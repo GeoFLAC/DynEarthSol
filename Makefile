@@ -21,7 +21,7 @@ openacc = 0
 openmp = 1
 nprof = 0
 gprof = 0
-usemmg = 0
+usemmg = 1
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
@@ -99,7 +99,7 @@ ifeq ($(usemmg), 1)
 	MMG_INCLUDE = ../mmg/build/include
 
 	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ../mmg/build/lib
+	MMG_LIB_DIR = ./mmg/build/lib
 
 	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
 	ifeq ($(ndims), 3)	
