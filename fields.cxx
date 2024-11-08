@@ -7,7 +7,7 @@
 #include "bc.hpp"
 #include "matprops.hpp"
 #include "fields.hpp"
-
+#include "utils.hpp"
 
 void allocate_variables(const Param &param, Variables& var)
 {
@@ -524,6 +524,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
             buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
         }
+
 
         for (int i=0; i<NODES_PER_ELEM; ++i) {
 #ifdef THREED

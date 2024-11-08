@@ -629,6 +629,7 @@ void compute_mass(const Param &param, const Variables &var,
 #endif
 }
 
+
 void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shapefn &shpdz)
 {
 #ifdef USE_NPROF

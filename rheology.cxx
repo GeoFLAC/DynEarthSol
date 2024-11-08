@@ -191,7 +191,6 @@ static void elasto_plastic(double bulkm, double shearm,
     {
         elastic(bulkm, shearm, de, s);
     }
-
     depls = 0;
     failure_mode = 0;
 
@@ -578,7 +577,6 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
                strain_rate, ppressure_element, dppressure_element, std::cerr)
-
     #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         // stress, strain and strain_rate of this element
