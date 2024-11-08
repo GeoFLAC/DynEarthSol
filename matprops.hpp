@@ -203,7 +203,6 @@ private:
                            double &dilation_angle, double &hardening) const;
 };
 
-
 #endif
 
 #endif

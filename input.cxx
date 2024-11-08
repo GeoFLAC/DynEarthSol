@@ -269,8 +269,6 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.has_thermal_diffusion", po::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
-        ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
-         "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
 
         ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -646,7 +644,6 @@ static void declare_parameters(po::options_description &cfg,
          "Dilation angle of the materials when weakening starts '[d0, d1, d2, ...]' (in degree)")
         ("mat.dilation_angle1", po::value<std::string>()->default_value("[0]"),
          "Dilation angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
-
         ("mat.porosity", po::value<std::string>()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
         ("mat.hydraulic_perm", po::value<std::string>()->default_value("[1e-14]"),
@@ -664,18 +661,7 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.bulk_modulus_s", po::value<std::string>()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
         ;
-    /*
-    Example of bulk modulus of rock-forming minerals
-    Quartz (SiO₂) 37 GPa
-    Feldspar 60-75 GPa
-    Olivine ((Mg, Fe)₂SiO₄) 125-130 GPa
-    Pyroxene (e.g., Enstatite MgSiO₃, Diopside CaMgSi₂O₆) 100-110 GPa
-    Garnet (e.g., Almandine Fe₃Al₂(SiO₄)₃, Pyrope Mg₃Al₂(SiO₄)₃) 170-180 GPa
-    Muscovite (a type of mica) 55 GPa
-    Calcite (CaCO₃) 70-75 GPa
-    Dolomite (CaMg(CO₃)₂) 90 GPa
-    Amphibole (e.g., Hornblende) 80-90 GPa
-    */
+
     /* These parameters will enable additional debugging output. DO NOT document these parameters
        in defaults.cfg. */
     cfg.add_options()

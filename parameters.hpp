@@ -118,7 +118,6 @@ struct Control {
 
     bool is_quasi_static;
     bool has_thermal_diffusion;
-    bool has_hydraulic_diffusion;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -473,7 +472,7 @@ struct Variables {
     double_vec *dppressure; // delta pore pressure
     double_vec *dppressure_zero; // delta pore pressure
     double_vec *fluid_source; // injection and pumping of pore water
-    
+
     // For surface processes
     SurfaceInfo surfinfo;
     int_vec melt_markers;

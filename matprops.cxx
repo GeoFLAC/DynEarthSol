@@ -325,7 +325,6 @@ void MatProps::plastic_props(int e, double pls,
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
 }
 
-
 double MatProps::rho(int e) const
 {
     const double celsius0 = 273;
@@ -710,7 +709,6 @@ MatProps::~MatProps()
     delete friction_angle1;
     delete dilation_angle0;
     delete dilation_angle1;
-
     // Deleting hydraulic properties
     delete porosity;
     delete hydraulic_perm;

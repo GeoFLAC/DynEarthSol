@@ -358,8 +358,8 @@ take-snapshot:
 	@echo '  '  CXX=$(CXX) opt=$(opt) openmp=$(openmp) >> snapshot.diff
 	@echo '  '  CXXFLAGS=$(CXXFLAGS) >> snapshot.diff
 	@echo '  '  LDFLAGS=$(LDFLAGS) >> snapshot.diff
-	@echo '  '  PATH=$(PATH) >> snapshot.diff
-	@echo '  '  LD_LIBRARY_PATH=$(LD_LIBRARY_PATH) >> snapshot.diff
+	@echo '  '  PATH="$(PATH)" >> snapshot.diff
+	@echo '  '  LD_LIBRARY_PATH="$(LD_LIBRARY_PATH)" >> snapshot.diff
 	@echo >> snapshot.diff
 	@echo >> snapshot.diff
 ifneq ($(HAS_GIT),)
