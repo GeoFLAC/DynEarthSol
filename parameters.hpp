@@ -29,6 +29,7 @@ typedef Array2D<double,2> dh_t;
 typedef Array2D<int,NODES_PER_ELEM> conn_t;
 typedef Array2D<int,NDIMS> segment_t;
 typedef Array2D<int,1> segflag_t;
+typedef Array2D<int,NODES_PER_REGULAR> regular_t;
 
 // forward declaration
 class PhaseChange;
@@ -56,6 +57,7 @@ struct Sim {
 
 struct Mesh {
     int meshing_option;
+    int meshing_elem_shape;
     int meshing_verbosity;
     bool meshing_sediment;
     int tetgen_optlevel;

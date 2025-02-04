@@ -99,6 +99,158 @@ void set_2d_quality_str(std::string &quality, double min_angle)
     }
 }
 
+regular_t* get_quadrilateral_cells(int nx, int ny) {
+    int num_cells = (nx - 1) * (ny - 1);
+    regular_t* cells = new regular_t(num_cells);
+
+    int cell_idx = 0;
+    for (int i = 0; i < nx - 1; ++i) {
+        for (int j = 0; j < ny - 1; ++j) {
+            int idx0 = i * ny + j;
+            int idx1 = idx0 + ny;
+            (*cells)[cell_idx][0] = idx0;
+            (*cells)[cell_idx][1] = idx1;
+            (*cells)[cell_idx][2] = idx1 + 1;
+            (*cells)[cell_idx][3] = idx0 + 1;
+            cell_idx++;
+        }
+    }
+    return cells;
+}
+
+int* quadri_to_triang(const regular_t* cells) {
+    int num_cells = cells->size();
+    int *triangles = new int[num_cells * 2 * 3];
+
+    int tri_idx = 0;
+    for (int i = 0; i < num_cells; ++i) {
+        (triangles)[tri_idx] = (*cells)[i][0];
+        (triangles)[tri_idx+1] = (*cells)[i][1];
+        (triangles)[tri_idx+2] = (*cells)[i][2];
+        tri_idx += 3;
+
+        (triangles)[tri_idx] = (*cells)[i][0];
+        (triangles)[tri_idx+1] = (*cells)[i][2];
+        (triangles)[tri_idx+2] = (*cells)[i][3];
+        tri_idx += 3;
+    }
+    return triangles;
+}
+
+double* get_regular_mesh(int nx, int ny, double xlength, double ylength) {
+    double dx = xlength / (nx - 1);
+    double dy = -ylength / (ny - 1);
+    double *points = new double[nx * ny * 2];
+
+    for (int i = 0; i < nx; ++i) {
+        for (int j = 0; j < ny; ++j) {
+            points[(j + i * ny)*2] = i * dx;
+            points[(j + i * ny)*2 + 1] = j * dy;
+        }
+    }
+    return points;
+}
+
+int* get_regular_segments(int nx, int ny) {
+    int num_segments = (nx + ny - 2) * 2;
+    int *segments = new int[num_segments*2];
+
+    int seg_idx = 0;
+    for (int i = 0; i < nx - 1; ++i) {
+        for (int j = 0; j < ny - 1; ++j) {
+            if (i == 0) {
+                (segments)[seg_idx] = j + i * ny;
+                (segments)[seg_idx+1] = j + i * ny + 1;
+                seg_idx += 2;
+            }
+            if (j == 0) {
+                (segments)[seg_idx] = j + i * ny;
+                (segments)[seg_idx+1] = j + i * ny + ny;
+                seg_idx += 2;
+            }
+        }
+    }
+    for (int i = 1; i < nx; ++i) {
+        (segments)[seg_idx] = i * ny - 1;
+        (segments)[seg_idx+1] = i * ny + ny - 1;
+        seg_idx += 2;
+    }
+    for (int j = 0; j < ny - 1; ++j) {
+        (segments)[seg_idx] = ny * (nx - 1) + j;
+        (segments)[seg_idx+1] = ny * (nx - 1) + j + 1;
+        seg_idx += 2;
+    }
+    return segments;
+}
+
+int* get_regular_segflags(int nx, int ny) {
+    int num_segments = (nx + ny - 2) * 2;
+    int* segflags = new int[num_segments];
+
+    int seg_idx = 0;
+    for (int i = 0; i < nx - 1; ++i) {
+        for (int j = 0; j < ny - 1; ++j) {
+            if (i == 0) {
+                segflags[seg_idx] = 1;
+                seg_idx++;
+            }
+            if (j == 0) {
+                segflags[seg_idx] = 32;
+                seg_idx++;
+            }
+        }
+    }
+    for (int i = 1; i < nx; ++i) {
+        segflags[seg_idx] = 16;
+        seg_idx++;
+    }
+    for (int j = 0; j < ny; ++j) {
+        segflags[seg_idx] = 2;
+        seg_idx++;
+    }
+
+    return segflags;
+}
+
+double* get_regular_attributes(int nx, int ny) {
+    int num_triang = (nx - 1) * (ny - 1) * 2;
+    double* regattr = new double[num_triang];
+
+    for (int i = 0; i < num_triang; ++i)
+        regattr[i] = 0;
+
+    return regattr;
+}
+
+void rectangulate_polygon
+(double xlength, double ylength,
+ double min_angle, double max_area,
+ int npoints, int nsegments,
+ const double *points, const int *segments, const int *segflags,
+ const int nregions, const double *regionattributes,
+ int *noutpoints, int *ntriangles, int *noutsegments,
+ double **outpoints, int **triangles,
+ int **outsegments, int **outsegflags, double **outregattr)
+{
+
+    int nx = std::round(xlength/std::sqrt(max_area)) + 1;
+    int ny = std::round(ylength/std::sqrt(max_area)) + 1;
+
+    regular_t* cells = get_quadrilateral_cells(nx, ny);
+
+    *noutpoints = nx*ny;
+    *outpoints = get_regular_mesh(nx, ny, xlength, ylength);
+
+    *ntriangles = (nx - 1) * (ny - 1) * 2;
+    *triangles = quadri_to_triang(cells);
+
+    *noutsegments = (nx + ny - 2) * 2;
+    *outsegments = get_regular_segments(nx, ny);
+    *outsegflags = get_regular_segflags(nx, ny);
+    *outregattr = get_regular_attributes(nx, ny);
+
+}
+
 
 void triangulate_polygon
 (double min_angle, double max_area,
@@ -1351,14 +1503,29 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
 
 #else
 
-    triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity,
-                        npoints, n_init_segments, points,
-                        init_segments, init_segflags,
-                        n_regions, regattr,
-                        &nnode, &nelem, &nseg,
-                        &pcoord, &pconnectivity,
-                        &psegment, &psegflag, &pregattr);
+    if (mesh.meshing_elem_shape == 0) {
+        triangulate_polygon(mesh.min_angle, max_elem_size,
+                            mesh.meshing_verbosity,
+                            npoints, n_init_segments, points,
+                            init_segments, init_segflags,
+                            n_regions, regattr,
+                            &nnode, &nelem, &nseg,
+                            &pcoord, &pconnectivity,
+                            &psegment, &psegflag, &pregattr);
+    } else if (mesh.meshing_elem_shape == 1) {
+        if (mesh.meshing_option != 1) {
+            std::cerr << "Error: meshing_option must be 1 for rectangulate_polygon\n";
+            std::exit(10);
+        }
+        rectangulate_polygon(mesh.xlength, mesh.ylength,
+                             mesh.min_angle,max_elem_size,
+                             npoints, n_init_segments, points,
+                             init_segments, init_segflags,
+                             n_regions, regattr,
+                             &nnode, &nelem, &nseg,
+                             &pcoord, &pconnectivity,
+                             &psegment, &psegflag, &pregattr);
+    }
 
 #endif
 
