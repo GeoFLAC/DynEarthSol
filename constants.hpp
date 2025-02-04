@@ -17,6 +17,7 @@ const int NDIMS = 2;
 
 // triangles (3 node) in 2D and tetrahedra (4 nodes) in 3D
 const int NODES_PER_ELEM = NDIMS + 1;
+const int NODES_PER_REGULAR = (NDIMS-1) * 4;
 
 // # of indep. components of a symmetric tensor
 // 2D -> 3;  3D -> 6
