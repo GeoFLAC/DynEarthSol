@@ -1304,6 +1304,228 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
 }
 
+
+// use linear interpolation to calculate uniformly distributed 2D curve points
+void interpolate_uniform_curve(const Param &param,const array_t &input_points, 
+                               array_t &output_points, int primary_index) {
+    int np = input_points.size();
+
+    int secondary_index = 1 - primary_index;
+
+    double min_val = input_points[0][primary_index];
+    double max_val = input_points[(np - 1)][primary_index];
+
+    if (primary_index == 1) {
+        switch (param.mesh.remeshing_option)
+        {
+        case 1:
+            min_val = -param.mesh.zlength;
+            break;
+        case 11:
+            min_val = -param.mesh.zlength;
+            break;
+        default:
+            break;
+        }
+    }
+
+    double step = (max_val - min_val) / (np - 1);
+
+    for (int i = 0, j = 0; i < np; ++i) {
+        double target = min_val + i * step;
+        output_points[i][primary_index] = target;
+
+        while (j < np - 2 && target > input_points[(j + 1)][primary_index]) {
+            j++;
+        }
+
+        double t = (target - input_points[j][primary_index]) /
+                   (input_points[j + 1][primary_index] - input_points[j][primary_index]);
+
+        output_points[i][secondary_index] = 
+            (1 - t) * input_points[j][secondary_index] + 
+            t * input_points[(j + 1)][secondary_index];
+    }
+}
+
+void create_uniform_interpolated_mesh(const Param& param, const Variables& var, const array_t &old_coord, array_t* coord) {
+
+    array_t inz(var.nz);
+    array_t outz(var.nz);
+    array_t inx(var.nx);
+    array_t outx(var.nx);
+
+    // interpolate left side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[j];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];        
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*coord)[j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+
+    // interpolate right side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[(var.nx - 1) * var.nz + j];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*coord)[(var.nx - 1) * var.nz + j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+    // interpolate top side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * i];
+        inx[i][0] = p[0];
+        switch (param.mesh.remeshing_option) {
+        case 1:
+            inx[i][1] = -param.mesh.zlength;
+            break;
+        case 11:
+            inx[i][1] = -param.mesh.zlength;
+            break;
+        default:
+            inx[i][1] = p[1];
+        }
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*coord)[var.nz * i];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate botton side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * (i + 1) - 1];
+        inx[i][0] = p[0];
+        inx[i][1] = p[1];
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*coord)[var.nz * (i + 1) - 1];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate the x with left and right side nodes
+    for (int j = 1; j < var.nz - 1; ++j) {
+        double xi = (*coord)[j][0];
+        double xe = (*coord)[(var.nx - 1) * var.nz - 1 + j][0];
+        double dx = (xe - xi) / (var.nx - 1);
+        for (int i = 1; i < var.nx - 1; ++i)
+            (*coord)[i * var.nz + j][0] = xi + i * dx;
+    }
+    // interpolate the z with bottom and top side nodes
+    for (int i = 1; i < var.nx - 1; ++i) {
+        double zi = (*coord)[i * var.nz][1];
+        double ze = (*coord)[i * var.nz - 1][1];
+        double dz = (ze - zi) / (var.nz - 1);
+        for (int j = 1; j < var.nz - 1; ++j)
+            (*coord)[i * var.nz + j][1] = zi + j * dz; 
+    }
+}
+
+void new_uniformed_regular_mesh(const Param &param, Variables &var,
+              const array_t &old_coord, const conn_t &old_conn,
+              const segment_t &old_segment, const segflag_t &old_segflag)
+{
+
+    // create a copy of original mesh
+    var.coord = new array_t(var.nnode);
+    var.connectivity = new conn_t(old_conn);
+    var.segment = new segment_t(old_segment);
+    var.segflag = new segflag_t(old_segflag);
+
+    array_t inz(var.nz);
+    array_t outz(var.nz);
+    array_t inx(var.nx);
+    array_t outx(var.nx);
+
+    // interpolate left side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[j];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];        
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*var.coord)[j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+
+    // interpolate right side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[(var.nx - 1) * var.nz + j];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*var.coord)[(var.nx - 1) * var.nz + j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+    // interpolate top side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * i];
+        inx[i][0] = p[0];
+        switch (param.mesh.remeshing_option) {
+        case 1:
+            inx[i][1] = -param.mesh.zlength;
+            break;
+        case 11:
+            inx[i][1] = -param.mesh.zlength;
+            break;
+        default:
+            inx[i][1] = p[1];
+        }
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*var.coord)[var.nz * i];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate botton side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * (i + 1) - 1];
+        inx[i][0] = p[0];
+        inx[i][1] = p[1];
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*var.coord)[var.nz * (i + 1) - 1];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate the x with left and right side nodes
+    for (int j = 1; j < var.nz - 1; ++j) {
+        double xi = (*var.coord)[j][0];
+        double xe = (*var.coord)[(var.nx - 1) * var.nz - 1 + j][0];
+        double dx = (xe - xi) / (var.nx - 1);
+        for (int i = 1; i < var.nx - 1; ++i)
+            (*var.coord)[i * var.nz + j][0] = xi + i * dx;
+    }
+    // interpolate the z with bottom and top side nodes
+    for (int i = 1; i < var.nx - 1; ++i) {
+        double zi = (*var.coord)[i * var.nz][1];
+        double ze = (*var.coord)[i * var.nz - 1][1];
+        double dz = (ze - zi) / (var.nz - 1);
+        for (int j = 1; j < var.nz - 1; ++j)
+            (*var.coord)[i * var.nz + j][1] = zi + j * dz; 
+    }
+
+        // create_uniform_interpolated_mesh(param, var, old_coord, var.coord);
+}
+
+
 void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &tmp_result_sg)
 {
     /* dvoldt is the volumetric strain rate, weighted by the element volume,
@@ -2166,8 +2388,16 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
 #else
-        new_mesh(param, var, bad_quality, old_coord, old_connectivity,
+        if (param.mesh.meshing_elem_shape == 0) {
+            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
+        } else if (param.mesh.meshing_elem_shape == 1) {
+            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
+                 old_segment, old_segflag);
+        } else {
+            std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
+            std::exit(1);
+        }        
 #endif
 #endif
         renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);        
