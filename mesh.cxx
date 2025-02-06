@@ -117,64 +117,74 @@ void create_quadrilateral_cells(int nx, int nz, regular_t* cells) {
 }
 
 
-void create_elem_from_cell(const Variables& var, conn_t* connectivity) {
+void create_elem_from_cell(const Variables& var, int *&connectivity) {
+    connectivity = new int[var.nelem*3];
     for (int i = 0; i < var.ncell; ++i) {
-        int *conn0 = (*connectivity)[i*2];
-        conn0[0] = (*var.cell)[i][0];
-        conn0[1] = (*var.cell)[i][1];
-        conn0[2] = (*var.cell)[i][2];
+        connectivity[i*6] = (*var.cell)[i][0];
+        connectivity[i*6+1] = (*var.cell)[i][1];
+        connectivity[i*6+2] = (*var.cell)[i][2];
 
-        int *conn1 = (*connectivity)[i*2+1];
-        conn1[0] = (*var.cell)[i][0];
-        conn1[1] = (*var.cell)[i][2];
-        conn1[2] = (*var.cell)[i][3];
+        connectivity[i*6+3] = (*var.cell)[i][0];
+        connectivity[i*6+4] = (*var.cell)[i][2];
+        connectivity[i*6+5] = (*var.cell)[i][3];
     }
 }
 
 
-void create_regular_mesh(const Param& param, const Variables& var, array_t *points) {
+void create_regular_mesh(const Param& param, const Variables& var, double *&points) {
+    points = new double[var.nnode*2];
     double dx = param.mesh.xlength / (var.nx - 1);
     double dz = -param.mesh.zlength / (var.nz - 1);
 
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
-            double *x = (*points)[(j + i * var.nz)];
-            (*points)[(j + i * var.nz)][0] = i * dx;
-            (*points)[(j + i * var.nz)][1] = j * dz;
+            (points)[(j + i * var.nz)*2] = i * dx;
+            (points)[(j + i * var.nz)*2+1] = j * dz;
         }
     }
 }
 
 
-void create_regular_segments(const Variables& var, segment_t* segments, segflag_t* segflags) {
+void create_regular_segments(const Variables& var, int *&segments, int *&segflags) {
+    segments = new int[var.nseg*2];
+    segflags = new int[var.nseg];
     int seg_idx = 0;
+    int flag_idx = 0;
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             if (i == 0) {
-                (*segments)[seg_idx][0] = j + i * var.nz;
-                (*segments)[seg_idx][1] = j + i * var.nz + 1;
-                (*segflags)[seg_idx][0] = 1;
+                segments[seg_idx] = j + i * var.nz;
                 seg_idx++;
+                segments[seg_idx] = j + i * var.nz + 1;
+                seg_idx++;
+                segflags[flag_idx] = 1;
+                flag_idx++;
             }
             if (j == 0) {
-                (*segments)[seg_idx][0] = j + i * var.nz;
-                (*segments)[seg_idx][1] = j + i * var.nz + var.nz;
-                (*segflags)[seg_idx][0] = 32;
+                segments[seg_idx] = j + i * var.nz;
                 seg_idx++;
+                segments[seg_idx] = j + i * var.nz + var.nz;
+                seg_idx++;
+                segflags[flag_idx] = 32;
+                flag_idx++;
             }
         }
     }
     for (int i = 1; i < var.nx; ++i) {
-        (*segments)[seg_idx][0] = i * var.nz - 1;
-        (*segments)[seg_idx][1] = i * var.nz + var.nz - 1;
-        (*segflags)[seg_idx][0] = 16;
+        segments[seg_idx] = i * var.nz - 1;
         seg_idx++;
+        segments[seg_idx] = i * var.nz + var.nz - 1;
+        seg_idx++;
+        segflags[flag_idx] = 16;
+        flag_idx++;
     }
     for (int j = 0; j < var.nz - 1; ++j) {
-        (*segments)[seg_idx][0] = var.nz * (var.nx - 1) + j;
-        (*segments)[seg_idx][1] = var.nz * (var.nx - 1) + j + 1;
-        (*segflags)[seg_idx][0] = 2;
+        segments[seg_idx] = var.nz * (var.nx - 1) + j;
         seg_idx++;
+        segments[seg_idx] = var.nz * (var.nx - 1) + j + 1;
+        seg_idx++;
+        segflags[flag_idx] = 2;
+        flag_idx++;
     }
 }
 
@@ -412,6 +422,9 @@ void points_to_mesh(const Param &param, Variables &var,
 
 void new_mesh_regular(const Param& param, Variables& var)
 {
+    double *pcoord, *pregattr;
+    int *pconnectivity, *psegment, *psegflag;
+
     var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
     var.nz = std::round(param.mesh.zlength/param.mesh.resolution) + 1;
     var.ncell = (var.nx-1) * (var.nz-1);
@@ -419,17 +432,23 @@ void new_mesh_regular(const Param& param, Variables& var)
     var.nelem = 2 * var.ncell;
     var.nseg = 2 * (var.nx + var.nz - 2);
 
-    var.coord = new array_t(var.nnode);
-    var.connectivity = new conn_t(var.nelem);
-    var.segment = new segment_t(var.nseg);
-    var.segflag = new segflag_t(var.nseg);
-    var.regattr = new regattr_t(var.nelem,0.0);
     var.cell = new regular_t(var.ncell);
-
-    create_regular_mesh(param, var, var.coord);
     create_quadrilateral_cells(var.nx, var.nz, var.cell);
-    create_elem_from_cell(var, var.connectivity);
-    create_regular_segments(var, var.segment, var.segflag);
+
+    create_regular_mesh(param, var, pcoord);
+    create_elem_from_cell(var, pconnectivity);
+    create_regular_segments(var, psegment, psegflag);
+
+    var.coord = new array_t(pcoord, var.nnode);
+    var.connectivity = new conn_t(pconnectivity, var.nelem);
+    var.segment = new segment_t(psegment, var.nseg);
+    var.segflag = new segflag_t(psegflag, var.nseg);
+
+    pregattr = new double[var.nelem];
+    for (int i = 0; i < var.nelem; i++) {
+        pregattr[i] = 0;
+    }
+    var.regattr = new regattr_t(pregattr, var.nelem);
 }
 
 
