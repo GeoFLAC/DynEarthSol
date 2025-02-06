@@ -15,8 +15,8 @@
 ## use_R_S = 1: use Rate - State friction law
 ## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
 
-ndims = 3
-opt = 2
+ndims = 2
+opt = 0
 openacc = 0
 openmp = 1
 nprof = 0
@@ -52,7 +52,7 @@ CXX_BACKEND = ${CXX}
 CUDA_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2/cuda
 
 ## path to Boost's base directory, if not in standard system location
-BOOST_ROOT_DIR =
+BOOST_ROOT_DIR = /home/utig5/cshyu/lib/boost_1_87_0
 
 ########################################################################
 ## Select compiler and linker flags

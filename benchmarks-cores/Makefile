@@ -1,5 +1,5 @@
 
-CASE := test-3d-tiny.cfg
+CASE := test-rect-tiny.cfg
 #CASE := test-tiny-long.cfg
 #CASE := test-big.cfg
 #CASE := test-topo.cfg
@@ -9,7 +9,7 @@ TFLAG = # time -v
 DEBUG := 0
 NSYS := 0
 VTK := 0
-NDIMS := 3
+NDIMS := 2
 EXE := ../dynearthsol$(NDIMS)d
 FUNC := compute_mass
 
