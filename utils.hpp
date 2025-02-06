@@ -173,6 +173,12 @@ static void check_nan(const Variables& var) {
           std::exit(11);
         }
       }
+      for (int i=0; i<3; i++) {
+          if (std::isnan((*var.stress)[e][i])) {
+              std::cerr << "Error: stress becomes NaN\n";
+              std::exit(11);
+          }
+      }
     }
 
     for (int i=0; i<var.nnode; i++) {
@@ -192,12 +198,6 @@ static void check_nan(const Variables& var) {
             }
             if (std::isnan((*var.coord)[i][j])) {
                 std::cerr << "Error: coordinate becomes NaN\n";
-                std::exit(11);
-            }
-        }
-        for (int j=0; j<3; j++) {
-            if (std::isnan((*var.stress)[i][j])) {
-                std::cerr << "Error: stress becomes NaN\n";
                 std::exit(11);
             }
         }
