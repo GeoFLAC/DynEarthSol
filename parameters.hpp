@@ -418,6 +418,7 @@ struct Variables {
     int nnode;
     int nelem;
     int nseg;
+    int nx, ny, nz, ncell;
 
     double max_vbc_val;
     double compensation_pressure;
@@ -431,6 +432,7 @@ struct Variables {
     regattr_t *regattr;
     array_t *old_coord;
     conn_t *old_connectivity;
+    regular_t *cell;
 
 
     uint_vec *bcflag;
