@@ -141,6 +141,10 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
 	else # debugging flags
 		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unknown-pragmas -fbounds-check -ftrapv
+		ifeq ($(opt), -1)
+			CXXFLAGS += -fsanitize=address
+			LDFLAGS += -fsanitize=address
+		endif
 	endif
 
 	ifeq ($(openmp), 1)
