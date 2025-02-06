@@ -1,5 +1,5 @@
 
-CASE := test-rect-tiny.cfg
+CASE := test-rect-tiny-long.cfg
 #CASE := test-tiny-long.cfg
 #CASE := test-big.cfg
 #CASE := test-topo.cfg
