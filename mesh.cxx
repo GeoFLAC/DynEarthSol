@@ -100,18 +100,18 @@ void set_2d_quality_str(std::string &quality, double min_angle)
 }
 
 
-void create_quadrilateral_cells(int nx, int nz, regular_t* cells) {
+void create_quadrilateral_cells(int nx, int nz, int *&cells) {
+    cells = new int[(nx-1)*(nz-1)*4];
     int cell_idx = 0;
     for (int i = 0; i < nx - 1; ++i) {
         for (int j = 0; j < nz - 1; ++j) {
-            int* cell = (*cells)[cell_idx];
             int idx0 = i * nz + j;
             int idx1 = idx0 + nz;
-            cell[0] = idx0;
-            cell[1] = idx1;
-            cell[2] = idx1 + 1;
-            cell[3] = idx0 + 1;
-            cell_idx++;
+            cells[cell_idx] = idx0;
+            cells[cell_idx+1] = idx1;
+            cells[cell_idx+2] = idx1 + 1;
+            cells[cell_idx+3] = idx0 + 1;
+            cell_idx += 4;
         }
     }
 }
@@ -120,13 +120,14 @@ void create_quadrilateral_cells(int nx, int nz, regular_t* cells) {
 void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*3];
     for (int i = 0; i < var.ncell; ++i) {
+        // wrong order will cause the bug
         connectivity[i*6] = (*var.cell)[i][0];
-        connectivity[i*6+1] = (*var.cell)[i][1];
-        connectivity[i*6+2] = (*var.cell)[i][2];
+        connectivity[i*6+1] = (*var.cell)[i][2];
+        connectivity[i*6+2] = (*var.cell)[i][1];
 
         connectivity[i*6+3] = (*var.cell)[i][0];
-        connectivity[i*6+4] = (*var.cell)[i][2];
-        connectivity[i*6+5] = (*var.cell)[i][3];
+        connectivity[i*6+4] = (*var.cell)[i][3];
+        connectivity[i*6+5] = (*var.cell)[i][2];
     }
 }
 
@@ -186,6 +187,13 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
         segflags[flag_idx] = 2;
         flag_idx++;
     }
+}
+
+void create_regular_regattr(const Variables& var, double *&regattr) {
+    regattr = new double[var.nelem];
+
+    for (int i = 0; i < var.nelem; i++)
+        regattr[i] = 0.;
 }
 
 
@@ -423,7 +431,7 @@ void points_to_mesh(const Param &param, Variables &var,
 void new_mesh_regular(const Param& param, Variables& var)
 {
     double *pcoord, *pregattr;
-    int *pconnectivity, *psegment, *psegflag;
+    int *pconnectivity, *psegment, *psegflag, *pcell;
 
     var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
     var.nz = std::round(param.mesh.zlength/param.mesh.resolution) + 1;
@@ -432,8 +440,8 @@ void new_mesh_regular(const Param& param, Variables& var)
     var.nelem = 2 * var.ncell;
     var.nseg = 2 * (var.nx + var.nz - 2);
 
-    var.cell = new regular_t(var.ncell);
-    create_quadrilateral_cells(var.nx, var.nz, var.cell);
+    create_quadrilateral_cells(var.nx, var.nz, pcell);
+    var.cell = new regular_t(pcell, var.ncell);
 
     create_regular_mesh(param, var, pcoord);
     create_elem_from_cell(var, pconnectivity);
@@ -444,10 +452,7 @@ void new_mesh_regular(const Param& param, Variables& var)
     var.segment = new segment_t(psegment, var.nseg);
     var.segflag = new segflag_t(psegflag, var.nseg);
 
-    pregattr = new double[var.nelem];
-    for (int i = 0; i < var.nelem; i++) {
-        pregattr[i] = 0;
-    }
+    create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
 }
 
@@ -1712,7 +1717,7 @@ void create_top_elems(Variables& var)
         top_nodes[i] = top_tmp[top_ind[i]];
             
 
- 
+
     int_vec telems;
     telems.reserve(100);
     std::set<int> elem_set;
