@@ -119,15 +119,28 @@ void create_quadrilateral_cells(int nx, int nz, int *&cells) {
 
 void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*3];
-    for (int i = 0; i < var.ncell; ++i) {
-        // wrong order will cause the bug
-        connectivity[i*6] = (*var.cell)[i][0];
-        connectivity[i*6+1] = (*var.cell)[i][2];
-        connectivity[i*6+2] = (*var.cell)[i][1];
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.nz - 1; ++j) {
+            int idx = i * (var.nz - 1) + j;
+            // should be counter-clockwise
+            if ((i+j) % 2 == 0){
+                connectivity[idx*6] = (*var.cell)[idx][0];
+                connectivity[idx*6+1] = (*var.cell)[idx][2];
+                connectivity[idx*6+2] = (*var.cell)[idx][1];
 
-        connectivity[i*6+3] = (*var.cell)[i][0];
-        connectivity[i*6+4] = (*var.cell)[i][3];
-        connectivity[i*6+5] = (*var.cell)[i][2];
+                connectivity[idx*6+3] = (*var.cell)[idx][0];
+                connectivity[idx*6+4] = (*var.cell)[idx][3];
+                connectivity[idx*6+5] = (*var.cell)[idx][2];                
+            } else {
+                connectivity[idx*6] = (*var.cell)[idx][0];
+                connectivity[idx*6+1] = (*var.cell)[idx][3];
+                connectivity[idx*6+2] = (*var.cell)[idx][1];
+
+                connectivity[idx*6+3] = (*var.cell)[idx][1];
+                connectivity[idx*6+4] = (*var.cell)[idx][3];
+                connectivity[idx*6+5] = (*var.cell)[idx][2];
+            }
+        }
     }
 }
 
