@@ -1533,7 +1533,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     // interpolate the z with bottom and top side nodes
     for (int i = 1; i < var.nx - 1; ++i) {
         double zi = (*var.coord)[i * var.nz][1];
-        double ze = (*var.coord)[i * var.nz - 1][1];
+        double ze = (*var.coord)[(i + 1) * var.nz - 1][1];
         double dz = (ze - zi) / (var.nz - 1);
         for (int j = 1; j < var.nz - 1; ++j)
             (*var.coord)[i * var.nz + j][1] = zi + j * dz; 
