@@ -1436,11 +1436,28 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
 
-    // create a copy of original mesh
-    var.coord = new array_t(var.nnode);
-    var.connectivity = new conn_t(old_conn);
-    var.segment = new segment_t(old_segment);
-    var.segflag = new segflag_t(old_segflag);
+    double *qcoord = new double[var.nnode * NDIMS];
+    int *qconn = new int[var.nelem * NODES_PER_ELEM];
+    int *qsegment = new int[var.nseg * NODES_PER_FACET];
+    int *qsegflag = new int[var.nseg];
+
+    var.coord->reset(qcoord, var.nnode);
+    var.connectivity->reset(qconn, var.nelem);
+    var.segment->reset(qsegment, var.nseg);
+    var.segflag->reset(qsegflag, var.nseg);
+
+    for (int i = 0; i < var.nelem; ++i) {
+        int* p = (*var.connectivity)[i];
+        p[0] = old_conn[i][0];
+        p[1] = old_conn[i][1];
+        p[2] = old_conn[i][2];
+    }
+    for (int i = 0; i < var.nseg; ++i) {
+        int* p = (*var.segment)[i];
+        p[0] = old_segment[i][0];
+        p[1] = old_segment[i][1];
+        (*var.segflag)[i][0] = old_segflag[i][0];
+    }
 
     array_t inz(var.nz);
     array_t outz(var.nz);
