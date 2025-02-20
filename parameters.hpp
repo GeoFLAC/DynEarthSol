@@ -9,6 +9,8 @@
 
 #include "constants.hpp"
 #include "array2d.hpp"
+#include "childInterface.h"
+#include "childInterface_Wrapper.h"
 
 typedef std::pair<double,double> double_pair;
 typedef std::unordered_map<int,int> int_map;
@@ -52,6 +54,7 @@ struct Sim {
 
     std::string modelname;
     std::string restarting_from_modelname;
+    std::string child_input_file_name;
 };
 
 struct Mesh {
@@ -505,6 +508,11 @@ struct Variables {
         vbc_vertical_ratio_x1.resize(4);
     }
 
+    // for coupling with CHILD, a surface process code
+    childInterface *cI;
+    // mutable because this coordinate array needs to be modified by CHILD even when Variables is const.
+    mutable std::vector<double *> surf_points;
+    std::vector<int> surf_bmarkers;
 };
 
 #endif

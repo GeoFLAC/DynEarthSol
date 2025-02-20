@@ -160,6 +160,32 @@ void init(const Param& param, Variables& var)
     initial_weak_zone(param, var, *var.plstrain);
 
     phase_changes_init(param, var);
+
+#ifdef HAVE_CHILD
+    const int_vec &top_nodes = *(var.surfinfo.top_nodes);
+    const int ntop = var.surfinfo.ntop;
+    var.surf_points.clear();
+    var.surf_bmarkers.clear();
+    // loops over all top nodes
+    for (std::size_t i=0; i<ntop; ++i) {
+        int n = top_nodes[i];
+        var.surf_points.push_back( (*(var.coord))[n] );
+        if( (*var.bcflag)[n] & (BOUNDX0 | BOUNDX1 | BOUNDY0 | BOUNDY1) ) 
+            var.surf_bmarkers.push_back(1);
+        else
+            var.surf_bmarkers.push_back(0);
+    }
+    if( var.cI != nullptr ) {
+        delete var.cI;
+        var.cI = nullptr;
+    }
+    var.cI = new childInterface;
+    string argstr;
+    argstr.append( param.sim.child_input_file_name );
+    argstr.append( " --silent-mode" );
+    (var.cI)->Initialize(argstr, ntop, var.surf_points, var.surf_bmarkers);
+#endif
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -290,6 +316,28 @@ void restart(const Param& param, Variables& var)
     }
 
     phase_changes_init(param, var);
+
+#ifdef HAVE_CHILD
+    const int_vec &top_nodes = *(var.surfinfo.top_nodes);
+    const int ntop = var.surfinfo.ntop;
+    var.surf_points.clear();
+    var.surf_bmarkers.clear();
+    // loops over all top nodes
+    for (std::size_t i=0; i<ntop; ++i) {
+        int n = top_nodes[i];
+        var.surf_points.push_back( (*(var.coord))[n] );
+        if( (*var.bcflag)[n] & (BOUNDX0 | BOUNDX1 | BOUNDY0 | BOUNDY1) ) 
+            var.surf_bmarkers.push_back(1);
+        else
+            var.surf_bmarkers.push_back(0);
+    }
+    if( var.cI != nullptr ) {
+        delete var.cI;
+        var.cI = nullptr;
+    }
+    var.cI = new childInterface;
+    (var.cI)->Initialize(param.sim.child_input_file_name, ntop, var.surf_points, var.surf_bmarkers);
+#endif
 }
 
 
@@ -627,7 +675,10 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
-
+#ifdef HAVE_CHILD
+    if( var.cI != nullptr )
+        delete var.cI;
+#endif
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
     std::cout << "Time summary...\n  Execute: ";

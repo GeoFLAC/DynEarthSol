@@ -1897,6 +1897,17 @@ namespace {
         nvtxRangePop();
 #endif
     }
+#ifdef HAVE_CHILD
+    void surface_processes_by_CHILD(const Variables& var)
+    {
+        // Modify surface topo using CHILD 
+        var.cI->ModifyCoords( var.surf_points );
+        // Run CHILD for dt.
+        var.cI->Run( var.dt/3.1536e7 ); // dt should be given as [year].
+        // Modify the surface topo using the
+        var.cI->GetNewCoords( var.surf_points );
+    }
+#endif
 }
 
 
@@ -2023,6 +2034,11 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         }
 #endif
         break;
+#ifdef HAVE_CHILD
+    case 103:
+        surface_processes_by_CHILD(var);
+        break;   
+#endif 
     default:
         std::cout << "Error: unknown surface process option: " << param.control.surface_process_option << '\n';
         std::exit(1);

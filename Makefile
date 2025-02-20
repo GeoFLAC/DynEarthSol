@@ -14,8 +14,9 @@
 ## adaptive_time_step = 1: use adaptive time stepping technique
 ## use_R_S = 1: use Rate - State friction law
 ## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
+## usechild = 1: let CHILD handle surface process
 
-ndims = 3
+ndims = 2
 opt = 2
 openacc = 0
 openmp = 1
@@ -26,6 +27,7 @@ adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
 ANNFLAGS = linux-g++
+usechild = 1
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -112,6 +114,15 @@ ifeq ($(usemmg), 1)
 	endif
 endif
 
+ifeq ($(usechild), 1)
+	CHILDCODE_DIR = ${HOME}/opt/DynEarthSol/child/Code
+	CHILDBIN_DIR = $(CHILDCODE_DIR)/../bin
+	CHILDINTERFACE_DIR = ${HOME}/opt/DynEarthSol/childInterface
+	CHILD_CXXFLAGS =-I$(CHILDINTERFACE_DIR) -I$(CHILDBIN_DIR) -I${CHILDCODE_DIR} -DHAVE_CHILD=1
+	CHILD_LDFLAGS =-g -L$(CHILDINTERFACE_DIR) -lchildInterfaceWrapper
+	CHILD_LDFLAGS +=-L$(CHILDBIN_DIR) -lchild
+	CHILD_LDFLAGS += -Wl,-rpath=$(CHILDBIN_DIR) -Wl,-rpath=$(CHILDINTERFACE_DIR)
+endif
 
 ifneq (, $(findstring clang++, $(CXX)))
 	CXXFLAGS = -v -DGPP1X
@@ -321,6 +332,11 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(usechild), 1)
+	CXXFLAGS += $(CHILD_CXXFLAGS)
+	LDFLAGS += $(CHILD_LDFLAGS)
+endif
+
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3
 
@@ -386,6 +402,7 @@ else
 endif
 
 $(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+	echo $(CXXFLAGS) $(CHILD_CXXFLAGS) $(usechild)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(TRI_OBJS): %.o : %.c $(TRI_INCS)
