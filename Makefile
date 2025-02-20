@@ -16,7 +16,7 @@
 ## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
 ## usechild = 1: let CHILD handle surface process
 
-ndims = 2
+ndims = 3
 opt = 2
 openacc = 0
 openmp = 1
