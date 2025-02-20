@@ -33,8 +33,10 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("sim.modelname", po::value<std::string>(&p.sim.modelname),
          "Prefix for the output files")
+#ifdef HAVE_CHILD
         ("sim.child_input_file_name", po::value<std::string>(&p.sim.child_input_file_name)->default_value("hillslope1.in"),
         "child input file name")
+#endif
         ("sim.max_steps", po::value<int>(&p.sim.max_steps),
          "Max. number of time steps")
         ("sim.max_time_in_yr", po::value<double>(&p.sim.max_time_in_yr),
