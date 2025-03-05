@@ -52,10 +52,22 @@ public:
     #pragma acc routine seq
     double beta_mineral(int e) const;
     
+    // rate-and-state friction parameters
+    #pragma acc routine seq
+    double d_a(int e) const;
+    #pragma acc routine seq
+    double e_b(int e) const;
+    #pragma acc routine seq
+    double c_v(int e) const;
+
     #pragma acc routine seq
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
+    #pragma acc routine seq
+    void plastic_props_rsf(int e, double pls,
+                       double& amc, double& anphi, double& anpsi,
+                       double& hardn, double& ten_max, double& slip_rate) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -64,14 +76,16 @@ public:
     const double therm_diff_max;
     double hydro_diff_max;
 
-    const static int rh_elastic = 1 << 0;
-    const static int rh_viscous = 1 << 1;
-    const static int rh_plastic = 1 << 2;
-    const static int rh_plastic2d = rh_plastic | 1 << 3;
-    const static int rh_maxwell = rh_elastic | rh_viscous;
-    const static int rh_ep = rh_elastic | rh_plastic;
-    const static int rh_evp = rh_elastic | rh_viscous | rh_plastic;
-
+    const static int rh_elastic = 1 << 0; // Decimal value 1
+    const static int rh_viscous = 1 << 1; // Decimal value 2
+    const static int rh_plastic = 1 << 2; // Decimal value 4
+    const static int rh_plastic2d = rh_plastic | 1 << 3; // Decimal value 12
+    const static int rh_rsf = 1 << 4; // Decimal value 16
+    const static int rh_maxwell = rh_elastic | rh_viscous; // Decimal value 3
+    const static int rh_ep = rh_elastic | rh_plastic; // Decimal value 5
+    const static int rh_evp = rh_elastic | rh_viscous | rh_plastic; // Decimal value 7
+    const static int rh_ep_rsf = rh_elastic | rh_plastic | rh_rsf;  // Decimal value 21
+    const static int rh_evp_rsf = rh_elastic | rh_viscous | rh_plastic | rh_rsf; // Decimal value 23
 private:
 
     // alias to field variables in var
@@ -102,10 +116,19 @@ private:
     VectorBase fluid_alpha, fluid_bulk_modulus, fluid_visc;
     VectorBase biot_coeff, bulk_modulus_s;
 
+    // rate-and-state friction
+    VectorBase direct_a, evolution_b, characteristic_velocity;
+    // VectorBase static_friction_coefficient;
+
     #pragma acc routine seq
     void plastic_weakening(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening) const;
+                           double &dilation_angle, double &hardening, double& slip_rate) const;
+
+    #pragma acc routine seq
+    void plastic_weakening_rsf(int e, double pls,
+                           double &cohesion, double &friction_angle,
+                           double &dilation_angle, double &hardening, double &slip_rate) const;
 };
 
 #else
@@ -150,9 +173,17 @@ public:
     double alpha_biot(int e) const;
     double beta_mineral(int e) const;
 
+    // rate-and-state friction parameters
+    double d_a(int e) const;
+    double e_b(int e) const;
+    double c_v(int e) const;
+
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
+    void plastic_props_rsf(int e, double pls,
+                       double& amc, double& anphi, double& anpsi,
+                       double& hardn, double& ten_max, double& slip_rate) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -165,9 +196,12 @@ public:
     const static int rh_viscous = 1 << 1;
     const static int rh_plastic = 1 << 2;
     const static int rh_plastic2d = rh_plastic | 1 << 3;
+    const static int rh_rsf = 1 << 4; // Decimal value 16
     const static int rh_maxwell = rh_elastic | rh_viscous;
     const static int rh_ep = rh_elastic | rh_plastic;
     const static int rh_evp = rh_elastic | rh_viscous | rh_plastic;
+    const static int rh_ep_rsf = rh_elastic | rh_plastic | rh_rsf;  // Decimal value 21
+    const static int rh_evp_rsf = rh_elastic | rh_viscous | rh_plastic | rh_rsf; // Decimal value 23
 
 private:
 
@@ -198,9 +232,17 @@ private:
     const VectorBase *fluid_alpha, *fluid_bulk_modulus, *fluid_visc;
     const VectorBase *biot_coeff, *bulk_modulus_s;
 
+    // rate-and-state friction
+    const VectorBase *direct_a, *evolution_b, *characteristic_velocity;
+    // const VectorBase *static_friction_coefficient;   
+
     void plastic_weakening(int e, double pls,
                            double &cohesion, double &friction_angle,
                            double &dilation_angle, double &hardening) const;
+
+    void plastic_weakening_rsf(int e, double pls,
+                           double &cohesion, double &friction_angle,
+                           double &dilation_angle, double &hardening, double &slip_rate) const;
 };
 
 

@@ -124,10 +124,13 @@ struct Control {
     double hydration_migration_speed;
 
     bool has_PT;
+    mutable bool PT_jump;
     int PT_max_iter;
     double PT_relative_tolerance;
 
     bool has_moving_mesh;
+
+    bool has_ATS;
 };
 
 struct BC {
@@ -307,6 +310,12 @@ struct Mat {
     double_vec fluid_visc;  // pore fluid dynamic viscosity
     double_vec biot_coeff;  // Biot-Willis coefficient
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
+
+    // rate-and-state friction parameters
+    double_vec direct_a;
+    double_vec evolution_b;
+    double_vec characteristic_velocity;
+    // double_vec static_friction_coefficient;
 };
 
 struct Time {
@@ -423,7 +432,19 @@ struct Variables {
     int nseg;
 
     double max_vbc_val;
+    double max_global_vel_mag;
+    double global_dt_min;
     double compensation_pressure;
+
+// #ifdef ATS
+//     double vmax, hmin, dt_elastic, dt_min, vmax_shear_zone, CL_min;
+// #endif    
+//     double a0, b0, a1, b1, max_pls, number_plf, seismic_eff, S_E, K_E;
+
+//     double_vec *MAX_shear, *CL, *dl_min, *maxv, *strain_energy, *kinetic_energy, *MAX_shear_0;
+// #ifdef RS
+//     double_vec *state1, *slip_velocity, *friction_coefficient, *RS_shear, *Failure_mode, avg_shear_stress, avg_vm, slip_area;
+// #endif
 
     // These 5 arrays are allocated by external library
     array_t *coord;
@@ -460,6 +481,7 @@ struct Variables {
     double_vec *volume, *volume_old, *volume_n;
     double_vec *mass, *tmass;
     double_vec *hmass;
+    double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
     double_vec *temperature, *plstrain, *delta_plstrain;
     double_vec *stressyy, *dpressure, *viscosity;

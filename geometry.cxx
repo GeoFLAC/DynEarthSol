@@ -344,7 +344,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #endif
 }
 
-double compute_dt(const Param& param, const Variables& var)
+double compute_dt(const Param& param, Variables& var)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -357,15 +357,60 @@ double compute_dt(const Param& param, const Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
-    double scaling = 1.0;
+    
+    // Define element velocity arrays
+    double_vec velocity_x_element(var.nelem, 0.0);
+    double_vec velocity_y_element(var.nelem, 0.0);
+    double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
+    double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
+    // Global max velocity for elements
+    // double global_max_vem = std::max(std::max(var.max_vbc_val, 0.0), 1E-20);
+    double global_max_vem = 0.0;  // 
+    double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
-    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-        default(none) shared(param,var)
-    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+        reduction(max: global_max_vem) \
+        default(none) shared(param, var, velocity_x_element, velocity_y_element, velocity_z_element) \
+        private(vx_element, vy_element, vz_element)
+    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+        reduction(max: global_max_vem)
     for (int e=0; e<var.nelem; ++e) {
+
+        vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
+
+        // calculate maxium velocity in the element
+        const array_t& vel = *var.vel;
+        const int *conn = (*var.connectivity)[e];
+        double weight = 1.0 / NODES_PER_ELEM; 
+
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            vx_element += vel[conn[j]][0] * weight;
+            vy_element += vel[conn[j]][1] * weight;
+            #ifdef THREED
+            vz_element += vel[conn[j]][2] * weight;
+            #endif
+        }
+
+        velocity_x_element[e] = vx_element;
+        velocity_y_element[e] = vy_element;
+        #ifdef THREED
+        velocity_z_element[e] = vz_element;
+        #endif
+
+        // min height of this element
+        #ifdef THREED  
+        double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element + vz_element*vz_element);
+        #else
+        double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element);
+        #endif
+
+        // Find global max velocity
+        global_max_vem = std::max(global_max_vem, max_vem);
+
+        // std::cout<< "Element: " << e << " max_vem: " << global_max_vem << std::scientific << std::setprecision(5) << std::endl;
 
         const double *a = (*var.coord)[n0];
         const double *b = (*var.coord)[n1];
@@ -407,6 +452,9 @@ double compute_dt(const Param& param, const Variables& var)
                                             0.5 * minh * minh / var.mat->hydro_diff_max);
             }
         minl = std::min(minl, minh);
+
+        // Find global min delta t to meet CFL condition
+        global_dt_min = std::min(global_dt_min, minl/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
     }
 
     double max_vbc_val;
@@ -418,11 +466,29 @@ double compute_dt(const Param& param, const Variables& var)
     else
         max_vbc_val = param.control.characteristic_speed;
 
-    double dt_advection = 0.5 * minl / max_vbc_val;
-    double dt_elastic = (param.control.is_quasi_static) ?
+    double dt_advection = 0;
+    double dt_elastic = 0;
+    global_max_vem = std::max(global_max_vem, var.max_vbc_val);
+    var.max_global_vel_mag = global_max_vem;
+    var.global_dt_min = global_dt_min;
+    
+    // Calculate dt_advection and dt_elastic 
+    if(param.control.has_ATS)
+    {
+        dt_advection = 0.5 * minl / global_max_vem;
+        dt_elastic = (param.control.is_quasi_static) ?
+        0.5 * minl / (global_max_vem * param.control.inertial_scaling) :
+        0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
+        dt_elastic = std::max(dt_elastic, global_dt_min); // Ensure dt_elastic is not smaller than global_dt_min
+    }
+    else
+    {
+        dt_advection = 0.5 * minl / max_vbc_val;
+        dt_elastic = (param.control.is_quasi_static) ?
         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
-
+    }
+    
     // Combine dt calculations and incorporate dt_hydro_diffusion
     double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion}) * param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
@@ -435,6 +501,7 @@ double compute_dt(const Param& param, const Variables& var)
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
         std::exit(11);
     }
+    
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -504,9 +571,10 @@ double compute_dt_PT(const Param& param, const Variables& var)
         minl = std::min(minl, minh);
     }
 
+    // max_vbc_val is maximum boundary velocity
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
-        max_vbc_val = var.max_vbc_val;
+        max_vbc_val = var.max_vbc_val; 
         if (param.control.surface_process_option > 0)
             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
     }
@@ -534,7 +602,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
 
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
-                  double_vec &mass, double_vec &tmass, double_vec &hmass, elem_cache &tmp_result)
+                  double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -544,7 +612,8 @@ void compute_mass(const Param &param, const Variables &var,
     // mass.assign(mass.size(), 0);
     // tmass.assign(tmass.size(), 0);
 
-    const double pseudo_speed = max_vbc_val * param.control.inertial_scaling;
+    const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
+    const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
     // Retrieve hydraulic properties for the element
     double perm_e = var.mat->perm(0);                // Intrinsic permeability 
@@ -574,21 +643,38 @@ void compute_mass(const Param &param, const Variables &var,
 
 
 #ifdef GPP1X
-    #pragma omp parallel for default(none) shared(var, param, pseudo_speed, tmp_result)
+    #pragma omp parallel for default(none) shared(var, param, pseudo_speed, pseudo_speed_ATP, tmp_result)
 #else
     #pragma omp parallel for default(none) shared(var, param, tmp_result)
 #endif
     #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         double *tr = tmp_result[e];
-        
-        double rho = (param.control.is_quasi_static) ?
+        double rho;
+
+        if(param.control.has_ATS)
+        {
+            double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
+
+            rho = (param.control.is_quasi_static) ?
+            (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
+            (*var.mat).rho(e);  // true density for dynamic sim
+
+            if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
+                // Modified density considering porosity for hydraulic diffusion
+                    rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
+                }
+        }
+        else
+        {    
+            rho = (param.control.is_quasi_static) ?
             (*var.mat).bulkm(e) / (pseudo_speed * pseudo_speed) :  // pseudo density for quasi-static sim
-            (*var.mat).rho(e);                                     // true density for dynamic sim
-           
-        if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-        // Modified density considering porosity for hydraulic diffusion
-            rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
+            (*var.mat).rho(e);  // true density for dynamic sim
+
+            if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
+                // Modified density considering porosity for hydraulic diffusion
+                    rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
+                }
         }
 
         double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
@@ -598,22 +684,25 @@ void compute_mass(const Param &param, const Variables &var,
         double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
         double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
         double hm = (hm_coeff * bulk_comp + (*var.mat).phi(e) * (*var.mat).beta_fluid(e)) * (*var.volume)[e] / NODES_PER_ELEM;
+        double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
         tr[0] = (*var.volume)[e];
         tr[1] = m;
         if (param.control.has_thermal_diffusion)
             tr[2] = tm;
         tr[3] = hm; // check
+        tr[4] = ym; 
     }
 
     #pragma omp parallel for default(none)      \
-        shared(param,var,volume_n,mass,tmass,hmass,tmp_result)
+        shared(param,var,volume_n,mass,tmass,hmass,ymass,tmp_result)
     #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         volume_n[n]=0;
         mass[n]=0;
         tmass[n]=0;
         hmass[n]=0;
+        ymass[n]=0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
             double *tr = tmp_result[*e];
             volume_n[n] += tr[0];
@@ -621,6 +710,7 @@ void compute_mass(const Param &param, const Variables &var,
             if (param.control.has_thermal_diffusion)
                 tmass[n] += tr[2];
             hmass[n] += tr[3];
+            ymass[n] += tr[4];
         }
     }
 
@@ -628,7 +718,6 @@ void compute_mass(const Param &param, const Variables &var,
     nvtxRangePop();
 #endif
 }
-
 
 void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shapefn &shpdz)
 {

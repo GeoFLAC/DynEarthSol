@@ -18,6 +18,7 @@ static void principal_stresses3(const double* s, double p[3], double v[3][3])
     /* s is a flattened stress vector, with the components {XX, YY, ZZ, XY, XZ, YZ}.
      * Returns the eigenvalues p and eignvectors v.
      * The eigenvalues are ordered such that p[0] <= p[1] <= p[2].
+     *  - Maximum shear stress direction 'shear_dir'.
      */
 
     // unflatten s to a 3x3 tensor, only the upper part is needed.
@@ -102,6 +103,95 @@ static void principal_stresses2(const double* s, double p[2],
             sin2t = 0;
         }
     }
+}
+
+#pragma acc routine seq
+static void compute_slip_rate2(const double* s, double& vx, double& vz, double& slip_rate)
+{
+    /* Computes the slip magnitude by projecting velocity (vx, vz) onto the maximum shear direction.
+     *
+     * Inputs:
+     *  - s: Flattened stress tensor {σ_xx, σ_zz, σ_xz}
+     *  - vx, vz: Velocity components
+     * 
+     * Output:
+     *  - slip: The scalar magnitude of the slip vector (computed by projection)
+     */
+
+    // Compute center and radius of Mohr circle
+    double s0 = 0.5 * (s[0] + s[1]);
+    double rad = second_invariant(s);
+    double cos2t, sin2t;
+
+    {
+        // Compute direction cosine and sine of 2*theta
+        const double eps = 1e-15;
+        double a = 0.5 * (s[0] - s[1]);
+        double b = -rad; // Always negative
+        if (b < -eps) {
+            cos2t = a / b;
+            sin2t = s[2] / b;
+        }
+        else {
+            cos2t = 1;
+            sin2t = 0;
+        }
+    }
+
+    // Compute shear direction (rotated 45° from principal stress direction)
+    double theta_shear = 0.5 * atan2(sin2t, cos2t);
+    double shear_dir[2];
+    shear_dir[0] = cos(theta_shear + M_PI_4); // Shear direction X-component
+    shear_dir[1] = sin(theta_shear + M_PI_4); // Shear direction Z-component
+
+    // slip magnitude
+    slip_rate = std::abs(vx * shear_dir[0] + vz * shear_dir[1]);
+}
+
+#pragma acc routine seq
+static void compute_slip_rate3(const double* s, double vx, double vy, double vz, double& slip_rate)
+{
+    /* Computes the slip magnitude by projecting velocity (vx, vy, vz) onto the maximum shear direction in 3D.
+     *
+     * Inputs:
+     *  - s: Flattened 3D stress tensor {σ_xx, σ_yy, σ_zz, σ_xy, σ_xz, σ_yz}
+     *  - vx, vy, vz: Velocity components
+     * 
+     * Output:
+     *  - slip_rate: Scalar magnitude of the slip vector (computed by projection)
+     */
+
+    double p[3], v[3][3];
+
+    // Compute principal stresses and eigenvectors
+    principal_stresses3(s, p, v);
+
+    // Compute maximum shear stress plane
+    double tau_max_1 = 0.5 * std::abs(p[2] - p[1]);  // Shear between σ3 and σ2
+    double tau_max_2 = 0.5 * std::abs(p[2] - p[0]);  // Shear between σ3 and σ1
+    double tau_max_3 = 0.5 * std::abs(p[1] - p[0]);  // Shear between σ2 and σ1
+
+    int shear_plane_index = (tau_max_2 >= tau_max_1 && tau_max_2 >= tau_max_3) ? 1 :
+                            (tau_max_3 >= tau_max_1 && tau_max_3 >= tau_max_2) ? 2 : 0;
+
+    // Fault normal (perpendicular to max shear stress plane)
+    double fault_normal[3] = {v[0][shear_plane_index], v[1][shear_plane_index], v[2][shear_plane_index]};
+
+    // Two shear directions (perpendicular to fault normal)
+    double shear_dir_1[3] = {v[0][(shear_plane_index + 1) % 3], 
+                             v[1][(shear_plane_index + 1) % 3], 
+                             v[2][(shear_plane_index + 1) % 3]};
+
+    double shear_dir_2[3] = {v[0][(shear_plane_index + 2) % 3], 
+                             v[1][(shear_plane_index + 2) % 3], 
+                             v[2][(shear_plane_index + 2) % 3]};
+
+    // Project velocity onto shear directions
+    double slip_magnitude_1 = vx * shear_dir_1[0] + vy * shear_dir_1[1] + vz * shear_dir_1[2];
+    double slip_magnitude_2 = vx * shear_dir_2[0] + vy * shear_dir_2[1] + vz * shear_dir_2[2];
+
+    // Compute final slip magnitude
+    slip_rate = std::sqrt(slip_magnitude_1 * slip_magnitude_1 + slip_magnitude_2 * slip_magnitude_2);
 }
 
 #pragma acc routine seq
@@ -541,11 +631,11 @@ static void elasto_plastic2d(double bulkm, double shearm,
     }
 }
 
-void update_stress(const Param& param, const Variables& var, tensor_t& stress,
+void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& stressyy, double_vec& dpressure, double_vec& viscosity,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
-                   double_vec& ppressure, double_vec& dppressure)
+                   double_vec& ppressure, double_vec& dppressure, array_t& vel)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -554,29 +644,49 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
     // Interpolate pore pressure from nodes to element level
     double_vec ppressure_element(var.nelem, 0.0);
     double_vec dppressure_element(var.nelem, 0.0);
-    #pragma omp parallel for default(none) shared(var, ppressure, ppressure_element, dppressure, dppressure_element)
+
+    // Define element velocity arrays
+    double_vec velocity_x_element(var.nelem, 0.0);
+    double_vec velocity_y_element(var.nelem, 0.0);
+    double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
+
+    #pragma omp parallel for default(none) shared(var, ppressure, ppressure_element, dppressure, dppressure_element, \
+        vel, velocity_x_element, velocity_y_element, velocity_z_element)
     #pragma acc parallel loop
     for (int e = 0; e < var.nelem; e++) {
         const int *conn = (*var.connectivity)[e];
-
         double pp_element = 0.0;
         double dpp_element = 0.0;
+
+        const array_t& vel = *var.vel;
+        double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
         #ifdef THREED
             pp_element += ppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
             dpp_element += dppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
+            vx_element += vel[conn[j]][0] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
+            vy_element += vel[conn[j]][1] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
+            vz_element += vel[conn[j]][2] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
         #else
             pp_element += ppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-            dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/4 for each node in 3D
+            dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
+            vx_element += vel[conn[j]][0] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
+            vy_element += vel[conn[j]][1] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
         #endif
         }
         ppressure_element[e] = pp_element;  // Store element-level pore pressure 
         dppressure_element[e] = dpp_element;  // Store element-level pore pressure rate
+        velocity_x_element[e] = vx_element;  // Store element-level velocity in x direction
+        velocity_y_element[e] = vy_element;  // Store element-level velocity in y direction
+        #ifdef THREED
+        velocity_z_element[e] = vz_element;  // Store element-level velocity in z direction
+        #endif
     }
 
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
-               strain_rate, ppressure_element, dppressure_element, std::cerr)
+               strain_rate, ppressure_element, dppressure_element, std::cerr, \
+               velocity_x_element, velocity_y_element, velocity_z_element)
     #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         // stress, strain and strain_rate of this element
@@ -591,10 +701,24 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
         double pp = ppressure_element[e];        // Use element-level interpolated pore pressure
         double dpp = dppressure_element[e];        // Use element-level interpolated pore pressure rate
 
-        //  #pragma omp critical
-        // {
-        //     std::cout << e << ", " << ppressure_element[e] << ", " << dppressure_element[e] << ", " << stress[e][2] << std::endl;
+        double vx = velocity_x_element[e];        // Use element-level interpolated velocity in x direction
+        double vy = velocity_y_element[e];        // Use element-level interpolated velocity in y direction
+        double vz = velocity_z_element[e];        // Use element-level interpolated velocity in z direction
+
+        // // Calculate the center of the element
+        // const int *conn = (*var.connectivity)[e];
+        // double center_x = 0., center_z = 0., T = 0.;
+        // for (int i=0; i<NODES_PER_ELEM; ++i){
+        //     center_x += (*var.coord)[conn[i]][0];
+	    // center_z += (*var.coord)[conn[i]][NDIMS-1];
+        //     T += (*var.temperature)[conn[i]];
         // }
+        // T /= NODES_PER_ELEM;
+        // center_x /= NODES_PER_ELEM;
+	    // center_z /= NODES_PER_ELEM;
+        // // Find the most abundant marker mattype in this element
+        // int_vec &a = (*var.elemmarkers)[e];
+        // int material = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
         
         if (param.control.has_hydraulic_diffusion) {
             pp = alpha_b * pp; // Apply Biot coefficient to pore pressure
@@ -719,6 +843,91 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
                     syy = spyy;
                 }
             }
+            case MatProps::rh_ep_rsf: // rate-and-state frition model
+            {
+                double depls = 0;
+                double bulkm = var.mat->bulkm(e);
+                double shearm = var.mat->shearm(e);
+
+                // calculate the shear direction in maximum shear stress
+                double slip_rate;
+                
+#ifdef THREED
+                compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
+#else
+                compute_slip_rate2(s, vx, vy, slip_rate); // Calculate slip vector magnitude in 2D
+#endif
+        
+                double amc, anphi, anpsi, hardn, ten_max;
+                var.mat->plastic_props_rsf(e, plstrain[e],
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                int failure_mode;
+                if (var.mat->is_plane_strain) {
+                    elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                     de, depls, s, syy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
+                }
+                else {
+                    elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                   de, depls, s, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
+                }
+                plstrain[e] += depls;
+                delta_plstrain[e] = depls;
+            }
+            break;
+        case MatProps::rh_evp_rsf: // rate-and-state frition model
+            {
+                double depls = 0;
+                double bulkm = var.mat->bulkm(e);
+                double shearm = var.mat->shearm(e);
+                viscosity[e] = var.mat->visc(e);
+                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                // stress due to maxwell rheology
+                double sv[NSTR];
+                for (int i=0; i<NSTR; ++i) sv[i] = s[i];
+                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
+                double svII = second_invariant2(sv);
+
+                 // calculate the shear direction in maximum shear stress
+                double slip_rate;
+                
+#ifdef THREED
+                compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
+#else
+                compute_slip_rate2(s, vx, vy, slip_rate); // Calculate slip vector magnitude in 2D
+#endif
+
+                double amc, anphi, anpsi, hardn, ten_max;
+                var.mat->plastic_props_rsf(e, plstrain[e],
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                // stress due to elasto-plastic rheology
+                double sp[NSTR], spyy;
+                for (int i=0; i<NSTR; ++i) sp[i] = s[i];
+                int failure_mode;
+                if (var.mat->is_plane_strain) {
+                    spyy = syy;
+                    elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                     de, depls, s, syy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
+                }
+                else {
+                    elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                   de, depls, s, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
+                }
+                double spII = second_invariant2(sp);
+
+                // use the smaller as the final stress
+                if (svII < spII)
+                    for (int i=0; i<NSTR; ++i) s[i] = sv[i];
+                else {
+                    for (int i=0; i<NSTR; ++i) s[i] = sp[i];
+                    plstrain[e] += depls;
+                    delta_plstrain[e] = depls;
+                    syy = spyy;
+                }
+            }
             break;
         default:
 //            std::cerr << "Error: unknown rheology type: " << rheol_type << "\n";
@@ -735,6 +944,70 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
     nvtxRangePop();
 #endif
 }
+
+// #ifdef RS
+// void friction_variables(double &T, double &direct_a, double &evolution_b, double &characteristic_velocity, double &static_friction_coefficient)
+// {
+// //    double T1 = 0, T2 = 19e3, T3 = 20e3, T4 = 21.5e3, T5 = 22e3, T6 = 90e3;
+//     double T1 = 0, T2 = 43e3,T3 = 45e3, T4 = 45e3, T5 = 47e3, T6 = 90e3;
+//     T = std::fabs(T);
+//     double vc1 = 1e-6, vc2 = 1e-6, vc3 = 1e-6, vc4 = 1e-6, vc5 = 1e-6, vc6 = 1e-6;
+//     double a1 = 0.019, a2 = 0.019, a3 = 0.015, a4 = 0.015, a5 = 0.019, a6 = 0.019;
+//     double b1 = 0.015, b2 = 0.015, b3 = 0.019, b4 = 0.019, b5 = 0.015, b6 = 0.015;
+//     double f0_1 = 0.6, f0_2 = 0.6, f0_3 = 0.6, f0_4 = 0.6, f0_5 = 0.6, f0_6 = 0.6;
+
+//     if (T < T2) {
+//         double f = (f0_2-f0_1)/(T2-T1);
+//         double a = (a2-a1)/(T2-T1);
+//         double b = (b2-b1)/(T2-T1);
+//         double vc = (vc2-vc1)/(T2-T1);
+//         static_friction_coefficient = T*f+(f0_1-f*T1);
+//         direct_a = T*a+(a1-a*T1);
+//         evolution_b = T*b+(b1-b*T1);
+//         characteristic_velocity = T*vc+(vc1-vc*T1);
+//     }
+//     else if (T >= T2 && T < T3) {
+//         double f = (f0_3-f0_2)/(T3-T2);
+//         double a = (a3-a2)/(T3-T2);
+//         double b = (b3-b2)/(T3-T2);
+//         double vc = (vc3-vc2)/(T3-T2);
+//         static_friction_coefficient = T*f+(f0_2-f*T2);
+//         direct_a = T*a+(a2-a*T2);
+//         evolution_b = T*b+(b2-b*T2);
+//         characteristic_velocity = T*vc+(vc2-vc*T2);
+//     }
+//     else if (T >= T3 && T < T4) {
+//         double f = (f0_4-f0_3)/(T4-T3);
+//         double a = (a4-a3)/(T4-T3);
+//         double b = (b4-b3)/(T4-T3);
+//         double vc = (vc4-vc3)/(T4-T3);
+//         static_friction_coefficient = T*f+(f0_3-f*T3);
+//         direct_a = T*a+(a3-a*T3);
+//         evolution_b = T*b+(b3-b*T3);
+//         characteristic_velocity = T*vc+(vc3-vc*T3);
+//     }
+//     else if (T >= T4 && T < T5) {
+//         double f = (f0_5-f0_4)/(T5-T4);
+//         double a = (a5-a4)/(T5-T4);
+//         double b = (b5-b4)/(T5-T4);
+//         double vc = (vc5-vc4)/(T5-T4);
+//         static_friction_coefficient = T*f+(f0_4-f*T4);
+//         direct_a = T*a+(a4-a*T4);
+//         evolution_b = T*b+(b4-b*T4);
+//         characteristic_velocity = T*vc+(vc4-vc*T4);
+//     }
+//     else {
+//         double f = (f0_6-f0_5)/(T6-T5);
+//         double a = (a6-a5)/(T6-T5);
+//         double b = (b6-b5)/(T6-T5);
+//         double vc = (vc6-vc5)/(T6-T5);
+// 	static_friction_coefficient = T*f+(f0_5-f*T5);
+//         direct_a = T*a+(a5-a*T5);
+//         evolution_b = T*b+(b5-b*T5);
+//         characteristic_velocity = T*vc+(vc5-vc*T5);
+//     }
+// }
+// #endif
 
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
@@ -754,44 +1027,3 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
     nvtxRangePop();
 #endif
 }
-
-// void update_stress_old(const Param& param, const Variables& var, tensor_t& stress, tensor_t& stress_old)
-// {
-// #ifdef USE_NPROF
-//     nvtxRangePushA(__FUNCTION__);
-// #endif
-
-//     // Copy current stress into stress_old for each element
-//     #pragma omp parallel for default(none) shared(var, stress, stress_old)
-//     #pragma acc parallel loop
-//     for (int e = 0; e < var.nelem; ++e) {
-//         for (int i = 0; i < NSTR; ++i) {
-//             stress_old[e][i] = stress[e][i];  // Copy current stress to stress_old
-//         }
-//     }
-
-// #ifdef USE_NPROF
-//     nvtxRangePop();
-// #endif
-// }
-
-// void add_stress_old(const Param& param, const Variables& var, tensor_t& stress, tensor_t& stress_old)
-// {
-// #ifdef USE_NPROF
-//     nvtxRangePushA(__FUNCTION__);
-// #endif
-
-//     #pragma omp parallel for default(none) shared(var, stress, stress_old)
-//     #pragma acc parallel loop
-//     for (int e = 0; e < var.nelem; ++e) {
-//         for (int i = 0; i < NSTR; ++i) {
-//             double diff = 0.0;
-//             diff = stress[e][i] - stress_old[e][i];
-//             stress[e][i] += diff;
-//         }
-//     }
-
-// #ifdef USE_NPROF
-//     nvtxRangePop();
-// #endif
-// }

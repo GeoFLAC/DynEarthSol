@@ -1,0 +1,46 @@
+# Mesh layering 
+#  0--------------------7
+#  |    upper layer     |
+#  1--------------------6
+#  | seismogenic zone   |
+#  2--------------------5
+#  |    lower layer     |
+#  3--------------------4
+#
+#### node coordinates ####
+# npoints ndims 0 0
+  8      2     0 0
+# i    xi       yi
+  0    0.e3     0.e3
+  1    0.e3    -4.e3
+  2    0.e3    -6.e3
+  3    0.e3   -10.e3
+  4   100.e3  -10.e3
+  5   100.e3   -6.e3
+  6   100.e3   -4.e3
+  7   100.e3   -0.e3
+
+#### segments ####
+# nsegments 1
+  10        1
+# j  pj0  pj1  bdry_flag
+  0   0    1    1  #  1: left (x0)
+  1   1    2    1
+  2   2    3    1
+  3   3    4    16 # 16: bottom (z0)
+  4   4    5    2  #  2: rigth
+  5   5    6    2
+  6   6    7    2
+  7   7    0    32 # 32: top (z1)
+  8   1    6    0  #  0: not a boundary
+  9   2    5    0
+
+#### holes, must be 0 ####
+0
+#### regions ####
+# nregions
+  3
+# k  xk    zk      mattype  size
+  0 50.e3  -2.e3  2        1.e2  # ratio to the area of regular setting
+  1 50.e3  -5.e3  1        1.e1
+  2 50.e3  -8.e3  0        1.e2

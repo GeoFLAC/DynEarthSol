@@ -619,11 +619,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
                 break;
             case 3:
-                v[0] = 0;
+                // v[0] = 0;
+                v[0] = bc_vz1;
 #ifdef THREED
                 v[1] = 0;
 #endif
-                v[NDIMS-1] = bc_vz1;
+                // v[NDIMS-1] = bc_vz1;
+                v[NDIMS-1] = 0.0;
                 break;
             }
         }
@@ -762,8 +764,8 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 #else
         const double *x = (*var.coord)[i];
         double ratio, rr, dvr;
-        double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
-        double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
+        double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]) * 0.0;
+        double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]) * 0.0;
 #endif
         //
         // X

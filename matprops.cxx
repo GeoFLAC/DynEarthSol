@@ -202,6 +202,13 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = p.mat.fluid_visc;
     biot_coeff = p.mat.biot_coeff;
     bulk_modulus_s = p.mat.bulk_modulus_s;
+
+    // Rate-and-state friction parameters
+    direct_a = p.mat.direct_a;
+    evolution_b = p.mat.evolution_b;
+    characteristic_velocity = p.mat.characteristic_velocity;
+    // static_friction_coefficient = p.mat.static_friction_coefficient;
+
 }
 
 
@@ -211,6 +218,7 @@ MatProps::~MatProps()
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,heat_capacity,therm_cond,pls0)
     #pragma acc exit data delete(pls1,cohesion0,friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
+    #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity)
 }
 
 
@@ -305,6 +313,64 @@ void MatProps::plastic_weakening(int e, double pls,
     hardening = h / n;
 }
 
+void MatProps::plastic_weakening_rsf(int e, double pls,
+                                 double &cohesion, double &friction_angle,
+                                 double &dilation_angle, double &hardening, double &slip_rate) const
+{
+    double c, f, d, h;
+    c = f = d = h = 0;
+
+    double d_a, e_b, c_v, mu_0, mu_d;
+    d_a = e_b = c_v = mu_0 = mu_d = 0;
+
+    double static_friction_angle = 0;
+
+    double 
+    int n = 0;
+    for (int m=0; m<nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        n += k;
+        if (pls < pls0[m]) {
+            // no weakening yet
+            c += cohesion0[m] * k;
+            f += friction_angle0[m] * k;
+            d += dilation_angle0[m] * k;
+            h += 0;
+        }
+        else if (pls < pls1[m]) {
+            // linear weakening
+            double p = (pls - pls0[m]) / (pls1[m] - pls0[m]);
+            c += (cohesion0[m] + p * (cohesion1[m] - cohesion0[m])) * k;
+            f += (friction_angle0[m] + p * (friction_angle1[m] - friction_angle0[m])) * k;
+            d += (dilation_angle0[m] + p * (dilation_angle1[m] - dilation_angle0[m])) * k;
+            h += (cohesion1[m] - cohesion0[m]) / (pls1[m] - pls0[m]) * k;
+        }
+        else {
+            // saturated weakening
+            c += cohesion1[m] * k;
+            f += friction_angle1[m] * k;
+            d += dilation_angle1[m] * k;
+            h += 0;
+        }
+
+        // Rate-and-state friction parameters
+        d_a += direct_a[m] * k;
+        e_b += evolution_b[m] * k;
+        c_v += characteristic_velocity[m] * k;
+    }
+
+    d_a /= n; // direct effect parameter
+    e_b /= n; // evolution effect parameter   
+    c_v /= n; // characteristic velocity
+    static_friction_angle = f / n; // friction angle
+    mu_0 = std::tan(DEG2RAD * static_friction_angle); // static friction coefficient
+    mu_d = mu_0 + (d_a - e_b) * log(slip_rate / c_v); // dynamic friction angle
+    friction_angle = std::atan(mu_d) / DEG2RAD;
+    cohesion = c / n;
+    dilation_angle = d / n;
+    hardening = h / n;
+}
 
 void MatProps::plastic_props(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
@@ -313,6 +379,25 @@ void MatProps::plastic_props(int e, double pls,
     double cohesion, phi, psi;
 
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
+
+    // derived variables
+    double sphi = std::sin(phi * DEG2RAD);
+    double spsi = std::sin(psi * DEG2RAD);
+
+    anphi = (1 + sphi) / (1 - sphi);
+    anpsi = (1 + spsi) / (1 - spsi);
+    amc = 2 * cohesion * std::sqrt(anphi);
+
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+}
+
+void MatProps::plastic_props_rsf(int e, double pls,
+                             double& amc, double& anphi, double& anpsi,
+                             double& hardn, double& ten_max, double& slip_rate) const
+{
+    double cohesion, phi, psi;
+
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate);
 
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);
@@ -434,6 +519,22 @@ double MatProps::beta_mineral(int e) const
 {
     // Return the inverse of harmonic mean (compressibility)
     return 1.0 / harmonic_mean(bulk_modulus_s, elemmarkers[e]);
+}
+
+// Rate-and-state friction parameters
+double MatProps::d_a(int e) const
+{
+    return arithmetic_mean(direct_a, elemmarkers[e]);
+}
+
+double MatProps::e_b(int e) const
+{
+    return arithmetic_mean(evolution_b, elemmarkers[e]);
+}
+
+double MatProps::c_v(int e) const
+{
+    return arithmetic_mean(characteristic_velocity, elemmarkers[e]);
 }
 
 #else
@@ -687,6 +788,12 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = VectorBase::create(p.mat.fluid_visc, nmat);
     biot_coeff = VectorBase::create(p.mat.biot_coeff, nmat);
     bulk_modulus_s = VectorBase::create(p.mat.bulk_modulus_s, nmat);
+
+    // Rate-and-state friction parameters
+    direct_a = VectorBase::create(p.mat.direct_a, nmat);
+    evolution_b = VectorBase::create(p.mat.evolution_b, nmat);
+    characteristic_velocity = VectorBase::create(p.mat.characteristic_velocity, nmat);
+    // static_friction_coefficient = VectorBase::create(p.mat.static_friction_coefficient, nmat);
 }
 
 
@@ -720,6 +827,12 @@ MatProps::~MatProps()
     delete fluid_visc;
     delete biot_coeff;
     delete bulk_modulus_s;
+
+    // Deleting rate-and-state friction properties
+    delete direct_a;
+    delete evolution_b;
+    delete characteristic_velocity;
+    // delete static_friction_coefficient;
 }
 
 
@@ -819,6 +932,72 @@ void MatProps::plastic_weakening(int e, double pls,
     hardening = h / n;
 }
 
+void MatProps::plastic_weakening_rsf(int e, double pls,
+                                 double &cohesion, double &friction_angle,
+                                 double &dilation_angle, double &hardening, double &slip_rate) const
+{
+    double c, f, d, h;
+    c = f = d = h = 0;
+
+    double d_a, e_b, c_v, mu_0, mu_d;
+    d_a = e_b = c_v = mu_0 = mu_d = 0;
+
+    double static_friction_angle = 0;
+
+    int n = 0;
+    for (int m=0; m<nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        n += k;
+        if (pls < (*pls0)[m]) {
+            // no weakening yet
+            c += (*cohesion0)[m] * k;
+            f += (*friction_angle0)[m] * k;
+            d += (*dilation_angle0)[m] * k;
+            h += 0;
+        }
+        else if (pls < (*pls1)[m]) {
+            // linear weakening
+            double p = (pls - (*pls0)[m]) / ((*pls1)[m] - (*pls0)[m]);
+            c += ((*cohesion0)[m] + p * ((*cohesion1)[m] - (*cohesion0)[m])) * k;
+            f += ((*friction_angle0)[m] + p * ((*friction_angle1)[m] - (*friction_angle0)[m])) * k;
+            d += ((*dilation_angle0)[m] + p * ((*dilation_angle1)[m] -(* dilation_angle0)[m])) * k;
+            h += ((*cohesion1)[m] - (*cohesion0)[m]) / ((*pls1)[m] - (*pls0)[m]) * k;
+        }
+        else {
+            // saturated weakening
+            c += (*cohesion1)[m] * k;
+            f += (*friction_angle1)[m] * k;
+            d += (*dilation_angle1)[m] * k;
+            h += 0;
+        }
+
+        // Rate-and-state friction parameters
+        d_a += (*direct_a)[m] * k;
+        e_b += (*evolution_b)[m] * k;
+        c_v += (*characteristic_velocity)[m] * k;
+    }
+
+    d_a /= n; // direct effect parameter
+    e_b /= n; // evolution effect parameter   
+    c_v /= n; // characteristic velocity
+    static_friction_angle = f / n; // friction angle
+    mu_0 = std::tan(DEG2RAD * static_friction_angle); // static friction coefficient
+    mu_d = mu_0 + (d_a - e_b) * log(slip_rate / c_v); // dynamic friction angle
+    friction_angle = std::atan(mu_d) / DEG2RAD;
+    cohesion = c / n;
+    dilation_angle = d / n;
+    hardening = h / n;
+
+    // std::cout << "d_a: " << d_a << " e_b: " << e_b << " c_v: " << c_v << " mu_0: " << mu_0 << " mu_d: " << mu_d << " friction_angle: " << friction_angle << std::endl;
+
+    // std::cout << "d_a: " << d_a << std::endl;
+    // std::cout << "e_b: " << e_b << std::endl;  
+    // std::cout << "c_v: " << c_v << std::endl;
+    // std::cout << "mu_0: " << mu_0 << std::endl;
+    // std::cout << "mu_d: " << mu_d << std::endl;
+    // std::cout << "friction_angle: " << friction_angle << std::endl;
+}
 
 void MatProps::plastic_props(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
@@ -839,6 +1018,24 @@ void MatProps::plastic_props(int e, double pls,
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
 }
 
+void MatProps::plastic_props_rsf(int e, double pls,
+                             double& amc, double& anphi, double& anpsi,
+                             double& hardn, double& ten_max, double& slip_rate) const
+{
+    double cohesion, phi, psi;
+
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate);
+
+    // derived variables
+    double sphi = std::sin(phi * DEG2RAD);
+    double spsi = std::sin(psi * DEG2RAD);
+
+    anphi = (1 + sphi) / (1 - sphi);
+    anpsi = (1 + spsi) / (1 - spsi);
+    amc = 2 * cohesion * std::sqrt(anphi);
+
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+}
 
 double MatProps::rho(int e) const
 {
@@ -950,4 +1147,19 @@ double MatProps::beta_mineral(int e) const
     return 1.0 / harmonic_mean(*bulk_modulus_s, elemmarkers[e]);
 }
 
+// Rate-and-state friction parameters
+double MatProps::d_a(int e) const
+{
+    return arithmetic_mean(*direct_a, elemmarkers[e]);
+}
+
+double MatProps::e_b(int e) const
+{
+    return arithmetic_mean(*evolution_b, elemmarkers[e]);
+}
+
+double MatProps::c_v(int e) const
+{
+    return arithmetic_mean(*characteristic_velocity, elemmarkers[e]);
+}
 #endif

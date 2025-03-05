@@ -2220,7 +2220,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     compute_volume(*var.coord, *var.connectivity, *var.volume);
     // TODO: using edvoldt and volume to get volume_old
     std::copy(var.volume->begin(), var.volume->end(), var.volume_old->begin());
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.tmp_result);
+
+    if(param.control.has_ATS)
+        var.dt = compute_dt(param, var);
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     if (param.mesh.remeshing_option==1 ||

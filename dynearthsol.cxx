@@ -144,11 +144,15 @@ void init(const Param& param, Variables& var)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
     *var.volume_old = *var.volume;
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.tmp_result);
+    
+    apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
+    var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors);
-    apply_vbcs(param, var, *var.vel);
+    // apply_vbcs(param, var, *var.vel); move to above compute_mass
+
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source);
@@ -251,10 +255,8 @@ void restart(const Param& param, Variables& var)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
     bin_chkpt.read_array(*var.volume_old, "volume_old");
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.tmp_result);
-
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-
     create_boundary_normals(var, *var.bnormals, var.edge_vectors);
 
     // Initializing field variables
@@ -289,6 +291,14 @@ void restart(const Param& param, Variables& var)
         initial_weak_zone(param, var, *var.plstrain);
     }
 
+    // For some reason, the following is added by Denis
+    // However, it is not clear why this is needed.
+    if (param.control.has_ATS) {
+        var.dt = compute_dt(param, var);
+        compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+        compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+    }
+
     phase_changes_init(param, var);
 }
 
@@ -300,8 +310,12 @@ void update_mesh(const Param& param, Variables& var)
 #endif
 
     update_coordinate(var, *var.coord);
-    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
+    if(!param.control.PT_jump)
+    {
+        surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, var.surfinfo, var.markersets, *var.elemmarkers);
+    }
+    
 //    var.markersets[0]->update_marker_in_elem(var);
 //    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
 
@@ -320,7 +334,12 @@ void update_mesh(const Param& param, Variables& var)
 #endif
 
     compute_volume(var, *var.volume);
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.tmp_result);
+
+    if (param.control.has_ATS) {
+        var.dt = compute_dt(param, var);
+    }
+
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -345,7 +364,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure);
+            *var.ppressure, *var.dppressure, *var.vel);
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
 
@@ -400,7 +419,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
-                *var.ppressure, *var.dppressure);
+                *var.ppressure, *var.dppressure, *var.vel);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -411,7 +430,6 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             }
             residual_old = var.l2_residual;
         }
-        
     }
 
 #ifdef USE_NPROF
@@ -460,6 +478,8 @@ int main(int argc, const char* argv[])
     var.dt_PT = compute_dt(param, var);
     output.write_exact(var);
 
+    // int rheol_type_old = param.mat.rheol_type;
+
     double starting_time = var.time; // var.time & var.steps might be set in restart()
     double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
@@ -487,6 +507,9 @@ int main(int argc, const char* argv[])
         var.steps ++;
         var.time += var.dt;
         // dt_copy = 0.0; dt_copy += var.dt;
+
+        // std::cout << "global max vel: " << var.max_global_vel_mag << std::scientific << std::setprecision(5) << " global dt min: " << var.global_dt_min << std::endl;
+
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.ntmp, *var.tmp_result);
 
@@ -497,7 +520,7 @@ int main(int argc, const char* argv[])
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure);
+            *var.ppressure, *var.dppressure, *var.vel);
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -514,6 +537,7 @@ int main(int argc, const char* argv[])
             // var.dt = compute_dt_PT(param, var);
             if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
 
+            param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
                 apply_vbcs_PT(param, var, *var.vel);
@@ -525,7 +549,7 @@ int main(int argc, const char* argv[])
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                     *var.strain_rate,
-                    *var.ppressure, *var.dppressure);
+                    *var.ppressure, *var.dppressure, *var.vel);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);
@@ -537,9 +561,36 @@ int main(int argc, const char* argv[])
                 }
                 residual_old = var.l2_residual;
                 // var.dt = std::min({var.dt*1.01, dt_copy});
+
+                if (pt_step % param.mesh.quality_check_step_interval == 0) {
+                    if (param.control.has_moving_mesh)
+                    {
+                        int quality_is_bad, bad_quality_index;
+                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index);
+                        if (quality_is_bad) {
+
+                            if (param.sim.has_output_during_remeshing) {
+                                int64_t time_tmp = get_nanoseconds();
+                                output.write_exact(var);
+                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                            }
+
+                            int64_t time_tmp = get_nanoseconds();
+                            remesh(param, var, quality_is_bad);
+                            var.func_time.remesh_time += get_nanoseconds() - time_tmp;
+
+                            if (param.sim.has_output_during_remeshing) {
+                                int64_t time_tmp = get_nanoseconds();
+                                output.write_exact(var);
+                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                            }
+                        }
+                    }
+                }
             }
             if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
             // var.dt = dt_copy;
+            param.control.PT_jump = false;
         }
 
 
@@ -565,14 +616,63 @@ int main(int argc, const char* argv[])
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
-
             var.dt = compute_dt(param, var);
         }
 
         if (param.sim.is_outputting_averaged_fields)
             output.average_fields(var);
+        
+        int r = 1;
+        if(param.control.has_ATS)
+        {
+            // r = std::pow(2, log10(var.dt) + 9);
+            // r = std::max(r, 1);
+            // if ((! param.sim.is_outputting_averaged_fields || (var.steps % param.sim.is_outputting_averaged_fields == 0)) &&
+            // // When output_averaged_fields in turned on, the output cannot be
+            // // done at arbitrary time steps.
+            // (((var.steps - starting_step) >= r * param.sim.output_step_interval) ||
+            // ((var.time - starting_time) > param.sim.output_time_interval_in_yr * YEAR2SEC)) ) {
+            //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+            //     output.write_checkpoint(param, var);
 
-        if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
+            // int64_t time_tmp = get_nanoseconds();
+            // output.write(var);
+            // var.func_time.output_time += get_nanoseconds() - time_tmp;
+
+            // next_regular_frame ++;
+            // starting_step = var.steps; starting_time = var.time;
+            // }
+
+            if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
+               (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
+              ||
+              (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
+               (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
+              ||
+              (var.max_global_vel_mag > 1e-6)  // **New condition for high velocity**
+             )
+            // time or step output requirements are met
+            &&
+            ((! param.sim.is_outputting_averaged_fields) ||
+                (param.sim.is_outputting_averaged_fields &&
+                    (var.steps % param.mesh.quality_check_step_interval == 0)))
+            // When is_outputting_averaged_fields is turned on, the output cannot be
+            // done at arbitrary time steps.
+            ) {
+
+            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                output.write_checkpoint(param, var);
+
+            int64_t time_tmp = get_nanoseconds();
+            output.write(var);
+            var.func_time.output_time += get_nanoseconds() - time_tmp;
+
+            next_regular_frame ++;
+            }
+        }
+        else
+        {
+            if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
                (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
               ||
               (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
@@ -595,6 +695,8 @@ int main(int argc, const char* argv[])
             var.func_time.output_time += get_nanoseconds() - time_tmp;
 
             next_regular_frame ++;
+            }
+
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {

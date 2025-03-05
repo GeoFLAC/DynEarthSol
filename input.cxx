@@ -279,6 +279,8 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.has_PT", po::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
+        ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
+         "Skip certain processes in PT look to avoid accumulative effects. For example, surface diffusion.\n")
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
@@ -286,6 +288,9 @@ static void declare_parameters(po::options_description &cfg,
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
+
+         ("control.has_ATS", po::value<bool>(&p.control.has_ATS)->default_value(false),
+         "Does the model consider adaptive time stepping?\n")
         ;
 
     cfg.add_options()
@@ -567,7 +572,7 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("mat.rheology_type", po::value<std::string>()->required(),
          "Type of rheology, either 'elastic', 'viscous' (experimental), 'maxwell', "
-         "'elasto-plastic', or 'elasto-visco-plastic'.")
+         "'elasto-plastic', 'elasto-visco-plastic', 'elasto-plastic-rsf', or 'elasto-visco-plastic-rsf'")
         ("mat.is_plane_strain", po::value<bool>(&p.mat.is_plane_strain)->default_value(false),
          "Is the rheology formulation in plane strain (2D elasto-plastic case only)?\n")
 
@@ -663,6 +668,14 @@ static void declare_parameters(po::options_description &cfg,
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
         ("mat.bulk_modulus_s", po::value<std::string>()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
+
+        // for rate-and-state friction
+        ("mat.direct_a", po::value<std::string>()->default_value("[0.020]"),
+         "rate-and-state friction parameter a '[d0, d1, d2, ...]' (-)")
+        ("mat.evolution_b", po::value<std::string>()->default_value("[0.025]"),
+         "rate-and-state friction parameter b '[d0, d1, d2, ...]' (-)")
+        ("mat.characteristic_velocity", po::value<std::string>()->default_value("[1e-6]"),
+         "rate-and-state friction parameter V0 '[d0, d1, d2, ...]' (-)")
         ;
     /*
     Example of bulk modulus of rock-forming minerals
@@ -978,6 +991,10 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             p.mat.rheol_type = MatProps::rh_ep;
         else if (str == std::string("elasto-visco-plastic"))
             p.mat.rheol_type = MatProps::rh_evp;
+        else if (str == std::string("elasto-plastic-rsf"))
+            p.mat.rheol_type = MatProps::rh_ep_rsf;
+        else if (str == std::string("elasto-visco-plastic-rsf"))
+            p.mat.rheol_type = MatProps::rh_evp_rsf;
         else {
             std::cerr << "Error: unknown rheology: '" << str << "'\n";
             std::exit(1);
@@ -1059,6 +1076,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, 1);
         get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, 1);
         get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, 1);
+
+        // Rate-and-state friction parameters
+        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, 1);
+        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, 1);
+        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, 1);
+
     }
 
 }
