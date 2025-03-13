@@ -145,7 +145,7 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
 }
 
 
-void create_regular_mesh(const Param& param, const Variables& var, double *&points) {
+void create_rect_node(const Param& param, const Variables& var, double *&points) {
     points = new double[var.nnode*2];
     double dx = param.mesh.xlength / (var.nx - 1);
     double dz = -param.mesh.zlength / (var.nz - 1);
@@ -207,6 +207,193 @@ void create_regular_regattr(const Variables& var, double *&regattr) {
 
     for (int i = 0; i < var.nelem; i++)
         regattr[i] = 0.;
+}
+
+
+void create_equilateral_node(const Param& param, const Variables& var, double *&points) {
+    /*
+    Create equilateral mesh nodes.
+    
+                     nx = 7
+    0------1-----2-----3-----4-----5-----6
+    | \  /  \  /  \  /  \  /  \  /  \  / |
+    14-15----16----17----18----19----20-21
+    | /  \  /  \  /  \  /  \  /  \  /  \ |   nz = 4
+    7-----8-----9-----10----11----12----13
+    | \  /  \  /  \  /  \  /  \  /  \  / |
+    22-23----24----25----26----27----28-29
+
+    var.nnode = 30
+    var.nelem = 42
+    */
+    points = new double[var.nnode*2];
+    double dx = param.mesh.resolution;
+    double dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
+
+    double bdy_dx = (param.mesh.xlength - (var.nx-1)*dx) / 2.;
+    double bdy_dz = param.mesh.zlength - (var.nz-1)*dz;
+
+    int ind = 0;
+    for (int j=0; j<var.nz; j+=2) {
+        int np = var.nx;
+        int ind_tmp = ind;
+        if (j == var.nz-1) {
+            for (int i=0; i<var.nx; ++i) {
+                points[ind_tmp*2+1] = -param.mesh.zlength;
+                ind_tmp++;
+            }
+        } else {
+            for (int i=0; i<var.nx; ++i) {
+                points[ind_tmp*2+1] = j * dz;
+                ind_tmp++;
+            }
+        }
+        points[ind*2] = 0.;
+        ind++;
+
+        for (int i=1; i <var.nx-1; ++i) {
+            points[ind*2] = i * dx + bdy_dx;
+            ind++;
+        }
+
+        points[ind*2] = param.mesh.xlength;
+        ind++;
+    }
+
+    for (int j=1; j<var.nz; j+=2) {
+        int ind_tmp = ind;
+        if (j == var.nz-1) {
+            ind_tmp = ind;
+            for (int i = 0; i < var.nx+1; ++i) {
+                points[ind_tmp*2+1] = -param.mesh.zlength;
+                ind_tmp++;
+            }
+        } else {
+            for (int i = 0; i<var.nx+1; ++i) {
+                points[ind_tmp*2+1] = j * dz;
+                ind_tmp++;
+            }
+        }
+        points[ind*2] = 0.;
+        ind++;
+
+        for (int i=0; i<var.nx-1; ++i) {
+            points[ind*2] = (i+0.5) * dx + bdy_dx;
+            ind++;
+        }
+
+        points[ind*2] = param.mesh.xlength;
+        ind++;
+    }
+}
+
+
+void create_equilateral_elem(const Variables& var, int *&connectivity) {
+    connectivity = new int[var.nelem*3];
+
+    int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
+
+    int ind = 0;
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        int in0 = var.nx * int((j+1)/2);
+        int in1 = istart_n1 + (var.nx+1)*int(j/2);
+        int istarts[2] = {in0, in1};
+
+        for (int k=0; k<2;k++) {
+            int inc = (k+j)%2;
+            int istart0 = istarts[inc];
+            int istart1 = istarts[1-inc];
+
+            if (inc==0) {
+                for (int i=0; i<var.nx-1;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart1+i+1;
+                    connectivity[ind*3+2-jnc] = istart0+i+1;
+                    // printf("conn %d %d %d\n", connectivity[ind*3], connectivity[ind*3+1], connectivity[ind*3+2]);
+                    ind++;
+                }
+            } else {
+                for (int i=0; i<var.nx;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart0+i+1;
+                    connectivity[ind*3+2-jnc] = istart1+i;
+                    // printf("conn %d %d %d\n", connectivity[ind*3], connectivity[ind*3+1], connectivity[ind*3+2]);
+                    ind++;
+                }
+            }
+        }
+    }
+}
+
+void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
+    segments = new int[var.nseg*2];
+    segflags = new int[var.nseg];
+    int seg_idx = 0;
+    int flag_idx = 0;
+
+    // top
+    for (int i = 0; i<var.nx-1; ++i) {
+        segments[seg_idx*2] = i;
+        segments[seg_idx*2+1] = i+1;
+        seg_idx++;
+        segflags[flag_idx] = 32;
+        flag_idx++;
+    }
+    // bottom
+    int nbot = var.nx-var.nz%2;
+    for (int i = 0; i<nbot; ++i) {
+        segments[seg_idx*2] = var.nnode - nbot - 1 + i;
+        segments[seg_idx*2+1] = var.nnode - nbot + i;
+        seg_idx++;
+        segflags[flag_idx] = 16;
+        flag_idx++;
+    }
+
+    // left and right
+    int istart_n2 = var.nx * (int(var.nz/2)+var.nz%2);
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc)*var.nx;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2))*(var.nx+1);
+        seg_idx++;
+        segflags[flag_idx] = 1;
+        flag_idx++;
+
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc+1)*var.nx -1;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2)+1)*(var.nx+1) -1;
+        seg_idx++;
+        segflags[flag_idx] = 2;
+        flag_idx++;
+    }
+}
+
+void new_mesh_regular_equilateral(const Param& param, Variables& var)
+{
+    double *pcoord, *pregattr;
+    int *pconnectivity, *psegment, *psegflag;
+
+    double sqrt3_to_2 = 2./std::sqrt(3.0);
+
+    double x_mid = param.mesh.xlength / 2;
+    var.nx = int((x_mid-0.5*param.mesh.resolution) / param.mesh.resolution)*2 + 2;
+    var.nz = int(param.mesh.zlength*sqrt3_to_2 / param.mesh.resolution) + 1;
+    var.nnode = var.nx*((int)((var.nz-1)/2)+1) + (var.nx+1)*((int)((var.nz-1)/2)+(1-var.nz%2));
+    var.nelem = (2*var.nx-1) * (var.nz-1);
+    var.nseg = 2*(var.nz+var.nx-2) + 1 - var.nz%2;
+
+    create_equilateral_node(param, var, pcoord);
+    create_equilateral_elem(var, pconnectivity);
+    create_equilateral_segments(var, psegment, psegflag);
+
+    var.coord = new array_t(pcoord, var.nnode);
+    var.connectivity = new conn_t(pconnectivity, var.nelem);
+    var.segment = new segment_t(psegment, var.nseg);
+    var.segflag = new segflag_t(psegflag, var.nseg);
+
+    create_regular_regattr(var, pregattr);
+    var.regattr = new regattr_t(pregattr, var.nelem);
+
 }
 
 
@@ -456,7 +643,7 @@ void new_mesh_regular(const Param& param, Variables& var)
     create_quadrilateral_cells(var.nx, var.nz, pcell);
     var.cell = new regular_t(pcell, var.ncell);
 
-    create_regular_mesh(param, var, pcoord);
+    create_rect_node(param, var, pcoord);
     create_elem_from_cell(var, pconnectivity);
     create_regular_segments(var, psegment, psegflag);
 
@@ -2071,6 +2258,8 @@ void create_new_mesh(const Param& param, Variables& var)
             new_mesh_uniform_resolution(param, var);
         } else if (param.mesh.meshing_elem_shape == 1) {
             new_mesh_regular(param, var);
+        } else if (param.mesh.meshing_elem_shape == 2) {
+            new_mesh_regular_equilateral(param, var);
         } else {
             std::cout << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             std::exit(10);

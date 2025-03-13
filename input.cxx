@@ -74,7 +74,7 @@ static void declare_parameters(po::options_description &cfg,
          "95: read the mesh from from a .exo file\n"
          )
         ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
-         "Element shape for meshing. 0: tetrahedra; 1: hexahedra.")
+         "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
         ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
          "Output verbose during mesh/remeshing. -1 for no output.")
         ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
