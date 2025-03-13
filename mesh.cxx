@@ -231,7 +231,6 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
     double dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
 
     double bdy_dx = (param.mesh.xlength - (var.nx-1)*dx) / 2.;
-    double bdy_dz = param.mesh.zlength - (var.nz-1)*dz;
 
     int ind = 0;
     for (int j=0; j<var.nz; j+=2) {
@@ -287,86 +286,6 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
     }
 }
 
-
-void create_equilateral_elem(const Variables& var, int *&connectivity) {
-    connectivity = new int[var.nelem*3];
-
-    int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
-
-    int ind = 0;
-    for (int j=0; j<var.nz-1;j++) {
-        int jnc = j%2;
-        int in0 = var.nx * int((j+1)/2);
-        int in1 = istart_n1 + (var.nx+1)*int(j/2);
-        int istarts[2] = {in0, in1};
-
-        for (int k=0; k<2;k++) {
-            int inc = (k+j)%2;
-            int istart0 = istarts[inc];
-            int istart1 = istarts[1-inc];
-
-            if (inc==0) {
-                for (int i=0; i<var.nx-1;i++) {
-                    connectivity[ind*3] = istart0+i;
-                    connectivity[ind*3+1+jnc] = istart1+i+1;
-                    connectivity[ind*3+2-jnc] = istart0+i+1;
-                    // printf("conn %d %d %d\n", connectivity[ind*3], connectivity[ind*3+1], connectivity[ind*3+2]);
-                    ind++;
-                }
-            } else {
-                for (int i=0; i<var.nx;i++) {
-                    connectivity[ind*3] = istart0+i;
-                    connectivity[ind*3+1+jnc] = istart0+i+1;
-                    connectivity[ind*3+2-jnc] = istart1+i;
-                    // printf("conn %d %d %d\n", connectivity[ind*3], connectivity[ind*3+1], connectivity[ind*3+2]);
-                    ind++;
-                }
-            }
-        }
-    }
-}
-
-void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
-    segments = new int[var.nseg*2];
-    segflags = new int[var.nseg];
-    int seg_idx = 0;
-    int flag_idx = 0;
-
-    // top
-    for (int i = 0; i<var.nx-1; ++i) {
-        segments[seg_idx*2] = i;
-        segments[seg_idx*2+1] = i+1;
-        seg_idx++;
-        segflags[flag_idx] = 32;
-        flag_idx++;
-    }
-    // bottom
-    int nbot = var.nx-var.nz%2;
-    for (int i = 0; i<nbot; ++i) {
-        segments[seg_idx*2] = var.nnode - nbot - 1 + i;
-        segments[seg_idx*2+1] = var.nnode - nbot + i;
-        seg_idx++;
-        segflags[flag_idx] = 16;
-        flag_idx++;
-    }
-
-    // left and right
-    int istart_n2 = var.nx * (int(var.nz/2)+var.nz%2);
-    for (int j=0; j<var.nz-1;j++) {
-        int jnc = j%2;
-        segments[seg_idx*2+jnc] = (int(j/2)+jnc)*var.nx;
-        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2))*(var.nx+1);
-        seg_idx++;
-        segflags[flag_idx] = 1;
-        flag_idx++;
-
-        segments[seg_idx*2+jnc] = (int(j/2)+jnc+1)*var.nx -1;
-        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2)+1)*(var.nx+1) -1;
-        seg_idx++;
-        segflags[flag_idx] = 2;
-        flag_idx++;
-    }
-}
 
 void new_mesh_regular_equilateral(const Param& param, Variables& var)
 {
@@ -1651,6 +1570,84 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
 } // end of anonymous namespace
 
+
+void create_equilateral_elem(const Variables& var, int *&connectivity) {
+    connectivity = new int[var.nelem*3];
+
+    int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
+
+    int ind = 0;
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        int in0 = var.nx * int((j+1)/2);
+        int in1 = istart_n1 + (var.nx+1)*int(j/2);
+        int istarts[2] = {in0, in1};
+
+        for (int k=0; k<2;k++) {
+            int inc = (k+j)%2;
+            int istart0 = istarts[inc];
+            int istart1 = istarts[1-inc];
+
+            if (inc==0) {
+                for (int i=0; i<var.nx-1;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart1+i+1;
+                    connectivity[ind*3+2-jnc] = istart0+i+1;
+                    ind++;
+                }
+            } else {
+                for (int i=0; i<var.nx;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart0+i+1;
+                    connectivity[ind*3+2-jnc] = istart1+i;
+                    ind++;
+                }
+            }
+        }
+    }
+}
+
+void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
+    segments = new int[var.nseg*2];
+    segflags = new int[var.nseg];
+    int seg_idx = 0;
+    int flag_idx = 0;
+
+    // top
+    for (int i = 0; i<var.nx-1; ++i) {
+        segments[seg_idx*2] = i;
+        segments[seg_idx*2+1] = i+1;
+        seg_idx++;
+        segflags[flag_idx] = 32;
+        flag_idx++;
+    }
+    // bottom
+    int nbot = var.nx-var.nz%2;
+    for (int i = 0; i<nbot; ++i) {
+        segments[seg_idx*2] = var.nnode - nbot - 1 + i;
+        segments[seg_idx*2+1] = var.nnode - nbot + i;
+        seg_idx++;
+        segflags[flag_idx] = 16;
+        flag_idx++;
+    }
+
+    // left and right
+    int istart_n2 = var.nx * (int(var.nz/2)+var.nz%2);
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc)*var.nx;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2))*(var.nx+1);
+        seg_idx++;
+        segflags[flag_idx] = 1;
+        flag_idx++;
+
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc+1)*var.nx -1;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2)+1)*(var.nx+1) -1;
+        seg_idx++;
+        segflags[flag_idx] = 2;
+        flag_idx++;
+    }
+}
 
 void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
                         int n_init_segments, const int *init_segments, const int *init_segflags,
