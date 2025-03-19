@@ -1763,6 +1763,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
               const array_t &old_coord, const conn_t &old_conn,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
 
     double *qcoord = new double[var.nnode * NDIMS];
     int *qconn = new int[var.nelem * NODES_PER_ELEM];
@@ -1793,20 +1796,13 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         (*var.segflag)[i][0] = old_segflag[i][0];
     }
 
-    array_t inz(var.nz);
-    array_t outz(var.nz);
-    array_t inx(var.nx);
-    array_t outx(var.nx);
-#ifdef THREED
-    array_t iny(var.ny);
-    array_t outy(var.ny);
-#endif
-
-
 #ifdef THREED
     // interpolate z edges
+    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
+            array_t inz(var.nz);
+            array_t outz(var.nz);
             int ind_base = i * (var.nx-1) * (var.nz * var.ny) + j * (var.ny-1);
             for (int k = 0; k < var.nz; ++k) {
                 const double* p = old_coord[ind_base + k * var.ny];
@@ -1816,25 +1812,27 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             }
 
             interpolate_uniform_curve(param, inz, outz, NDIMS - 1);
+
             for (int k = 0; k < var.nz; ++k) {
                 double* p = (*var.coord)[ind_base + k * var.ny];
                 p[0] = outz[k][0];
                 p[1] = outz[k][1];
                 p[2] = outz[k][2];
             }
-
         }
     }
     // interpolate x edges
+    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
     for (int j = 0; j < 2; ++j) {
         for (int k = 0; k < 2; ++k) {
+            array_t inx(var.nx);
+            array_t outx(var.nx);
             int ind_base = j * (var.ny-1) + k * (var.nz-1) * var.ny;
             for (int i = 0; i < var.nx; ++i) {
                 const double* p = old_coord[ind_base + i * var.ny * var.nz];
                 inx[i][0] = p[0];
                 inx[i][1] = p[1];
                 inx[i][2] = p[2];
-                // printf("p[0]: %f, p[1]: %f, p[2]: %f\n", p[0], p[1], p[2]);
             }
             if (k == 0) {
                 if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
@@ -1843,19 +1841,23 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                     }
                 }
             }
+
             interpolate_uniform_curve(param, inx, outx, 0);
+
             for (int i = 0; i < var.nx; ++i) {
                 double* p = (*var.coord)[ind_base + i * var.ny * var.nz];
                 p[0] = outx[i][0];
                 p[1] = outx[i][1];
                 p[2] = outx[i][2];
-                // printf("p[0]: %f, p[1]: %f, p[2]: %f\n", p[0], p[1], p[2]);
             }
         }
     }
     // interpolate y edges
+    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
     for (int i = 0; i < 2; ++i) {
         for (int k = 0; k < 2; ++k) {
+            array_t iny(var.ny);
+            array_t outy(var.ny);
             int ind_base = i * (var.nx-1) * var.ny * var.nz + k * (var.nz-1) * var.ny;
             for (int j = 0; j < var.ny; ++j) {
                 const double* p = old_coord[ind_base + j];
@@ -1863,6 +1865,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 iny[j][1] = p[1];
                 iny[j][2] = p[2];
             }
+
             if (k == 0) {
                 if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
                     for (int j = 0; j < var.ny; ++j) {
@@ -1870,7 +1873,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                     }
                 }
             }
+
             interpolate_uniform_curve(param, iny, outy, 1);
+
             for (int j = 0; j < var.ny; ++j) {
                 double* p = (*var.coord)[ind_base + j];
                 p[0] = outy[j][0];
@@ -1882,6 +1887,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // interpolation surfaces
     // interpolate throught the x direction
+    #pragma omp parallel for default(none) shared(param,var)
     for (int i=1; i<var.nx-1; i++) {
         // top y
         int jys = i * var.ny * var.nz;
@@ -1923,6 +1929,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         }
     }
     // interpolate throught the y direction
+    #pragma omp parallel for default(none) shared(param,var)
     for (int j=1; j<var.ny-1; j++) {
         // top x
         int ixs = j;
@@ -1962,6 +1969,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         }
     }
     // interpolate throught the z direction
+    #pragma omp parallel for default(none) shared(param,var)
     for (int k=1; k<var.nz-1; k++) {
         // front x
         int ixs = k * var.ny;
@@ -2004,6 +2012,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // 2D interpolation of x-y plane
     // top and bottom
+    #pragma omp parallel for default(none) shared(param,var,old_coord)
     for (int i=1; i<var.nx-1; i++) {
         for (int j=1; j<var.ny-1; j++) {
             for (int k=0; k<2; k++) {
@@ -2095,6 +2104,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // 2D interpolation of x-z plane
     // left and right
+    #pragma omp parallel for default(none) shared(var,old_coord)
     for (int i=1; i<var.nx-1; i++) {
         for (int k=1; k<var.nz-1; k++) {
             for (int j=0; j<2; j++) {
@@ -2178,6 +2188,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
     // 2D interpolation of y-z plane
     // front and back
+    #pragma omp parallel for default(none) shared(var,old_coord)
     for (int j=1; j<var.ny-1; j++) {
         for (int k=1; k<var.nz-1; k++) {
             for (int i=0; i<2; i++) {
@@ -2261,6 +2272,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
 
     // interpolate the x inside the mesh
+    #pragma omp parallel for default(none) shared(var)
     for (int j=1; j<var.ny-1; j++) {
         for (int k=1; k<var.nz-1; k++) {
             double zs = (*var.coord)[k*var.ny+j][0];
@@ -2272,6 +2284,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         }
     }
     // interpolate the y inside the mesh
+    #pragma omp parallel for default(none) shared(var)
     for (int i=1; i<var.nx-1; i++) {
         for (int k=1; k<var.nz-1; k++) {
             double zs = (*var.coord)[i*var.ny*var.nz+k*var.ny][1];
@@ -2283,6 +2296,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         }
     }
     // interpolate the z inside the mesh
+    #pragma omp parallel for default(none) shared(var)
     for (int i=1; i<var.nx-1; i++) {
         for (int j=1; j<var.ny-1; j++) {
             double zs = (*var.coord)[i*var.ny*var.nz+j][2];
@@ -2295,6 +2309,10 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
 
 #else
+    array_t inz(var.nz);
+    array_t outz(var.nz);
+    array_t inx(var.nx);
+    array_t outx(var.nx);
     // interpolate left side
     for (int j = 0; j < var.nz; ++j) {
         const double* p = old_coord[j];
@@ -2372,6 +2390,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 #endif
 
         // create_uniform_interpolated_mesh(param, var, old_coord, var.coord);
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &tmp_result_sg)
