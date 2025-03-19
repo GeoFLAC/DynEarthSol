@@ -100,13 +100,19 @@ void set_2d_quality_str(std::string &quality, double min_angle)
 }
 
 
-void create_quadrilateral_cells(int nx, int nz, int *&cells) {
-    cells = new int[(nx-1)*(nz-1)*4];
+void create_quadrilateral_cells(Variables &var, int *&cells) {
+#ifndef THREED
+    cells = new int[(var.nx-1)*(var.nz-1)*4];
+#else
+    cells = new int[(var.nx-1)*(var.ny-1)*(var.nz-1)*8];
+#endif
     int cell_idx = 0;
-    for (int i = 0; i < nx - 1; ++i) {
-        for (int j = 0; j < nz - 1; ++j) {
-            int idx0 = i * nz + j;
-            int idx1 = idx0 + nz;
+
+#ifndef THREED
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.nz - 1; ++j) {
+            int idx0 = i * var.nz + j;
+            int idx1 = idx0 + var.nz;
             cells[cell_idx] = idx0;
             cells[cell_idx+1] = idx1;
             cells[cell_idx+2] = idx1 + 1;
@@ -114,11 +120,113 @@ void create_quadrilateral_cells(int nx, int nz, int *&cells) {
             cell_idx += 4;
         }
     }
+#else
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.ny - 1; ++j) {
+            for (int k = 0; k < var.nz - 1; ++k) {
+                // 8 vertices index
+                int idx0 = i * var.ny * var.nz + j * var.nz + k;
+                int idx1 = idx0 + var.nz;
+                int idx2 = idx1 + var.ny * var.nz;
+                int idx3 = idx2 - var.nz;
+                cells[cell_idx] = idx0;
+                cells[cell_idx+1] = idx1;
+                cells[cell_idx+2] = idx2;
+                cells[cell_idx+3] = idx3;
+                cells[cell_idx+4] = idx0 + 1;
+                cells[cell_idx+5] = idx1 + 1;
+                cells[cell_idx+6] = idx2 + 1;
+                cells[cell_idx+7] = idx3 + 1;
+                cell_idx += 8;
+            }
+        }
+    }
+#endif
+}
+
+void divide_hexahedron_to_tetrahedra_index(const int *cell, int order, int n, int *conn) {
+
+    if (order == 0) {
+        switch (n)
+        {
+        case 0:
+            conn[0] = cell[0];
+            conn[1] = cell[1];
+            conn[2] = cell[2];
+            conn[3] = cell[5];
+            break;
+        case 1:
+            conn[0] = cell[0];
+            conn[1] = cell[2];
+            conn[2] = cell[3];
+            conn[3] = cell[7];
+            break;
+        case 2:
+            conn[0] = cell[0];
+            conn[1] = cell[4];
+            conn[2] = cell[5];
+            conn[3] = cell[7];
+            break;
+        case 3:
+            conn[0] = cell[2];
+            conn[1] = cell[5];
+            conn[2] = cell[6];
+            conn[3] = cell[7];
+            break;
+        case 4:
+            conn[0] = cell[0];
+            conn[1] = cell[5];
+            conn[2] = cell[2];
+            conn[3] = cell[7];
+            break;
+        default:
+            exit(554);
+            break;
+        }
+    } else {
+        switch (n)
+        {
+        case 0:
+            conn[0] = cell[1];
+            conn[1] = cell[2];
+            conn[2] = cell[3];
+            conn[3] = cell[6];
+            break;
+        case 1:
+            conn[0] = cell[0];
+            conn[1] = cell[1];
+            conn[2] = cell[3];
+            conn[3] = cell[4];
+            break;
+        case 2:
+            conn[0] = cell[1];
+            conn[1] = cell[5];
+            conn[2] = cell[6];
+            conn[3] = cell[4];
+            break;
+        case 3:
+            conn[0] = cell[3];
+            conn[1] = cell[4];
+            conn[2] = cell[6];
+            conn[3] = cell[7];
+            break;
+        case 4:
+            conn[0] = cell[1];
+            conn[1] = cell[3];
+            conn[2] = cell[4];
+            conn[3] = cell[6];
+            break;
+        default:
+            exit(555);
+            break;
+        }
+    }
 }
 
 
 void create_elem_from_cell(const Variables& var, int *&connectivity) {
-    connectivity = new int[var.nelem*3];
+    connectivity = new int[var.nelem*NODES_PER_ELEM];
+#ifndef THREED
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             int idx = i * (var.nz - 1) + j;
@@ -142,28 +250,64 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
             }
         }
     }
+#else
+    int conn[NODES_PER_ELEM];
+    for (int i = 0; i<var.nx - 1; ++i) {
+        for (int j = 0; j<var.ny -1; ++j) {
+            for (int k = 0; k<var.nz - 1; ++k) {
+                int idx = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+                int order = idx%2;
+                for (int n = 0; n < 5; ++n) {
+                    int idx_elem = idx*5+n;
+                    divide_hexahedron_to_tetrahedra_index((*var.cell)[idx], 0, n, conn);
+                    connectivity[idx_elem*4] = conn[0];
+                    connectivity[idx_elem*4+1] = conn[1];
+                    connectivity[idx_elem*4+2] = conn[2];
+                    connectivity[idx_elem*4+3] = conn[3];
+                }
+            }
+        }
+    }
+#endif
 }
 
 
 void create_rect_node(const Param& param, const Variables& var, double *&points) {
-    points = new double[var.nnode*2];
+    points = new double[var.nnode*NDIMS];
     double dx = param.mesh.xlength / (var.nx - 1);
     double dz = -param.mesh.zlength / (var.nz - 1);
+#ifdef THREED
+    double dy = param.mesh.ylength / (var.ny - 1);
+#endif
 
+#ifndef THREED
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
-            (points)[(j + i * var.nz)*2] = i * dx;
-            (points)[(j + i * var.nz)*2+1] = j * dz;
+            points[(j + i * var.nz)*2] = i * dx;
+            points[(j + i * var.nz)*2+1] = j * dz;
         }
     }
+#else
+    for (int i = 0; i < var.nx; ++i) {
+        for (int j = 0; j < var.ny; ++j) {
+            for (int k = 0; k < var.nz; ++k) {
+                int idx = k + j * var.nz + i * var.ny * var.nz;
+                points[idx*3] = i * dx;
+                points[idx*3+1] = j * dy;
+                points[idx*3+2] = k * dz;
+            }
+        }
+    }
+#endif
 }
 
 
 void create_regular_segments(const Variables& var, int *&segments, int *&segflags) {
-    segments = new int[var.nseg*2];
+    segments = new int[var.nseg*NODES_PER_FACET];
     segflags = new int[var.nseg];
     int seg_idx = 0;
     int flag_idx = 0;
+#ifndef THREED
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             if (i == 0) {
@@ -200,6 +344,136 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
         segflags[flag_idx] = 2;
         flag_idx++;
     }
+#else
+    int idx_elem, idx_cell;
+    int *conn;
+    // top and bottom
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.ny - 1; ++j) {
+            // top
+            int k = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDZ1;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDZ1;
+            seg_idx++;
+
+            // bottom
+            k = var.nz - 2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDZ0;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 3;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDZ0;
+            seg_idx++;
+        }
+    }
+    // left and right
+    for (int j = 0; j < var.ny - 1; ++j) {
+        for (int k = 0; k < var.nz - 1; ++k) {
+            // left
+            int i = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[1];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDX0;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDX0;
+            seg_idx++;
+
+            // right
+            i = var.nx - 2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDX1;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 3;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[3];
+            segments[seg_idx*3+2] = conn[2];
+            segflags[seg_idx] = BOUNDX1;
+            seg_idx++;
+        }
+    }
+    // front and back
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int k = 0; k < var.nz - 1; ++k) {
+            // front
+            int j = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[3];
+            segments[seg_idx*3+2] = conn[2];
+            segflags[seg_idx] = BOUNDY0;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[1];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDY0;
+            seg_idx++;
+ 
+            // back
+            j = var.ny - 2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDY1;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 3;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDY1;
+            seg_idx++;
+        }
+    }
+#endif
 }
 
 void create_regular_regattr(const Variables& var, double *&regattr) {
@@ -558,16 +832,27 @@ void new_mesh_regular(const Param& param, Variables& var)
     var.nnode = var.nx * var.nz;
     var.nelem = 2 * var.ncell;
     var.nseg = 2 * (var.nx + var.nz - 2);
+#ifdef THREED
+    var.ny = std::round(param.mesh.ylength/param.mesh.resolution) + 1;
+    var.ncell *= (var.ny-1);
+    var.nnode *= var.ny;
+    var.nelem = 5 * var.ncell;
+    var.nseg = 4 * ( (var.nx-1) * (var.ny-1) + \
+                     (var.ny-1) * (var.nz-1) + \
+                     (var.nz-1) * (var.nx-1) );
+#endif
+    
 
-    create_quadrilateral_cells(var.nx, var.nz, pcell);
+    create_quadrilateral_cells(var, pcell);
     var.cell = new regular_t(pcell, var.ncell);
 
     create_rect_node(param, var, pcoord);
     create_elem_from_cell(var, pconnectivity);
-    create_regular_segments(var, psegment, psegflag);
 
     var.coord = new array_t(pcoord, var.nnode);
     var.connectivity = new conn_t(pconnectivity, var.nelem);
+
+    create_regular_segments(var, psegment, psegflag);
     var.segment = new segment_t(psegment, var.nseg);
     var.segflag = new segflag_t(psegflag, var.nseg);
 
@@ -1770,10 +2055,17 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.zlength};
     std::vector<std::size_t> idx(NDIMS);
     sortindex(lengths, idx);
-    const int dmin = idx[0];
-    const int dmid = idx[1];
-    const int dmax = idx[NDIMS-1];
+    int dmin, dmid, dmax;
 
+    if (param.mesh.meshing_elem_shape == 0) {
+        dmin = idx[0];
+        dmid = idx[1];
+        dmax = idx[NDIMS-1];
+    } else {
+        dmax = 0;
+        dmid = 2;
+        dmin = 1;
+    }
     //
     // sort coordinate of nodes and element centers
     //

@@ -1366,8 +1366,6 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
                                array_t &output_points, int primary_index) {
     int np = input_points.size();
 
-    int secondary_index = 1 - primary_index;
-
     double min_val = input_points[0][primary_index];
     double max_val = input_points[(np - 1)][primary_index];
 
@@ -1376,7 +1374,7 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
         std::swap(min_val, max_val);
         reverse = true;
     }
-    if (primary_index == 1) {
+    if (primary_index == (NDIMS - 1)) {
         switch (param.mesh.remeshing_option)
         {
         case 1:
@@ -1408,11 +1406,25 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
         double t = (target - input_points[j][primary_index]) /
                    (input_points[j + 1][primary_index] - input_points[j][primary_index]);
 
-        output_points[ind][secondary_index] = 
-            (1 - t) * input_points[j][secondary_index] + 
-            t * input_points[(j + 1)][secondary_index];
+        for (int k = 0; k < NDIMS; k++) {
+            if (k != primary_index) {
+                output_points[ind][k] = 
+                    (1 - t) * input_points[j][k] + 
+                    t * input_points[(j + 1)][k];
+            }
+        }
     }
 }
+
+
+double quadraticInterpolation(double x, 
+                              double x0, double x1, double x2, 
+                              double y0, double y1, double y2) {
+    return y0 * ((x - x1) * (x - x2)) / ((x0 - x1) * (x0 - x2)) +
+           y1 * ((x - x0) * (x - x2)) / ((x1 - x0) * (x1 - x2)) +
+           y2 * ((x - x0) * (x - x1)) / ((x2 - x0) * (x2 - x1));
+}
+
 
 void create_uniform_interpolated_mesh(const Param& param, const Variables& var, const array_t &old_coord, array_t* coord) {
 
@@ -1767,11 +1779,17 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         p[0] = old_conn[i][0];
         p[1] = old_conn[i][1];
         p[2] = old_conn[i][2];
+#ifdef THREED
+        p[3] = old_conn[i][3];
+#endif
     }
     for (int i = 0; i < var.nseg; ++i) {
         int* p = (*var.segment)[i];
         p[0] = old_segment[i][0];
         p[1] = old_segment[i][1];
+#ifdef THREED
+        p[2] = old_segment[i][2];
+#endif
         (*var.segflag)[i][0] = old_segflag[i][0];
     }
 
@@ -1779,12 +1797,509 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     array_t outz(var.nz);
     array_t inx(var.nx);
     array_t outx(var.nx);
+#ifdef THREED
+    array_t iny(var.ny);
+    array_t outy(var.ny);
+#endif
 
+
+#ifdef THREED
+    // interpolate z edges
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            int ind_base = i * (var.nx-1) * (var.nz * var.ny) + j * (var.ny-1);
+            for (int k = 0; k < var.nz; ++k) {
+                const double* p = old_coord[ind_base + k * var.ny];
+                inz[k][0] = p[0];
+                inz[k][1] = p[1];
+                inz[k][2] = p[2];
+            }
+
+            interpolate_uniform_curve(param, inz, outz, NDIMS - 1);
+            for (int k = 0; k < var.nz; ++k) {
+                double* p = (*var.coord)[ind_base + k * var.ny];
+                p[0] = outz[k][0];
+                p[1] = outz[k][1];
+                p[2] = outz[k][2];
+            }
+
+        }
+    }
+    // interpolate x edges
+    for (int j = 0; j < 2; ++j) {
+        for (int k = 0; k < 2; ++k) {
+            int ind_base = j * (var.ny-1) + k * (var.nz-1) * var.ny;
+            for (int i = 0; i < var.nx; ++i) {
+                const double* p = old_coord[ind_base + i * var.ny * var.nz];
+                inx[i][0] = p[0];
+                inx[i][1] = p[1];
+                inx[i][2] = p[2];
+                // printf("p[0]: %f, p[1]: %f, p[2]: %f\n", p[0], p[1], p[2]);
+            }
+            if (k == 0) {
+                if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
+                    for (int i = 0; i < var.nx; ++i) {
+                        inx[i][2] = -param.mesh.zlength;
+                    }
+                }
+            }
+            interpolate_uniform_curve(param, inx, outx, 0);
+            for (int i = 0; i < var.nx; ++i) {
+                double* p = (*var.coord)[ind_base + i * var.ny * var.nz];
+                p[0] = outx[i][0];
+                p[1] = outx[i][1];
+                p[2] = outx[i][2];
+                // printf("p[0]: %f, p[1]: %f, p[2]: %f\n", p[0], p[1], p[2]);
+            }
+        }
+    }
+    // interpolate y edges
+    for (int i = 0; i < 2; ++i) {
+        for (int k = 0; k < 2; ++k) {
+            int ind_base = i * (var.nx-1) * var.ny * var.nz + k * (var.nz-1) * var.ny;
+            for (int j = 0; j < var.ny; ++j) {
+                const double* p = old_coord[ind_base + j];
+                iny[j][0] = p[0];
+                iny[j][1] = p[1];
+                iny[j][2] = p[2];
+            }
+            if (k == 0) {
+                if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
+                    for (int j = 0; j < var.ny; ++j) {
+                        iny[j][2] = -param.mesh.zlength;
+                    }
+                }
+            }
+            interpolate_uniform_curve(param, iny, outy, 1);
+            for (int j = 0; j < var.ny; ++j) {
+                double* p = (*var.coord)[ind_base + j];
+                p[0] = outy[j][0];
+                p[1] = outy[j][1];
+                p[2] = outy[j][2];
+            }
+        }
+    }
+
+    // interpolation surfaces
+    // interpolate throught the x direction
+    for (int i=1; i<var.nx-1; i++) {
+        // top y
+        int jys = i * var.ny * var.nz;
+        // int jye = (i+1) * var.ny * var.nz - var.nz;
+        int jye = i * var.ny * var.nz + var.ny-1;
+        double dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
+        for (int j=1; j<var.ny-1;j++) {
+            int ind = i * var.ny * var.nz + j;
+            double y = (*var.coord)[jys][1] + j * dy;
+            (*var.coord)[ind][1] = y;
+        }
+        // bottom y
+        jys = i * var.ny * var.nz + (var.nz-1) * var.ny;
+        jye = i * var.ny * var.nz + (var.nz-1) * var.ny + var.ny-1;
+
+        dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
+        for (int j=1; j<var.ny-1;j++) {
+            int ind = i * var.ny * var.nz + (var.nz-1) * var.ny + j;
+            double y = (*var.coord)[jys][1] + j * dy;
+            (*var.coord)[ind][1] = y;
+        }
+        // front z
+        int kzs = i * var.ny * var.nz;
+        int kze = i * var.ny * var.nz + (var.nz-1) * var.ny;
+        double dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
+        for (int k=1; k<var.nz-1;k++) {
+            int ind = i * var.ny * var.nz + k * var.ny;
+            double z = (*var.coord)[kzs][2] + k * dz;
+            (*var.coord)[ind][2] = z;
+        }
+        // back z
+        kzs = i * var.ny * var.nz + (var.ny-1);
+        kze = i * var.ny * var.nz + (var.nz-1) * var.ny + (var.ny-1);
+        dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
+        for (int k=1; k<var.nz-1;k++) {
+            int ind = i * var.ny * var.nz + k * var.ny + (var.ny-1);
+            double z = (*var.coord)[kzs][2] + k * dz;
+            (*var.coord)[ind][2] = z;
+        }
+    }
+    // interpolate throught the y direction
+    for (int j=1; j<var.ny-1; j++) {
+        // top x
+        int ixs = j;
+        int ixe = (var.nx - 1) * var.ny * var.nz + j;
+        double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
+        for (int i=1; i<var.nx-1; i++) {
+            int ind = i * var.ny * var.nz + j;
+            double x = (*var.coord)[ixs][0] + i * dx;
+            (*var.coord)[ind][0] = x;
+        }
+        // bottom x
+        ixs = (var.nz-1) * var.ny + j;
+        ixe = (var.nx - 1) * var.ny * var.nz + (var.nz-1) * var.ny + j;
+        dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
+        for (int i=1; i<var.nx-1; i++) {
+            int ind = i * var.ny * var.nz + (var.nz-1) * var.ny + j;
+            double x = (*var.coord)[ixs][0] + i * dx;
+            (*var.coord)[ind][0] = x;
+        }
+        // left z
+        int kzs = j;
+        int kze = (var.nz-1) * var.ny + j;
+        double dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
+        for (int k=1; k<var.nz-1; k++) {
+            int ind = k * var.ny + j;
+            double z = (*var.coord)[kzs][2] + k * dz;
+            (*var.coord)[ind][2] = z;
+        }
+        // right z
+        kzs = (var.nx-1) * var.ny * var.nz + j;
+        kze = (var.nx-1) * var.ny * var.nz + (var.nz-1) * var.ny + j;
+        dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
+        for (int k=1; k<var.nz-1; k++) {
+            int ind = (var.nx - 1) * var.ny * var.nz + k * var.ny + j;
+            double z = (*var.coord)[kzs][2] + k * dz;
+            (*var.coord)[ind][2] = z;
+        }
+    }
+    // interpolate throught the z direction
+    for (int k=1; k<var.nz-1; k++) {
+        // front x
+        int ixs = k * var.ny;
+        int ixe = (var.nx - 1) * var.ny * var.nz + k * var.ny;
+        double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
+        for (int i=1; i<var.nx-1; i++) {
+            int ind = i * var.ny * var.nz + k * var.ny;
+            double x = (*var.coord)[ixs][0] + i * dx;
+            (*var.coord)[ind][0] = x;
+        }
+        // back x
+        ixs = k * var.ny + (var.ny-1);
+        ixe = (var.nx-1) * var.ny * var.nz + k * var.ny + (var.ny-1);
+        dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
+        for (int i=1; i<var.nx-1; i++) {
+            int ind = i * var.ny * var.nz + k * var.ny + (var.ny-1);
+            double x = (*var.coord)[ixs][0] + i * dx;
+            (*var.coord)[ind][0] = x;
+        }
+        // left y
+        int jys = k * var.ny;
+        int jye = k * var.ny + (var.ny-1);
+        double dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
+        for (int j=1; j<var.ny-1; j++) {
+            int ind = k * var.ny + j;
+            double y = (*var.coord)[jys][1] + j * dy;
+            (*var.coord)[ind][1] = y;
+        }
+        // right y
+        jys = (var.nx-1) * var.ny * var.nz + k * var.ny;
+        jye = (var.nx-1) * var.ny * var.nz + k * var.ny + (var.ny-1);
+        dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
+        for (int j=1; j<var.ny-1; j++) {
+            int ind = (var.nx - 1) * var.ny * var.nz + k * var.ny + j;
+            double y = (*var.coord)[jys][1] + j * dy;
+            (*var.coord)[ind][1] = y;
+        }
+    }
+
+
+    // 2D interpolation of x-y plane
+    // top and bottom
+    for (int i=1; i<var.nx-1; i++) {
+        for (int j=1; j<var.ny-1; j++) {
+            for (int k=0; k<2; k++) {
+                int ind = i * var.ny * var.nz + k * (var.nz-1) * var.ny + j;
+
+                if (k==0) {
+                    if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
+                        (*var.coord)[ind][2] = -param.mesh.zlength;
+                        continue;
+                    }
+                }
+                int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
+                // search along the x direction
+                double xi = old_coord[ind][0];
+                for (int ii=0; ii<var.nx; ii++) {
+                    if ((*var.coord)[ii * var.ny * var.nz + k * (var.nz-1) * var.ny + j][0] > xi) {
+                        ind_x0 = ii - 1;
+                        ind_x1 = ii;
+                        ind_x2 = ii + 1;
+                        break;
+                    }
+                }
+                if (ind_x2 > var.nx - 1) {
+                    ind_x2 = var.nx - 1;
+                    ind_x1 = var.nx - 2;
+                    ind_x0 = var.nx - 3;
+                }
+                if (ind_x0 < 0) {
+                    ind_x2 = 2;
+                    ind_x1 = 1;
+                    ind_x0 = 0;
+                }
+                if (ind_x2 > var.nx - 1) {
+                    ind_x2 = var.nx - 1;
+                }
+                // search along the y direction
+                double yi = old_coord[ind][1];
+                for (int jj=0; jj<var.ny; jj++) {
+                    if ((*var.coord)[i * var.ny * var.nz + k * (var.nz-1) * var.ny + jj][1] > yi) {
+                        ind_y0 = jj - 1;
+                        ind_y1 = jj;
+                        ind_y2 = jj + 1;
+                        break;
+                    }
+                }
+                if (ind_y2 > var.ny - 1) {
+                    ind_y2 = var.ny - 1;
+                    ind_y1 = var.ny - 2;
+                    ind_y0 = var.ny - 3;
+                }
+                if (ind_y0 < 0) {
+                    ind_y2 = 2;
+                    ind_y1 = 1;
+                    ind_y0 = 0;
+                }
+                if (ind_y2 > var.ny - 1) {
+                    ind_y2 = var.ny - 1;
+                }
+
+                double x_interp1 = quadraticInterpolation(yi, 
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
+                double x_interp2 = quadraticInterpolation(yi,
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
+                double x_interp3 = quadraticInterpolation(yi,
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
+                (*var.coord)[ind][2] = quadraticInterpolation(xi,
+                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
+                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
+                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
+                    x_interp1, x_interp2, x_interp3);
+            }
+        }
+    }
+
+    // 2D interpolation of x-z plane
+    // left and right
+    for (int i=1; i<var.nx-1; i++) {
+        for (int k=1; k<var.nz-1; k++) {
+            for (int j=0; j<2; j++) {
+                int ind = i * var.ny * var.nz + k * var.ny + j * (var.ny-1);
+                int ind_x0=-1, ind_x1, ind_x2, ind_z0=-1, ind_z1, ind_z2;
+                // search along the x direction
+                double xi = old_coord[ind][0];
+                for (int ii=0; ii<var.nx; ii++) {
+                    if ((*var.coord)[ii * var.ny * var.nz + k * var.ny + j * (var.ny-1)][0] > xi) {
+                        ind_x0 = ii - 1;
+                        ind_x1 = ii;
+                        ind_x2 = ii + 1;
+                        break;
+                    }
+                }
+                if (ind_x2 > var.nx - 1) {
+                    ind_x2 = var.nx - 1;
+                    ind_x1 = var.nx - 2;
+                    ind_x0 = var.nx - 3;
+                }
+                if (ind_x0 < 0) {
+                    ind_x2 = 2;
+                    ind_x1 = 1;
+                    ind_x0 = 0;
+                }
+                if (ind_x2 > var.nx - 1) {
+                    ind_x2 = var.nx - 1;
+                }
+                // search along the y direction
+                double zi = old_coord[ind][2];
+                for (int kk=0; kk<var.nz; kk++) {
+                    if ((*var.coord)[i * var.ny * var.nz + kk * var.ny + j * (var.ny-1)][2] > zi) {
+                        ind_z0 = kk - 1;
+                        ind_z1 = kk;
+                        ind_z2 = kk + 1;
+                        break;
+                    }
+                }
+                if (ind_z2 > var.nz - 1) {
+                    ind_z2 = var.nz - 1;
+                    ind_z1 = var.nz - 2;
+                    ind_z0 = var.nz - 3;
+                }
+                if (ind_z0 < 0) {
+                    ind_z2 = 2;
+                    ind_z1 = 1;
+                    ind_z0 = 0;
+                }
+                if (ind_z2 > var.nz - 1) {
+                    ind_z2 = var.nz - 1;
+                }
+
+                double x_interp1 = quadraticInterpolation(zi, 
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
+                double x_interp2 = quadraticInterpolation(zi,
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
+                double x_interp3 = quadraticInterpolation(zi,
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
+                (*var.coord)[ind][1] = quadraticInterpolation(xi,
+                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
+                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
+                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
+                    x_interp1, x_interp2, x_interp3);
+            }
+        }
+    }
+    // 2D interpolation of y-z plane
+    // front and back
+    for (int j=1; j<var.ny-1; j++) {
+        for (int k=1; k<var.nz-1; k++) {
+            for (int i=0; i<2; i++) {
+                int ind = i * (var.nx-1) * var.ny * var.nz + k * var.ny + j;
+                int ind_y0=-1, ind_y1, ind_y2, ind_z0=-1, ind_z1, ind_z2;
+                // search along the y direction
+                double yi = old_coord[ind][1];
+                for (int jj=0; jj<var.ny; jj++) {
+                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + k * var.ny + jj][1] > yi) {
+                        ind_y0 = jj - 1;
+                        ind_y1 = jj;
+                        ind_y2 = jj + 1;
+                        break;
+                    }
+                }
+                if (ind_y2 > var.ny - 1) {
+                    ind_y2 = var.ny - 1;
+                    ind_y1 = var.ny - 2;
+                    ind_y0 = var.ny - 3;
+                }
+                if (ind_y0 < 0) {
+                    ind_y2 = 2;
+                    ind_y1 = 1;
+                    ind_y0 = 0;
+                }
+                if (ind_y2 > var.ny - 1) {
+                    ind_y2 = var.ny - 1;
+                }
+                // search along the z direction
+                double zi = old_coord[ind][2];
+                for (int kk=0; kk<var.nz; kk++) {
+                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + kk * var.ny + j][2] > zi) {
+                        ind_z0 = kk - 1;
+                        ind_z1 = kk;
+                        ind_z2 = kk + 1;
+                        break;
+                    }
+                }
+                if (ind_z2 > var.nz - 1) {
+                    ind_z2 = var.nz - 1;
+                    ind_z1 = var.nz - 2;
+                    ind_z0 = var.nz - 3;
+                }
+                if (ind_z0 < 0) {
+                    ind_z2 = 2;
+                    ind_z1 = 1;
+                    ind_z0 = 0;
+                }
+                if (ind_z2 > var.nz - 1) {
+                    ind_z2 = var.nz - 1;
+                }
+
+                double y_interp1 = quadraticInterpolation(zi, 
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y0][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y0][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y0][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y0][0]);
+                double y_interp2 = quadraticInterpolation(zi,
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y1][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y1][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y1][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y1][0]);
+                double y_interp3 = quadraticInterpolation(zi,
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y2][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y2][2],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y2][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][0],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y2][0]);
+                (*var.coord)[ind][0] = quadraticInterpolation(yi,
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][1],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][1],
+                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][1],
+                    y_interp1, y_interp2, y_interp3);
+            }
+        }
+    }
+
+    // interpolate the x inside the mesh
+    for (int j=1; j<var.ny-1; j++) {
+        for (int k=1; k<var.nz-1; k++) {
+            double zs = (*var.coord)[k*var.ny+j][0];
+            double ze = (*var.coord)[(var.nx-1)*var.ny*var.nz+k*var.ny+j][0];
+            double dx = (ze - zs) / (var.nx - 1);
+            for (int i=1; i<var.nx-1; i++) {
+                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][0] = zs + i * dx;
+            }
+        }
+    }
+    // interpolate the y inside the mesh
+    for (int i=1; i<var.nx-1; i++) {
+        for (int k=1; k<var.nz-1; k++) {
+            double zs = (*var.coord)[i*var.ny*var.nz+k*var.ny][1];
+            double ze = (*var.coord)[i*var.ny*var.nz+k*var.ny+var.ny-1][1];
+            double dy = (ze - zs) / (var.ny - 1);
+            for (int j=1; j<var.ny-1; j++) {
+                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][1] = zs + j * dy;
+            }
+        }
+    }
+    // interpolate the z inside the mesh
+    for (int i=1; i<var.nx-1; i++) {
+        for (int j=1; j<var.ny-1; j++) {
+            double zs = (*var.coord)[i*var.ny*var.nz+j][2];
+            double ze = (*var.coord)[i*var.ny*var.nz+(var.nz-1)*var.ny+j][2];
+            double dz = (ze - zs) / (var.nz - 1);
+            for (int k=1; k<var.nz-1; k++) {
+                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][2] = zs + k * dz;
+            }
+        }
+    }
+
+#else
     // interpolate left side
     for (int j = 0; j < var.nz; ++j) {
         const double* p = old_coord[j];
         inz[j][0] = p[0];
-        inz[j][1] = p[1];        
+        inz[j][1] = p[1];
     }
     interpolate_uniform_curve(param, inz, outz, 1);
     for (int j = 0; j < var.nz; ++j) {
@@ -1854,10 +2369,10 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         for (int j = 1; j < var.nz - 1; ++j)
             (*var.coord)[i * var.nz + j][1] = zi + j * dz; 
     }
+#endif
 
         // create_uniform_interpolated_mesh(param, var, old_coord, var.coord);
 }
-
 
 void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &tmp_result_sg)
 {
@@ -2713,8 +3228,16 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
 #else
-        new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+        if (param.mesh.meshing_elem_shape == 0) {
+            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+        } else if (param.mesh.meshing_elem_shape == 1) {
+            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+        } else {
+            std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
+            std::exit(1);
+        }
 #endif
 #else  // if 2d
 #if defined USEMMG
@@ -2736,7 +3259,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }        
 #endif
 #endif
-        renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
+        if (param.mesh.meshing_elem_shape == 0) {
+            // renumbering mesh
+            renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
+        }
 
         {
             std::cout << "    Interpolating fields.\n";
