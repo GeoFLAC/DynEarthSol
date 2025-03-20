@@ -1694,6 +1694,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     var.segment->reset(qsegment, var.nseg);
     var.segflag->reset(qsegflag, var.nseg);
 
+    #pragma omp parallel for default(none) shared(var,old_conn)
     for (int i = 0; i < var.nelem; ++i) {
         int* p = (*var.connectivity)[i];
         p[0] = old_conn[i][0];
@@ -1703,6 +1704,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         p[3] = old_conn[i][3];
 #endif
     }
+    #pragma omp parallel for default(none) shared(var,old_segment,old_segflag)
     for (int i = 0; i < var.nseg; ++i) {
         int* p = (*var.segment)[i];
         p[0] = old_segment[i][0];
@@ -1714,468 +1716,190 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
 
 #ifdef THREED
+    const int_vec nxyz = {var.nx, var.ny, var.nz};
+
     // interpolate edges
     for (int n0=0;n0<NDIMS;n0++) {
         for (int n1=n0+1;n1<NDIMS;n1++) {
             if (n0 >= n1) continue;
-            int n2 = 3 - n0 - n1;
+            const int n2 = 3 - n0 - n1;
 
-        
+            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1,n2,nxyz) collapse(2)
+            for (int ii=0; ii<2; ii++) {
+                for (int jj=0; jj<2; jj++) {
+                    array_t in(nxyz[n2]);
+                    array_t out(nxyz[n2]);
+                    int_vec idx(3);
+                    idx[n0] = ii*(nxyz[n0]-1);
+                    idx[n1] = jj*(nxyz[n1]-1);
 
+                    for (int kk=0; kk<nxyz[n2]; kk++) {
+                        idx[n2] = kk;
+                        const double* p = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        in[kk][0] = p[0];
+                        in[kk][1] = p[1];
+                        in[kk][2] = p[2];
+                    }
+                    if (idx[2] == 0 && n2 != 2)
+                        if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][2] = -param.mesh.zlength;
+    
+                    interpolate_uniform_curve(param, in, out, n2);
 
-
-
-        }
-    }
-
-
-    // interpolate z edges
-    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            array_t inz(var.nz);
-            array_t outz(var.nz);
-            int ind_base = i * (var.nx-1) * (var.nz * var.ny) + j * (var.ny-1) * var.nz;
-            for (int k = 0; k < var.nz; ++k) {
-                const double* p = old_coord[ind_base + k];
-                inz[k][0] = p[0];
-                inz[k][1] = p[1];
-                inz[k][2] = p[2];
-            }
-
-            interpolate_uniform_curve(param, inz, outz, NDIMS - 1);
-
-            for (int k = 0; k < var.nz; ++k) {
-                double* p = (*var.coord)[ind_base + k];
-                p[0] = outz[k][0];
-                p[1] = outz[k][1];
-                p[2] = outz[k][2];
-            }
-        }
-    }
-    // interpolate x edges
-    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
-    for (int j = 0; j < 2; ++j) {
-        for (int k = 0; k < 2; ++k) {
-            array_t inx(var.nx);
-            array_t outx(var.nx);
-            int ind_base = j * (var.ny-1) * var.nz + k * (var.nz-1);
-            for (int i = 0; i < var.nx; ++i) {
-                const double* p = old_coord[ind_base + i * var.ny * var.nz];
-                inx[i][0] = p[0];
-                inx[i][1] = p[1];
-                inx[i][2] = p[2];
-            }
-            if (k == 0) {
-                if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
-                    for (int i = 0; i < var.nx; ++i) {
-                        inx[i][2] = -param.mesh.zlength;
+                    for (int kk=0; kk<nxyz[n2]; kk++) {
+                        idx[n2] = kk;
+                        double* p = (*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        p[0] = out[kk][0];
+                        p[1] = out[kk][1];
+                        p[2] = out[kk][2];
                     }
                 }
             }
-
-            interpolate_uniform_curve(param, inx, outx, 0);
-
-            for (int i = 0; i < var.nx; ++i) {
-                double* p = (*var.coord)[ind_base + i * var.ny * var.nz];
-                p[0] = outx[i][0];
-                p[1] = outx[i][1];
-                p[2] = outx[i][2];
-            }
         }
     }
-    // interpolate y edges
-    #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
-    for (int i = 0; i < 2; ++i) {
-        for (int k = 0; k < 2; ++k) {
-            array_t iny(var.ny);
-            array_t outy(var.ny);
-            int ind_base = i * (var.nx-1) * var.ny * var.nz + k * (var.nz-1);
-            for (int j = 0; j < var.ny; ++j) {
-                const double* p = old_coord[ind_base + j * var.nz];
-                iny[j][0] = p[0];
-                iny[j][1] = p[1];
-                iny[j][2] = p[2];
-            }
 
-            if (k == 0) {
-                if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
-                    for (int j = 0; j < var.ny; ++j) {
-                        iny[j][2] = -param.mesh.zlength;
+    // interpolation x, y, z in each plane
+    for (int n0=0; n0<NDIMS; n0++) {
+        #pragma omp parallel for default(none) shared(param,var,old_coord,n0,nxyz)
+        for (int ii=1; ii<nxyz[n0]-1; ii++) {
+            for (int n1=0; n1<NDIMS; n1++) {
+                if (n0 == n1) continue;
+                int n2 = 3 - n0 - n1;
+                int i0 = 0;
+                int i1 = nxyz[n1]-1;
+                int_vec idx(3);
+                idx[n0] = ii;
+                for (int jj=0; jj<2; jj++) {
+                    idx[n2] = jj * (nxyz[n2]-1);
+                    idx[n1] = i0;
+                    int ind0 = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                    idx[n1] = i1;
+                    int ind1 = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                    double delta = ((*var.coord)[ind1][n1] - (*var.coord)[ind0][n1]) / i1;
+                    for (int kk=1; kk<nxyz[n1]-1; kk++) {
+                        idx[n1] = kk;
+                        int ind = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                        (*var.coord)[ind][n1] = (*var.coord)[ind0][n1] + kk * delta;
                     }
                 }
             }
-
-            interpolate_uniform_curve(param, iny, outy, 1);
-
-            for (int j = 0; j < var.ny; ++j) {
-                double* p = (*var.coord)[ind_base + j * var.nz];
-                p[0] = outy[j][0];
-                p[1] = outy[j][1];
-                p[2] = outy[j][2];
-            }
-        }
+        }   
     }
 
-    // interpolation surfaces
-    // interpolate throught the x direction
-    #pragma omp parallel for default(none) shared(param,var)
-    for (int i=1; i<var.nx-1; i++) {
-        // top & bottom y
-        int y0 = 0;
-        int y1 = var.ny-1;
-        for (int k=0; k<2;k++) {
-            int zz = k * (var.nz-1);
-            int ind0 = i * var.ny * var.nz + zz + y0 * var.nz;
-            int ind1 = i * var.ny * var.nz + zz + y1 * var.nz;
+    // 2D interpolation of x-y, y-z, x-z plane
+    for (int n0=0; n0<NDIMS; n0++) {
+        for (int n1=0; n1<NDIMS; n1++) {
+            if (n0 >= n1) continue;
+            const int n2 = 3 - n0 - n1;
 
-            double delta = ((*var.coord)[ind1][1] - (*var.coord)[ind0][1]) / y1;
-            for (int j=1; j<var.ny-1; j++) {
-                int ind = i * var.ny * var.nz + zz + j * var.nz;
-                (*var.coord)[ind][1] = (*var.coord)[ind0][1] + j * delta;
-            }
-        }
-        // front and back z
-        int z0 = 0;
-        int z1 = var.nz-1;
-        for (int j=0; j<2;j++) {
-            int yy = j * (var.ny-1);
-            int ind0 = i * var.ny * var.nz + z0 + yy * var.nz;
-            int ind1 = i * var.ny * var.nz + z1 + yy * var.nz;
-            double delta = ((*var.coord)[ind1][2] - (*var.coord)[ind0][2]) / z1;
+            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1,n2,nxyz) collapse(2)
+            for (int ii=1; ii<nxyz[n0]-1;ii++) {
+                for (int jj=1; jj<nxyz[n1]-1;jj++) {
+                    for (int kk=0; kk<2; kk++) {
+                        int_vec idx(3);
+                        idx[n0] = ii;
+                        idx[n1] = jj;
+                        idx[n2] = kk * (nxyz[n2]-1);
+                        int ind = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
 
-            for (int k=1; k<var.nz-1;k++) {
-                int ind = i * var.ny * var.nz + k + yy * var.nz;
-                (*var.coord)[ind][2] =(*var.coord)[ind0][2] + k * delta;
-            }
-        }
-    }
-    // interpolate throught the y direction
-    #pragma omp parallel for default(none) shared(param,var)
-    for (int j=1; j<var.ny-1; j++) {
-        // top x
-        int ixs = j * var.nz;
-        int ixe = (var.nx - 1) * var.ny * var.nz + j * var.nz;
-        double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
-        for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + j * var.nz;
-            double x = (*var.coord)[ixs][0] + i * dx;
-            (*var.coord)[ind][0] = x;
-        }
-        // bottom x
-        ixs = (var.nz-1) + j * var.nz;
-        ixe = (var.nx - 1) * var.ny * var.nz + (var.nz-1) + j * var.nz;
-        dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
-        for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + (var.nz-1) + j * var.nz;
-            double x = (*var.coord)[ixs][0] + i * dx;
-            (*var.coord)[ind][0] = x;
-        }
-        // left z
-        int kzs = j * var.nz;
-        int kze = (var.nz-1) + j * var.nz;
-        double dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
-        for (int k=1; k<var.nz-1; k++) {
-            int ind = k + j * var.nz;
-            double z = (*var.coord)[kzs][2] + k * dz;
-            (*var.coord)[ind][2] = z;
-        }
-        // right z
-        kzs = (var.nx-1) * var.ny * var.nz + j * var.nz;
-        kze = (var.nx-1) * var.ny * var.nz + (var.nz-1) + j * var.nz;
-        dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
-        for (int k=1; k<var.nz-1; k++) {
-            int ind = (var.nx - 1) * var.ny * var.nz + k + j * var.nz;
-            double z = (*var.coord)[kzs][2] + k * dz;
-            (*var.coord)[ind][2] = z;
-        }
-    }
-    // interpolate throught the z direction
-    #pragma omp parallel for default(none) shared(param,var)
-    for (int k=1; k<var.nz-1; k++) {
-        // front x
-        int ixs = k;
-        int ixe = (var.nx - 1) * var.ny * var.nz + k;
-        double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
-        for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + k;
-            double x = (*var.coord)[ixs][0] + i * dx;
-            (*var.coord)[ind][0] = x;
-        }
-        // back x
-        ixs = k + (var.ny-1) * var.nz;
-        ixe = (var.nx-1) * var.ny * var.nz + k + (var.ny-1) * var.nz;
-        dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
-        for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + k + (var.ny-1) * var.nz;
-            double x = (*var.coord)[ixs][0] + i * dx;
-            (*var.coord)[ind][0] = x;
-        }
-        // left y
-        int jys = k;
-        int jye = k + (var.ny-1) * var.nz;
-        double dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
-        for (int j=1; j<var.ny-1; j++) {
-            int ind = k + j * var.nz;
-            double y = (*var.coord)[jys][1] + j * dy;
-            (*var.coord)[ind][1] = y;
-        }
-        // right y
-        jys = (var.nx-1) * var.ny * var.nz + k;
-        jye = (var.nx-1) * var.ny * var.nz + k + (var.ny-1) * var.nz;
-        dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
-        for (int j=1; j<var.ny-1; j++) {
-            int ind = (var.nx - 1) * var.ny * var.nz + k + j * var.nz;
-            double y = (*var.coord)[jys][1] + j * dy;
-            (*var.coord)[ind][1] = y;
-        }
-    }
+                        if (n2==2 && kk==0) {
+                            if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
+                                (*var.coord)[ind][2] = -param.mesh.zlength;
+                                continue;
+                            }
+                        }
+                        int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
+                        double p0 = old_coord[ind][n0];
+                        double p1 = old_coord[ind][n1];
 
+                        for (int iii=0; iii<nxyz[n0]; iii++) {
+                            idx[n0] = iii;
+                            if ((*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]][n0] > p0) {
+                                ind_x0 = iii - 1;
+                                ind_x1 = iii;
+                                ind_x2 = iii + 1;
+                                break;
+                            }
+                        }
+                        if (ind_x2 > nxyz[n0] - 1) {
+                            ind_x2 = nxyz[n0] - 1;
+                            ind_x1 = nxyz[n0] - 2;
+                            ind_x0 = nxyz[n0] - 3;
+                        }
+                        if (ind_x0 < 0) {
+                            ind_x2 = 2;
+                            ind_x1 = 1;
+                            ind_x0 = 0;
+                        }
+                        if (ind_x2 > nxyz[n0] - 1) {
+                            ind_x2 = nxyz[n0] - 1;
+                        }
 
-    // 2D interpolation of x-y plane
-    // top and bottom
-    #pragma omp parallel for default(none) shared(param,var,old_coord)
-    for (int i=1; i<var.nx-1; i++) {
-        for (int j=1; j<var.ny-1; j++) {
-            for (int k=0; k<2; k++) {
-                int ind = i * var.ny * var.nz + k * (var.nz-1) + j * var.nz;
+                        idx[n0] = ii;
+                        for (int jjj=0; jjj<nxyz[n1]; jjj++) {
+                            idx[n1] = jjj;
+                            if ((*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]][n1] > p1) {
+                                ind_y0 = jjj - 1;
+                                ind_y1 = jjj;
+                                ind_y2 = jjj + 1;
+                                break;
+                            }
+                        }
+                        if (ind_y2 > nxyz[n1] - 1) {
+                            ind_y2 = nxyz[n1] - 1;
+                            ind_y1 = nxyz[n1] - 2;
+                            ind_y0 = nxyz[n1] - 3;
+                        }
+                        if (ind_y0 < 0) {
+                            ind_y2 = 2;
+                            ind_y1 = 1;
+                            ind_y0 = 0;
+                        }
+                        if (ind_y2 > nxyz[n1] - 1) {
+                            ind_y2 = nxyz[n1] - 1;
+                        }
+                        idx[n0] = ind_x0;
+                        idx[n1] = ind_y0;
+                        const double *x0y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x0y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x0y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n0] = ind_x1;
+                        idx[n1] = ind_y0;
+                        const double *x1y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x1y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x1y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n0] = ind_x2;
+                        idx[n1] = ind_y0;
+                        const double *x2y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x2y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x2y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
 
-                if (k==0) {
-                    if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
-                        (*var.coord)[ind][2] = -param.mesh.zlength;
-                        continue;
+                        double interp0 = quadraticInterpolation(p1,
+                            x0y0[n1], x0y1[n1], x0y2[n1], x0y0[n2], x0y1[n2], x0y2[n2]);
+                        double interp1 = quadraticInterpolation(p1, 
+                            x1y0[n1], x1y1[n1], x1y2[n1], x1y0[n2], x1y1[n2], x1y2[n2]);
+                        double interp2 = quadraticInterpolation(p1, 
+                            x2y0[n1], x2y1[n1], x2y2[n1], x2y0[n2], x2y1[n2], x2y2[n2]);
+                        (*var.coord)[ind][n2] = quadraticInterpolation(p0, 
+                            x0y1[n0], x1y1[n0], x2y1[n0], interp0, interp1, interp2);
                     }
                 }
-                int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
-                // search along the x direction
-                double xi = old_coord[ind][0];
-                for (int ii=0; ii<var.nx; ii++) {
-                    if ((*var.coord)[ii * var.ny * var.nz + k * (var.nz-1) + j * var.nz][0] > xi) {
-                        ind_x0 = ii - 1;
-                        ind_x1 = ii;
-                        ind_x2 = ii + 1;
-                        break;
-                    }
-                }
-                if (ind_x2 > var.nx - 1) {
-                    ind_x2 = var.nx - 1;
-                    ind_x1 = var.nx - 2;
-                    ind_x0 = var.nx - 3;
-                }
-                if (ind_x0 < 0) {
-                    ind_x2 = 2;
-                    ind_x1 = 1;
-                    ind_x0 = 0;
-                }
-                if (ind_x2 > var.nx - 1) {
-                    ind_x2 = var.nx - 1;
-                }
-                // search along the y direction
-                double yi = old_coord[ind][1];
-                for (int jj=0; jj<var.ny; jj++) {
-                    if ((*var.coord)[i * var.ny * var.nz + k * (var.nz-1) + jj * var.nz][1] > yi) {
-                        ind_y0 = jj - 1;
-                        ind_y1 = jj;
-                        ind_y2 = jj + 1;
-                        break;
-                    }
-                }
-                if (ind_y2 > var.ny - 1) {
-                    ind_y2 = var.ny - 1;
-                    ind_y1 = var.ny - 2;
-                    ind_y0 = var.ny - 3;
-                }
-                if (ind_y0 < 0) {
-                    ind_y2 = 2;
-                    ind_y1 = 1;
-                    ind_y0 = 0;
-                }
-                if (ind_y2 > var.ny - 1) {
-                    ind_y2 = var.ny - 1;
-                }
-                const int kbase = k * (var.nz-1);
-                const double *x0y0 = old_coord[ind_x0 * var.ny * var.nz + ind_y0 * var.nz + kbase];
-                const double *x0y1 = old_coord[ind_x0 * var.ny * var.nz + ind_y1 * var.nz + kbase];
-                const double *x0y2 = old_coord[ind_x0 * var.ny * var.nz + ind_y2 * var.nz + kbase];
-                const double *x1y0 = old_coord[ind_x1 * var.ny * var.nz + ind_y0 * var.nz + kbase];
-                const double *x1y1 = old_coord[ind_x1 * var.ny * var.nz + ind_y1 * var.nz + kbase];
-                const double *x1y2 = old_coord[ind_x1 * var.ny * var.nz + ind_y2 * var.nz + kbase];
-                const double *x2y0 = old_coord[ind_x2 * var.ny * var.nz + ind_y0 * var.nz + kbase];
-                const double *x2y1 = old_coord[ind_x2 * var.ny * var.nz + ind_y1 * var.nz + kbase];
-                const double *x2y2 = old_coord[ind_x2 * var.ny * var.nz + ind_y2 * var.nz + kbase];
-
-                double z_interp0 = quadraticInterpolation(yi, 
-                    x0y0[1],x0y1[1],x0y2[1],x0y0[2],x0y1[2],x0y2[2]);
-                double z_interp1 = quadraticInterpolation(yi,
-                    x1y0[1],x1y1[1],x1y2[1],x1y0[2],x1y1[2],x1y2[2]);
-                double z_interp2 = quadraticInterpolation(yi,
-                    x2y0[1],x2y1[1],x2y2[1],x2y0[2],x2y1[2],x2y2[2]);
-                (*var.coord)[ind][2] = quadraticInterpolation(xi,
-                    x0y1[0],x1y1[0],x2y1[0],z_interp0,z_interp1,z_interp2);
             }
         }
     }
 
-    // 2D interpolation of x-z plane
-    // left and right
-    #pragma omp parallel for default(none) shared(var,old_coord)
-    for (int i=1; i<var.nx-1; i++) {
-        for (int k=1; k<var.nz-1; k++) {
-            for (int j=0; j<2; j++) {
-                int ind = i * var.ny * var.nz + k + j * (var.ny-1) * var.nz;
-                int ind_x0=-1, ind_x1, ind_x2, ind_z0=-1, ind_z1, ind_z2;
-                // search along the x direction
-                double xi = old_coord[ind][0];
-                for (int ii=0; ii<var.nx; ii++) {
-                    if ((*var.coord)[ii * var.ny * var.nz + k + j * (var.ny-1) * var.nz][0] > xi) {
-                        ind_x0 = ii - 1;
-                        ind_x1 = ii;
-                        ind_x2 = ii + 1;
-                        break;
-                    }
-                }
-                if (ind_x2 > var.nx - 1) {
-                    ind_x2 = var.nx - 1;
-                    ind_x1 = var.nx - 2;
-                    ind_x0 = var.nx - 3;
-                }
-                if (ind_x0 < 0) {
-                    ind_x2 = 2;
-                    ind_x1 = 1;
-                    ind_x0 = 0;
-                }
-                if (ind_x2 > var.nx - 1) {
-                    ind_x2 = var.nx - 1;
-                }
-                // search along the y direction
-                double zi = old_coord[ind][2];
-                for (int kk=0; kk<var.nz; kk++) {
-                    if ((*var.coord)[i * var.ny * var.nz + kk + j * (var.ny-1) * var.nz][2] > zi) {
-                        ind_z0 = kk - 1;
-                        ind_z1 = kk;
-                        ind_z2 = kk + 1;
-                        break;
-                    }
-                }
-                if (ind_z2 > var.nz - 1) {
-                    ind_z2 = var.nz - 1;
-                    ind_z1 = var.nz - 2;
-                    ind_z0 = var.nz - 3;
-                }
-                if (ind_z0 < 0) {
-                    ind_z2 = 2;
-                    ind_z1 = 1;
-                    ind_z0 = 0;
-                }
-                if (ind_z2 > var.nz - 1) {
-                    ind_z2 = var.nz - 1;
-                }
-
-                const int jbase = j * (var.ny-1) * var.nz;
-                const double *x0z0 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z0];
-                const double *x0z1 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z1];
-                const double *x0z2 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z2];
-                const double *x1z0 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z0];
-                const double *x1z1 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z1];
-                const double *x1z2 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z2];
-                const double *x2z0 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z0];
-                const double *x2z1 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z1];
-                const double *x2z2 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z2];
-
-                double y_interp0 = quadraticInterpolation(zi, 
-                    x0z0[2],x0z1[2],x0z2[2],x0z0[1],x0z1[1],x0z2[1]);
-                double y_interp1 = quadraticInterpolation(zi,
-                    x1z0[2],x1z1[2],x1z2[2],x1z0[1],x1z1[1],x1z2[1]);
-                double y_interp2 = quadraticInterpolation(zi,
-                    x2z0[2],x2z1[2],x2z2[2],x2z0[1],x2z1[1],x2z2[1]);
-                (*var.coord)[ind][1] = quadraticInterpolation(xi,
-                    x0z1[0],x1z1[0],x2z1[0],y_interp0,y_interp1,y_interp2);
-            }
-        }
-    }
-    // 2D interpolation of y-z plane
-    // front and back
-    #pragma omp parallel for default(none) shared(var,old_coord)
-    for (int j=1; j<var.ny-1; j++) {
-        for (int k=1; k<var.nz-1; k++) {
-            for (int i=0; i<2; i++) {
-                int ind = i * (var.nx-1) * var.ny * var.nz + k + j * var.nz;
-                int ind_y0=-1, ind_y1, ind_y2, ind_z0=-1, ind_z1, ind_z2;
-                // search along the y direction
-                double yi = old_coord[ind][1];
-                for (int jj=0; jj<var.ny; jj++) {
-                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + k + jj * var.nz][1] > yi) {
-                        ind_y0 = jj - 1;
-                        ind_y1 = jj;
-                        ind_y2 = jj + 1;
-                        break;
-                    }
-                }
-                if (ind_y2 > var.ny - 1) {
-                    ind_y2 = var.ny - 1;
-                    ind_y1 = var.ny - 2;
-                    ind_y0 = var.ny - 3;
-                }
-                if (ind_y0 < 0) {
-                    ind_y2 = 2;
-                    ind_y1 = 1;
-                    ind_y0 = 0;
-                }
-                if (ind_y2 > var.ny - 1) {
-                    ind_y2 = var.ny - 1;
-                }
-                // search along the z direction
-                double zi = old_coord[ind][2];
-                for (int kk=0; kk<var.nz; kk++) {
-                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + kk + j * var.nz][2] > zi) {
-                        ind_z0 = kk - 1;
-                        ind_z1 = kk;
-                        ind_z2 = kk + 1;
-                        break;
-                    }
-                }
-                if (ind_z2 > var.nz - 1) {
-                    ind_z2 = var.nz - 1;
-                    ind_z1 = var.nz - 2;
-                    ind_z0 = var.nz - 3;
-                }
-                if (ind_z0 < 0) {
-                    ind_z2 = 2;
-                    ind_z1 = 1;
-                    ind_z0 = 0;
-                }
-                if (ind_z2 > var.nz - 1) {
-                    ind_z2 = var.nz - 1;
-                }
-                const int ibase = i * (var.nx-1) * var.ny * var.nz;
-                const double *z0y0 = old_coord[ibase + ind_z0 + ind_y0 * var.nz];
-                const double *z1y0 = old_coord[ibase + ind_z1 + ind_y0 * var.nz];
-                const double *z2y0 = old_coord[ibase + ind_z2 + ind_y0 * var.nz];
-                const double *z0y1 = old_coord[ibase + ind_z0 + ind_y1 * var.nz];
-                const double *z1y1 = old_coord[ibase + ind_z1 + ind_y1 * var.nz];
-                const double *z2y1 = old_coord[ibase + ind_z2 + ind_y1 * var.nz];
-                const double *z0y2 = old_coord[ibase + ind_z0 + ind_y2 * var.nz];
-                const double *z1y2 = old_coord[ibase + ind_z1 + ind_y2 * var.nz];
-                const double *z2y2 = old_coord[ibase + ind_z2 + ind_y2 * var.nz];
-
-                double x_interp0 = quadraticInterpolation(zi, 
-                    z0y0[2],z1y0[2],z2y0[2],z0y0[0],z1y0[0],z2y0[0]);
-                double x_interp1 = quadraticInterpolation(zi,
-                    z0y1[2],z1y1[2],z2y1[2],z0y1[0],z1y1[0],z2y1[0]);
-                double x_interp2 = quadraticInterpolation(zi,
-                    z0y2[2],z1y2[2],z2y2[2],z0y2[0],z1y2[0],z2y2[0]);
-                (*var.coord)[ind][0] = quadraticInterpolation(yi,
-                    z1y0[1],z1y1[1],z1y2[1],x_interp0,x_interp1,x_interp2);
-            }
-        }
-    }
-
-    int_vec nxyz = {var.nx, var.ny, var.nz};
     // interpolate x,y,z inside the mesh
     for (int n0=0; n0<NDIMS;n0++) {
         for (int n1=0; n1<NDIMS;n1++) {
             if (n0 >= n1) continue;
-            int n2 = 3 - n0 - n1;
+            const int n2 = 3 - n0 - n1;
 
             #pragma omp parallel for default(none) shared(var,n0,n1,n2,nxyz) collapse(2)
             for (int ii=1; ii<nxyz[n0]-1;ii++) {
