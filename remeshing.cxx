@@ -1426,89 +1426,6 @@ double quadraticInterpolation(double x,
 }
 
 
-void create_uniform_interpolated_mesh(const Param& param, const Variables& var, const array_t &old_coord, array_t* coord) {
-
-    array_t inz(var.nz);
-    array_t outz(var.nz);
-    array_t inx(var.nx);
-    array_t outx(var.nx);
-
-    // interpolate left side
-    for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[j];
-        inz[j][0] = p[0];
-        inz[j][1] = p[1];        
-    }
-    interpolate_uniform_curve(param, inz, outz, 1);
-    for (int j = 0; j < var.nz; ++j) {
-        double* p = (*coord)[j];
-        p[0] = outz[j][0];
-        p[1] = outz[j][1];
-    }
-
-    // interpolate right side
-    for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[(var.nx - 1) * var.nz + j];
-        inz[j][0] = p[0];
-        inz[j][1] = p[1];
-    }
-    interpolate_uniform_curve(param, inz, outz, 1);
-    for (int j = 0; j < var.nz; ++j) {
-        double* p = (*coord)[(var.nx - 1) * var.nz + j];
-        p[0] = outz[j][0];
-        p[1] = outz[j][1];
-    }
-    // interpolate top side
-    for (int i = 0; i < var.nx; ++i) {
-        const double* p = old_coord[var.nz * i];
-        inx[i][0] = p[0];
-        switch (param.mesh.remeshing_option) {
-        case 1:
-            inx[i][1] = -param.mesh.zlength;
-            break;
-        case 11:
-            inx[i][1] = -param.mesh.zlength;
-            break;
-        default:
-            inx[i][1] = p[1];
-        }
-    }
-    interpolate_uniform_curve(param, inx, outx, 0);
-    for (int i = 0; i < var.nx; ++i) {
-        double* p = (*coord)[var.nz * i];
-        p[0] = outx[i][0];
-        p[1] = outx[i][1];
-    }
-    // interpolate botton side
-    for (int i = 0; i < var.nx; ++i) {
-        const double* p = old_coord[var.nz * (i + 1) - 1];
-        inx[i][0] = p[0];
-        inx[i][1] = p[1];
-    }
-    interpolate_uniform_curve(param, inx, outx, 0);
-    for (int i = 0; i < var.nx; ++i) {
-        double* p = (*coord)[var.nz * (i + 1) - 1];
-        p[0] = outx[i][0];
-        p[1] = outx[i][1];
-    }
-    // interpolate the x with left and right side nodes
-    for (int j = 1; j < var.nz - 1; ++j) {
-        double xi = (*coord)[j][0];
-        double xe = (*coord)[(var.nx - 1) * var.nz - 1 + j][0];
-        double dx = (xe - xi) / (var.nx - 1);
-        for (int i = 1; i < var.nx - 1; ++i)
-            (*coord)[i * var.nz + j][0] = xi + i * dx;
-    }
-    // interpolate the z with bottom and top side nodes
-    for (int i = 1; i < var.nx - 1; ++i) {
-        double zi = (*coord)[i * var.nz][1];
-        double ze = (*coord)[i * var.nz - 1][1];
-        double dz = (ze - zi) / (var.nz - 1);
-        for (int j = 1; j < var.nz - 1; ++j)
-            (*coord)[i * var.nz + j][1] = zi + j * dz; 
-    }
-}
-
 void new_equilateral_info(const Param& param, const Variables& var, double xlength, int *nx, int *nz, int *nnode, int *nelem, int *nseg) {
     
     double sqrt3_to_2 = 2./std::sqrt(3.0);
@@ -1797,15 +1714,30 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
 
 #ifdef THREED
+    // interpolate edges
+    for (int n0=0;n0<NDIMS;n0++) {
+        for (int n1=n0+1;n1<NDIMS;n1++) {
+            if (n0 >= n1) continue;
+            int n2 = 3 - n0 - n1;
+
+        
+
+
+
+
+        }
+    }
+
+
     // interpolate z edges
     #pragma omp parallel for default(none) shared(param,var,old_coord) collapse(2)
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
             array_t inz(var.nz);
             array_t outz(var.nz);
-            int ind_base = i * (var.nx-1) * (var.nz * var.ny) + j * (var.ny-1);
+            int ind_base = i * (var.nx-1) * (var.nz * var.ny) + j * (var.ny-1) * var.nz;
             for (int k = 0; k < var.nz; ++k) {
-                const double* p = old_coord[ind_base + k * var.ny];
+                const double* p = old_coord[ind_base + k];
                 inz[k][0] = p[0];
                 inz[k][1] = p[1];
                 inz[k][2] = p[2];
@@ -1814,7 +1746,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             interpolate_uniform_curve(param, inz, outz, NDIMS - 1);
 
             for (int k = 0; k < var.nz; ++k) {
-                double* p = (*var.coord)[ind_base + k * var.ny];
+                double* p = (*var.coord)[ind_base + k];
                 p[0] = outz[k][0];
                 p[1] = outz[k][1];
                 p[2] = outz[k][2];
@@ -1827,7 +1759,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         for (int k = 0; k < 2; ++k) {
             array_t inx(var.nx);
             array_t outx(var.nx);
-            int ind_base = j * (var.ny-1) + k * (var.nz-1) * var.ny;
+            int ind_base = j * (var.ny-1) * var.nz + k * (var.nz-1);
             for (int i = 0; i < var.nx; ++i) {
                 const double* p = old_coord[ind_base + i * var.ny * var.nz];
                 inx[i][0] = p[0];
@@ -1858,9 +1790,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         for (int k = 0; k < 2; ++k) {
             array_t iny(var.ny);
             array_t outy(var.ny);
-            int ind_base = i * (var.nx-1) * var.ny * var.nz + k * (var.nz-1) * var.ny;
+            int ind_base = i * (var.nx-1) * var.ny * var.nz + k * (var.nz-1);
             for (int j = 0; j < var.ny; ++j) {
-                const double* p = old_coord[ind_base + j];
+                const double* p = old_coord[ind_base + j * var.nz];
                 iny[j][0] = p[0];
                 iny[j][1] = p[1];
                 iny[j][2] = p[2];
@@ -1877,7 +1809,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             interpolate_uniform_curve(param, iny, outy, 1);
 
             for (int j = 0; j < var.ny; ++j) {
-                double* p = (*var.coord)[ind_base + j];
+                double* p = (*var.coord)[ind_base + j * var.nz];
                 p[0] = outy[j][0];
                 p[1] = outy[j][1];
                 p[2] = outy[j][2];
@@ -1889,81 +1821,71 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     // interpolate throught the x direction
     #pragma omp parallel for default(none) shared(param,var)
     for (int i=1; i<var.nx-1; i++) {
-        // top y
-        int jys = i * var.ny * var.nz;
-        // int jye = (i+1) * var.ny * var.nz - var.nz;
-        int jye = i * var.ny * var.nz + var.ny-1;
-        double dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
-        for (int j=1; j<var.ny-1;j++) {
-            int ind = i * var.ny * var.nz + j;
-            double y = (*var.coord)[jys][1] + j * dy;
-            (*var.coord)[ind][1] = y;
-        }
-        // bottom y
-        jys = i * var.ny * var.nz + (var.nz-1) * var.ny;
-        jye = i * var.ny * var.nz + (var.nz-1) * var.ny + var.ny-1;
+        // top & bottom y
+        int y0 = 0;
+        int y1 = var.ny-1;
+        for (int k=0; k<2;k++) {
+            int zz = k * (var.nz-1);
+            int ind0 = i * var.ny * var.nz + zz + y0 * var.nz;
+            int ind1 = i * var.ny * var.nz + zz + y1 * var.nz;
 
-        dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
-        for (int j=1; j<var.ny-1;j++) {
-            int ind = i * var.ny * var.nz + (var.nz-1) * var.ny + j;
-            double y = (*var.coord)[jys][1] + j * dy;
-            (*var.coord)[ind][1] = y;
+            double delta = ((*var.coord)[ind1][1] - (*var.coord)[ind0][1]) / y1;
+            for (int j=1; j<var.ny-1; j++) {
+                int ind = i * var.ny * var.nz + zz + j * var.nz;
+                (*var.coord)[ind][1] = (*var.coord)[ind0][1] + j * delta;
+            }
         }
-        // front z
-        int kzs = i * var.ny * var.nz;
-        int kze = i * var.ny * var.nz + (var.nz-1) * var.ny;
-        double dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
-        for (int k=1; k<var.nz-1;k++) {
-            int ind = i * var.ny * var.nz + k * var.ny;
-            double z = (*var.coord)[kzs][2] + k * dz;
-            (*var.coord)[ind][2] = z;
-        }
-        // back z
-        kzs = i * var.ny * var.nz + (var.ny-1);
-        kze = i * var.ny * var.nz + (var.nz-1) * var.ny + (var.ny-1);
-        dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
-        for (int k=1; k<var.nz-1;k++) {
-            int ind = i * var.ny * var.nz + k * var.ny + (var.ny-1);
-            double z = (*var.coord)[kzs][2] + k * dz;
-            (*var.coord)[ind][2] = z;
+        // front and back z
+        int z0 = 0;
+        int z1 = var.nz-1;
+        for (int j=0; j<2;j++) {
+            int yy = j * (var.ny-1);
+            int ind0 = i * var.ny * var.nz + z0 + yy * var.nz;
+            int ind1 = i * var.ny * var.nz + z1 + yy * var.nz;
+            double delta = ((*var.coord)[ind1][2] - (*var.coord)[ind0][2]) / z1;
+
+            for (int k=1; k<var.nz-1;k++) {
+                int ind = i * var.ny * var.nz + k + yy * var.nz;
+                (*var.coord)[ind][2] =(*var.coord)[ind0][2] + k * delta;
+            }
         }
     }
     // interpolate throught the y direction
     #pragma omp parallel for default(none) shared(param,var)
     for (int j=1; j<var.ny-1; j++) {
         // top x
-        int ixs = j;
-        int ixe = (var.nx - 1) * var.ny * var.nz + j;
+        int ixs = j * var.nz;
+        int ixe = (var.nx - 1) * var.ny * var.nz + j * var.nz;
         double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
         for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + j;
+            int ind = i * var.ny * var.nz + j * var.nz;
             double x = (*var.coord)[ixs][0] + i * dx;
             (*var.coord)[ind][0] = x;
         }
         // bottom x
-        ixs = (var.nz-1) * var.ny + j;
-        ixe = (var.nx - 1) * var.ny * var.nz + (var.nz-1) * var.ny + j;
+        ixs = (var.nz-1) + j * var.nz;
+        ixe = (var.nx - 1) * var.ny * var.nz + (var.nz-1) + j * var.nz;
         dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
         for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + (var.nz-1) * var.ny + j;
+            int ind = i * var.ny * var.nz + (var.nz-1) + j * var.nz;
             double x = (*var.coord)[ixs][0] + i * dx;
             (*var.coord)[ind][0] = x;
         }
         // left z
-        int kzs = j;
-        int kze = (var.nz-1) * var.ny + j;
+        int kzs = j * var.nz;
+        int kze = (var.nz-1) + j * var.nz;
         double dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
         for (int k=1; k<var.nz-1; k++) {
-            int ind = k * var.ny + j;
+            int ind = k + j * var.nz;
             double z = (*var.coord)[kzs][2] + k * dz;
             (*var.coord)[ind][2] = z;
         }
         // right z
-        kzs = (var.nx-1) * var.ny * var.nz + j;
-        kze = (var.nx-1) * var.ny * var.nz + (var.nz-1) * var.ny + j;
+        kzs = (var.nx-1) * var.ny * var.nz + j * var.nz;
+        kze = (var.nx-1) * var.ny * var.nz + (var.nz-1) + j * var.nz;
         dz = ((*var.coord)[kze][2] - (*var.coord)[kzs][2]) / (var.nz - 1);
         for (int k=1; k<var.nz-1; k++) {
-            int ind = (var.nx - 1) * var.ny * var.nz + k * var.ny + j;
+            int ind = (var.nx - 1) * var.ny * var.nz + k + j * var.nz;
             double z = (*var.coord)[kzs][2] + k * dz;
             (*var.coord)[ind][2] = z;
         }
@@ -1972,38 +1894,38 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     #pragma omp parallel for default(none) shared(param,var)
     for (int k=1; k<var.nz-1; k++) {
         // front x
-        int ixs = k * var.ny;
-        int ixe = (var.nx - 1) * var.ny * var.nz + k * var.ny;
+        int ixs = k;
+        int ixe = (var.nx - 1) * var.ny * var.nz + k;
         double dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
         for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + k * var.ny;
+            int ind = i * var.ny * var.nz + k;
             double x = (*var.coord)[ixs][0] + i * dx;
             (*var.coord)[ind][0] = x;
         }
         // back x
-        ixs = k * var.ny + (var.ny-1);
-        ixe = (var.nx-1) * var.ny * var.nz + k * var.ny + (var.ny-1);
+        ixs = k + (var.ny-1) * var.nz;
+        ixe = (var.nx-1) * var.ny * var.nz + k + (var.ny-1) * var.nz;
         dx = ((*var.coord)[ixe][0] - (*var.coord)[ixs][0]) / (var.nx - 1);
         for (int i=1; i<var.nx-1; i++) {
-            int ind = i * var.ny * var.nz + k * var.ny + (var.ny-1);
+            int ind = i * var.ny * var.nz + k + (var.ny-1) * var.nz;
             double x = (*var.coord)[ixs][0] + i * dx;
             (*var.coord)[ind][0] = x;
         }
         // left y
-        int jys = k * var.ny;
-        int jye = k * var.ny + (var.ny-1);
+        int jys = k;
+        int jye = k + (var.ny-1) * var.nz;
         double dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
         for (int j=1; j<var.ny-1; j++) {
-            int ind = k * var.ny + j;
+            int ind = k + j * var.nz;
             double y = (*var.coord)[jys][1] + j * dy;
             (*var.coord)[ind][1] = y;
         }
         // right y
-        jys = (var.nx-1) * var.ny * var.nz + k * var.ny;
-        jye = (var.nx-1) * var.ny * var.nz + k * var.ny + (var.ny-1);
+        jys = (var.nx-1) * var.ny * var.nz + k;
+        jye = (var.nx-1) * var.ny * var.nz + k + (var.ny-1) * var.nz;
         dy = ((*var.coord)[jye][1] - (*var.coord)[jys][1]) / (var.ny - 1);
         for (int j=1; j<var.ny-1; j++) {
-            int ind = (var.nx - 1) * var.ny * var.nz + k * var.ny + j;
+            int ind = (var.nx - 1) * var.ny * var.nz + k + j * var.nz;
             double y = (*var.coord)[jys][1] + j * dy;
             (*var.coord)[ind][1] = y;
         }
@@ -2016,7 +1938,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     for (int i=1; i<var.nx-1; i++) {
         for (int j=1; j<var.ny-1; j++) {
             for (int k=0; k<2; k++) {
-                int ind = i * var.ny * var.nz + k * (var.nz-1) * var.ny + j;
+                int ind = i * var.ny * var.nz + k * (var.nz-1) + j * var.nz;
 
                 if (k==0) {
                     if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
@@ -2028,7 +1950,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 // search along the x direction
                 double xi = old_coord[ind][0];
                 for (int ii=0; ii<var.nx; ii++) {
-                    if ((*var.coord)[ii * var.ny * var.nz + k * (var.nz-1) * var.ny + j][0] > xi) {
+                    if ((*var.coord)[ii * var.ny * var.nz + k * (var.nz-1) + j * var.nz][0] > xi) {
                         ind_x0 = ii - 1;
                         ind_x1 = ii;
                         ind_x2 = ii + 1;
@@ -2051,7 +1973,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 // search along the y direction
                 double yi = old_coord[ind][1];
                 for (int jj=0; jj<var.ny; jj++) {
-                    if ((*var.coord)[i * var.ny * var.nz + k * (var.nz-1) * var.ny + jj][1] > yi) {
+                    if ((*var.coord)[i * var.ny * var.nz + k * (var.nz-1) + jj * var.nz][1] > yi) {
                         ind_y0 = jj - 1;
                         ind_y1 = jj;
                         ind_y2 = jj + 1;
@@ -2071,33 +1993,25 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 if (ind_y2 > var.ny - 1) {
                     ind_y2 = var.ny - 1;
                 }
+                const int kbase = k * (var.nz-1);
+                const double *x0y0 = old_coord[ind_x0 * var.ny * var.nz + ind_y0 * var.nz + kbase];
+                const double *x0y1 = old_coord[ind_x0 * var.ny * var.nz + ind_y1 * var.nz + kbase];
+                const double *x0y2 = old_coord[ind_x0 * var.ny * var.nz + ind_y2 * var.nz + kbase];
+                const double *x1y0 = old_coord[ind_x1 * var.ny * var.nz + ind_y0 * var.nz + kbase];
+                const double *x1y1 = old_coord[ind_x1 * var.ny * var.nz + ind_y1 * var.nz + kbase];
+                const double *x1y2 = old_coord[ind_x1 * var.ny * var.nz + ind_y2 * var.nz + kbase];
+                const double *x2y0 = old_coord[ind_x2 * var.ny * var.nz + ind_y0 * var.nz + kbase];
+                const double *x2y1 = old_coord[ind_x2 * var.ny * var.nz + ind_y1 * var.nz + kbase];
+                const double *x2y2 = old_coord[ind_x2 * var.ny * var.nz + ind_y2 * var.nz + kbase];
 
-                double x_interp1 = quadraticInterpolation(yi, 
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
-                double x_interp2 = quadraticInterpolation(yi,
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
-                double x_interp3 = quadraticInterpolation(yi,
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][1],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][1],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][1],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y0][2],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][2],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y2][2]);
+                double z_interp0 = quadraticInterpolation(yi, 
+                    x0y0[1],x0y1[1],x0y2[1],x0y0[2],x0y1[2],x0y2[2]);
+                double z_interp1 = quadraticInterpolation(yi,
+                    x1y0[1],x1y1[1],x1y2[1],x1y0[2],x1y1[2],x1y2[2]);
+                double z_interp2 = quadraticInterpolation(yi,
+                    x2y0[1],x2y1[1],x2y2[1],x2y0[2],x2y1[2],x2y2[2]);
                 (*var.coord)[ind][2] = quadraticInterpolation(xi,
-                    old_coord[ind_x0 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
-                    old_coord[ind_x1 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
-                    old_coord[ind_x2 * var.ny * var.nz + k * (var.nz-1) * var.ny + ind_y1][0],
-                    x_interp1, x_interp2, x_interp3);
+                    x0y1[0],x1y1[0],x2y1[0],z_interp0,z_interp1,z_interp2);
             }
         }
     }
@@ -2108,12 +2022,12 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     for (int i=1; i<var.nx-1; i++) {
         for (int k=1; k<var.nz-1; k++) {
             for (int j=0; j<2; j++) {
-                int ind = i * var.ny * var.nz + k * var.ny + j * (var.ny-1);
+                int ind = i * var.ny * var.nz + k + j * (var.ny-1) * var.nz;
                 int ind_x0=-1, ind_x1, ind_x2, ind_z0=-1, ind_z1, ind_z2;
                 // search along the x direction
                 double xi = old_coord[ind][0];
                 for (int ii=0; ii<var.nx; ii++) {
-                    if ((*var.coord)[ii * var.ny * var.nz + k * var.ny + j * (var.ny-1)][0] > xi) {
+                    if ((*var.coord)[ii * var.ny * var.nz + k + j * (var.ny-1) * var.nz][0] > xi) {
                         ind_x0 = ii - 1;
                         ind_x1 = ii;
                         ind_x2 = ii + 1;
@@ -2136,7 +2050,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 // search along the y direction
                 double zi = old_coord[ind][2];
                 for (int kk=0; kk<var.nz; kk++) {
-                    if ((*var.coord)[i * var.ny * var.nz + kk * var.ny + j * (var.ny-1)][2] > zi) {
+                    if ((*var.coord)[i * var.ny * var.nz + kk + j * (var.ny-1) * var.nz][2] > zi) {
                         ind_z0 = kk - 1;
                         ind_z1 = kk;
                         ind_z2 = kk + 1;
@@ -2157,32 +2071,25 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                     ind_z2 = var.nz - 1;
                 }
 
-                double x_interp1 = quadraticInterpolation(zi, 
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
-                double x_interp2 = quadraticInterpolation(zi,
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
-                double x_interp3 = quadraticInterpolation(zi,
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][2],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z0 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][1],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z2 * var.ny + j * (var.ny-1)][1]);
+                const int jbase = j * (var.ny-1) * var.nz;
+                const double *x0z0 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z0];
+                const double *x0z1 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z1];
+                const double *x0z2 = old_coord[ind_x0 * var.ny * var.nz + jbase + ind_z2];
+                const double *x1z0 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z0];
+                const double *x1z1 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z1];
+                const double *x1z2 = old_coord[ind_x1 * var.ny * var.nz + jbase + ind_z2];
+                const double *x2z0 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z0];
+                const double *x2z1 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z1];
+                const double *x2z2 = old_coord[ind_x2 * var.ny * var.nz + jbase + ind_z2];
+
+                double y_interp0 = quadraticInterpolation(zi, 
+                    x0z0[2],x0z1[2],x0z2[2],x0z0[1],x0z1[1],x0z2[1]);
+                double y_interp1 = quadraticInterpolation(zi,
+                    x1z0[2],x1z1[2],x1z2[2],x1z0[1],x1z1[1],x1z2[1]);
+                double y_interp2 = quadraticInterpolation(zi,
+                    x2z0[2],x2z1[2],x2z2[2],x2z0[1],x2z1[1],x2z2[1]);
                 (*var.coord)[ind][1] = quadraticInterpolation(xi,
-                    old_coord[ind_x0 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
-                    old_coord[ind_x1 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
-                    old_coord[ind_x2 * var.ny * var.nz + ind_z1 * var.ny + j * (var.ny-1)][0],
-                    x_interp1, x_interp2, x_interp3);
+                    x0z1[0],x1z1[0],x2z1[0],y_interp0,y_interp1,y_interp2);
             }
         }
     }
@@ -2192,12 +2099,12 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     for (int j=1; j<var.ny-1; j++) {
         for (int k=1; k<var.nz-1; k++) {
             for (int i=0; i<2; i++) {
-                int ind = i * (var.nx-1) * var.ny * var.nz + k * var.ny + j;
+                int ind = i * (var.nx-1) * var.ny * var.nz + k + j * var.nz;
                 int ind_y0=-1, ind_y1, ind_y2, ind_z0=-1, ind_z1, ind_z2;
                 // search along the y direction
                 double yi = old_coord[ind][1];
                 for (int jj=0; jj<var.ny; jj++) {
-                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + k * var.ny + jj][1] > yi) {
+                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + k + jj * var.nz][1] > yi) {
                         ind_y0 = jj - 1;
                         ind_y1 = jj;
                         ind_y2 = jj + 1;
@@ -2220,7 +2127,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 // search along the z direction
                 double zi = old_coord[ind][2];
                 for (int kk=0; kk<var.nz; kk++) {
-                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + kk * var.ny + j][2] > zi) {
+                    if ((*var.coord)[i * (var.nx-1) * var.ny * var.nz + kk + j * var.nz][2] > zi) {
                         ind_z0 = kk - 1;
                         ind_z1 = kk;
                         ind_z2 = kk + 1;
@@ -2240,70 +2147,52 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                 if (ind_z2 > var.nz - 1) {
                     ind_z2 = var.nz - 1;
                 }
+                const int ibase = i * (var.nx-1) * var.ny * var.nz;
+                const double *z0y0 = old_coord[ibase + ind_z0 + ind_y0 * var.nz];
+                const double *z1y0 = old_coord[ibase + ind_z1 + ind_y0 * var.nz];
+                const double *z2y0 = old_coord[ibase + ind_z2 + ind_y0 * var.nz];
+                const double *z0y1 = old_coord[ibase + ind_z0 + ind_y1 * var.nz];
+                const double *z1y1 = old_coord[ibase + ind_z1 + ind_y1 * var.nz];
+                const double *z2y1 = old_coord[ibase + ind_z2 + ind_y1 * var.nz];
+                const double *z0y2 = old_coord[ibase + ind_z0 + ind_y2 * var.nz];
+                const double *z1y2 = old_coord[ibase + ind_z1 + ind_y2 * var.nz];
+                const double *z2y2 = old_coord[ibase + ind_z2 + ind_y2 * var.nz];
 
-                double y_interp1 = quadraticInterpolation(zi, 
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y0][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y0][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y0][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y0][0]);
-                double y_interp2 = quadraticInterpolation(zi,
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y1][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y1][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y1][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y1][0]);
-                double y_interp3 = quadraticInterpolation(zi,
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y2][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y2][2],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z0 * var.ny + ind_y2][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][0],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z2 * var.ny + ind_y2][0]);
+                double x_interp0 = quadraticInterpolation(zi, 
+                    z0y0[2],z1y0[2],z2y0[2],z0y0[0],z1y0[0],z2y0[0]);
+                double x_interp1 = quadraticInterpolation(zi,
+                    z0y1[2],z1y1[2],z2y1[2],z0y1[0],z1y1[0],z2y1[0]);
+                double x_interp2 = quadraticInterpolation(zi,
+                    z0y2[2],z1y2[2],z2y2[2],z0y2[0],z1y2[0],z2y2[0]);
                 (*var.coord)[ind][0] = quadraticInterpolation(yi,
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y0][1],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y1][1],
-                    old_coord[i * (var.nx-1) * var.ny * var.nz + ind_z1 * var.ny + ind_y2][1],
-                    y_interp1, y_interp2, y_interp3);
+                    z1y0[1],z1y1[1],z1y2[1],x_interp0,x_interp1,x_interp2);
             }
         }
     }
 
-    // interpolate the x inside the mesh
-    #pragma omp parallel for default(none) shared(var)
-    for (int j=1; j<var.ny-1; j++) {
-        for (int k=1; k<var.nz-1; k++) {
-            double zs = (*var.coord)[k*var.ny+j][0];
-            double ze = (*var.coord)[(var.nx-1)*var.ny*var.nz+k*var.ny+j][0];
-            double dx = (ze - zs) / (var.nx - 1);
-            for (int i=1; i<var.nx-1; i++) {
-                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][0] = zs + i * dx;
-            }
-        }
-    }
-    // interpolate the y inside the mesh
-    #pragma omp parallel for default(none) shared(var)
-    for (int i=1; i<var.nx-1; i++) {
-        for (int k=1; k<var.nz-1; k++) {
-            double zs = (*var.coord)[i*var.ny*var.nz+k*var.ny][1];
-            double ze = (*var.coord)[i*var.ny*var.nz+k*var.ny+var.ny-1][1];
-            double dy = (ze - zs) / (var.ny - 1);
-            for (int j=1; j<var.ny-1; j++) {
-                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][1] = zs + j * dy;
-            }
-        }
-    }
-    // interpolate the z inside the mesh
-    #pragma omp parallel for default(none) shared(var)
-    for (int i=1; i<var.nx-1; i++) {
-        for (int j=1; j<var.ny-1; j++) {
-            double zs = (*var.coord)[i*var.ny*var.nz+j][2];
-            double ze = (*var.coord)[i*var.ny*var.nz+(var.nz-1)*var.ny+j][2];
-            double dz = (ze - zs) / (var.nz - 1);
-            for (int k=1; k<var.nz-1; k++) {
-                (*var.coord)[i*var.ny*var.nz+k*var.ny+j][2] = zs + k * dz;
+    int_vec nxyz = {var.nx, var.ny, var.nz};
+    // interpolate x,y,z inside the mesh
+    for (int n0=0; n0<NDIMS;n0++) {
+        for (int n1=0; n1<NDIMS;n1++) {
+            if (n0 >= n1) continue;
+            int n2 = 3 - n0 - n1;
+
+            #pragma omp parallel for default(none) shared(var,n0,n1,n2,nxyz) collapse(2)
+            for (int ii=1; ii<nxyz[n0]-1;ii++) {
+                for (int jj=1; jj<nxyz[n1]-1; jj++) {
+                    int_vec idx0(3);
+                    idx0[n0] = ii;
+                    idx0[n1] = jj;
+                    idx0[n2] = 0;
+                    double zs = (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2];
+                    idx0[n2] = nxyz[n2] - 1;
+                    double ze = (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2];
+                    double delta = (ze - zs) / (nxyz[n2] - 1);
+                    for (int kk=1; kk<nxyz[n2]-1; kk++) {
+                        idx0[n2] = kk;
+                        (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2] = zs + kk * delta;
+                    }
+                }
             }
         }
     }

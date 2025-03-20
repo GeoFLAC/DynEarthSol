@@ -2088,8 +2088,8 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
         dmax = idx[NDIMS-1];
     } else {
         dmax = 0;
-        dmid = 2;
-        dmin = 1;
+        dmid = 1;
+        dmin = 2;
     }
     //
     // sort coordinate of nodes and element centers
