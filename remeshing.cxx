@@ -1724,7 +1724,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             if (n0 >= n1) continue;
             const int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1,n2,nxyz) collapse(2)
+            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1) collapse(2)
             for (int ii=0; ii<2; ii++) {
                 for (int jj=0; jj<2; jj++) {
                     array_t in(nxyz[n2]);
@@ -1761,7 +1761,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // interpolation x, y, z in each plane
     for (int n0=0; n0<NDIMS; n0++) {
-        #pragma omp parallel for default(none) shared(param,var,old_coord,n0,nxyz)
+        #pragma omp parallel for default(none) shared(param,var,old_coord,n0)
         for (int ii=1; ii<nxyz[n0]-1; ii++) {
             for (int n1=0; n1<NDIMS; n1++) {
                 if (n0 == n1) continue;
@@ -1793,7 +1793,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             if (n0 >= n1) continue;
             const int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1,n2,nxyz) collapse(2)
+            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1) collapse(2)
             for (int ii=1; ii<nxyz[n0]-1;ii++) {
                 for (int jj=1; jj<nxyz[n1]-1;jj++) {
                     for (int kk=0; kk<2; kk++) {
@@ -1901,7 +1901,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
             if (n0 >= n1) continue;
             const int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(var,n0,n1,n2,nxyz) collapse(2)
+            #pragma omp parallel for default(none) shared(var,n0,n1) collapse(2)
             for (int ii=1; ii<nxyz[n0]-1;ii++) {
                 for (int jj=1; jj<nxyz[n1]-1; jj++) {
                     int_vec idx0(3);
