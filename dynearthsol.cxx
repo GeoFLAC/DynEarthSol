@@ -293,6 +293,17 @@ void restart(const Param& param, Variables& var)
 }
 
 
+void end(Variables& var) {
+    for (int i=0; i<nbdrytypes; i++) {
+        if (var.bfacets[i]->size() == 0) continue;
+        for (int j=i+1; j<nbdrytypes; j++)
+            delete[] var.edge_vectors[std::make_pair(i, j)];
+    }
+    for (size_t i=0; i<var.markersets.size(); i++)
+        delete var.markersets[i];
+}
+
+
 void update_mesh(const Param& param, Variables& var)
 {
 #ifdef USE_NPROF
@@ -627,6 +638,9 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+
+    // at end of code, clean up lost memory reported by valgrind
+    end(var);
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
