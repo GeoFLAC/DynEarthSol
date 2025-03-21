@@ -699,12 +699,12 @@ void update_stress(const Param& param, const Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, s, syy, failure_mode, 
+                                     de, depls, sp, spyy, failure_mode, 
                                      param.control.has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, s, failure_mode, 
+                                   de, depls, sp, failure_mode, 
                                    param.control.has_hydraulic_diffusion, dpp);
                 }
                 double spII = second_invariant2(sp);
