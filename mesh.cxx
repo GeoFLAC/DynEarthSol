@@ -256,7 +256,7 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
         for (int j = 0; j<var.ny -1; ++j) {
             for (int k = 0; k<var.nz - 1; ++k) {
                 int idx = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
-                int order = (i%2 + j%2 + k%2)%2;
+                int order = (i+j+k)%2;
                 for (int n = 0; n < 5; ++n) {
                     int idx_elem = idx*5+n;
                     divide_hexahedron_to_tetrahedra_index((*var.cell)[idx], order, n, conn);
@@ -396,7 +396,7 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
             // left
             int i = 0;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
-            int order = (i%2 + j%2 + k%2)%2;
+            int order = (i+j+k)%2;
 
             if (order)
                 idx_elem = idx_cell*5 + 1;
@@ -419,6 +419,7 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
 
             // right
             i = var.nx - 2;
+            order = (i+j+k)%2;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
             if (order)
                 idx_elem = idx_cell*5;
@@ -447,7 +448,7 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
             // front
             int j = 0;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
-            int order = (i%2 + j%2 + k%2)%2;
+            int order = (i+j+k)%2;
             idx_elem = idx_cell*5 + 1;
             conn = (*var.connectivity)[idx_elem];
             segments[seg_idx*3] = conn[0];
@@ -469,6 +470,7 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
  
             // back
             j = var.ny - 2;
+            order = (i+j+k)%2;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
             idx_elem = idx_cell*5;
             conn = (*var.connectivity)[idx_elem];
