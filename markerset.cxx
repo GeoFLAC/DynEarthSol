@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <unordered_map>
 #include <set>
+#include <numeric>
 #ifdef USE_NPROF
 #include <nvToolsExt.h>
 #endif
@@ -247,23 +248,12 @@ void MarkerSet::set_surface_marker(const Variables& var, const double smallest_s
         }
 
 #ifdef THREED
-        std::cout << "3D deposition of sediment processes is not ready yet.";
-        exit(168);
-
-/*        double b[3][2];
-        const double *coord0[NODES_PER_ELEM];
-
-        for (size_t j=0; j<3;j++) {
-            b[j][0] = (*var.coord)[n[j]][0];
-            b[j][1] = (*var.coord)[n[j]][1];
-            coord0[j] = b[j];
-        }
-        compute_area(coord0,base);
-*/
-
+        base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
+            - ((*var.coord)[n[2]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[1]][1] - (*var.coord)[n[0]][1]))/2.0;
 #else
-        base = fabs((*var.coord)[n[0]][0] - (*var.coord)[n[1]][0]);
+        base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
+        base = (base > 0.0) ? base : -base;
 
         dv = base * dv / NDIMS;
 
@@ -278,14 +268,17 @@ void MarkerSet::set_surface_marker(const Variables& var, const double smallest_s
         double eta[NDIMS], mcoord[NDIMS] = {}, sum = 0.;
         double edhr[NDIMS];
 
-        edhr[0] = edh[0]/(edh[0]+edh[1]);
-        edhr[1] = edh[1]/(edh[0]+edh[1]);
+        double sum_edh = std::accumulate(edh, edh + NDIMS, 0.0);
+
+        for (int j=0; j<NDIMS; j++)
+            edhr[j] = edh[j]/sum_edh;
+
         // random horizontal coordinate (2D:x or 3D:x-y) 
-        for( int j = 0; j < NDIMS; j++ ) {
+        for (int j = 0; j < NDIMS; j++ ) {
             eta[j] = (rand()/(double)RAND_MAX)*pow(2,edhr[j]);
             sum += eta[j];
         }
-        for( int j = 0; j < NDIMS; j++ )
+        for (int j = 0; j < NDIMS; j++ )
             eta[j] /= sum;
 
         for (size_t j=0; j<NDIMS-1; j++)
@@ -312,8 +305,34 @@ void MarkerSet::set_surface_marker(const Variables& var, const double smallest_s
             edh[j] = 0.;
 
         // the surface slope for marker
-        double slope = ( (*var.coord)[n[0]][NDIMS-1] - (*var.coord)[n[1]][NDIMS-1] ) / ( (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0] );
+#ifdef THREED
+        double slope, aspect_deg;
+        const double *p0 = (*var.coord)[n[0]];
+        const double *p1 = (*var.coord)[n[1]];
+        const double *p2 = (*var.coord)[n[2]];
+        double v1x = p1[0] - p0[0], v1y = p1[1] - p0[1], v1z = p1[2] - p0[2];
+        double v2x = p2[0] - p0[0], v2y = p2[1] - p0[1], v2z = p2[2] - p0[2];
 
+        // norm n = v1 x v2
+        double nx = v1y * v2z - v1z * v2y;
+        double ny = v1z * v2x - v1x * v2z;
+        double nz = v1x * v2y - v1y * v2x;
+
+        double norm = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (norm == 0.0) {
+            slope = 0.0;
+            aspect_deg = -1.0;
+        } else {
+            // slope: normal vector and z-axis angle
+            slope = std::acos(nz / norm);
+            // asmith: direction of maximum slope (relative to north, clockwise)
+            aspect_deg = std::atan2(ny, nx) * 180.0 / M_PI;
+            aspect_deg = 90.0 - aspect_deg;
+            if (aspect_deg < 0) aspect_deg += 360.0;
+        }
+#else
+        double slope = ( (*var.coord)[n[0]][NDIMS-1] - (*var.coord)[n[1]][NDIMS-1] ) / ( (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0] );
+#endif
         double water_depth = var.surfinfo.base_level - mcoord[NDIMS-1];
 
         double distance = 0.;
@@ -408,9 +427,8 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
 
         for (int k=0; k<NDIMS; k++) {
             m_coord[k] = 0.;
-                m_coord[k] += (*_eta)[i][0] * coord0s[e_ind*NODES_PER_ELEM][k];
-                m_coord[k] += (*_eta)[i][1] * coord0s[e_ind*NODES_PER_ELEM+1][k];
-                m_coord[k] += (*_eta)[i][2] * coord0s[e_ind*NODES_PER_ELEM+2][k];
+            for (int j=0; j<NODES_PER_ELEM; j++)
+                m_coord[k] += (*_eta)[i][j] * coord0s[e_ind*NODES_PER_ELEM+j][k];
         }
         // check if the marker is still in original element
         bary.transform(m_coord,e_ind,new_eta);
@@ -418,18 +436,18 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
             set_eta(i, new_eta);
         else {
             int inc, new_elem;
-//                std::cout << "Marker " << *imark << " in element " << *e << " is trying to remap in element ";
+            // std::cout << "Marker " << i << " in element " << e_ind << " is trying to remap in element ";
             // find new element of the marker
             remap_marker(var,m_coord,e,new_elem,new_eta,inc);
             if (inc) {
                 set_eta(i, new_eta);
                 set_elem(i, new_elem);
-//                    std::cout << "... Success!.\n";
+                // std::cout << "... Success!.\n";
             }
             else {
                 #pragma omp critical
                 delete_marker.push_back(i);
-//                    std::cout << "... Fail!. (Erosion might have occurred)\n";
+                // std::cout << "... Fail!. (Erosion might have occurred)\n";
             }
         }
     }

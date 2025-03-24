@@ -1697,7 +1697,7 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
             (*surfinfo.arcelem_and_nodes_num)[i][n[k]]= k;
             (*surfinfo.edhacc_ind)[i][k] = n[k];
         }
-        for (int k=0; k<2; k++) {
+        for (int k=0; k<NDIMS; k++) {
             // store the elements connect to node
             (*surfinfo.node_and_elems)[n[k]][(*surfinfo.nelem_with_node)[n[k]]] = i;
             (*surfinfo.nelem_with_node)[n[k]]++;
