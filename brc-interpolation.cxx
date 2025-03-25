@@ -211,35 +211,6 @@ void prepare_interpolation(const Variables &var,
 
 } // anonymous namespace
 
-void prepare_dhacc(SurfaceInfo &surfinfo)
-{
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
-    // go through all surface nodes
-    for (size_t i=0; i<surfinfo.top_nodes->size(); i++) {
-        // get global index of node
-        int n = (*surfinfo.top_nodes)[i];
-        // go through connected elements
-        for (size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
-            // get local index of surface element
-            int e = (*surfinfo.node_and_elems)[i][j];
-            // get global index of element
-            int eg = (*surfinfo.top_facet_elems)[e];
-            // get local index of node in connected element
-            int ind = (*surfinfo.arcelem_and_nodes_num)[e][i];
-            // update edhacc of connected elements
-            (*surfinfo.dhacc)[n] += (*surfinfo.edhacc)[eg][ind];
-            (*surfinfo.dhacc_oc)[n] += (*surfinfo.edhacc_oc)[eg][ind];
-        }
-        (*surfinfo.dhacc)[n] /= (*surfinfo.nelem_with_node)[i];
-        (*surfinfo.dhacc_oc)[n] /= (*surfinfo.nelem_with_node)[i];
-    }
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-}
-
 void barycentric_node_interpolation(Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
@@ -267,17 +238,6 @@ void barycentric_node_interpolation(Variables &var,
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *a);
     delete var.dppressure;
     var.dppressure = a;
-
-    a = new double_vec(var.nnode);
-    prepare_dhacc(var.surfinfo);
-    interpolate_field(brc, el, old_connectivity, *var.surfinfo.dhacc, *a);
-    delete var.surfinfo.dhacc;
-    var.surfinfo.dhacc = a;
-
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.surfinfo.dhacc_oc, *a);
-    delete var.surfinfo.dhacc_oc;
-    var.surfinfo.dhacc_oc = a;
 
     array_t *b = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.vel, *b);
