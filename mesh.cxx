@@ -1648,30 +1648,13 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     
     delete surfinfo.dh;
     surfinfo.dh = new double_vec(ntop,0.);
-    delete surfinfo.edhacc;
-    surfinfo.edhacc = new array_t(var.nelem);
-    delete surfinfo.edhacc_ind;
-    surfinfo.edhacc_ind = new segment_t(etop);
     delete surfinfo.top_facet_elems;
     surfinfo.top_facet_elems = new int_vec(etop,0);
     delete surfinfo.elem_and_nodes;
     surfinfo.elem_and_nodes = new segment_t(etop);
-    delete surfinfo.node_and_elems;
-    surfinfo.node_and_elems = new segment_t(ntop);
-    delete surfinfo.nelem_with_node;
-    surfinfo.nelem_with_node = new int_vec(ntop,0);
-
-    delete surfinfo.node_and_nodes;
-    surfinfo.node_and_nodes = new int_vec2D(ntop,int_vec());
-    delete surfinfo.arcelem_and_nodes_num;
-    surfinfo.arcelem_and_nodes_num = new int_map2D(etop);
 
     delete surfinfo.dh_oc;
     surfinfo.dh_oc = new double_vec(ntop,0.);
-    delete surfinfo.edhacc_oc;
-    surfinfo.edhacc_oc = new array_t(var.nelem);
-    delete surfinfo.edhacc_ind_oc;
-    surfinfo.edhacc_ind_oc = new segment_t(etop);
 
     delete surfinfo.total_dx;
     surfinfo.total_dx = new double_vec(var.nnode,0.);
@@ -1679,56 +1662,24 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
 
+    delete surfinfo.node_and_elems;
+    surfinfo.node_and_elems = new int_vec2D(ntop);
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
         int f = j.second;
 
         (*surfinfo.top_facet_elems)[i] = e;
-        // create globle-local map
-//        surfinfo.arctop_facet_elems[e] = i;
 
         // the nodes of element
-        int n[NDIMS];
-
         for (int k=0; k<NDIMS; k++) {
-            n[k] = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n[k];
-            (*surfinfo.arcelem_and_nodes_num)[i][n[k]]= k;
-            (*surfinfo.edhacc_ind)[i][k] = n[k];
-        }
-        for (int k=0; k<NDIMS; k++) {
+            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+            (*surfinfo.elem_and_nodes)[i][k] = n;
             // store the elements connect to node
-            (*surfinfo.node_and_elems)[n[k]][(*surfinfo.nelem_with_node)[n[k]]] = i;
-            (*surfinfo.nelem_with_node)[n[k]]++;
-
-            // store the nodes connect to ndoe
-            for (int l=0; l<NDIMS; l++)
-                if (k != l)
-                    (*surfinfo.node_and_nodes)[n[k]].push_back(n[l]);
+            (*surfinfo.node_and_elems)[n].push_back(i);
         }
     }
 
-    // go through all surface nodes
-    for (size_t i=0; i<ntop; i++) {
-        // get global index of node
-        int n = (*surfinfo.top_nodes)[i];
-
-        // go through connected elements
-        for (size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
-            // get local index of surface element
-            int e = (*surfinfo.node_and_elems)[i][j];
-            // get global index of element
-            int eg = (*surfinfo.top_facet_elems)[e];
-            // get local index of node in connected element
-            int ind = (*surfinfo.arcelem_and_nodes_num)[e][i];
-            // pass dhacc to new edhacc of connected elements
-            (*surfinfo.edhacc)[eg][ind] = (*surfinfo.dhacc)[n];
-            // oc
-            (*surfinfo.edhacc_oc)[eg][ind] = (*surfinfo.dhacc_oc)[n];
-        }
-    }
-    std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
     std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
 }
 
@@ -1775,52 +1726,33 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
         surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
     surfinfo.dh = new double_vec(ntop,0.);
     surfinfo.dhacc = new double_vec(var.nnode,0);
-    surfinfo.edhacc = new array_t(var.nelem,0);
-    surfinfo.edhacc_ind = new segment_t(etop);
+    surfinfo.edvacc_surf = new double_vec(var.nelem,0);
     surfinfo.top_facet_elems = new int_vec(etop,0);
     surfinfo.elem_and_nodes = new segment_t(etop);
-    surfinfo.node_and_elems = new segment_t(ntop);
-    surfinfo.nelem_with_node = new int_vec(ntop,0);
-    surfinfo.node_and_nodes = new int_vec2D(ntop,int_vec());
-    surfinfo.arcelem_and_nodes_num = new int_map2D(etop);
 
     surfinfo.dh_oc = new double_vec(ntop,0.);
     surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    surfinfo.edhacc_oc = new array_t(var.nelem);
-    surfinfo.edhacc_ind_oc = new segment_t(etop);
+    surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
+    surfinfo.node_and_elems = new int_vec2D(ntop);
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
         int f = j.second;
 
         (*surfinfo.top_facet_elems)[i] = e;
-        // create globle-local map
-//        surfinfo.arctop_facet_elems[e] = i;
 
         // the nodes of element
-        int n[NDIMS];
-
         for (int k=0; k<NDIMS; k++) {
-            n[k] = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n[k];
-            (*surfinfo.arcelem_and_nodes_num)[i][n[k]]= k;
-            (*surfinfo.edhacc_ind)[i][k] = n[k];
-        }
-        for (int k=0; k<NDIMS; k++) {
+            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+            (*surfinfo.elem_and_nodes)[i][k] = n;
             // store the elements connect to node
-            (*surfinfo.node_and_elems)[n[k]][(*surfinfo.nelem_with_node)[n[k]]] = i;
-            (*surfinfo.nelem_with_node)[n[k]]++;
-
-            // store the nodes connect to ndoe
-            for (int l=0; l<NDIMS; l++)
-                if (k != l)
-                    (*surfinfo.node_and_nodes)[n[k]].push_back(n[l]);
+            (*surfinfo.node_and_elems)[n].push_back(i);
         }
     }
 

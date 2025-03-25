@@ -374,16 +374,12 @@ struct SurfaceInfo {
     double_vec *drainage;
 
     double_vec *dhacc;
-    array_t *edhacc;
-    segment_t *edhacc_ind;
-    segment_t *node_and_elems;
+    double_vec *edvacc_surf;
+    int_vec2D *node_and_elems;
     segment_t *elem_and_nodes;
-    int_vec *nelem_with_node;
-    int_vec2D *node_and_nodes;
 
     double_vec *dhacc_oc;
-    array_t *edhacc_oc;
-    segment_t *edhacc_ind_oc;
+    double_vec *edhacc_oc;
 
     std::vector<double_vec> *fcenters;
     std::vector<double_vec> *normals;
@@ -391,7 +387,6 @@ struct SurfaceInfo {
 
     int_map arctop_facet_elems;
     int_map arctop_nodes;
-    int_map2D *arcelem_and_nodes_num;
 
 
     int ntops;

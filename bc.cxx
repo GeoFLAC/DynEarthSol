@@ -2072,12 +2072,23 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         coord[n][NDIMS-1] += dh[i];
         dhacc[n] += dh[i];
 
-    // update edhacc of connected elements
-        for (std::size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
+        // update edvacc_surf of connected elements
+        for (std::size_t j=0; j<(*surfinfo.node_and_elems)[i].size(); j++) {
             int e = (*surfinfo.node_and_elems)[i][j]; // get local index of surface element
             int eg = (*surfinfo.top_facet_elems)[e]; // get global index of element
-            int ind = (*surfinfo.arcelem_and_nodes_num)[e][i]; // get local index of node in connected element
-            (*surfinfo.edhacc)[eg][ind] += dh[i]; // update edhacc of connected elements
+
+            int_vec n(NDIMS);
+            for (int k=0; k<NDIMS; k++)
+                n[k] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[e][k]];
+
+#ifdef THREED
+            double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
+                - ((*var.coord)[n[2]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[1]][1] - (*var.coord)[n[0]][1]))/2.0;
+#else
+            double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
+#endif
+
+            (*surfinfo.edvacc_surf)[eg] += dh[i] * base / NDIMS; // update edvacc_surf of connected elements
         }
     }
 
@@ -2087,7 +2098,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
             correct_surface_element(var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain);
             std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
             // set marker of sediment.
-            markersets[0]->set_surface_marker(var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edhacc, elemmarkers);
+            markersets[0]->set_surface_marker(var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers);
         }
     }
 
@@ -2105,13 +2116,6 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                 int n = (*surfinfo.top_nodes)[i];
                 (coord)[n][NDIMS-1] += dh_oc[i];
                 (*surfinfo.dhacc_oc)[n] += dh_oc[i];
-
-                for (std::size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
-                    int e = (*surfinfo.node_and_elems)[i][j];
-                    int eg = (*surfinfo.top_facet_elems)[e];
-                    int ind = (*surfinfo.arcelem_and_nodes_num)[e][i];
-                    (*surfinfo.edhacc_oc)[eg][ind] += dh_oc[i];
-                }
             }
 
             if (!(var.steps % param.mesh.quality_check_step_interval)) {
