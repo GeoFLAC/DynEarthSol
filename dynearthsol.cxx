@@ -469,7 +469,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+    output.write_exact(param, var);
 
     double starting_time = var.time; // var.time & var.steps might be set in restart()
     double starting_step = var.steps;
@@ -617,7 +617,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
@@ -627,7 +627,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }

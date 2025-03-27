@@ -152,16 +152,17 @@ static void print_time_ns(const int64_t duration) {
 
 #endif
 
-static void check_nan(const Variables& var) {
+static void check_nan(const Param& param, const Variables& var) {
     for (int e=0; e<var.nelem;e++) {
       if (std::isnan((*var.volume)[e])) {
         std::cerr << "Error: volume becomes NaN\n";
         std::exit(11);
       }
-      if (std::isnan((*var.dpressure)[e])) {
-        std::cerr << "Error: dpressure becomes NaN\n";
-        std::exit(11);
-      }
+      if (param.control.is_using_mixed_stress)
+        if (std::isnan((*var.dpressure)[e])) {
+          std::cerr << "Error: dpressure becomes NaN\n";
+          std::exit(11);
+        }
       if (std::isnan((*var.viscosity)[e])) {
         std::cerr << "Error: viscosity becomes NaN\n";
         std::exit(11);

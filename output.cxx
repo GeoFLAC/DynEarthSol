@@ -214,9 +214,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     frame ++;
 
-    // check for NaN in var
-    check_nan(var);
-
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -229,9 +226,11 @@ void Output::write(const Variables& var)
 }
 
 
-void Output::write_exact(const Variables& var)
+void Output::write_exact(const Param& param, const Variables& var)
 {
     _write(var, true);
+    // check for NaN in var
+    check_nan(param,var);
 }
 
 
