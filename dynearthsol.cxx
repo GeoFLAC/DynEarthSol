@@ -151,7 +151,7 @@ void init(const Param& param, Variables& var)
     apply_vbcs(param, var, *var.vel);
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)

@@ -424,6 +424,7 @@ struct Variables {
 
     double max_vbc_val;
     double compensation_pressure;
+    double bottom_temperature;
 
     // These 5 arrays are allocated by external library
     array_t *coord;
