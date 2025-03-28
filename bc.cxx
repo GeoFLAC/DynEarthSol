@@ -1915,7 +1915,7 @@ void surface_plstrain_diffusion(const Param &param, \
         int_vec &a = (*var.elemmarkers)[*e];
         int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
         if (mat != param.mat.mattype_oceanic_crust)
-            plstrain[*e] -= plstrain[*e] * lambha * var.dt;
+        plstrain[*e] -= plstrain[*e] * lambha * var.dt;
     }
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -2002,7 +2002,7 @@ void correct_surface_element(const Variables& var, \
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, SurfaceInfo& surfinfo, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, SurfaceInfo& surfinfo, \
                         std::vector<MarkerSet*> &markersets, int_vec2D& elemmarkers)
 {
 #ifdef USE_NPROF
@@ -2068,9 +2068,9 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         // get global index of node
         // update coordinate via dh
         // update dhacc for marker correction
-        int n = top_nodes[i];
-        coord[n][NDIMS-1] += dh[i];
-        dhacc[n] += dh[i];
+        int nt = top_nodes[i];
+        coord[nt][NDIMS-1] += dh[i];
+        dhacc[nt] += dh[i];
 
         // update edvacc_surf of connected elements
         for (std::size_t j=0; j<(*surfinfo.node_and_elems)[i].size(); j++) {
@@ -2087,8 +2087,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-
-            (*surfinfo.edvacc_surf)[eg] += dh[i] * base / NDIMS; // update edvacc_surf of connected elements
+            double dv = dh[i] * base / NDIMS;
+            (*surfinfo.edvacc_surf)[eg] += dv; // update edvacc_surf of connected elements
+            volume[eg] += dv;
+            volume_n[nt] += dv;
         }
     }
 
