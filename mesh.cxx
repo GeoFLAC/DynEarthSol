@@ -1663,7 +1663,7 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
 
 
     delete surfinfo.node_and_elems;
-    surfinfo.node_and_elems = new int_vec2D(ntop);
+    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
@@ -1739,7 +1739,7 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
-    surfinfo.node_and_elems = new int_vec2D(ntop);
+    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
