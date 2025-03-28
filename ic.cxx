@@ -417,7 +417,7 @@ void initial_weak_zone(const Param &param, const Variables &var,
 
 
 void initial_temperature(const Param &param, const Variables &var,
-                         double_vec &temperature, double_vec &radiogenic_source)
+                         double_vec &temperature, double_vec &radiogenic_source, double &bottom_temperature)
 {
     switch(param.ic.temperature_option) {
     case 0:
@@ -596,6 +596,12 @@ void initial_temperature(const Param &param, const Variables &var,
         std::cout << "Error: unknown ic.temperature option: " << param.ic.temperature_option << '\n';
         std::exit(1);
     }
+
+    double max_temp = 0.0;
+    for (int i=0; i<var.nnode; ++i) {
+        if (temperature[i] > max_temp) max_temp = temperature[i];
+    }
+    bottom_temperature = max_temp;
 }
 
 

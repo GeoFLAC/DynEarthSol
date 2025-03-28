@@ -151,7 +151,7 @@ void init(const Param& param, Variables& var)
     apply_vbcs(param, var, *var.vel);
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -290,6 +290,17 @@ void restart(const Param& param, Variables& var)
     }
 
     phase_changes_init(param, var);
+}
+
+
+void end(Variables& var) {
+    for (int i=0; i<nbdrytypes; i++) {
+        if (var.bfacets[i]->size() == 0) continue;
+        for (int j=i+1; j<nbdrytypes; j++)
+            delete[] var.edge_vectors[std::make_pair(i, j)];
+    }
+    for (size_t i=0; i<var.markersets.size(); i++)
+        delete var.markersets[i];
 }
 
 
@@ -458,7 +469,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+    output.write_exact(param, var);
 
     double starting_time = var.time; // var.time & var.steps might be set in restart()
     double starting_step = var.steps;
@@ -606,7 +617,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
@@ -616,7 +627,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }
@@ -627,6 +638,9 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+
+    // at end of code, clean up lost memory reported by valgrind
+    end(var);
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
