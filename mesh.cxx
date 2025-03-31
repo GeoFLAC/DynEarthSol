@@ -1648,6 +1648,8 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     
     delete surfinfo.dh;
     surfinfo.dh = new double_vec(ntop,0.);
+    delete surfinfo.dhacc;
+    surfinfo.dhacc = new double_vec(var.nnode,0);
     delete surfinfo.top_facet_elems;
     surfinfo.top_facet_elems = new int_vec(etop,0);
     delete surfinfo.elem_and_nodes;
