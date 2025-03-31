@@ -2092,9 +2092,13 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
         dmid = idx[1];
         dmax = idx[NDIMS-1];
     } else {
+#ifdef THREED
         dmax = 0;
-        dmid = 1;
-        dmin = 2;
+#else
+        dmax = NDIMS-2;
+#endif
+        dmid = NDIMS-2;
+        dmin = NDIMS-1;
     }
     //
     // sort coordinate of nodes and element centers
