@@ -105,6 +105,21 @@ bool is_x0(uint flag)
     return flag & BOUNDX0;
 }
 
+bool is_x1(uint flag)
+{
+    return flag & BOUNDX1;
+}
+
+bool is_y0(uint flag)
+{
+    return flag & BOUNDY0;
+}
+
+bool is_y1(uint flag)
+{
+    return flag & BOUNDY1;
+}
+
 bool is_corner(uint flag)
 {
     uint f = flag & BOUND_ANY;
@@ -150,8 +165,60 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-
 void flatten_x0(const uint_vec &old_bcflag, double *qcoord,
+                int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_x0(flag))
+            qcoord[i*NDIMS] = 0.;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS] < min_dist)
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_x1(const uint_vec &old_bcflag, double *qcoord,
+                double side, int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_x1(flag))
+            qcoord[i*NDIMS] = side;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS] > (side - min_dist))
+                points_to_delete.push_back(i);
+    }
+}
+
+
+void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
+                    int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_y0(flag))
+            qcoord[i*NDIMS + 1] = 0.;
+        else if (! is_boundary(flag))
+            if ( qcoord[i*NDIMS + 1] < min_dist)
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
+                    double side, int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_y1(flag))
+            qcoord[i*NDIMS + 1] = side;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS + 1] > (side - min_dist))
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
                 int_vec &points_to_delete)
 {
 
@@ -1118,10 +1185,9 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     case 10:
     case 11:
-        // DO NOT change the corners
-        excl_func = &is_corner;
-        break;
     case 12:
+    case 13:
+        // DO NOT change the corners
         excl_func = &is_corner;
         break;
     default:
@@ -1147,7 +1213,17 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                    points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
         break;
     case 12:
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        break;
+    case 13:
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
+#ifdef THREED
+        flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
+#endif
         break;
     }
 
@@ -1182,15 +1258,14 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     case 10:
     case 11:
+    case 12:
+    case 13:
         // deleting points, some of them might be on the boundary
         delete_points_on_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
                                   old_nnode, old_nseg,
                                   qcoord, qsegment, qsegflag, old_bcflag, min_dist);
-        break;
-    case 12:
-        delete_points_on_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
-                                  old_nnode, old_nseg,
-                                  qcoord, qsegment, qsegflag, old_bcflag, min_dist);
+        delete_points(points_to_delete, old_nnode, old_nseg,
+                      qcoord, qsegment);
         break;
     }
 
@@ -1374,18 +1449,28 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
         std::swap(min_val, max_val);
         reverse = true;
     }
-    if (primary_index == (NDIMS - 1)) {
-        switch (param.mesh.remeshing_option)
-        {
-        case 1:
+    switch (param.mesh.remeshing_option)
+    {
+    case 1:
+    case 11:
+        if (primary_index == (NDIMS - 1))
             min_val = -param.mesh.zlength;
-            break;
-        case 11:
+        break;
+    case 13:
+        if (primary_index == (NDIMS - 1))
             min_val = -param.mesh.zlength;
-            break;
-        default:
-            break;
+        else if (primary_index == 0) {
+            min_val = 0;
+            max_val = param.mesh.xlength;
+#ifdef THREED
+        } else if (primary_index == 1) {
+            min_val = 0;
+            max_val = param.mesh.ylength;
+#endif
         }
+        break;
+    default:
+        break;
     }
 
     double step = (max_val - min_val) / (np - 1);
@@ -1715,6 +1800,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         (*var.segflag)[i][0] = old_segflag[i][0];
     }
 
+    // interpolate coordinates
 #ifdef THREED
     const int_vec nxyz = {var.nx, var.ny, var.nz};
 
@@ -1740,10 +1826,39 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         in[kk][1] = p[1];
                         in[kk][2] = p[2];
                     }
-                    if (idx[2] == 0 && n2 != 2)
-                        if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11)
+                    switch (param.mesh.remeshing_option)
+                    {
+                    case 1:
+                    case 11:
+                        if (idx[2] == 0 && n2 != 2)
                             for (int kk=0; kk<nxyz[n2]; ++kk)
                                 in[kk][2] = -param.mesh.zlength;
+                        break;
+                    case 13:
+                        if (idx[2] == 0 && n2 != 2)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][2] = -param.mesh.zlength;
+
+                        if (idx[0] == 0 && n2 != 0)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][0] = 0;
+
+                        if (idx[0] == nxyz[0]-1 && n2 != 0)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][0] = param.mesh.xlength;
+
+                        if (idx[1] == 0 && n2 != 1)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][1] = 0;
+
+                        if (idx[1] == nxyz[1]-1 && n2 != 1)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][1] = param.mesh.ylength;
+
+                        break;
+                    default:
+                        break;
+                    }
     
                     interpolate_uniform_curve(param, in, out, n2);
 
@@ -1803,12 +1918,38 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         idx[n2] = kk * (nxyz[n2]-1);
                         int ind = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
 
-                        if (n2==2 && kk==0) {
-                            if ( param.mesh.remeshing_option == 1 || param.mesh.remeshing_option == 11) {
+
+                        switch (param.mesh.remeshing_option)
+                        {
+                        case 1:
+                        case 11:
+                            if (n2==2 && kk==0) {
                                 (*var.coord)[ind][2] = -param.mesh.zlength;
                                 continue;
                             }
+                            break;
+                        case 13:
+                            if (n2==2 && kk==0) {
+                                (*var.coord)[ind][2] = -param.mesh.zlength;
+                                continue;
+                            } else if (n2==0 && kk==0) {
+                                (*var.coord)[ind][0] = 0;
+                                continue;
+                            } else if (n2==0 && kk==1) {
+                                (*var.coord)[ind][0] = param.mesh.xlength;
+                                continue;
+                            } else if (n2==1 && kk==0) {
+                                (*var.coord)[ind][1] = 0;
+                                continue;
+                            } else if (n2==1 && kk==1) {
+                                (*var.coord)[ind][1] = param.mesh.ylength;
+                                continue;
+                            }
+                            break;
+                        default:
+                            break;
                         }
+
                         int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
                         double p0 = old_coord[ind][n0];
                         double p1 = old_coord[ind][n1];
@@ -1929,8 +2070,15 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     // interpolate left side
     for (int j = 0; j < var.nz; ++j) {
         const double* p = old_coord[j];
-        inz[j][0] = p[0];
         inz[j][1] = p[1];
+
+        switch (param.mesh.remeshing_option) {
+        case 13:
+            inz[j][0] = 0;
+            break;
+        default:
+            inz[j][0] = p[0];
+        }
     }
     interpolate_uniform_curve(param, inz, outz, 1);
     for (int j = 0; j < var.nz; ++j) {
@@ -1942,8 +2090,15 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     // interpolate right side
     for (int j = 0; j < var.nz; ++j) {
         const double* p = old_coord[(var.nx - 1) * var.nz + j];
-        inz[j][0] = p[0];
         inz[j][1] = p[1];
+
+        switch (param.mesh.remeshing_option) {
+        case 13:
+            inz[j][0] = param.mesh.xlength;
+            break;
+        default:
+            inz[j][0] = p[0];
+        }
     }
     interpolate_uniform_curve(param, inz, outz, 1);
     for (int j = 0; j < var.nz; ++j) {
@@ -1951,15 +2106,14 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         p[0] = outz[j][0];
         p[1] = outz[j][1];
     }
-    // interpolate top side
+    // interpolate botton side
     for (int i = 0; i < var.nx; ++i) {
         const double* p = old_coord[var.nz * i];
         inx[i][0] = p[0];
         switch (param.mesh.remeshing_option) {
         case 1:
-            inx[i][1] = -param.mesh.zlength;
-            break;
         case 11:
+        case 13:
             inx[i][1] = -param.mesh.zlength;
             break;
         default:
@@ -1972,7 +2126,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         p[0] = outx[i][0];
         p[1] = outx[i][1];
     }
-    // interpolate botton side
+    // interpolate top side
     for (int i = 0; i < var.nx; ++i) {
         const double* p = old_coord[var.nz * (i + 1) - 1];
         inx[i][0] = p[0];
@@ -2105,7 +2259,16 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        break;
+    case 13:
+        excl_func = &is_corner;
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                    points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
+        flatten_y0(old_bcflag, qcoord, points_to_delete);
+        flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -2353,7 +2516,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                        points_to_delete, min_dist);
         break;
     case 12:
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -2592,7 +2755,14 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        break;
+    case 13:
+        excl_func = &is_corner;
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                    points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -2798,7 +2968,8 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     // check if any bottom node is too far away from the bottom depth
     if (param.mesh.remeshing_option == 1 ||
         param.mesh.remeshing_option == 2 ||
-        param.mesh.remeshing_option == 11) {
+        param.mesh.remeshing_option == 11 ||
+        param.mesh.remeshing_option == 13) {
         double bottom = - param.mesh.zlength;
         const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
         for (int i=0; i<var.nnode; ++i) {
@@ -2813,6 +2984,46 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
                     return 2;
                 }
             }
+        }
+    }
+    // check if any side node is too far away from the side
+    if (param.mesh.remeshing_option == 13) {
+        const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        for (int i=0; i<var.nnode; ++i) {
+            if (is_x0((*var.bcflag)[i])) {
+                double x = (*var.coord)[i][0];
+                if (std::fabs(x) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the x0 side: x = " << x << "\n";
+                }
+            } else if (is_x1((*var.bcflag)[i])) {
+                double x = (*var.coord)[i][0];
+                if (std::fabs(x - param.mesh.xlength) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the x1 side: x = " << x << "\n";
+                }
+#ifdef THREED
+            } else if (is_y0((*var.bcflag)[i])) {
+                double y = (*var.coord)[i][1];
+                if (std::fabs(y) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the y0 side: y = " << y << "\n";
+                }
+            } else if (is_y1((*var.bcflag)[i])) {
+                double y = (*var.coord)[i][1];
+                if (std::fabs(y - param.mesh.ylength) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the y1 side: y = " << y << "\n";
+                }
+#endif
+            }
+            if (index >= 0) break;
+        }
+        if (index >= 0) {
+#ifdef USE_NPROF
+            nvtxRangePop();
+#endif
+            return 2;
         }
     }
 
@@ -2951,7 +3162,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
-        param.mesh.remeshing_option==11) {
+        param.mesh.remeshing_option==11 ||
+        param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
         for (auto i=var.bnodes[iboundz0]->begin(); i<var.bnodes[iboundz0]->end(); ++i) {
             int n = *i;

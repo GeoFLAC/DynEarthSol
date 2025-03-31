@@ -612,7 +612,7 @@ int main(int argc, const char* argv[])
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
             if (param.control.has_moving_mesh)
             {
-                int quality_is_bad, bad_quality_index;
+                int quality_is_bad, bad_quality_index = -1;
                 quality_is_bad = bad_mesh_quality(param, var, bad_quality_index);
                 if (quality_is_bad) {
 
