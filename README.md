@@ -70,6 +70,7 @@ alike.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
   necessary to debug the code under valgrind.
+* Or run `make opt=-1` to build a memory-specific debugging executable using `-fsanitize=address`, a compiler flag for detacting memory address issues. It can show where the issue occurs and where variables are allocated during execution, without needing additional tools such as GDB or Valgrind. However, valgrind cannot easily coexist with -fsanitize=address. as using both together may cause library-related errors.
 
 # Running DES3D
 * Execute `dynearthsol2d [inputfile: examples/defaults.cfg by default]`.
