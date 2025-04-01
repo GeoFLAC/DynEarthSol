@@ -174,6 +174,9 @@ static void check_nan(const Param& param, const Variables& var) {
             if (std::isnan((*var.volume)[e]))
                 out_nan_error("volume", e);
             
+            if (std::isnan((*var.dpressure)[e]))
+                out_nan_error("dpressure", e);
+
             if (std::isnan((*var.viscosity)[e]))
                 out_nan_error("viscosity", e);
             
@@ -185,12 +188,6 @@ static void check_nan(const Param& param, const Variables& var) {
                 if (std::isnan((*var.stress)[e][i]))
                     out_nan_error("stress", e, i);
         }
-
-        if (param.control.is_using_mixed_stress)
-            #pragma omp for
-            for (int e=0; e<var.nelem;e++)
-                if (std::isnan((*var.dpressure)[e]))
-                    out_nan_error("dpressure", e);
 
         #pragma omp for
         for (int n=0; n<var.nnode; n++) {
