@@ -619,13 +619,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
                 break;
             case 3:
-                // v[0] = 0;
-                v[0] = bc_vz1;
+                v[0] = 0;
 #ifdef THREED
                 v[1] = 0;
 #endif
-                // v[NDIMS-1] = bc_vz1;
-                v[NDIMS-1] = 0.0;
+                v[NDIMS-1] = bc_vz1;
                 break;
             }
         }
