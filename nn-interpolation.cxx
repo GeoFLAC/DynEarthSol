@@ -336,6 +336,18 @@ namespace {
         inject_field(idx, is_changed, elems_vec, ratios_vec, *var.radiogenic_source, *a);
         delete var.radiogenic_source;
         var.radiogenic_source = a;
+
+        a = new double_vec(e);
+        inject_field(idx, is_changed, elems_vec, ratios_vec, *var.surfinfo.edvacc_surf, *a);
+        delete var.surfinfo.edvacc_surf;
+        var.surfinfo.edvacc_surf = a;
+
+        a = new double_vec(e);
+        inject_field(idx, is_changed, elems_vec, ratios_vec, *var.surfinfo.edhacc_oc, *a);
+        delete var.surfinfo.edhacc_oc;
+        var.surfinfo.edhacc_oc = a;
+
+
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif

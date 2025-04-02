@@ -33,7 +33,7 @@ public:
 //    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
     void correct_surface_marker(const Variables& var, array_t& coord0s, Barycentric_transformation &bary);
-    void set_surface_marker(const Variables& var, const double smallest_size, const int mattype_sed, array_t& edhacc, int_vec2D& elemmarkers);
+    void set_surface_marker(const Variables& var, const double smallest_size, const int mattype_sed, double_vec& edvacc_surf, int_vec2D& elemmarkers);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt);
     void append_marker( const double *eta, int el, int mt, double time, double z, double distance, double slope);
