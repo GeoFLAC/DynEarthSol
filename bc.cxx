@@ -1915,7 +1915,7 @@ void surface_plstrain_diffusion(const Param &param, \
         int_vec &a = (*var.elemmarkers)[*e];
         int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
         if (mat != param.mat.mattype_oceanic_crust)
-        plstrain[*e] -= plstrain[*e] * lambha * var.dt;
+            plstrain[*e] -= plstrain[*e] * lambha * var.dt;
     }
 #ifdef USE_NPROF
     nvtxRangePop();
