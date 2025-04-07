@@ -817,6 +817,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::exit(1);
     }
 
+    // these parameters are required in mesh.meshing_elem_shape >= 1
+#ifdef THREED
+    if (p.mesh.meshing_elem_shape == 2) {
+        std::cerr << "Error: mesh.meshing_elem_shape == 2 is not available in 3D.\n";
+        std::exit(1);
+    }
+#endif
+    if (p.mesh.meshing_elem_shape >= 1) {
+        if ( p.mesh.meshing_option != 1) {
+            std::cerr << "Error: mesh.meshing_elem_shape >= 1 is only for mesh.meshing_option == 1.\n";
+            std::exit(1);
+        }
+    }
+
     //
     // these parameters are required in mesh.meshing_option == 2
     //
