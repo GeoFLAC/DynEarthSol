@@ -1802,15 +1802,15 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // interpolate coordinates
 #ifdef THREED
-    const int_vec nxyz = {var.nx, var.ny, var.nz};
+    int_vec nxyz = {var.nx, var.ny, var.nz};
 
     // interpolate edges
     for (int n0=0;n0<NDIMS;n0++) {
         for (int n1=n0+1;n1<NDIMS;n1++) {
             if (n0 >= n1) continue;
-            const int n2 = 3 - n0 - n1;
+            int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1) collapse(2)
+            #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0,n1,n2) collapse(2)
             for (int ii=0; ii<2; ii++) {
                 for (int jj=0; jj<2; jj++) {
                     array_t in(nxyz[n2]);
@@ -1876,7 +1876,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     // interpolation x, y, z in each plane
     for (int n0=0; n0<NDIMS; n0++) {
-        #pragma omp parallel for default(none) shared(param,var,old_coord,n0)
+        #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0)
         for (int ii=1; ii<nxyz[n0]-1; ii++) {
             for (int n1=0; n1<NDIMS; n1++) {
                 if (n0 == n1) continue;
@@ -1906,9 +1906,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     for (int n0=0; n0<NDIMS; n0++) {
         for (int n1=0; n1<NDIMS; n1++) {
             if (n0 >= n1) continue;
-            const int n2 = 3 - n0 - n1;
+            int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(param,var,old_coord,n0,n1) collapse(2)
+            #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0,n1,n2) collapse(2)
             for (int ii=1; ii<nxyz[n0]-1;ii++) {
                 for (int jj=1; jj<nxyz[n1]-1;jj++) {
                     for (int kk=0; kk<2; kk++) {
@@ -2040,9 +2040,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     for (int n0=0; n0<NDIMS;n0++) {
         for (int n1=0; n1<NDIMS;n1++) {
             if (n0 >= n1) continue;
-            const int n2 = 3 - n0 - n1;
+            int n2 = 3 - n0 - n1;
 
-            #pragma omp parallel for default(none) shared(var,n0,n1) collapse(2)
+            #pragma omp parallel for default(none) shared(var,nxyz,n0,n1,n2) collapse(2)
             for (int ii=1; ii<nxyz[n0]-1;ii++) {
                 for (int jj=1; jj<nxyz[n1]-1; jj++) {
                     int_vec idx0(3);
@@ -2265,9 +2265,9 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                    points_to_delete, min_dist);
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
         flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
-        flatten_y0(old_bcflag, qcoord, points_to_delete);
+        flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
         flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
         break;
     default:
