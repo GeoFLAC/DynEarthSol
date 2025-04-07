@@ -34,7 +34,7 @@ output_in_binary = True
 output_in_cwd = False
 
 # Save indivisual components?
-output_tensor_components = True
+output_tensor_components = False
 
 # Save principle stresses
 output_principle_stress = False
@@ -46,7 +46,7 @@ output_markers = True
 output_melting = False
 
 # Calculate heat flow?
-output_heatflux = True
+output_heatflux = False
 conductivity = 3.3
 
 ########################

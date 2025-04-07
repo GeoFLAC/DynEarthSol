@@ -649,7 +649,7 @@ int main(int argc, const char* argv[])
               (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
                (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
               ||
-              (var.max_global_vel_mag > 1e-6)  // **New condition for high velocity**
+              (var.max_global_vel_mag > 1e-8)  // **New condition for high velocity**
              )
             // time or step output requirements are met
             &&

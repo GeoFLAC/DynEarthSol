@@ -26,7 +26,6 @@ adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
 ANNFLAGS = linux-g++
-block_slide = 0  # set to 1 to enable the patch for stick-slip exmaples for sliding boundary condition on the top surface 
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -331,15 +330,9 @@ CXXFLAGS += -I$(ANN_DIR)/include
 
 ## Action
 
-.PHONY: all clean take-snapshot apply_block_slide_patch revert_block_slide_patch
+.PHONY: all clean take-snapshot
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
-
-ifeq ($(block_slide), 1)
-	@$(MAKE) apply_block_slide_patch
-else
-	@$(MAKE) revert_block_slide_patch
-endif
 
 $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
@@ -431,19 +424,3 @@ cleanall: clean
 
 clean:
 	@rm -f $(OBJS) $(EXE)
-
-apply_block_slide_patch:
-	@if ! patch --dry-run -R -s -f bc.cxx < ./patch/slide_block.diff > /dev/null 2>&1; then \
-		echo "Applying slide_block.diff patch..."; \
-		patch -s -f bc.cxx < ./patch/slide_block.diff; \
-	else \
-		echo "slide_block.diff patch already applied."; \
-	fi
-
-revert_block_slide_patch:
-	@if patch --dry-run -R -s -f bc.cxx < ./patch/slide_block.diff > /dev/null 2>&1; then \
-		echo "Reverting slide_block.diff patch..."; \
-		patch -R -s -f bc.cxx < ./patch/slide_block.diff; \
-	else \
-		echo "slide_block.diff patch not applied. Skipping unpatch."; \
-	fi

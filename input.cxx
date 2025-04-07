@@ -916,8 +916,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, or 3.\n";
             std::exit(1);
         }
-        if ( p.bc.vbc_z1 > 3) {
-            std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, or 3.\n";
+        if ( p.bc.vbc_z1 > 4) {
+            std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, 3, or 4.\n";
             std::exit(1);
         }
         if ( p.bc.vbc_n0 != 1 && p.bc.vbc_n0 != 3 && p.bc.vbc_n0 != 11 && p.bc.vbc_n0 != 13 ) {
