@@ -626,7 +626,7 @@ if __name__ == '__main__':
     if '-melt' in sys.argv:
         output_melting = True
     if '-heat' in sys.argv:
-        output_heatflux = False
+        output_heatflux = True
 
     # delete options
     for i in range(len(sys.argv)):

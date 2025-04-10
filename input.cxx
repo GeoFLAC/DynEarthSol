@@ -280,7 +280,7 @@ static void declare_parameters(po::options_description &cfg,
         ("control.has_PT", po::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
         ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
-         "Skip certain processes in PT look to avoid accumulative effects. For example, surface diffusion.\n")
+         "Skip certain processes in PT loop to avoid accumulative effects. For example, surface diffusion.\n")
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
