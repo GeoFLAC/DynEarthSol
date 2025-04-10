@@ -291,6 +291,14 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
+    // Set bottom temperature
+    {
+        double max_temp = 0.0;
+        for (int i=0; i<var.nnode; ++i)
+            if ((*var.temperature)[i] > max_temp) max_temp = (*var.temperature)[i];
+        var.bottom_temperature = max_temp;
+    }
+
     // Misc. items
     {
         double_vec tmp(2);
