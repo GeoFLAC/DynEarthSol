@@ -139,13 +139,14 @@ double ref_pressure(const Param& param, double z)
     // Get pressure at this depth
     double depth = -z;
     double p;
+    int mattype_ref = param.mat.mattype_mantle;
     if (param.control.ref_pressure_option == 0)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
-            p = (param.mat.rho0[0] * (1 - param.mat.porosity[0]) + 1000.0 * param.mat.porosity[0]) * param.control.gravity * depth;
+            p = (param.mat.rho0[mattype_ref] * (1 - param.mat.porosity[mattype_ref]) + 1000.0 * param.mat.porosity[mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
-            p = param.mat.rho0[0] * param.control.gravity * depth;
+            p = param.mat.rho0[mattype_ref] * param.control.gravity * depth;
         }
 
     else if (param.control.ref_pressure_option == 1)
@@ -722,15 +723,16 @@ VectorBase* VectorBase::create(const double_vec &a, int len)
 double ref_pressure(const Param& param, double z)
 {
     // Get pressure at this depth
+    int mattype_ref = param.mat.mattype_mantle;
     double depth = -z;
     double p;
     if (param.control.ref_pressure_option == 0)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
-            p = (param.mat.rho0[0] * (1 - param.mat.porosity[0]) + 1000.0 * param.mat.porosity[0]) * param.control.gravity * depth;
+            p = (param.mat.rho0[mattype_ref] * (1 - param.mat.porosity[mattype_ref]) + 1000.0 * param.mat.porosity[mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
-            p = param.mat.rho0[0] * param.control.gravity * depth;
+            p = param.mat.rho0[mattype_ref] * param.control.gravity * depth;
         }
 
     else if (param.control.ref_pressure_option == 1)
