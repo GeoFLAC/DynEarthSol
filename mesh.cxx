@@ -856,23 +856,6 @@ void new_mesh_regular(const Param& param, Variables& var)
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag, *pcell;
 
-    var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
-    var.nz = std::round(param.mesh.zlength/param.mesh.resolution) + 1;
-    var.ncell = (var.nx-1) * (var.nz-1);
-    var.nnode = var.nx * var.nz;
-    var.nelem = 2 * var.ncell;
-    var.nseg = 2 * (var.nx + var.nz - 2);
-#ifdef THREED
-    var.ny = std::round(param.mesh.ylength/param.mesh.resolution) + 1;
-    var.ncell *= (var.ny-1);
-    var.nnode *= var.ny;
-    var.nelem = 5 * var.ncell;
-    var.nseg = 4 * ( (var.nx-1) * (var.ny-1) + \
-                     (var.ny-1) * (var.nz-1) + \
-                     (var.nz-1) * (var.nx-1) );
-#endif
-    
-
     create_quadrilateral_cells(var, pcell);
     var.cell = new regular_t(pcell, var.ncell);
 
