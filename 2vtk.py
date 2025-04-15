@@ -34,7 +34,7 @@ output_in_binary = True
 output_in_cwd = False
 
 # Save indivisual components?
-output_tensor_components = False
+output_tensor_components = True
 
 # Save principle stresses
 output_principle_stress = False
@@ -626,7 +626,7 @@ if __name__ == '__main__':
     if '-melt' in sys.argv:
         output_melting = True
     if '-heat' in sys.argv:
-        output_heatflux = True
+        output_heatflux = False
 
     # delete options
     for i in range(len(sys.argv)):

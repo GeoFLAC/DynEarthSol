@@ -29,6 +29,7 @@ typedef Array2D<double,2> dh_t;
 typedef Array2D<int,NODES_PER_ELEM> conn_t;
 typedef Array2D<int,NDIMS> segment_t;
 typedef Array2D<int,1> segflag_t;
+typedef Array2D<int,NODES_PER_CELL> regular_t;
 
 // forward declaration
 class PhaseChange;
@@ -56,6 +57,7 @@ struct Sim {
 
 struct Mesh {
     int meshing_option;
+    int meshing_elem_shape;
     int meshing_verbosity;
     bool meshing_sediment;
     int tetgen_optlevel;
@@ -129,8 +131,8 @@ struct Control {
     double PT_relative_tolerance;
 
     bool has_moving_mesh;
-
     bool has_ATS;
+
 };
 
 struct BC {
@@ -310,12 +312,13 @@ struct Mat {
     double_vec fluid_visc;  // pore fluid dynamic viscosity
     double_vec biot_coeff;  // Biot-Willis coefficient
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
-
+  
     // rate-and-state friction parameters
     double_vec direct_a;
     double_vec evolution_b;
     double_vec characteristic_velocity;
     // double_vec static_friction_coefficient;
+
 };
 
 struct Time {
@@ -383,16 +386,12 @@ struct SurfaceInfo {
     double_vec *drainage;
 
     double_vec *dhacc;
-    array_t *edhacc;
-    segment_t *edhacc_ind;
-    segment_t *node_and_elems;
+    double_vec *edvacc_surf;
+    int_vec2D *node_and_elems;
     segment_t *elem_and_nodes;
-    int_vec *nelem_with_node;
-    int_vec2D *node_and_nodes;
 
     double_vec *dhacc_oc;
-    array_t *edhacc_oc;
-    segment_t *edhacc_ind_oc;
+    double_vec *edhacc_oc;
 
     std::vector<double_vec> *fcenters;
     std::vector<double_vec> *normals;
@@ -400,7 +399,6 @@ struct SurfaceInfo {
 
     int_map arctop_facet_elems;
     int_map arctop_nodes;
-    int_map2D *arcelem_and_nodes_num;
 
 
     int ntops;
@@ -430,11 +428,13 @@ struct Variables {
     int nnode;
     int nelem;
     int nseg;
+    int nx, ny, nz, ncell;
 
     double max_vbc_val;
     double max_global_vel_mag;
     double global_dt_min;
     double compensation_pressure;
+    double bottom_temperature;
 
 // #ifdef ATS
 //     double vmax, hmin, dt_elastic, dt_min, vmax_shear_zone, CL_min;
@@ -454,6 +454,7 @@ struct Variables {
     regattr_t *regattr;
     array_t *old_coord;
     conn_t *old_connectivity;
+    regular_t *cell;
 
 
     uint_vec *bcflag;

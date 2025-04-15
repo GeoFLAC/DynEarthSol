@@ -144,10 +144,10 @@ void init(const Param& param, Variables& var)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
     *var.volume_old = *var.volume;
-    
     apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors);
@@ -155,7 +155,7 @@ void init(const Param& param, Variables& var)
 
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -303,6 +303,17 @@ void restart(const Param& param, Variables& var)
 }
 
 
+void end(Variables& var) {
+    for (int i=0; i<nbdrytypes; i++) {
+        if (var.bfacets[i]->size() == 0) continue;
+        for (int j=i+1; j<nbdrytypes; j++)
+            delete[] var.edge_vectors[std::make_pair(i, j)];
+    }
+    for (size_t i=0; i<var.markersets.size(); i++)
+        delete var.markersets[i];
+}
+
+
 void update_mesh(const Param& param, Variables& var)
 {
 #ifdef USE_NPROF
@@ -310,10 +321,12 @@ void update_mesh(const Param& param, Variables& var)
 #endif
 
     update_coordinate(var, *var.coord);
+
     if(!param.control.PT_jump)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                      *var.plstrain, var.surfinfo, var.markersets, *var.elemmarkers);
+                      *var.plstrain, *var.volume, *var.volume_n, \
+                      var.surfinfo, var.markersets, *var.elemmarkers);
     }
     
 //    var.markersets[0]->update_marker_in_elem(var);
@@ -340,6 +353,7 @@ void update_mesh(const Param& param, Variables& var)
     }
 
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -365,6 +379,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
             *var.ppressure, *var.dppressure, *var.vel);
+
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
 
@@ -464,7 +479,7 @@ int main(int argc, const char* argv[])
         init(param, var);
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
-            // output.write_exact(var);
+            // output.write_exact(param, var);
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
@@ -476,7 +491,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+    output.write_exact(param, var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -507,9 +522,6 @@ int main(int argc, const char* argv[])
         var.steps ++;
         var.time += var.dt;
         // dt_copy = 0.0; dt_copy += var.dt;
-
-        // std::cout << "global max vel: " << var.max_global_vel_mag << std::scientific << std::setprecision(5) << " global dt min: " << var.global_dt_min << std::endl;
-
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.ntmp, *var.tmp_result);
 
@@ -536,7 +548,6 @@ int main(int argc, const char* argv[])
         {   
             // var.dt = compute_dt_PT(param, var);
             if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
-
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
@@ -571,7 +582,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
+                                output.write_exact(param, var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
 
@@ -581,7 +592,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
+                                output.write_exact(param, var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
                         }
@@ -591,6 +602,7 @@ int main(int argc, const char* argv[])
             if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
             // var.dt = dt_copy;
             param.control.PT_jump = false;
+
         }
 
 
@@ -708,7 +720,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
@@ -718,7 +730,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
+                        output.write_exact(param, var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }
@@ -729,6 +741,9 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+
+    // at end of code, clean up lost memory reported by valgrind
+    end(var);
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;

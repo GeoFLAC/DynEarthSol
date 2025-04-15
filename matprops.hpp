@@ -51,7 +51,7 @@ public:
     double alpha_biot(int e) const;
     #pragma acc routine seq
     double beta_mineral(int e) const;
-    
+
     // rate-and-state friction parameters
     #pragma acc routine seq
     double d_a(int e) const;
@@ -86,6 +86,7 @@ public:
     const static int rh_evp = rh_elastic | rh_viscous | rh_plastic; // Decimal value 7
     const static int rh_ep_rsf = rh_elastic | rh_plastic | rh_rsf;  // Decimal value 21
     const static int rh_evp_rsf = rh_elastic | rh_viscous | rh_plastic | rh_rsf; // Decimal value 23
+
 private:
 
     // alias to field variables in var

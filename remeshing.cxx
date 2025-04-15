@@ -105,6 +105,21 @@ bool is_x0(uint flag)
     return flag & BOUNDX0;
 }
 
+bool is_x1(uint flag)
+{
+    return flag & BOUNDX1;
+}
+
+bool is_y0(uint flag)
+{
+    return flag & BOUNDY0;
+}
+
+bool is_y1(uint flag)
+{
+    return flag & BOUNDY1;
+}
+
 bool is_corner(uint flag)
 {
     uint f = flag & BOUND_ANY;
@@ -150,8 +165,60 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-
 void flatten_x0(const uint_vec &old_bcflag, double *qcoord,
+                int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_x0(flag))
+            qcoord[i*NDIMS] = 0.;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS] < min_dist)
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_x1(const uint_vec &old_bcflag, double *qcoord,
+                double side, int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_x1(flag))
+            qcoord[i*NDIMS] = side;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS] > (side - min_dist))
+                points_to_delete.push_back(i);
+    }
+}
+
+
+void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
+                    int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_y0(flag))
+            qcoord[i*NDIMS + 1] = 0.;
+        else if (! is_boundary(flag))
+            if ( qcoord[i*NDIMS + 1] < min_dist)
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
+                    double side, int_vec &points_to_delete, double min_dist)
+{
+    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
+        uint flag = old_bcflag[i];
+        if (is_y1(flag))
+            qcoord[i*NDIMS + 1] = side;
+        else if (! is_boundary(flag))
+            if (qcoord[i*NDIMS + 1] > (side - min_dist))
+                points_to_delete.push_back(i);
+    }
+}
+
+void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
                 int_vec &points_to_delete)
 {
 
@@ -1118,10 +1185,9 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     case 10:
     case 11:
-        // DO NOT change the corners
-        excl_func = &is_corner;
-        break;
     case 12:
+    case 13:
+        // DO NOT change the corners
         excl_func = &is_corner;
         break;
     default:
@@ -1147,7 +1213,17 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                    points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
         break;
     case 12:
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        break;
+    case 13:
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
+#ifdef THREED
+        flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
+#endif
         break;
     }
 
@@ -1182,15 +1258,14 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     case 10:
     case 11:
+    case 12:
+    case 13:
         // deleting points, some of them might be on the boundary
         delete_points_on_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
                                   old_nnode, old_nseg,
                                   qcoord, qsegment, qsegflag, old_bcflag, min_dist);
-        break;
-    case 12:
-        delete_points_on_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
-                                  old_nnode, old_nseg,
-                                  qcoord, qsegment, qsegflag, old_bcflag, min_dist);
+        delete_points(points_to_delete, old_nnode, old_nseg,
+                      qcoord, qsegment);
         break;
     }
 
@@ -1304,6 +1379,789 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
 }
 
+
+// use linear interpolation to calculate uniformly distributed 2D curve points
+void interpolate_curve(const Param &param,const array_t &input_points, 
+                               array_t &output_points, int primary_index) {
+    int np = input_points.size();
+    int np_out = output_points.size();
+
+    int secondary_index = 1 - primary_index;
+
+    double min_val = input_points[0][primary_index];
+    double max_val = input_points[(np - 1)][primary_index];
+
+    bool reverse = false;
+    if (min_val > max_val) {
+        std::swap(min_val, max_val);
+        reverse = true;
+    }
+
+    if (primary_index == 1) {
+        switch (param.mesh.remeshing_option)
+        {
+        case 1:
+            min_val = -param.mesh.zlength;
+            break;
+        case 11:
+            min_val = -param.mesh.zlength;
+            break;
+        default:
+            break;
+        }
+    }
+
+    double step = (max_val - min_val) / (np - 1);
+
+    int ind;
+    for (int i = 0, j = 0; i < np_out; ++i) {
+        if (reverse)
+            ind = np_out - 1 - i;
+        else
+            ind = i;
+        ;
+        double target = output_points[ind][primary_index];
+
+        while (j < np_out - 2 && target > input_points[(j + 1)][primary_index]) {
+            j++;
+        }
+
+        double t = (target - input_points[j][primary_index]) /
+                   (input_points[j + 1][primary_index] - input_points[j][primary_index]);
+
+        output_points[ind][secondary_index] = 
+            (1 - t) * input_points[j][secondary_index] + 
+            t * input_points[(j + 1)][secondary_index];
+    }
+}
+
+
+// use linear interpolation to calculate uniformly distributed 2D curve points
+void interpolate_uniform_curve(const Param &param,const array_t &input_points, 
+                               array_t &output_points, int primary_index) {
+    int np = input_points.size();
+
+    double min_val = input_points[0][primary_index];
+    double max_val = input_points[(np - 1)][primary_index];
+
+    bool reverse = false;
+    if (min_val > max_val) {
+        std::swap(min_val, max_val);
+        reverse = true;
+    }
+    switch (param.mesh.remeshing_option)
+    {
+    case 1:
+    case 11:
+        if (primary_index == (NDIMS - 1))
+            min_val = -param.mesh.zlength;
+        break;
+    case 13:
+        if (primary_index == (NDIMS - 1))
+            min_val = -param.mesh.zlength;
+        else if (primary_index == 0) {
+            min_val = 0;
+            max_val = param.mesh.xlength;
+#ifdef THREED
+        } else if (primary_index == 1) {
+            min_val = 0;
+            max_val = param.mesh.ylength;
+#endif
+        }
+        break;
+    default:
+        break;
+    }
+
+    double step = (max_val - min_val) / (np - 1);
+
+    int ind;
+    for (int i = 0, j = 0; i < np; ++i) {
+        if (reverse)
+            ind = np - 1 - i;
+        else
+            ind = i;
+        double target = min_val + i * step;
+        output_points[ind][primary_index] = target;
+
+        while (j < np - 2 && target > input_points[(j + 1)][primary_index]) {
+            j++;
+        }
+
+        double t = (target - input_points[j][primary_index]) /
+                   (input_points[j + 1][primary_index] - input_points[j][primary_index]);
+
+        for (int k = 0; k < NDIMS; k++) {
+            if (k != primary_index) {
+                output_points[ind][k] = 
+                    (1 - t) * input_points[j][k] + 
+                    t * input_points[(j + 1)][k];
+            }
+        }
+    }
+}
+
+
+double quadraticInterpolation(double x, 
+                              double x0, double x1, double x2, 
+                              double y0, double y1, double y2) {
+    return y0 * ((x - x1) * (x - x2)) / ((x0 - x1) * (x0 - x2)) +
+           y1 * ((x - x0) * (x - x2)) / ((x1 - x0) * (x1 - x2)) +
+           y2 * ((x - x0) * (x - x1)) / ((x2 - x0) * (x2 - x1));
+}
+
+
+void new_equilateral_info(const Param& param, const Variables& var, double xlength, int *nx, int *nz, int *nnode, int *nelem, int *nseg) {
+    
+    double sqrt3_to_2 = 2./std::sqrt(3.0);
+
+    double x_mid = xlength / 2;
+    *nx = int((x_mid-0.5*param.mesh.resolution) / param.mesh.resolution)*2 + 2;
+    *nz = int(param.mesh.zlength*sqrt3_to_2 / param.mesh.resolution) + 1;
+    *nnode = (*nx)*((int)(((*nz)-1)/2)+1) + ((*nx)+1)*(int(((*nz)-1)/2)+(1-(*nz)%2));
+    *nelem = (2*(*nx)-1) * ((*nz)-1);
+    *nseg = 2*((*nz)+(*nx)-2) + 1 - (*nz)%2;
+}
+
+void get_side_nodes(const Variables& var, const segflag_t& old_segflag, const segment_t &old_segment, int side, int* side_tips) {
+    int ind = 0;
+    for (int i = 0; i < var.nseg; ++i) {
+        if(old_segflag[i][0] == side) {
+            if (ind==0) {
+                side_tips[ind] = old_segment[i][0];
+                ind++;
+                side_tips[ind] = old_segment[i][1];
+                ind++;
+            } else {
+                side_tips[ind] = old_segment[i][1];
+                ind++;
+            }
+        }
+    }
+}
+
+
+void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
+              const array_t &old_coord, const conn_t &old_conn,
+              const segment_t &old_segment, const segflag_t &old_segflag)
+{
+    int nx_new, nz_new, nnode_new, nelem_new, nseg_new;
+    int ind;
+
+    // find sides    
+    int side_top[var.nx], side_bottom[var.nx+1-var.nz%2], side_left[var.nz], side_right[var.nz];
+
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ1, side_top);
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ0, side_bottom);
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX0, side_left);
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX1, side_right);
+
+    double xlength = old_coord[side_top[var.nx-1]][0] - old_coord[side_top[0]][0];
+
+    new_equilateral_info(param, var, xlength, &nx_new, &nz_new, &nnode_new, &nelem_new, &nseg_new);
+
+    double *qcoord = new double[nnode_new* NDIMS];
+
+    array_t inz(var.nz);
+    array_t outz(nz_new);
+
+    double dx = param.mesh.resolution;
+    double dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
+
+    var.coord->reset(qcoord, nnode_new);
+
+    int istart_n2 = nx_new * (int(nz_new/2)+nz_new%2);
+
+    // interpolate left side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[side_left[j]];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];
+    }
+    // give assign z value to the new mesh
+    ind = 0;
+    double ddz = (old_coord[side_left[0]][1] - 0.)/(nz_new-1);
+
+    for (int j=0; j<nz_new; ++j) {
+        if (j == nz_new-1) {
+            outz[j][1] = -param.mesh.zlength;
+        } else {
+            outz[j][1] = j * dz + old_coord[side_left[0]][1] + ddz*j;
+        }
+    }
+
+    interpolate_curve(param, inz, outz, 1);
+    for (int j = 0; j < nz_new; ++j) {
+        int inc = j%2;
+        double* p;
+        if (inc) {
+            p = (*var.coord)[(istart_n2 + int(j/2)*(nx_new+1))];
+        } else {
+            p = (*var.coord)[(int(j/2)*nx_new)];
+        }        
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+
+    // interpolate right side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[side_right[j]];
+        inz[j][0] = p[0];
+        inz[j][1] = p[1];
+    }
+
+    // give assign z value to the new mesh
+    ind = 0;
+    ddz = (old_coord[side_right[0]][1] - 0.)/(nz_new-1);
+    for (int j=0; j<nz_new; ++j) {
+        if (j == nz_new-1) {
+            outz[j][1] = -param.mesh.zlength;
+        } else {
+            outz[j][1] = j * dz + old_coord[side_right[0]][1] + ddz*j;;
+        }
+    }
+    interpolate_curve(param, inz, outz, 1);
+    for (int j = 0; j < nz_new; ++j) {
+        int inc = j%2;
+        double* p;
+        if (inc) {
+            p = (*var.coord)[(istart_n2 + (int(j/2)+1)*(nx_new+1)-1)];
+        } else {
+            p = (*var.coord)[((int(j/2)+1)*nx_new)-1];
+        }        
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+
+    array_t inx_top(var.nx);
+    array_t outx_top(nx_new);
+
+    // interpolate top side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[side_top[i]];
+        inx_top[i][0] = p[0];
+        inx_top[i][1] = p[1];
+    }
+
+    double bdy_dx = (xlength - (nx_new-1)*dx) / 2.;
+    double bdy_dz = param.mesh.zlength - (nz_new-1)*dz;
+
+    outx_top[0][0] = old_coord[side_top[0]][0];
+    for (int i=1; i <nx_new-1; ++i)
+        outx_top[i][0] = i * dx + bdy_dx + old_coord[side_top[0]][0];
+    outx_top[nx_new-1][0] = old_coord[side_top[var.nx-1]][0];
+
+    interpolate_curve(param, inx_top, outx_top, 0);
+    for (int i = 0; i <nx_new; ++i) {
+        double* p = (*var.coord)[i];
+        p[0] = outx_top[i][0];
+        p[1] = outx_top[i][1];
+    }
+
+    array_t inx_bot(var.nx+1-var.nz%2);
+    array_t outx_bot(nx_new+1-nz_new%2);
+
+    // interpolate top side
+    for (int i = 0; i < var.nx+1-var.nz%2; ++i) {
+        const double* p = old_coord[side_bottom[i]];
+        inx_bot[i][0] = p[0];
+        switch (param.mesh.remeshing_option) {
+        case 1:
+            inx_bot[i][1] = -param.mesh.zlength;
+            break;
+        case 11:
+            inx_bot[i][1] = -param.mesh.zlength;
+            break;
+        default:
+            inx_bot[i][1] = p[1];
+        }
+    }
+    int nbot = nx_new + 1-nz_new%2;
+
+    outx_bot[0][0] = old_coord[side_bottom[0]][0];
+    for (int i=1; i <nx_new-nz_new%2; ++i)
+        outx_bot[i][0] = (i+(nz_new%2-1)+0.5*(1-nz_new%2)) * dx + bdy_dx + old_coord[side_bottom[0]][0];
+    outx_bot[nx_new-nz_new%2][0] = old_coord[side_bottom[var.nx-var.nz%2]][0];
+
+    interpolate_curve(param, inx_bot, outx_bot, 0);
+    for (int i = 0; i < nx_new+1-nz_new%2; ++i) {
+        double* p = (*var.coord)[nnode_new - nbot + i];
+        p[0] = outx_bot[i][0];
+        p[1] = outx_bot[i][1];
+    }
+
+    // interpolate the x with left and right side nodes
+    for (int j = 1; j < int(nz_new/2)+nz_new%2; ++j) {
+        double xi = (*var.coord)[j*nx_new][0];
+        double xe = (*var.coord)[(j+1)*nx_new-1][0];
+        for (int i = 1; i < nx_new-1; ++i)
+            (*var.coord)[i + j*nx_new][0] = xi + bdy_dx + i * dx;
+    }
+    for (int j = 0; j < int(nz_new/2)-1; ++j) {
+        double xi = (*var.coord)[istart_n2+j*(nx_new+1)][0];
+        double xe = (*var.coord)[istart_n2+(j+1)*(nx_new+1)-1][0];
+        for (int i = 1; i < nx_new; ++i)
+            (*var.coord)[istart_n2 + i + j*(nx_new+1)][0] = xi + bdy_dx + (i-0.5) * dx;
+    }
+
+    array_t outx_top_fine(nx_new*2-1);
+    array_t outx_bot_fine(nx_new*2-1);
+
+    outx_top_fine[0][0] = old_coord[side_top[0]][0];
+    for (int i=1; i <nx_new*2-2; ++i)
+        outx_top_fine[i][0] = i * dx/2 + bdy_dx + old_coord[side_top[0]][0];
+    outx_top_fine[nx_new*2-2][0] = old_coord[side_top[var.nx-1]][0];
+
+    interpolate_curve(param, inx_top, outx_top_fine, 0);
+
+    outx_bot_fine[0][0] = old_coord[side_bottom[0]][0];
+    for (int i=1; i <nx_new*2-2; ++i)
+        outx_bot_fine[i][0] = i * dx/2. + bdy_dx + old_coord[side_bottom[0]][0];
+    outx_bot_fine[nx_new*2-2][0] = old_coord[side_bottom[var.nx-var.nz%2]][0];
+
+    interpolate_curve(param, inx_bot, outx_bot_fine, 0);
+
+    bdy_dz = param.mesh.zlength - (nz_new-2)*dz;
+    dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
+
+    double zi, ze;
+    // interpolate the z with bottom and top side nodes
+    for (int i = 1; i < nx_new-1; i++) {
+        zi = outx_top_fine[i*2][1];
+        ze = outx_bot_fine[i*2][1];
+        ddz = ((zi - ze) - dz*(nz_new-2)-bdy_dz)/(nz_new-1);
+        for (int j = 1; j < int(nz_new/2); j++) {
+            (*var.coord)[i + j*nx_new][1] = zi + (j*2)*dz - (j*2)*ddz;
+        }
+    }
+
+    for (int i = 1; i < nx_new; i++) {
+        zi = outx_top_fine[i*2-1][1];
+        ze = outx_bot_fine[i*2-1][1];
+        ddz = ((zi - ze) - dz*(nz_new-2)-bdy_dz)/(nz_new-1);
+        for (int j = 0; j < int(nz_new/2)-1+nz_new%2; j++) {
+            (*var.coord)[istart_n2 + i + j*(nx_new+1)][1] = zi + (j*2+1)*dz - (j*2+1)*ddz;
+        }
+    }
+
+    var.nx = nx_new;
+    var.nz = nz_new;
+    var.nnode = nnode_new;
+    var.nelem = nelem_new;
+    var.nseg = nseg_new;
+
+    int *qconn, *qsegment, *qsegflag;
+
+    create_equilateral_elem(var, qconn);
+    create_equilateral_segments(var, qsegment, qsegflag);
+
+    var.connectivity->reset(qconn, nelem_new);
+    var.segment->reset(qsegment, nseg_new);
+    var.segflag->reset(qsegflag, nseg_new);
+}
+
+
+void new_uniformed_regular_mesh(const Param &param, Variables &var,
+              const array_t &old_coord, const conn_t &old_conn,
+              const segment_t &old_segment, const segflag_t &old_segflag)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+
+    double *qcoord = new double[var.nnode * NDIMS];
+    int *qconn = new int[var.nelem * NODES_PER_ELEM];
+    int *qsegment = new int[var.nseg * NODES_PER_FACET];
+    int *qsegflag = new int[var.nseg];
+
+    var.coord->reset(qcoord, var.nnode);
+    var.connectivity->reset(qconn, var.nelem);
+    var.segment->reset(qsegment, var.nseg);
+    var.segflag->reset(qsegflag, var.nseg);
+
+    #pragma omp parallel for default(none) shared(var,old_conn)
+    for (int i = 0; i < var.nelem; ++i) {
+        int* p = (*var.connectivity)[i];
+        p[0] = old_conn[i][0];
+        p[1] = old_conn[i][1];
+        p[2] = old_conn[i][2];
+#ifdef THREED
+        p[3] = old_conn[i][3];
+#endif
+    }
+    #pragma omp parallel for default(none) shared(var,old_segment,old_segflag)
+    for (int i = 0; i < var.nseg; ++i) {
+        int* p = (*var.segment)[i];
+        p[0] = old_segment[i][0];
+        p[1] = old_segment[i][1];
+#ifdef THREED
+        p[2] = old_segment[i][2];
+#endif
+        (*var.segflag)[i][0] = old_segflag[i][0];
+    }
+
+    // interpolate coordinates
+#ifdef THREED
+    int_vec nxyz = {var.nx, var.ny, var.nz};
+
+    // interpolate edges
+    for (int n0=0;n0<NDIMS;n0++) {
+        for (int n1=n0+1;n1<NDIMS;n1++) {
+            if (n0 >= n1) continue;
+            int n2 = 3 - n0 - n1;
+
+            #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0,n1,n2) collapse(2)
+            for (int ii=0; ii<2; ii++) {
+                for (int jj=0; jj<2; jj++) {
+                    array_t in(nxyz[n2]);
+                    array_t out(nxyz[n2]);
+                    int_vec idx(3);
+                    idx[n0] = ii*(nxyz[n0]-1);
+                    idx[n1] = jj*(nxyz[n1]-1);
+
+                    for (int kk=0; kk<nxyz[n2]; kk++) {
+                        idx[n2] = kk;
+                        const double* p = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        in[kk][0] = p[0];
+                        in[kk][1] = p[1];
+                        in[kk][2] = p[2];
+                    }
+                    switch (param.mesh.remeshing_option)
+                    {
+                    case 1:
+                    case 11:
+                        if (idx[2] == 0 && n2 != 2)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][2] = -param.mesh.zlength;
+                        break;
+                    case 13:
+                        if (idx[2] == 0 && n2 != 2)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][2] = -param.mesh.zlength;
+
+                        if (idx[0] == 0 && n2 != 0)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][0] = 0;
+
+                        if (idx[0] == nxyz[0]-1 && n2 != 0)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][0] = param.mesh.xlength;
+
+                        if (idx[1] == 0 && n2 != 1)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][1] = 0;
+
+                        if (idx[1] == nxyz[1]-1 && n2 != 1)
+                            for (int kk=0; kk<nxyz[n2]; ++kk)
+                                in[kk][1] = param.mesh.ylength;
+
+                        break;
+                    default:
+                        break;
+                    }
+    
+                    interpolate_uniform_curve(param, in, out, n2);
+
+                    for (int kk=0; kk<nxyz[n2]; kk++) {
+                        idx[n2] = kk;
+                        double* p = (*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        p[0] = out[kk][0];
+                        p[1] = out[kk][1];
+                        p[2] = out[kk][2];
+                    }
+                }
+            }
+        }
+    }
+
+    // interpolation x, y, z in each plane
+    for (int n0=0; n0<NDIMS; n0++) {
+        #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0)
+        for (int ii=1; ii<nxyz[n0]-1; ii++) {
+            for (int n1=0; n1<NDIMS; n1++) {
+                if (n0 == n1) continue;
+                int n2 = 3 - n0 - n1;
+                int i0 = 0;
+                int i1 = nxyz[n1]-1;
+                int_vec idx(3);
+                idx[n0] = ii;
+                for (int jj=0; jj<2; jj++) {
+                    idx[n2] = jj * (nxyz[n2]-1);
+                    idx[n1] = i0;
+                    int ind0 = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                    idx[n1] = i1;
+                    int ind1 = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                    double delta = ((*var.coord)[ind1][n1] - (*var.coord)[ind0][n1]) / i1;
+                    for (int kk=1; kk<nxyz[n1]-1; kk++) {
+                        idx[n1] = kk;
+                        int ind = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+                        (*var.coord)[ind][n1] = (*var.coord)[ind0][n1] + kk * delta;
+                    }
+                }
+            }
+        }   
+    }
+
+    // 2D interpolation of x-y, y-z, x-z plane
+    for (int n0=0; n0<NDIMS; n0++) {
+        for (int n1=0; n1<NDIMS; n1++) {
+            if (n0 >= n1) continue;
+            int n2 = 3 - n0 - n1;
+
+            #pragma omp parallel for default(none) shared(param,var,old_coord,nxyz,n0,n1,n2) collapse(2)
+            for (int ii=1; ii<nxyz[n0]-1;ii++) {
+                for (int jj=1; jj<nxyz[n1]-1;jj++) {
+                    for (int kk=0; kk<2; kk++) {
+                        int_vec idx(3);
+                        idx[n0] = ii;
+                        idx[n1] = jj;
+                        idx[n2] = kk * (nxyz[n2]-1);
+                        int ind = idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2];
+
+
+                        switch (param.mesh.remeshing_option)
+                        {
+                        case 1:
+                        case 11:
+                            if (n2==2 && kk==0) {
+                                (*var.coord)[ind][2] = -param.mesh.zlength;
+                                continue;
+                            }
+                            break;
+                        case 13:
+                            if (n2==2 && kk==0) {
+                                (*var.coord)[ind][2] = -param.mesh.zlength;
+                                continue;
+                            } else if (n2==0 && kk==0) {
+                                (*var.coord)[ind][0] = 0;
+                                continue;
+                            } else if (n2==0 && kk==1) {
+                                (*var.coord)[ind][0] = param.mesh.xlength;
+                                continue;
+                            } else if (n2==1 && kk==0) {
+                                (*var.coord)[ind][1] = 0;
+                                continue;
+                            } else if (n2==1 && kk==1) {
+                                (*var.coord)[ind][1] = param.mesh.ylength;
+                                continue;
+                            }
+                            break;
+                        default:
+                            break;
+                        }
+
+                        int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
+                        double p0 = old_coord[ind][n0];
+                        double p1 = old_coord[ind][n1];
+
+                        for (int iii=0; iii<nxyz[n0]; iii++) {
+                            idx[n0] = iii;
+                            if ((*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]][n0] > p0) {
+                                ind_x0 = iii - 1;
+                                ind_x1 = iii;
+                                ind_x2 = iii + 1;
+                                break;
+                            }
+                        }
+                        if (ind_x2 > nxyz[n0] - 1) {
+                            ind_x2 = nxyz[n0] - 1;
+                            ind_x1 = nxyz[n0] - 2;
+                            ind_x0 = nxyz[n0] - 3;
+                        }
+                        if (ind_x0 < 0) {
+                            ind_x2 = 2;
+                            ind_x1 = 1;
+                            ind_x0 = 0;
+                        }
+                        if (ind_x2 > nxyz[n0] - 1) {
+                            ind_x2 = nxyz[n0] - 1;
+                        }
+
+                        idx[n0] = ii;
+                        for (int jjj=0; jjj<nxyz[n1]; jjj++) {
+                            idx[n1] = jjj;
+                            if ((*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]][n1] > p1) {
+                                ind_y0 = jjj - 1;
+                                ind_y1 = jjj;
+                                ind_y2 = jjj + 1;
+                                break;
+                            }
+                        }
+                        if (ind_y2 > nxyz[n1] - 1) {
+                            ind_y2 = nxyz[n1] - 1;
+                            ind_y1 = nxyz[n1] - 2;
+                            ind_y0 = nxyz[n1] - 3;
+                        }
+                        if (ind_y0 < 0) {
+                            ind_y2 = 2;
+                            ind_y1 = 1;
+                            ind_y0 = 0;
+                        }
+                        if (ind_y2 > nxyz[n1] - 1) {
+                            ind_y2 = nxyz[n1] - 1;
+                        }
+                        idx[n0] = ind_x0;
+                        idx[n1] = ind_y0;
+                        const double *x0y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x0y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x0y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n0] = ind_x1;
+                        idx[n1] = ind_y0;
+                        const double *x1y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x1y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x1y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n0] = ind_x2;
+                        idx[n1] = ind_y0;
+                        const double *x2y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y1;
+                        const double *x2y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        idx[n1] = ind_y2;
+                        const double *x2y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+
+                        double interp0 = quadraticInterpolation(p1,
+                            x0y0[n1], x0y1[n1], x0y2[n1], x0y0[n2], x0y1[n2], x0y2[n2]);
+                        double interp1 = quadraticInterpolation(p1, 
+                            x1y0[n1], x1y1[n1], x1y2[n1], x1y0[n2], x1y1[n2], x1y2[n2]);
+                        double interp2 = quadraticInterpolation(p1, 
+                            x2y0[n1], x2y1[n1], x2y2[n1], x2y0[n2], x2y1[n2], x2y2[n2]);
+                        (*var.coord)[ind][n2] = quadraticInterpolation(p0, 
+                            x0y1[n0], x1y1[n0], x2y1[n0], interp0, interp1, interp2);
+                    }
+                }
+            }
+        }
+    }
+
+    // interpolate x,y,z inside the mesh
+    for (int n0=0; n0<NDIMS;n0++) {
+        for (int n1=0; n1<NDIMS;n1++) {
+            if (n0 >= n1) continue;
+            int n2 = 3 - n0 - n1;
+
+            #pragma omp parallel for default(none) shared(var,nxyz,n0,n1,n2) collapse(2)
+            for (int ii=1; ii<nxyz[n0]-1;ii++) {
+                for (int jj=1; jj<nxyz[n1]-1; jj++) {
+                    int_vec idx0(3);
+                    idx0[n0] = ii;
+                    idx0[n1] = jj;
+                    idx0[n2] = 0;
+                    double zs = (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2];
+                    idx0[n2] = nxyz[n2] - 1;
+                    double ze = (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2];
+                    double delta = (ze - zs) / (nxyz[n2] - 1);
+                    for (int kk=1; kk<nxyz[n2]-1; kk++) {
+                        idx0[n2] = kk;
+                        (*var.coord)[idx0[0] * var.ny * var.nz + idx0[1] * var.nz + idx0[2]][n2] = zs + kk * delta;
+                    }
+                }
+            }
+        }
+    }
+
+#else
+    array_t inz(var.nz);
+    array_t outz(var.nz);
+    array_t inx(var.nx);
+    array_t outx(var.nx);
+    // interpolate left side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[j];
+        inz[j][1] = p[1];
+
+        switch (param.mesh.remeshing_option) {
+        case 13:
+            inz[j][0] = 0;
+            break;
+        default:
+            inz[j][0] = p[0];
+        }
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*var.coord)[j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+
+    // interpolate right side
+    for (int j = 0; j < var.nz; ++j) {
+        const double* p = old_coord[(var.nx - 1) * var.nz + j];
+        inz[j][1] = p[1];
+
+        switch (param.mesh.remeshing_option) {
+        case 13:
+            inz[j][0] = param.mesh.xlength;
+            break;
+        default:
+            inz[j][0] = p[0];
+        }
+    }
+    interpolate_uniform_curve(param, inz, outz, 1);
+    for (int j = 0; j < var.nz; ++j) {
+        double* p = (*var.coord)[(var.nx - 1) * var.nz + j];
+        p[0] = outz[j][0];
+        p[1] = outz[j][1];
+    }
+    // interpolate botton side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * i];
+        inx[i][0] = p[0];
+        switch (param.mesh.remeshing_option) {
+        case 1:
+        case 11:
+        case 13:
+            inx[i][1] = -param.mesh.zlength;
+            break;
+        default:
+            inx[i][1] = p[1];
+        }
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*var.coord)[var.nz * i];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate top side
+    for (int i = 0; i < var.nx; ++i) {
+        const double* p = old_coord[var.nz * (i + 1) - 1];
+        inx[i][0] = p[0];
+        inx[i][1] = p[1];
+    }
+    interpolate_uniform_curve(param, inx, outx, 0);
+    for (int i = 0; i < var.nx; ++i) {
+        double* p = (*var.coord)[var.nz * (i + 1) - 1];
+        p[0] = outx[i][0];
+        p[1] = outx[i][1];
+    }
+    // interpolate the x with left and right side nodes
+    for (int j = 1; j < var.nz - 1; ++j) {
+        double xi = (*var.coord)[j][0];
+        double xe = (*var.coord)[(var.nx - 1) * var.nz - 1 + j][0];
+        double dx = (xe - xi) / (var.nx - 1);
+        for (int i = 1; i < var.nx - 1; ++i)
+            (*var.coord)[i * var.nz + j][0] = xi + i * dx;
+    }
+    // interpolate the z with bottom and top side nodes
+    for (int i = 1; i < var.nx - 1; ++i) {
+        double zi = (*var.coord)[i * var.nz][1];
+        double ze = (*var.coord)[(i + 1) * var.nz - 1][1];
+        double dz = (ze - zi) / (var.nz - 1);
+        for (int j = 1; j < var.nz - 1; ++j)
+            (*var.coord)[i * var.nz + j][1] = zi + j * dz; 
+    }
+#endif
+
+        // create_uniform_interpolated_mesh(param, var, old_coord, var.coord);
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
 void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &tmp_result_sg)
 {
     /* dvoldt is the volumetric strain rate, weighted by the element volume,
@@ -1401,7 +2259,16 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        break;
+    case 13:
+        excl_func = &is_corner;
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                    points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
+        flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -1649,7 +2516,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                        points_to_delete, min_dist);
         break;
     case 12:
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -1888,7 +2755,14 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        break;
+    case 13:
+        excl_func = &is_corner;
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                    points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
         break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
@@ -2094,7 +2968,8 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     // check if any bottom node is too far away from the bottom depth
     if (param.mesh.remeshing_option == 1 ||
         param.mesh.remeshing_option == 2 ||
-        param.mesh.remeshing_option == 11) {
+        param.mesh.remeshing_option == 11 ||
+        param.mesh.remeshing_option == 13) {
         double bottom = - param.mesh.zlength;
         const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
         for (int i=0; i<var.nnode; ++i) {
@@ -2109,6 +2984,46 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
                     return 2;
                 }
             }
+        }
+    }
+    // check if any side node is too far away from the side
+    if (param.mesh.remeshing_option == 13) {
+        const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        for (int i=0; i<var.nnode; ++i) {
+            if (is_x0((*var.bcflag)[i])) {
+                double x = (*var.coord)[i][0];
+                if (std::fabs(x) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the x0 side: x = " << x << "\n";
+                }
+            } else if (is_x1((*var.bcflag)[i])) {
+                double x = (*var.coord)[i][0];
+                if (std::fabs(x - param.mesh.xlength) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the x1 side: x = " << x << "\n";
+                }
+#ifdef THREED
+            } else if (is_y0((*var.bcflag)[i])) {
+                double y = (*var.coord)[i][1];
+                if (std::fabs(y) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the y0 side: y = " << y << "\n";
+                }
+            } else if (is_y1((*var.bcflag)[i])) {
+                double y = (*var.coord)[i][1];
+                if (std::fabs(y - param.mesh.ylength) > dist) {
+                    index = i;
+                    std::cout << "    Node #" << i << " is too far from the y1 side: y = " << y << "\n";
+                }
+#endif
+            }
+            if (index >= 0) break;
+        }
+        if (index >= 0) {
+#ifdef USE_NPROF
+            nvtxRangePop();
+#endif
+            return 2;
         }
     }
 
@@ -2158,19 +3073,41 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
 #else
-        new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+        if (param.mesh.meshing_elem_shape == 0) {
+            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+        } else if (param.mesh.meshing_elem_shape == 1) {
+            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+        } else {
+            std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
+            std::exit(1);
+        }
 #endif
 #else  // if 2d
 #if defined USEMMG
         optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
 #else
-        new_mesh(param, var, bad_quality, old_coord, old_connectivity,
+        if (param.mesh.meshing_elem_shape == 0) {
+            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                  old_segment, old_segflag);
+        } else if (param.mesh.meshing_elem_shape == 1) {
+            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
+                 old_segment, old_segflag);
+        } else if (param.mesh.meshing_elem_shape == 2) {
+            new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
+                 old_segment, old_segflag);
+        } else {
+            std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
+            std::exit(1);
+        }        
 #endif
 #endif
-        renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);        
+        if (param.mesh.meshing_elem_shape == 0) {
+            // renumbering mesh
+            renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
+        }
 
         {
             std::cout << "    Interpolating fields.\n";
@@ -2224,17 +3161,19 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     if(param.control.has_ATS)
         var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
-        param.mesh.remeshing_option==11) {
+        param.mesh.remeshing_option==11 ||
+        param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
         for (auto i=var.bnodes[iboundz0]->begin(); i<var.bnodes[iboundz0]->end(); ++i) {
             int n = *i;
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;
             // Reest temperature of the bottom nodes to mantle temperature
-            (*var.temperature)[n] = param.bc.mantle_temperature;
+            (*var.temperature)[n] = var.bottom_temperature;
         }
     }
 

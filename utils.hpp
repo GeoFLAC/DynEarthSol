@@ -1,5 +1,8 @@
 #ifndef DYNEARTHSOL3D_UTILS_HPP
 #define DYNEARTHSOL3D_UTILS_HPP
+#ifdef USE_NPROF
+#include <nvToolsExt.h> 
+#endif
 
 #include "parameters.hpp"
 #include <cmath>
@@ -152,54 +155,58 @@ static void print_time_ns(const int64_t duration) {
 
 #endif
 
-static void check_nan(const Variables& var) {
-    for (int e=0; e<var.nelem;e++) {
-      if (std::isnan((*var.volume)[e])) {
-        std::cerr << "Error: volume becomes NaN\n";
-        std::exit(11);
-      }
-      if (std::isnan((*var.dpressure)[e])) {
-        std::cerr << "Error: dpressure becomes NaN\n";
-        std::exit(11);
-      }
-      if (std::isnan((*var.viscosity)[e])) {
-        std::cerr << "Error: viscosity becomes NaN\n";
-        std::exit(11);
-      }
+static void out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
+    if (idx1 >= 0)
+        std::cerr << "Error: " << msg <<"[" << idx0 << "][" << idx1 << "] becomes NaN" << std::endl;
+    else
+        std::cerr << "Error: " << msg <<"[" << idx0 << "] becomes NaN" << std::endl;
+    std::exit(11);
+}
 
-      for (int i=0; i<3;i++) {
-        if(std::isnan((*var.connectivity)[e][i])) {
-          std::cerr << "Error: connectivity becomes NaN\n";
-          std::exit(11);
+static void check_nan(const Param& param, const Variables& var) {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    #pragma omp parallel default(none) shared(param,var)
+    {
+        #pragma omp for
+        for (int e=0; e<var.nelem;e++) {
+            if (std::isnan((*var.volume)[e]))
+                out_nan_error("volume", e);
+            
+            if (std::isnan((*var.dpressure)[e]))
+                out_nan_error("dpressure", e);
+
+            if (std::isnan((*var.viscosity)[e]))
+                out_nan_error("viscosity", e);
+            
+            for (int i=0; i<NODES_PER_ELEM;i++)
+                if(std::isnan((*var.connectivity)[e][i]))
+                    out_nan_error("connectivity", e, i);
+
+            for (int i=0; i<NSTR; i++)
+                if (std::isnan((*var.stress)[e][i]))
+                    out_nan_error("stress", e, i);
         }
-      }
+
+        #pragma omp for
+        for (int n=0; n<var.nnode; n++) {
+            if (std::isnan((*var.temperature)[n]))
+                out_nan_error("temperature", n);
+
+            for (int i=0; i<NDIMS; i++) {
+                if (std::isnan((*var.force)[n][i]))
+                    out_nan_error("force", n, i);
+
+                if (std::isnan((*var.vel)[n][i]))
+                    out_nan_error("vel", n, i);
+
+                if (std::isnan((*var.coord)[n][i]))
+                    out_nan_error("coord", n, i);                
+            }
+        }
     }
-
-    for (int i=0; i<var.nnode; i++) {
-        if (std::isnan((*var.temperature)[i])) {
-            std::cerr << "Error: temperature becomes NaN\n";
-            std::exit(11);
-        }
-
-        for (int j=0; j<NDIMS; j++) {
-            if (std::isnan((*var.force)[i][j])) {
-                std::cerr << "Error: force becomes NaN\n";
-                std::exit(11);
-            }
-            if (std::isnan((*var.vel)[i][j])) {
-                std::cerr << "Error: vel becomes NaN\n";
-                std::exit(11);
-            }
-            if (std::isnan((*var.coord)[i][j])) {
-                std::cerr << "Error: coordinate becomes NaN\n";
-                std::exit(11);
-            }
-        }
-        for (int j=0; j<3; j++) {
-            if (std::isnan((*var.stress)[i][j])) {
-                std::cerr << "Error: stress becomes NaN\n";
-                std::exit(11);
-            }
-        }
-    }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }

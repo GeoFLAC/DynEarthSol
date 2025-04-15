@@ -195,7 +195,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         std::cout << "  Output # " << frame
               << ", step = " << var.steps
               << ", time = " << std::scientific << std::setprecision(5) << var.time / YEAR2SEC << " yr"
-            //   << ", dt_min = " << var.global_dt_min/YEAR2SEC << " yr"
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt / YEAR2SEC << " yr"
               << ", wt = ";
@@ -207,19 +206,14 @@ void Output::_write(const Variables& var, bool disable_averaging)
         std::cout << "  Output # " << frame
               << ", step = " << var.steps
               << ", time = " << std::scientific << std::setprecision(5) << var.time << " sec"
-            //   << ", dt_min = " << var.global_dt_min << " yr"
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt<< " sec"
               << ", wt = ";
         print_time_ns(duration_ns);
         std::cout << "\n";
     }
-    
 
     frame ++;
-
-    // check for NaN in var
-    check_nan(var);
 
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -233,9 +227,11 @@ void Output::write(const Variables& var)
 }
 
 
-void Output::write_exact(const Variables& var)
+void Output::write_exact(const Param& param, const Variables& var)
 {
     _write(var, true);
+    // check for NaN in var
+    check_nan(param,var);
 }
 
 

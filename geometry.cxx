@@ -345,6 +345,7 @@ void NMD_stress(const Param& param, const Variables &var,
 }
 
 double compute_dt(const Param& param, Variables& var)
+
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -357,7 +358,6 @@ double compute_dt(const Param& param, Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
-    
     // Define element velocity arrays
     double_vec velocity_x_element(var.nelem, 0.0);
     double_vec velocity_y_element(var.nelem, 0.0);
@@ -374,6 +374,7 @@ double compute_dt(const Param& param, Variables& var)
         private(vx_element, vy_element, vz_element)
     #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem)
+
     for (int e=0; e<var.nelem; ++e) {
 
         vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -488,7 +489,7 @@ double compute_dt(const Param& param, Variables& var)
         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
     }
-    
+
     // Combine dt calculations and incorporate dt_hydro_diffusion
     double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion}) * param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
@@ -571,10 +572,12 @@ double compute_dt_PT(const Param& param, const Variables& var)
         minl = std::min(minl, minh);
     }
 
+
     // max_vbc_val is maximum boundary velocity
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
         max_vbc_val = var.max_vbc_val; 
+
         if (param.control.surface_process_option > 0)
             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
     }
@@ -603,6 +606,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
+
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -614,6 +618,32 @@ void compute_mass(const Param &param, const Variables &var,
 
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
+
+    // Retrieve hydraulic properties for the element
+    double perm_e = var.mat->perm(0);                // Intrinsic permeability 
+    double mu_e = var.mat->mu_fluid(0);              // Fluid dynamic viscosity
+    double alpha_b = var.mat->alpha_biot(0);         // Biot coefficient
+    double rho_f = var.mat->rho_fluid(0);            // Fluid density
+    double phi_e = var.mat->phi(0);        // Element porosity
+    double comp_fluid = var.mat->beta_fluid(0);        // fluid comporessibility
+    double bulkm = var.mat->bulkm(0);
+    double shearm = var.mat->shearm(0);
+    double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+
+    rho_f = 1000.0; 
+    double gamma_w = rho_f * param.control.gravity; // specific weight
+    
+    // Hydraulic conductivity using permeability and viscosity
+    double hydraulic_conductivity = perm_e * gamma_w / mu_e;
+    
+    // Compute element diffusivity and update max using reduction
+    double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
+
+    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
+    {
+        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
+        std::exit(11);
+    }
 
     // Retrieve hydraulic properties for the element
     double perm_e = var.mat->perm(0);                // Intrinsic permeability 
@@ -675,6 +705,7 @@ void compute_mass(const Param &param, const Variables &var,
                 // Modified density considering porosity for hydraulic diffusion
                     rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
                 }
+
         }
 
         double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
@@ -696,6 +727,7 @@ void compute_mass(const Param &param, const Variables &var,
 
     #pragma omp parallel for default(none)      \
         shared(param,var,volume_n,mass,tmass,hmass,ymass,tmp_result)
+
     #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         volume_n[n]=0;
@@ -703,6 +735,7 @@ void compute_mass(const Param &param, const Variables &var,
         tmass[n]=0;
         hmass[n]=0;
         ymass[n]=0;
+      
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
             double *tr = tmp_result[*e];
             volume_n[n] += tr[0];

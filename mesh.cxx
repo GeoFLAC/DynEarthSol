@@ -100,6 +100,526 @@ void set_2d_quality_str(std::string &quality, double min_angle)
 }
 
 
+void create_quadrilateral_cells(Variables &var, int *&cells) {
+#ifndef THREED
+    cells = new int[(var.nx-1)*(var.nz-1)*4];
+#else
+    cells = new int[(var.nx-1)*(var.ny-1)*(var.nz-1)*8];
+#endif
+    int cell_idx = 0;
+
+#ifndef THREED
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.nz - 1; ++j) {
+            int idx0 = i * var.nz + j;
+            int idx1 = idx0 + var.nz;
+            cells[cell_idx] = idx0;
+            cells[cell_idx+1] = idx1;
+            cells[cell_idx+2] = idx1 + 1;
+            cells[cell_idx+3] = idx0 + 1;
+            cell_idx += 4;
+        }
+    }
+#else
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.ny - 1; ++j) {
+            for (int k = 0; k < var.nz - 1; ++k) {
+                // 8 vertices index
+                int idx0 = i * var.ny * var.nz + j * var.nz + k;
+                int idx1 = idx0 + var.nz;
+                int idx2 = idx1 + var.ny * var.nz;
+                int idx3 = idx2 - var.nz;
+                cells[cell_idx] = idx0;
+                cells[cell_idx+1] = idx1;
+                cells[cell_idx+2] = idx2;
+                cells[cell_idx+3] = idx3;
+                cells[cell_idx+4] = idx0 + 1;
+                cells[cell_idx+5] = idx1 + 1;
+                cells[cell_idx+6] = idx2 + 1;
+                cells[cell_idx+7] = idx3 + 1;
+                cell_idx += 8;
+            }
+        }
+    }
+#endif
+}
+
+void divide_hexahedron_to_tetrahedra_index(const int *cell, int order, int n, int *conn) {
+
+    if (order == 0) {
+        switch (n)
+        {
+        case 0:
+            conn[0] = cell[0];
+            conn[1] = cell[1];
+            conn[2] = cell[2];
+            conn[3] = cell[5];
+            break;
+        case 1:
+            conn[0] = cell[0];
+            conn[1] = cell[2];
+            conn[2] = cell[3];
+            conn[3] = cell[7];
+            break;
+        case 2:
+            conn[0] = cell[0];
+            conn[1] = cell[4];
+            conn[2] = cell[5];
+            conn[3] = cell[7];
+            break;
+        case 3:
+            conn[0] = cell[2];
+            conn[1] = cell[5];
+            conn[2] = cell[6];
+            conn[3] = cell[7];
+            break;
+        case 4:
+            conn[0] = cell[0];
+            conn[1] = cell[5];
+            conn[2] = cell[2];
+            conn[3] = cell[7];
+            break;
+        default:
+            exit(554);
+            break;
+        }
+    } else {
+        switch (n)
+        {
+        case 0:
+            conn[0] = cell[1];
+            conn[1] = cell[2];
+            conn[2] = cell[3];
+            conn[3] = cell[6];
+            break;
+        case 1:
+            conn[0] = cell[0];
+            conn[1] = cell[1];
+            conn[2] = cell[3];
+            conn[3] = cell[4];
+            break;
+        case 2:
+            conn[0] = cell[1];
+            conn[1] = cell[4];
+            conn[2] = cell[5];
+            conn[3] = cell[6];
+            break;
+        case 3:
+            conn[0] = cell[3];
+            conn[1] = cell[4];
+            conn[2] = cell[6];
+            conn[3] = cell[7];
+            break;
+        case 4:
+            conn[0] = cell[1];
+            conn[1] = cell[3];
+            conn[2] = cell[4];
+            conn[3] = cell[6];
+            break;
+        default:
+            exit(555);
+            break;
+        }
+    }
+}
+
+
+void create_elem_from_cell(const Variables& var, int *&connectivity) {
+    connectivity = new int[var.nelem*NODES_PER_ELEM];
+#ifndef THREED
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.nz - 1; ++j) {
+            int idx = i * (var.nz - 1) + j;
+            // should be counter-clockwise
+            if ((i+j) % 2 == 0){
+                connectivity[idx*6] = (*var.cell)[idx][0];
+                connectivity[idx*6+1] = (*var.cell)[idx][2];
+                connectivity[idx*6+2] = (*var.cell)[idx][1];
+
+                connectivity[idx*6+3] = (*var.cell)[idx][0];
+                connectivity[idx*6+4] = (*var.cell)[idx][3];
+                connectivity[idx*6+5] = (*var.cell)[idx][2];                
+            } else {
+                connectivity[idx*6] = (*var.cell)[idx][0];
+                connectivity[idx*6+1] = (*var.cell)[idx][3];
+                connectivity[idx*6+2] = (*var.cell)[idx][1];
+
+                connectivity[idx*6+3] = (*var.cell)[idx][1];
+                connectivity[idx*6+4] = (*var.cell)[idx][3];
+                connectivity[idx*6+5] = (*var.cell)[idx][2];
+            }
+        }
+    }
+#else
+    int conn[NODES_PER_ELEM];
+    for (int i = 0; i<var.nx - 1; ++i) {
+        for (int j = 0; j<var.ny -1; ++j) {
+            for (int k = 0; k<var.nz - 1; ++k) {
+                int idx = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+                int order = (i+j+k)%2;
+                for (int n = 0; n < 5; ++n) {
+                    int idx_elem = idx*5+n;
+                    divide_hexahedron_to_tetrahedra_index((*var.cell)[idx], order, n, conn);
+                    connectivity[idx_elem*4] = conn[0];
+                    connectivity[idx_elem*4+1] = conn[1];
+                    connectivity[idx_elem*4+2] = conn[2];
+                    connectivity[idx_elem*4+3] = conn[3];
+                }
+            }
+        }
+    }
+#endif
+}
+
+
+void create_rect_node(const Param& param, const Variables& var, double *&points) {
+    points = new double[var.nnode*NDIMS];
+    double dx = param.mesh.xlength / (var.nx - 1);
+    double dz = -param.mesh.zlength / (var.nz - 1);
+#ifdef THREED
+    double dy = param.mesh.ylength / (var.ny - 1);
+#endif
+
+#ifndef THREED
+    for (int i = 0; i < var.nx; ++i) {
+        for (int j = 0; j < var.nz; ++j) {
+            points[(j + i * var.nz)*2] = i * dx;
+            points[(j + i * var.nz)*2+1] = j * dz;
+        }
+    }
+#else
+    for (int i = 0; i < var.nx; ++i) {
+        for (int j = 0; j < var.ny; ++j) {
+            for (int k = 0; k < var.nz; ++k) {
+                int idx = k + j * var.nz + i * var.ny * var.nz;
+                points[idx*3] = i * dx;
+                points[idx*3+1] = j * dy;
+                points[idx*3+2] = k * dz;
+            }
+        }
+    }
+#endif
+}
+
+
+void create_regular_segments(const Variables& var, int *&segments, int *&segflags) {
+    segments = new int[var.nseg*NODES_PER_FACET];
+    segflags = new int[var.nseg];
+    int seg_idx = 0;
+    int flag_idx = 0;
+#ifndef THREED
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.nz - 1; ++j) {
+            if (i == 0) {
+                segments[seg_idx] = j + i * var.nz;
+                seg_idx++;
+                segments[seg_idx] = j + i * var.nz + 1;
+                seg_idx++;
+                segflags[flag_idx] = 1;
+                flag_idx++;
+            }
+            if (j == 0) {
+                segments[seg_idx] = j + i * var.nz;
+                seg_idx++;
+                segments[seg_idx] = j + i * var.nz + var.nz;
+                seg_idx++;
+                segflags[flag_idx] = 32;
+                flag_idx++;
+            }
+        }
+    }
+    for (int i = 1; i < var.nx; ++i) {
+        segments[seg_idx] = i * var.nz - 1;
+        seg_idx++;
+        segments[seg_idx] = i * var.nz + var.nz - 1;
+        seg_idx++;
+        segflags[flag_idx] = 16;
+        flag_idx++;
+    }
+    for (int j = 0; j < var.nz - 1; ++j) {
+        segments[seg_idx] = var.nz * (var.nx - 1) + j;
+        seg_idx++;
+        segments[seg_idx] = var.nz * (var.nx - 1) + j + 1;
+        seg_idx++;
+        segflags[flag_idx] = 2;
+        flag_idx++;
+    }
+#else
+    int idx_elem, idx_cell;
+    int *conn;
+    // top and bottom
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int j = 0; j < var.ny - 1; ++j) {
+            // top
+            int k = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDZ1;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDZ1;
+            seg_idx++;
+
+            // bottom
+            k = var.nz - 2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDZ0;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 3;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDZ0;
+            seg_idx++;
+        }
+    }
+
+    // left and right
+    for (int j = 0; j < var.ny - 1; ++j) {
+        for (int k = 0; k < var.nz - 1; ++k) {
+            // left
+            int i = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            int order = (i+j+k)%2;
+
+            if (order)
+                idx_elem = idx_cell*5 + 1;
+            else
+                idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[1];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDX0;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[1];
+            segflags[seg_idx] = BOUNDX0;
+            seg_idx++;
+
+            // right
+            i = var.nx - 2;
+            order = (i+j+k)%2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            if (order)
+                idx_elem = idx_cell*5;
+            else
+                idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[1];
+            segments[seg_idx*3+1] = conn[2];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDX1;
+            seg_idx++;
+
+            idx_elem = idx_cell*5 + 3;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[3];
+            segments[seg_idx*3+2] = conn[2];
+            segflags[seg_idx] = BOUNDX1;
+            seg_idx++;
+        }
+    }
+
+    // front and back
+    for (int i = 0; i < var.nx - 1; ++i) {
+        for (int k = 0; k < var.nz - 1; ++k) {
+            // front
+            int j = 0;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            int order = (i+j+k)%2;
+            idx_elem = idx_cell*5 + 1;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[3];
+            segments[seg_idx*3+2] = conn[2];
+            segflags[seg_idx] = BOUNDY0;
+            seg_idx++;
+
+            if (order)
+                idx_elem = idx_cell*5 + 3;
+            else
+                idx_elem = idx_cell*5 + 2;
+            conn = (*var.connectivity)[idx_elem];
+            segments[seg_idx*3] = conn[0];
+            segments[seg_idx*3+1] = conn[1];
+            segments[seg_idx*3+2] = conn[3];
+            segflags[seg_idx] = BOUNDY0;
+            seg_idx++;
+ 
+            // back
+            j = var.ny - 2;
+            order = (i+j+k)%2;
+            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+            idx_elem = idx_cell*5;
+            conn = (*var.connectivity)[idx_elem];
+            if (order) {
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[1];
+                segments[seg_idx*3+2] = conn[3];
+            } else {
+                segments[seg_idx*3] = conn[1];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[3];
+            }
+            segflags[seg_idx] = BOUNDY1;
+            seg_idx++;
+
+            if (order) {
+                idx_elem = idx_cell*5 + 2;
+                conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[3];
+                segments[seg_idx*3+2] = conn[2];
+            } else {
+                idx_elem = idx_cell*5 + 3;
+                conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[1];
+            }
+            segflags[seg_idx] = BOUNDY1;
+            seg_idx++;
+        }
+    }
+#endif
+}
+
+void create_regular_regattr(const Variables& var, double *&regattr) {
+    regattr = new double[var.nelem];
+
+    for (int i = 0; i < var.nelem; i++)
+        regattr[i] = 0.;
+}
+
+
+void create_equilateral_node(const Param& param, const Variables& var, double *&points) {
+    /*
+    Create equilateral mesh nodes.
+    
+                     nx = 7
+    0------1-----2-----3-----4-----5-----6
+    | \  /  \  /  \  /  \  /  \  /  \  / |
+    14-15----16----17----18----19----20-21
+    | /  \  /  \  /  \  /  \  /  \  /  \ |   nz = 4
+    7-----8-----9-----10----11----12----13
+    | \  /  \  /  \  /  \  /  \  /  \  / |
+    22-23----24----25----26----27----28-29
+
+    var.nnode = 30
+    var.nelem = 42
+    */
+    points = new double[var.nnode*2];
+    double dx = param.mesh.resolution;
+    double dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
+
+    double bdy_dx = (param.mesh.xlength - (var.nx-1)*dx) / 2.;
+
+    int ind = 0;
+    for (int j=0; j<var.nz; j+=2) {
+        int np = var.nx;
+        int ind_tmp = ind;
+        if (j == var.nz-1) {
+            for (int i=0; i<var.nx; ++i) {
+                points[ind_tmp*2+1] = -param.mesh.zlength;
+                ind_tmp++;
+            }
+        } else {
+            for (int i=0; i<var.nx; ++i) {
+                points[ind_tmp*2+1] = j * dz;
+                ind_tmp++;
+            }
+        }
+        points[ind*2] = 0.;
+        ind++;
+
+        for (int i=1; i <var.nx-1; ++i) {
+            points[ind*2] = i * dx + bdy_dx;
+            ind++;
+        }
+
+        points[ind*2] = param.mesh.xlength;
+        ind++;
+    }
+
+    for (int j=1; j<var.nz; j+=2) {
+        int ind_tmp = ind;
+        if (j == var.nz-1) {
+            ind_tmp = ind;
+            for (int i = 0; i < var.nx+1; ++i) {
+                points[ind_tmp*2+1] = -param.mesh.zlength;
+                ind_tmp++;
+            }
+        } else {
+            for (int i = 0; i<var.nx+1; ++i) {
+                points[ind_tmp*2+1] = j * dz;
+                ind_tmp++;
+            }
+        }
+        points[ind*2] = 0.;
+        ind++;
+
+        for (int i=0; i<var.nx-1; ++i) {
+            points[ind*2] = (i+0.5) * dx + bdy_dx;
+            ind++;
+        }
+
+        points[ind*2] = param.mesh.xlength;
+        ind++;
+    }
+}
+
+
+void new_mesh_regular_equilateral(const Param& param, Variables& var)
+{
+    double *pcoord, *pregattr;
+    int *pconnectivity, *psegment, *psegflag;
+
+    double sqrt3_to_2 = 2./std::sqrt(3.0);
+
+    double x_mid = param.mesh.xlength / 2;
+    var.nx = int((x_mid-0.5*param.mesh.resolution) / param.mesh.resolution)*2 + 2;
+    var.nz = int(param.mesh.zlength*sqrt3_to_2 / param.mesh.resolution) + 1;
+    var.nnode = var.nx*((int)((var.nz-1)/2)+1) + (var.nx+1)*((int)((var.nz-1)/2)+(1-var.nz%2));
+    var.nelem = (2*var.nx-1) * (var.nz-1);
+    var.nseg = 2*(var.nz+var.nx-2) + 1 - var.nz%2;
+
+    create_equilateral_node(param, var, pcoord);
+    create_equilateral_elem(var, pconnectivity);
+    create_equilateral_segments(var, psegment, psegflag);
+
+    var.coord = new array_t(pcoord, var.nnode);
+    var.connectivity = new conn_t(pconnectivity, var.nelem);
+    var.segment = new segment_t(psegment, var.nseg);
+    var.segflag = new segflag_t(psegflag, var.nseg);
+
+    create_regular_regattr(var, pregattr);
+    var.regattr = new regattr_t(pregattr, var.nelem);
+
+}
+
+
 void triangulate_polygon
 (double min_angle, double max_area,
  int meshing_verbosity,
@@ -328,6 +848,45 @@ void points_to_mesh(const Param &param, Variables &var,
     var.connectivity = new conn_t(pconnectivity, var.nelem);
     var.segment = new segment_t(psegment, var.nseg);
     var.segflag = new segflag_t(psegflag, var.nseg);
+    var.regattr = new regattr_t(pregattr, var.nelem);
+}
+
+void new_mesh_regular(const Param& param, Variables& var)
+{
+    double *pcoord, *pregattr;
+    int *pconnectivity, *psegment, *psegflag, *pcell;
+
+    var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
+    var.nz = std::round(param.mesh.zlength/param.mesh.resolution) + 1;
+    var.ncell = (var.nx-1) * (var.nz-1);
+    var.nnode = var.nx * var.nz;
+    var.nelem = 2 * var.ncell;
+    var.nseg = 2 * (var.nx + var.nz - 2);
+#ifdef THREED
+    var.ny = std::round(param.mesh.ylength/param.mesh.resolution) + 1;
+    var.ncell *= (var.ny-1);
+    var.nnode *= var.ny;
+    var.nelem = 5 * var.ncell;
+    var.nseg = 4 * ( (var.nx-1) * (var.ny-1) + \
+                     (var.ny-1) * (var.nz-1) + \
+                     (var.nz-1) * (var.nx-1) );
+#endif
+    
+
+    create_quadrilateral_cells(var, pcell);
+    var.cell = new regular_t(pcell, var.ncell);
+
+    create_rect_node(param, var, pcoord);
+    create_elem_from_cell(var, pconnectivity);
+
+    var.coord = new array_t(pcoord, var.nnode);
+    var.connectivity = new conn_t(pconnectivity, var.nelem);
+
+    create_regular_segments(var, psegment, psegflag);
+    var.segment = new segment_t(psegment, var.nseg);
+    var.segflag = new segflag_t(psegflag, var.nseg);
+
+    create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
 }
 
@@ -1327,6 +1886,84 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 } // end of anonymous namespace
 
 
+void create_equilateral_elem(const Variables& var, int *&connectivity) {
+    connectivity = new int[var.nelem*3];
+
+    int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
+
+    int ind = 0;
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        int in0 = var.nx * int((j+1)/2);
+        int in1 = istart_n1 + (var.nx+1)*int(j/2);
+        int istarts[2] = {in0, in1};
+
+        for (int k=0; k<2;k++) {
+            int inc = (k+j)%2;
+            int istart0 = istarts[inc];
+            int istart1 = istarts[1-inc];
+
+            if (inc==0) {
+                for (int i=0; i<var.nx-1;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart1+i+1;
+                    connectivity[ind*3+2-jnc] = istart0+i+1;
+                    ind++;
+                }
+            } else {
+                for (int i=0; i<var.nx;i++) {
+                    connectivity[ind*3] = istart0+i;
+                    connectivity[ind*3+1+jnc] = istart0+i+1;
+                    connectivity[ind*3+2-jnc] = istart1+i;
+                    ind++;
+                }
+            }
+        }
+    }
+}
+
+void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
+    segments = new int[var.nseg*2];
+    segflags = new int[var.nseg];
+    int seg_idx = 0;
+    int flag_idx = 0;
+
+    // top
+    for (int i = 0; i<var.nx-1; ++i) {
+        segments[seg_idx*2] = i;
+        segments[seg_idx*2+1] = i+1;
+        seg_idx++;
+        segflags[flag_idx] = 32;
+        flag_idx++;
+    }
+    // bottom
+    int nbot = var.nx-var.nz%2;
+    for (int i = 0; i<nbot; ++i) {
+        segments[seg_idx*2] = var.nnode - nbot - 1 + i;
+        segments[seg_idx*2+1] = var.nnode - nbot + i;
+        seg_idx++;
+        segflags[flag_idx] = 16;
+        flag_idx++;
+    }
+
+    // left and right
+    int istart_n2 = var.nx * (int(var.nz/2)+var.nz%2);
+    for (int j=0; j<var.nz-1;j++) {
+        int jnc = j%2;
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc)*var.nx;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2))*(var.nx+1);
+        seg_idx++;
+        segflags[flag_idx] = 1;
+        flag_idx++;
+
+        segments[seg_idx*2+jnc] = (int(j/2)+jnc+1)*var.nx -1;
+        segments[seg_idx*2+1-jnc] = istart_n2 + (int(j/2)+1)*(var.nx+1) -1;
+        seg_idx++;
+        segflags[flag_idx] = 2;
+        flag_idx++;
+    }
+}
+
 void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
                         int n_init_segments, const int *init_segments, const int *init_segflags,
                         int n_regions, const double *regattr,
@@ -1448,10 +2085,21 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.zlength};
     std::vector<std::size_t> idx(NDIMS);
     sortindex(lengths, idx);
-    const int dmin = idx[0];
-    const int dmid = idx[1];
-    const int dmax = idx[NDIMS-1];
+    int dmin, dmid, dmax;
 
+    if (param.mesh.meshing_elem_shape == 0) {
+        dmin = idx[0];
+        dmid = idx[1];
+        dmax = idx[NDIMS-1];
+    } else {
+#ifdef THREED
+        dmax = 0;
+#else
+        dmax = NDIMS-2;
+#endif
+        dmid = NDIMS-2;
+        dmin = NDIMS-1;
+    }
     //
     // sort coordinate of nodes and element centers
     //
@@ -1592,7 +2240,7 @@ void create_top_elems(Variables& var)
         top_nodes[i] = top_tmp[top_ind[i]];
             
 
- 
+
     int_vec telems;
     telems.reserve(100);
     std::set<int> elem_set;
@@ -1648,30 +2296,15 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     
     delete surfinfo.dh;
     surfinfo.dh = new double_vec(ntop,0.);
-    delete surfinfo.edhacc;
-    surfinfo.edhacc = new array_t(var.nelem);
-    delete surfinfo.edhacc_ind;
-    surfinfo.edhacc_ind = new segment_t(etop);
+    delete surfinfo.dhacc;
+    surfinfo.dhacc = new double_vec(var.nnode,0);
     delete surfinfo.top_facet_elems;
     surfinfo.top_facet_elems = new int_vec(etop,0);
     delete surfinfo.elem_and_nodes;
     surfinfo.elem_and_nodes = new segment_t(etop);
-    delete surfinfo.node_and_elems;
-    surfinfo.node_and_elems = new segment_t(ntop);
-    delete surfinfo.nelem_with_node;
-    surfinfo.nelem_with_node = new int_vec(ntop,0);
-
-    delete surfinfo.node_and_nodes;
-    surfinfo.node_and_nodes = new int_vec2D(ntop,int_vec());
-    delete surfinfo.arcelem_and_nodes_num;
-    surfinfo.arcelem_and_nodes_num = new int_map2D(etop);
 
     delete surfinfo.dh_oc;
     surfinfo.dh_oc = new double_vec(ntop,0.);
-    delete surfinfo.edhacc_oc;
-    surfinfo.edhacc_oc = new array_t(var.nelem);
-    delete surfinfo.edhacc_ind_oc;
-    surfinfo.edhacc_ind_oc = new segment_t(etop);
 
     delete surfinfo.total_dx;
     surfinfo.total_dx = new double_vec(var.nnode,0.);
@@ -1679,56 +2312,24 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
 
+    delete surfinfo.node_and_elems;
+    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
         int f = j.second;
 
         (*surfinfo.top_facet_elems)[i] = e;
-        // create globle-local map
-//        surfinfo.arctop_facet_elems[e] = i;
 
         // the nodes of element
-        int n[NDIMS];
-
         for (int k=0; k<NDIMS; k++) {
-            n[k] = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n[k];
-            (*surfinfo.arcelem_and_nodes_num)[i][n[k]]= k;
-            (*surfinfo.edhacc_ind)[i][k] = n[k];
-        }
-        for (int k=0; k<2; k++) {
+            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+            (*surfinfo.elem_and_nodes)[i][k] = n;
             // store the elements connect to node
-            (*surfinfo.node_and_elems)[n[k]][(*surfinfo.nelem_with_node)[n[k]]] = i;
-            (*surfinfo.nelem_with_node)[n[k]]++;
-
-            // store the nodes connect to ndoe
-            for (int l=0; l<NDIMS; l++)
-                if (k != l)
-                    (*surfinfo.node_and_nodes)[n[k]].push_back(n[l]);
+            (*surfinfo.node_and_elems)[n].push_back(i);
         }
     }
 
-    // go through all surface nodes
-    for (size_t i=0; i<ntop; i++) {
-        // get global index of node
-        int n = (*surfinfo.top_nodes)[i];
-
-        // go through connected elements
-        for (size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
-            // get local index of surface element
-            int e = (*surfinfo.node_and_elems)[i][j];
-            // get global index of element
-            int eg = (*surfinfo.top_facet_elems)[e];
-            // get local index of node in connected element
-            int ind = (*surfinfo.arcelem_and_nodes_num)[e][i];
-            // pass dhacc to new edhacc of connected elements
-            (*surfinfo.edhacc)[eg][ind] = (*surfinfo.dhacc)[n];
-            // oc
-            (*surfinfo.edhacc_oc)[eg][ind] = (*surfinfo.dhacc_oc)[n];
-        }
-    }
-    std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
     std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
 }
 
@@ -1775,52 +2376,33 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
         surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
     surfinfo.dh = new double_vec(ntop,0.);
     surfinfo.dhacc = new double_vec(var.nnode,0);
-    surfinfo.edhacc = new array_t(var.nelem,0);
-    surfinfo.edhacc_ind = new segment_t(etop);
+    surfinfo.edvacc_surf = new double_vec(var.nelem,0);
     surfinfo.top_facet_elems = new int_vec(etop,0);
     surfinfo.elem_and_nodes = new segment_t(etop);
-    surfinfo.node_and_elems = new segment_t(ntop);
-    surfinfo.nelem_with_node = new int_vec(ntop,0);
-    surfinfo.node_and_nodes = new int_vec2D(ntop,int_vec());
-    surfinfo.arcelem_and_nodes_num = new int_map2D(etop);
 
     surfinfo.dh_oc = new double_vec(ntop,0.);
     surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    surfinfo.edhacc_oc = new array_t(var.nelem);
-    surfinfo.edhacc_ind_oc = new segment_t(etop);
+    surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
+    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
         auto j = (*(var.bfacets[iboundz1]))[i];
         int e = j.first;
         int f = j.second;
 
         (*surfinfo.top_facet_elems)[i] = e;
-        // create globle-local map
-//        surfinfo.arctop_facet_elems[e] = i;
 
         // the nodes of element
-        int n[NDIMS];
-
         for (int k=0; k<NDIMS; k++) {
-            n[k] = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n[k];
-            (*surfinfo.arcelem_and_nodes_num)[i][n[k]]= k;
-            (*surfinfo.edhacc_ind)[i][k] = n[k];
-        }
-        for (int k=0; k<NDIMS; k++) {
+            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+            (*surfinfo.elem_and_nodes)[i][k] = n;
             // store the elements connect to node
-            (*surfinfo.node_and_elems)[n[k]][(*surfinfo.nelem_with_node)[n[k]]] = i;
-            (*surfinfo.nelem_with_node)[n[k]]++;
-
-            // store the nodes connect to ndoe
-            for (int l=0; l<NDIMS; l++)
-                if (k != l)
-                    (*surfinfo.node_and_nodes)[n[k]].push_back(n[l]);
+            (*surfinfo.node_and_elems)[n].push_back(i);
         }
     }
 
@@ -1995,7 +2577,16 @@ void create_new_mesh(const Param& param, Variables& var)
 {
     switch (param.mesh.meshing_option) {
     case 1:
-        new_mesh_uniform_resolution(param, var);
+        if (param.mesh.meshing_elem_shape == 0) {
+            new_mesh_uniform_resolution(param, var);
+        } else if (param.mesh.meshing_elem_shape == 1) {
+            new_mesh_regular(param, var);
+        } else if (param.mesh.meshing_elem_shape == 2) {
+            new_mesh_regular_equilateral(param, var);
+        } else {
+            std::cout << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
+            std::exit(10);
+        }
         break;
     case 2:
         new_mesh_refined_zone(param, var);

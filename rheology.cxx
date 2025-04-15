@@ -636,6 +636,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel)
+
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -644,7 +645,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     // Interpolate pore pressure from nodes to element level
     double_vec ppressure_element(var.nelem, 0.0);
     double_vec dppressure_element(var.nelem, 0.0);
-
     // Define element velocity arrays
     double_vec velocity_x_element(var.nelem, 0.0);
     double_vec velocity_y_element(var.nelem, 0.0);
@@ -660,6 +660,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
         const array_t& vel = *var.vel;
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
+
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
         #ifdef THREED
             pp_element += ppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
@@ -672,6 +673,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vx_element += vel[conn[j]][0] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vy_element += vel[conn[j]][1] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
+
         #endif
         }
         ppressure_element[e] = pp_element;  // Store element-level pore pressure 
@@ -944,70 +946,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     nvtxRangePop();
 #endif
 }
-
-// #ifdef RS
-// void friction_variables(double &T, double &direct_a, double &evolution_b, double &characteristic_velocity, double &static_friction_coefficient)
-// {
-// //    double T1 = 0, T2 = 19e3, T3 = 20e3, T4 = 21.5e3, T5 = 22e3, T6 = 90e3;
-//     double T1 = 0, T2 = 43e3,T3 = 45e3, T4 = 45e3, T5 = 47e3, T6 = 90e3;
-//     T = std::fabs(T);
-//     double vc1 = 1e-6, vc2 = 1e-6, vc3 = 1e-6, vc4 = 1e-6, vc5 = 1e-6, vc6 = 1e-6;
-//     double a1 = 0.019, a2 = 0.019, a3 = 0.015, a4 = 0.015, a5 = 0.019, a6 = 0.019;
-//     double b1 = 0.015, b2 = 0.015, b3 = 0.019, b4 = 0.019, b5 = 0.015, b6 = 0.015;
-//     double f0_1 = 0.6, f0_2 = 0.6, f0_3 = 0.6, f0_4 = 0.6, f0_5 = 0.6, f0_6 = 0.6;
-
-//     if (T < T2) {
-//         double f = (f0_2-f0_1)/(T2-T1);
-//         double a = (a2-a1)/(T2-T1);
-//         double b = (b2-b1)/(T2-T1);
-//         double vc = (vc2-vc1)/(T2-T1);
-//         static_friction_coefficient = T*f+(f0_1-f*T1);
-//         direct_a = T*a+(a1-a*T1);
-//         evolution_b = T*b+(b1-b*T1);
-//         characteristic_velocity = T*vc+(vc1-vc*T1);
-//     }
-//     else if (T >= T2 && T < T3) {
-//         double f = (f0_3-f0_2)/(T3-T2);
-//         double a = (a3-a2)/(T3-T2);
-//         double b = (b3-b2)/(T3-T2);
-//         double vc = (vc3-vc2)/(T3-T2);
-//         static_friction_coefficient = T*f+(f0_2-f*T2);
-//         direct_a = T*a+(a2-a*T2);
-//         evolution_b = T*b+(b2-b*T2);
-//         characteristic_velocity = T*vc+(vc2-vc*T2);
-//     }
-//     else if (T >= T3 && T < T4) {
-//         double f = (f0_4-f0_3)/(T4-T3);
-//         double a = (a4-a3)/(T4-T3);
-//         double b = (b4-b3)/(T4-T3);
-//         double vc = (vc4-vc3)/(T4-T3);
-//         static_friction_coefficient = T*f+(f0_3-f*T3);
-//         direct_a = T*a+(a3-a*T3);
-//         evolution_b = T*b+(b3-b*T3);
-//         characteristic_velocity = T*vc+(vc3-vc*T3);
-//     }
-//     else if (T >= T4 && T < T5) {
-//         double f = (f0_5-f0_4)/(T5-T4);
-//         double a = (a5-a4)/(T5-T4);
-//         double b = (b5-b4)/(T5-T4);
-//         double vc = (vc5-vc4)/(T5-T4);
-//         static_friction_coefficient = T*f+(f0_4-f*T4);
-//         direct_a = T*a+(a4-a*T4);
-//         evolution_b = T*b+(b4-b*T4);
-//         characteristic_velocity = T*vc+(vc4-vc*T4);
-//     }
-//     else {
-//         double f = (f0_6-f0_5)/(T6-T5);
-//         double a = (a6-a5)/(T6-T5);
-//         double b = (b6-b5)/(T6-T5);
-//         double vc = (vc6-vc5)/(T6-T5);
-// 	static_friction_coefficient = T*f+(f0_5-f*T5);
-//         direct_a = T*a+(a5-a*T5);
-//         evolution_b = T*b+(b5-b*T5);
-//         characteristic_velocity = T*vc+(vc5-vc*T5);
-//     }
-// }
-// #endif
 
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)

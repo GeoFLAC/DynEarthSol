@@ -22,7 +22,6 @@ void allocate_variables(const Param &param, Variables& var)
     var.tmass = new double_vec(n);
     var.hmass = new double_vec(n);
     var.ymass = new double_vec(n);
-
     var.edvoldt = new double_vec(e);
 
 //    var.marker_in_elem = new int_vec2D(e);
@@ -61,8 +60,7 @@ void allocate_variables(const Param &param, Variables& var)
     }
 
     var.ntmp = new double_vec(n);
-    if (param.control.is_using_mixed_stress)
-        var.dpressure = new double_vec(e);
+    var.dpressure = new double_vec(e, 0);
 
     var.viscosity = new double_vec(e,param.mat.visc_max);
 
@@ -101,10 +99,9 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.hmass;
     var.hmass = new double_vec(n);
-
     delete var.ymass;
     var.ymass = new double_vec(n);
-
+  
     delete var.edvoldt;
     var.edvoldt = new double_vec(e);
 
@@ -113,10 +110,8 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.ntmp;
     var.ntmp = new double_vec(n);
-    if (param.control.is_using_mixed_stress) {
-        delete var.dpressure;
-        var.dpressure = new double_vec(e);
-    }
+    delete var.dpressure;
+    var.dpressure = new double_vec(e, 0);
     delete var.viscosity;
     var.viscosity = new double_vec(e,param.mat.visc_max);
     delete var.force;
@@ -276,8 +271,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double kv = hydraulic_conductivity * (*var.volume)[e];
 
         // Compute element diffusivity and update max using reduction
-        // D = K/S; S = gamma_w * (alpha + n *beta)
-        double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w; 
+        double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
         diff_max_local = std::max(diff_max_local, diff_e);
 
         // volume term (poroelastic effect)
@@ -620,7 +614,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
     apply_damping(param, var, force);
     
-
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -647,6 +640,28 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
     return std::sqrt(l2);
 }
 
+double calculate_residual_force(const Variables& var, array_t& force_residual)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    double l2 = 0.0;
+    double num = var.nnode * NDIMS;
+
+    #pragma omp parallel for default(none) shared(var, force_residual, num) reduction(+:l2)
+    #pragma acc parallel loop
+    for (int i = 0; i < var.nnode; ++i)
+        for (int j = 0; j < NDIMS; ++j)
+            l2 += std::pow(force_residual[i][j], 2) / num;
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+
+    return std::sqrt(l2);
+}
+
+
 void update_velocity(const Variables& var, array_t& vel)
 {
 #ifdef USE_NPROF
@@ -663,32 +678,6 @@ void update_velocity(const Variables& var, array_t& vel)
     nvtxRangePop();
 #endif
 }
-
-// void update_velocity(const Variables& var, array_t& vel)
-// {
-// #ifdef USE_NPROF
-//     nvtxRangePushA(__FUNCTION__);
-// #endif
-
-//     double global_vel_mag = 0.0;
-//     #pragma omp parallel for default(none) shared(var, vel, global_vel_mag)
-//     #pragma acc parallel loop
-//     for (int i=0; i<var.nnode; ++i)
-//     {
-//         double vel_mag = 0.0;
-//         for (int j=0;j<NDIMS;j++)
-//             vel[i][j] += var.dt * (*var.force)[i][j] / (*var.mass)[i];
-        
-//         vel_mag = std::sqrt(vel[i][0]*vel[i][0] + vel[i][1]*vel[i][1] + vel[i][2]*vel[i][2]);
-//         global_vel_mag = std::max(global_vel_mag, vel_mag );
-//     }
-    
-//     std::cout << "Global velocity magnitude: " << global_vel_mag << std::scientific << std::setprecision(5) << std::endl;
-
-// #ifdef USE_NPROF
-//     nvtxRangePop();
-// #endif
-// }
 
 void update_velocity_PT(const Variables& var, array_t& vel)
 {

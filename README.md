@@ -1,6 +1,6 @@
-[![Basic build](https://github.com/tan2/DynEarthSol/actions/workflows/basic-build.yml/badge.svg)](https://github.com/tan2/DynEarthSol/actions/workflows/basic-build.yml)
-[![Exodus build](https://github.com/tan2/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/tan2/DynEarthSol/actions/workflows/exodus-build.yml)
-[![MMG build](https://github.com/tan2/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/tan2/DynEarthSol/actions/workflows/mmg-build.yml)
+[![Basic build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml)
+[![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
+[![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
 
 # Overview
 
@@ -70,6 +70,7 @@ alike.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
   necessary to debug the code under valgrind.
+* Or run `make opt=-1` to build a memory-specific debugging executable using `-fsanitize=address`, a compiler flag for detacting memory address issues. It can show where the issue occurs and where variables are allocated during execution, without needing additional tools such as GDB or Valgrind. However, valgrind cannot easily coexist with -fsanitize=address. as using both together may cause library-related errors.
 
 # Running DES3D
 * Execute `dynearthsol2d [inputfile: examples/defaults.cfg by default]`.
@@ -93,13 +94,13 @@ alike.
       
 Bug reports, comments, and suggestions are always welcome. The best 
 channel is to create an issue on the Issue Tracker here:
-  https://github.com/tan2/DynEarthSol/issues
+  https://github.com/GeoFLAC/DynEarthSol/issues
 
 # License
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the MIT / X Windows System license. See
-[LICENSE](https://github.com/tan2/DynEarthSol/blob/master/LICENSE) for the full text.
+[LICENSE](https://github.com/GeoFLAC/DynEarthSol/blob/master/LICENSE) for the full text.
 
 The files under the subdirectories `3x3-C/`, `ann/`, `tetgen/`
 and `triangles/` are distributed by their own license(s).

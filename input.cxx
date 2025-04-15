@@ -73,6 +73,8 @@ static void declare_parameters(po::options_description &cfg,
          "91: same as 90, but the max. element size is normalized with resolution.\n"
          "95: read the mesh from from a .exo file\n"
          )
+        ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
+         "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
         ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
          "Output verbose during mesh/remeshing. -1 for no output.")
         ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
@@ -144,7 +146,8 @@ static void declare_parameters(po::options_description &cfg,
          " 2: create a new bottom boundary at the initial depth, other boundaries are intact (2D only).\n"
          "10: no modification on any boundary, except small boundary segments might get merged.\n"
          "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
-         "12: flatten x0 when using fixed bottom boundary.\n")
+         "12: flatten x0 when using fixed bottom boundary.\n"
+         "13: move all bottom, left, and right nodes to initial dimensions.\n")
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
@@ -288,7 +291,6 @@ static void declare_parameters(po::options_description &cfg,
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
-
          ("control.has_ATS", po::value<bool>(&p.control.has_ATS)->default_value(false),
          "Does the model consider adaptive time stepping?\n")
         ;
@@ -668,7 +670,6 @@ static void declare_parameters(po::options_description &cfg,
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
         ("mat.bulk_modulus_s", po::value<std::string>()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
-
         // for rate-and-state friction
         ("mat.direct_a", po::value<std::string>()->default_value("[0.020]"),
          "rate-and-state friction parameter a '[d0, d1, d2, ...]' (-)")
@@ -825,6 +826,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
             std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
             std::exit(1);
+    }
+
+    // these parameters are required in mesh.meshing_elem_shape >= 1
+#ifdef THREED
+    if (p.mesh.meshing_elem_shape == 2) {
+        std::cerr << "Error: mesh.meshing_elem_shape == 2 is not available in 3D.\n";
+        std::exit(1);
+    }
+#endif
+    if (p.mesh.meshing_elem_shape >= 1) {
+        if ( p.mesh.meshing_option != 1) {
+            std::cerr << "Error: mesh.meshing_elem_shape >= 1 is only for mesh.meshing_option == 1.\n";
+            std::exit(1);
+        }
     }
 
     //
@@ -1076,12 +1091,10 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, 1);
         get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, 1);
         get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, 1);
-
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, 1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, 1);
         get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, 1);
-
     }
 
 }

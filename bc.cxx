@@ -771,6 +771,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
         double ratio, rr, dvr;
         double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]) * 0.0;
         double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]) * 0.0;
+
 #endif
         //
         // X
@@ -1949,6 +1950,9 @@ void correct_surface_element(const Variables& var, \
         double *c00 = coord0s[i*NODES_PER_ELEM];
         double *c01 = coord0s[i*NODES_PER_ELEM+1];
         double *c02 = coord0s[i*NODES_PER_ELEM+2];
+#ifdef THREED
+        double *c03 = coord0s[i*NODES_PER_ELEM+3];
+#endif
 
         for (int j=0; j<NODES_PER_ELEM;j++)
             coord1[j] = (*var.coord)[tnodes[j]];
@@ -1956,19 +1960,37 @@ void correct_surface_element(const Variables& var, \
 
         // restore the reference node locations before deposition/erosion 
         c00[0] = (*var.coord)[tnodes[0]][0];
-        c00[1] = (*var.coord)[tnodes[0]][1] - dhacc[tnodes[0]];
         c01[0] = (*var.coord)[tnodes[1]][0];
-        c01[1] = (*var.coord)[tnodes[1]][1] - dhacc[tnodes[1]];
         c02[0] = (*var.coord)[tnodes[2]][0];
-        c02[1] = (*var.coord)[tnodes[2]][1] - dhacc[tnodes[2]];
+
+        c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
+        c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
+        c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
+#ifdef THREED            
+        c00[1] = (*var.coord)[tnodes[0]][1];
+        c01[1] = (*var.coord)[tnodes[1]][1];
+        c02[1] = (*var.coord)[tnodes[2]][1];
+
+        c03[0] = (*var.coord)[tnodes[3]][0];
+        c03[1] = (*var.coord)[tnodes[3]][1];
+        c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
+#endif
+
+#ifdef THREED
+        // calculate the volume of the element
+        double dv0 = ((c01[0] - c00[0])*((c02[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c02[2] - c00[2])) \
+                       - (c02[0] - c00[0])*((c01[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c01[2] - c00[2])) \
+                       + (c03[0] - c00[0])*((c01[1] - c00[1])*(c02[2] - c00[2]) - (c02[1] - c00[1])*(c01[2] - c00[2])))/6.0;
+#else
+        double dv0 = ((c01[0] - c00[0])*(c02[1] - c00[1]) \
+                       - (c02[0] - c00[0])*(c01[1] - c00[1]))/2.0;
+#endif
+        // make sure the area is positive
+        dv0 = (dv0 > 0.0) ? dv0 : -dv0;
+
+        double rdv = new_volumes[i] / dv0;
 
         // correct stress and strain
-        double dArea0 = ((c01[0] - c00[0])*(c02[1] - c00[1]) \
-                       - (c02[0] - c00[0])*(c01[1] - c00[1]))/2.0;
-        dArea0 = (dArea0 > 0.0) ? dArea0 : -dArea0;
-
-        double rdv = new_volumes[i] / dArea0;
-
         if (rdv > 1.) {
             // correct the plastic strain overestimation of surface element caused by sedimentation.
             plstrain[e] /= rdv;
@@ -1988,7 +2010,7 @@ void correct_surface_element(const Variables& var, \
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, SurfaceInfo& surfinfo, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, SurfaceInfo& surfinfo, \
                         std::vector<MarkerSet*> &markersets, int_vec2D& elemmarkers)
 {
 #ifdef USE_NPROF
@@ -2046,48 +2068,50 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     }
     surfinfo.max_surf_vel = maxdh / var.dt;
 
-#ifdef THREED
-    #pragma acc parallel loop
-    for (std::size_t i=0; i<ntop; ++i) {
-        int n = top_nodes[i];
-        coord[n][NDIMS-1] += dh[i];
-    }
-    // todo
-#else
     // go through all surface nodes and abject all surface node by dh
+    // #pragma acc parallel loop
     // #pragma omp parallel for default(none) \
     //     shared(top_nodes, coord, dh, dhacc)
     for (int i=0; i<ntop; i++) {
         // get global index of node
         // update coordinate via dh
         // update dhacc for marker correction
-        int n = top_nodes[i];
-        coord[n][NDIMS-1] += dh[i];
-        dhacc[n] += dh[i];
+        int nt = top_nodes[i];
+        coord[nt][NDIMS-1] += dh[i];
+        dhacc[nt] += dh[i];
 
-    // update edhacc of connected elements
-        for (std::size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
+        // update edvacc_surf of connected elements
+        for (std::size_t j=0; j<(*surfinfo.node_and_elems)[i].size(); j++) {
             int e = (*surfinfo.node_and_elems)[i][j]; // get local index of surface element
             int eg = (*surfinfo.top_facet_elems)[e]; // get global index of element
-            int ind = (*surfinfo.arcelem_and_nodes_num)[e][i]; // get local index of node in connected element
-            (*surfinfo.edhacc)[eg][ind] += dh[i]; // update edhacc of connected elements
-        }
-    }
-#endif
+
+            int_vec n(NDIMS);
+            for (int k=0; k<NDIMS; k++)
+                n[k] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[e][k]];
 
 #ifdef THREED
-
+            double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
+                - ((*var.coord)[n[2]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[1]][1] - (*var.coord)[n[0]][1]))/2.0;
 #else
+            double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
+#endif
+            double dv = dh[i] * base / NDIMS;
+            (*surfinfo.edvacc_surf)[eg] += dv; // update edvacc_surf of connected elements
+            volume[eg] += dv;
+            volume_n[nt] += dv;
+        }
+    }
+
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             // correct surface marker.
             correct_surface_element(var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain);
             std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
             // set marker of sediment.
-            markersets[0]->set_surface_marker(var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edhacc, elemmarkers);
+            markersets[0]->set_surface_marker(var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers);
         }
     }
-#endif
+
     if ( param.mat.phase_change_option == 2) {
 #ifdef THREED
         std::cout << "3D simple_igneous processes is not ready yet.";
@@ -2102,13 +2126,6 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                 int n = (*surfinfo.top_nodes)[i];
                 (coord)[n][NDIMS-1] += dh_oc[i];
                 (*surfinfo.dhacc_oc)[n] += dh_oc[i];
-
-                for (std::size_t j=0; j<(*surfinfo.nelem_with_node)[i]; j++) {
-                    int e = (*surfinfo.node_and_elems)[i][j];
-                    int eg = (*surfinfo.top_facet_elems)[e];
-                    int ind = (*surfinfo.arcelem_and_nodes_num)[e][i];
-                    (*surfinfo.edhacc_oc)[eg][ind] += dh_oc[i];
-                }
             }
 
             if (!(var.steps % param.mesh.quality_check_step_interval)) {

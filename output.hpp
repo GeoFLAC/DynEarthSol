@@ -27,7 +27,7 @@ public:
     Output(const Param& param, int64_t start_time, int start_frame);
     ~Output();
     void write(const Variables& var);
-    void write_exact(const Variables& var);
+    void write_exact(const Param& param, const Variables& var);
     void write_checkpoint(const Param& param, const Variables& var);
     void average_fields(Variables& var);
 

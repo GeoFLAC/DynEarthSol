@@ -202,7 +202,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = p.mat.fluid_visc;
     biot_coeff = p.mat.biot_coeff;
     bulk_modulus_s = p.mat.bulk_modulus_s;
-
     // Rate-and-state friction parameters
     direct_a = p.mat.direct_a;
     evolution_b = p.mat.evolution_b;
@@ -537,6 +536,7 @@ double MatProps::c_v(int e) const
     return arithmetic_mean(characteristic_velocity, elemmarkers[e]);
 }
 
+
 #else
 
 namespace {
@@ -788,7 +788,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = VectorBase::create(p.mat.fluid_visc, nmat);
     biot_coeff = VectorBase::create(p.mat.biot_coeff, nmat);
     bulk_modulus_s = VectorBase::create(p.mat.bulk_modulus_s, nmat);
-
     // Rate-and-state friction parameters
     direct_a = VectorBase::create(p.mat.direct_a, nmat);
     evolution_b = VectorBase::create(p.mat.evolution_b, nmat);
@@ -827,7 +826,6 @@ MatProps::~MatProps()
     delete fluid_visc;
     delete biot_coeff;
     delete bulk_modulus_s;
-
     // Deleting rate-and-state friction properties
     delete direct_a;
     delete evolution_b;
@@ -1162,4 +1160,5 @@ double MatProps::c_v(int e) const
 {
     return arithmetic_mean(*characteristic_velocity, elemmarkers[e]);
 }
+
 #endif

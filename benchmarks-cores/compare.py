@@ -83,59 +83,51 @@ def show_msg(kind,max,sigma):
     return inc
 
 
+def reldiff_and_show_msg(oldf, newf, kind):
+    if oldf.size != newf.size:
+        print('  %s:\t\t%-.d -> %-d (size mismatch)'%(kind, oldf.size, newf.size))
+        return 1
+    else:
+        max, sigma = reldiff(oldf, newf)
+        return show_msg(kind, max, sigma)
+
+
 def compare(old, new):
     inc = 0
+    
+    inc += reldiff_and_show_msg(old.T, new.T, 'Temperature')
 
-    max, sigma = reldiff(old.T, new.T)
-    inc += show_msg('Temperature',max,sigma)
+    inc += reldiff_and_show_msg(old.x, new.x, 'X coordinate')
 
-    max, sigma = reldiff(old.x, new.x)
-    inc += show_msg('X coordinate',max,sigma)
+    inc += reldiff_and_show_msg(old.z, new.z, 'Z coordinate')
 
-    max, sigma = reldiff(old.z, new.z)
-    inc += show_msg('Z coordinate',max,sigma)
+    inc += reldiff_and_show_msg(old.vx, new.vx, 'X velocity')
 
-    max, sigma = reldiff(old.vx, new.vx)
-    inc += show_msg('X velocity',max,sigma)
+    inc += reldiff_and_show_msg(old.vz, new.vz, 'Z velocity')
 
-    max, sigma = reldiff(old.vz, new.vz)
-    inc += show_msg('Z velocity',max,sigma)
+    inc += reldiff_and_show_msg(old.pls, new.pls, 'Pl. strain')
 
-    max, sigma = reldiff(old.pls, new.pls)
-    inc += show_msg('Pl. strain',max,sigma)
+    inc += reldiff_and_show_msg(old.tI, new.tI, 'Stress I')
 
-    max, sigma = reldiff(old.tI, new.tI)
-    inc += show_msg('Stress I',max,sigma)
+    inc += reldiff_and_show_msg(old.tII, new.tII, 'Stress II')
 
-    max, sigma = reldiff(old.tII, new.tII)
-    inc += show_msg('Stress II',max,sigma)
+    inc += reldiff_and_show_msg(old.sI, new.sI, 'Strain I')
 
-    max, sigma = reldiff(old.sI, new.sI)
-    inc += show_msg('Strain I',max,sigma)
+    inc += reldiff_and_show_msg(old.sII, new.sII, 'Strain II')
 
-    max, sigma = reldiff(old.sII, new.sII)
-    inc += show_msg('Strain II',max,sigma)
+    inc += reldiff_and_show_msg(old.srI, new.srI, 'S. rate I')
 
-    max, sigma = reldiff(old.srI, new.srI)
-    inc += show_msg('S. rate I',max,sigma)
+    inc += reldiff_and_show_msg(old.srII, new.srII, 'S. rate II')
 
-    max, sigma = reldiff(old.srII, new.srII)
-    inc += show_msg('S. rate II',max,sigma)
+    inc += reldiff_and_show_msg(old.visc, new.visc, 'Viscosity')
 
-    max, sigma = reldiff(old.visc, new.visc)
-    inc += show_msg('Viscosity',max,sigma)
+    inc += reldiff_and_show_msg(old.m_x, new.m_x, 'Marker X')
 
-    max, sigma = reldiff(old.m_x, new.m_x)
-    inc += show_msg('Marker X',max,sigma)
+    inc += reldiff_and_show_msg(old.m_z, new.m_z, 'Marker Z')
 
-    max, sigma = reldiff(old.m_z, new.m_z)
-    inc += show_msg('Marker Z',max,sigma)
+    inc += reldiff_and_show_msg(old.m_mat, new.m_mat, 'Marker Mat')
 
-    max, sigma = reldiff(old.m_mat, new.m_mat)
-    inc += show_msg('Marker Mat',max,sigma)
-
-    max, sigma = reldiff(old.m_time, new.m_time)
-    inc += show_msg('Marker Time',max,sigma)
+    inc += reldiff_and_show_msg(old.m_time, new.m_time, 'Marker Time')
 
     return inc
 
