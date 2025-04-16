@@ -645,33 +645,6 @@ void compute_mass(const Param &param, const Variables &var,
         std::exit(11);
     }
 
-    // Retrieve hydraulic properties for the element
-    double perm_e = var.mat->perm(0);                // Intrinsic permeability 
-    double mu_e = var.mat->mu_fluid(0);              // Fluid dynamic viscosity
-    double alpha_b = var.mat->alpha_biot(0);         // Biot coefficient
-    double rho_f = var.mat->rho_fluid(0);            // Fluid density
-    double phi_e = var.mat->phi(0);        // Element porosity
-    double comp_fluid = var.mat->beta_fluid(0);        // fluid comporessibility
-    double bulkm = var.mat->bulkm(0);
-    double shearm = var.mat->shearm(0);
-    double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
-
-    rho_f = 1000.0; 
-    double gamma_w = rho_f * param.control.gravity; // specific weight
-    
-    // Hydraulic conductivity using permeability and viscosity
-    double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-    
-    // Compute element diffusivity and update max using reduction
-    double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
-
-    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
-    {
-        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
-        std::exit(11);
-    }
-
-
 #ifdef GPP1X
     #pragma omp parallel for default(none) shared(var, param, pseudo_speed, pseudo_speed_ATP, tmp_result)
 #else

@@ -240,13 +240,6 @@ void barycentric_node_interpolation(Variables &var,
     var.dppressure = a;
 
     a = new double_vec(var.nnode);
-    prepare_dhacc(var.surfinfo);
-    interpolate_field(brc, el, old_connectivity, *var.surfinfo.dhacc, *a);
-    delete var.surfinfo.dhacc;
-    var.surfinfo.dhacc = a;
-
-
-    a = new double_vec(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *a);
     delete var.dppressure;
     var.dppressure = a;

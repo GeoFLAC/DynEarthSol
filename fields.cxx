@@ -640,27 +640,6 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
     return std::sqrt(l2);
 }
 
-double calculate_residual_force(const Variables& var, array_t& force_residual)
-{
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
-    double l2 = 0.0;
-    double num = var.nnode * NDIMS;
-
-    #pragma omp parallel for default(none) shared(var, force_residual, num) reduction(+:l2)
-    #pragma acc parallel loop
-    for (int i = 0; i < var.nnode; ++i)
-        for (int j = 0; j < NDIMS; ++j)
-            l2 += std::pow(force_residual[i][j], 2) / num;
-
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-
-    return std::sqrt(l2);
-}
-
 
 void update_velocity(const Variables& var, array_t& vel)
 {
