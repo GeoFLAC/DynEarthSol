@@ -479,7 +479,7 @@ int main(int argc, const char* argv[])
         init(param, var);
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
-            // output.write_exact(param, var);
+            // output.write_exact(var);
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
@@ -491,7 +491,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(param, var);
+    output.write_exact(var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -582,7 +582,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(param, var);
+                                output.write_exact(var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
 
@@ -592,7 +592,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(param, var);
+                                output.write_exact(var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
                         }
@@ -720,7 +720,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(param, var);
+                        output.write_exact(var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
@@ -730,7 +730,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(param, var);
+                        output.write_exact(var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }
