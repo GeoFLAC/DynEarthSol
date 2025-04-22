@@ -547,7 +547,11 @@ int main(int argc, const char* argv[])
         if (param.control.has_PT)
         {   
             // var.dt = compute_dt_PT(param, var);
-            if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
+            if (param.control.has_hydraulic_diffusion) {
+                param.control.has_hydraulic_diffusion = false;
+                hydraulic_diffusion_switch = true;
+            }
+
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
@@ -635,8 +639,7 @@ int main(int argc, const char* argv[])
             output.average_fields(var);
         
         int r = 1;
-        if(param.control.has_ATS)
-        {
+        if (param.control.has_ATS) {
             // r = std::pow(2, log10(var.dt) + 9);
             // r = std::max(r, 1);
             // if ((! param.sim.is_outputting_averaged_fields || (var.steps % param.sim.is_outputting_averaged_fields == 0)) &&
@@ -671,19 +674,16 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                    output.write_checkpoint(param, var);
 
-            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                output.write_checkpoint(param, var);
+                int64_t time_tmp = get_nanoseconds();
+                output.write(var);
+                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
-            int64_t time_tmp = get_nanoseconds();
-            output.write(var);
-            var.func_time.output_time += get_nanoseconds() - time_tmp;
-
-            next_regular_frame ++;
+                next_regular_frame ++;
             }
-        }
-        else
-        {
+        } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
                (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
               ||
@@ -698,17 +698,15 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                    output.write_checkpoint(param, var);
 
-            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                output.write_checkpoint(param, var);
+                int64_t time_tmp = get_nanoseconds();
+                output.write(var);
+                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
-            int64_t time_tmp = get_nanoseconds();
-            output.write(var);
-            var.func_time.output_time += get_nanoseconds() - time_tmp;
-
-            next_regular_frame ++;
+                next_regular_frame ++;
             }
-
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
