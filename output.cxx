@@ -297,6 +297,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     // Note: regattr is not needed for restarting
     // bin.write_array(*var.regattr, "regattr", var.regattr->size());
 
+    bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
+
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());

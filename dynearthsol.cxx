@@ -287,6 +287,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
 
+        bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
