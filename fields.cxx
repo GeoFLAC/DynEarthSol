@@ -436,7 +436,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
             shared(var, param, force, small_vel)
 #else
         #pragma omp parallel for default(none) \
-            shared(var, param, force)
+            shared(var, param, force)  firstprivate(small_vel)
 #endif
         #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
@@ -481,7 +481,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
             shared(var, param, force, small_vel)
 #else
         #pragma omp parallel for default(none) \
-        shared(var, param, force, small_vel)
+        shared(var, param, force) firstprivate(small_vel)
 #endif
         #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
