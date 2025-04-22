@@ -598,9 +598,8 @@ void initial_temperature(const Param &param, const Variables &var,
     }
 
     double max_temp = 0.0;
-    for (int i=0; i<var.nnode; ++i) {
+    for (int i=0; i<var.nnode; ++i)
         if (temperature[i] > max_temp) max_temp = temperature[i];
-    }
     bottom_temperature = max_temp;
 }
 

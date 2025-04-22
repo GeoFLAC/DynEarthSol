@@ -227,11 +227,11 @@ void Output::write(const Variables& var)
 }
 
 
-void Output::write_exact(const Param& param, const Variables& var)
+void Output::write_exact(const Variables& var)
 {
     _write(var, true);
     // check for NaN in var
-    check_nan(param,var);
+    check_nan(var);
 }
 
 
@@ -296,6 +296,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
     // Note: regattr is not needed for restarting
     // bin.write_array(*var.regattr, "regattr", var.regattr->size());
+
+    bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
     if (param.mat.is_plane_strain)

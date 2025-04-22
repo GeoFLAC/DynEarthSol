@@ -2988,6 +2988,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     }
     // check if any side node is too far away from the side
     if (param.mesh.remeshing_option == 13) {
+        index = -1;
         const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
         for (int i=0; i<var.nnode; ++i) {
             if (is_x0((*var.bcflag)[i])) {

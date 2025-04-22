@@ -163,11 +163,11 @@ static void out_nan_error(const char* msg, const int idx0, const int idx1 = -1) 
     std::exit(11);
 }
 
-static void check_nan(const Param& param, const Variables& var) {
+static void check_nan(const Variables& var) {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    #pragma omp parallel default(none) shared(param,var)
+    #pragma omp parallel default(none) shared(var)
     {
         #pragma omp for
         for (int e=0; e<var.nelem;e++) {

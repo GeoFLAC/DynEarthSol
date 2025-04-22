@@ -113,6 +113,23 @@ void init_var(const Param& param, Variables& var)
     var.stress_bc_values[5] = param.bc.stress_val_z1;
 
     var.vbc_val_z1_loading_period = param.bc.vbc_val_z1_loading_period;
+
+    // for regular mesh
+    var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
+    var.nz = std::round(param.mesh.zlength/param.mesh.resolution) + 1;
+    var.ncell = (var.nx-1) * (var.nz-1);
+    var.nnode = var.nx * var.nz;
+    var.nelem = 2 * var.ncell;
+    var.nseg = 2 * (var.nx + var.nz - 2);
+#ifdef THREED
+    var.ny = std::round(param.mesh.ylength/param.mesh.resolution) + 1;
+    var.ncell *= (var.ny-1);
+    var.nnode *= var.ny;
+    var.nelem = 5 * var.ncell;
+    var.nseg = 4 * ( (var.nx-1) * (var.ny-1) + \
+                     (var.ny-1) * (var.nz-1) + \
+                     (var.nz-1) * (var.nx-1) );
+#endif
 }
 
 
@@ -270,8 +287,18 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
 
+        bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    // Set bottom temperature
+    {
+        double max_temp = 0.0;
+        for (int i=0; i<var.nnode; ++i)
+            if ((*var.temperature)[i] > max_temp) max_temp = (*var.temperature)[i];
+        var.bottom_temperature = max_temp;
     }
 
     // Misc. items
@@ -479,7 +506,7 @@ int main(int argc, const char* argv[])
         init(param, var);
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
-            // output.write_exact(param, var);
+            // output.write_exact(var);
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
@@ -491,7 +518,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(param, var);
+    output.write_exact(var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -547,7 +574,11 @@ int main(int argc, const char* argv[])
         if (param.control.has_PT)
         {   
             // var.dt = compute_dt_PT(param, var);
-            if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
+            if (param.control.has_hydraulic_diffusion) {
+                param.control.has_hydraulic_diffusion = false;
+                hydraulic_diffusion_switch = true;
+            }
+
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
@@ -582,7 +613,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(param, var);
+                                output.write_exact(var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
 
@@ -592,7 +623,7 @@ int main(int argc, const char* argv[])
 
                             if (param.sim.has_output_during_remeshing) {
                                 int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(param, var);
+                                output.write_exact(var);
                                 var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
                         }
@@ -635,8 +666,7 @@ int main(int argc, const char* argv[])
             output.average_fields(var);
         
         int r = 1;
-        if(param.control.has_ATS)
-        {
+        if (param.control.has_ATS) {
             // r = std::pow(2, log10(var.dt) + 9);
             // r = std::max(r, 1);
             // if ((! param.sim.is_outputting_averaged_fields || (var.steps % param.sim.is_outputting_averaged_fields == 0)) &&
@@ -671,19 +701,16 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                    output.write_checkpoint(param, var);
 
-            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                output.write_checkpoint(param, var);
+                int64_t time_tmp = get_nanoseconds();
+                output.write(var);
+                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
-            int64_t time_tmp = get_nanoseconds();
-            output.write(var);
-            var.func_time.output_time += get_nanoseconds() - time_tmp;
-
-            next_regular_frame ++;
+                next_regular_frame ++;
             }
-        }
-        else
-        {
+        } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
                (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
               ||
@@ -698,17 +725,15 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                    output.write_checkpoint(param, var);
 
-            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                output.write_checkpoint(param, var);
+                int64_t time_tmp = get_nanoseconds();
+                output.write(var);
+                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
-            int64_t time_tmp = get_nanoseconds();
-            output.write(var);
-            var.func_time.output_time += get_nanoseconds() - time_tmp;
-
-            next_regular_frame ++;
+                next_regular_frame ++;
             }
-
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
@@ -720,7 +745,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(param, var);
+                        output.write_exact(var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
@@ -730,7 +755,7 @@ int main(int argc, const char* argv[])
 
                     if (param.sim.has_output_during_remeshing) {
                         int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(param, var);
+                        output.write_exact(var);
                         var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }
