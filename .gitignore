@@ -26,3 +26,4 @@ triangle/triangle
 tetgen/tetgen
 core.*
 test
+*.out
