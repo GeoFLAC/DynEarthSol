@@ -78,6 +78,7 @@ alike.
   race condition is printed on screen, do follow the given suggestions.
 * Several example input files are provided under `examples/` directory. The
   format of the input file is described in `examples/defaults.cfg`.
+* Try the [simple input file generator](https://geoflac.github.io/des-inputgen) 
 * Benchmark cases with analytical solution can be found under `benchmarks/`
   directory.
 * Execute the executable with `-h` flag to see the available input parameters
