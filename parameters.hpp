@@ -317,6 +317,7 @@ struct Mat {
     double_vec direct_a;
     double_vec evolution_b;
     double_vec characteristic_velocity;
+    double_vec characteristic_distance;
     // double_vec static_friction_coefficient;
 
 };
@@ -499,6 +500,7 @@ struct Variables {
     
     // For rate-and-state friction
     double_vec *dyn_fric_coeff;
+    double_vec *state_variable;
 
     // For surface processes
     SurfaceInfo surfinfo;

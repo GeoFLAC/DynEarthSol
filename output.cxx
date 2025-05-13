@@ -162,6 +162,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
     bin.write_array(tmp, "viscosity", tmp.size());
     bin.write_array(*var.dyn_fric_coeff, "friction coefficient", var.dyn_fric_coeff->size());
+    bin.write_array(*var.state_variable, "state variable", var.state_variable->size());
 
     // bin.write_array(*var.mass, "mass", var.mass->size());
     // bin.write_array(*var.tmass, "tmass", var.tmass->size());

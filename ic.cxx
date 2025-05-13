@@ -423,6 +423,14 @@ void initial_friction_coeff(const Param &param, const Variables &var,
     }           
 }
 
+void initial_state_variable(const Param &param, const Variables &var,
+                             double_vec &state_variable)
+{
+    for (int e=0; e<var.nelem; ++e) {
+        state_variable[e] = var.mat->ini_state_variable(e);
+    }           
+}
+
 void initial_temperature(const Param &param, const Variables &var,
                          double_vec &temperature, double_vec &radiogenic_source, double &bottom_temperature)
 {

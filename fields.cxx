@@ -43,6 +43,7 @@ void allocate_variables(const Param &param, Variables& var)
         var.radiogenic_source = new double_vec(e, 0);
 
         var.dyn_fric_coeff = new double_vec(e);
+        var.state_variable = new double_vec(e);
 
 //         // these fields are from Denis' code
 //         var.MAX_shear = new double_vec(e);

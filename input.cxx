@@ -677,6 +677,8 @@ static void declare_parameters(po::options_description &cfg,
          "rate-and-state friction parameter b '[d0, d1, d2, ...]' (-)")
         ("mat.characteristic_velocity", po::value<std::string>()->default_value("[1e-6]"),
          "rate-and-state friction parameter V0 '[d0, d1, d2, ...]' (-)")
+         ("mat.characteristic_distance", po::value<std::string>()->default_value("[4e-3]"),
+         "rate-and-state friction parameter Dc '[d0, d1, d2, ...]' (-)")
         ;
     /*
     Example of bulk modulus of rock-forming minerals
@@ -1095,6 +1097,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, 1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, 1);
         get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, 1);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, 1);
     }
 
 }
