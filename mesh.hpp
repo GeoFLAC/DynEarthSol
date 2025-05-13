@@ -29,7 +29,7 @@ void create_support(Variables& var);
 void create_elemmarkers(const Param&, Variables&);
 void create_markers(const Param&, Variables&);
 void create_new_mesh(const Param&, Variables&);
-double** elem_center(const array_t &coord, const conn_t &connectivity);
+array_t* elem_center(const array_t &coord, const conn_t &connectivity);
 void create_equilateral_elem(const Variables& var, int *&connectivity);
 void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags);
 

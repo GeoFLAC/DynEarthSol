@@ -25,7 +25,6 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
-ANNFLAGS = linux-g++
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -155,10 +154,6 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	ifeq ($(gprof), 1)
 		CXXFLAGS += -pg
 		LDFLAGS += -pg
-	endif
-
-	ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
-		ANNFLAGS = macosx-g++-13
 	endif
 
 	GCCVERSION = $(shell $(CXX) --version | grep g++ | sed 's/^.* //g' | cut -d. -f1)
@@ -328,8 +323,7 @@ endif
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3
 
-ANN_DIR = ann
-ANN_LIBNAME = ANN
+ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
 ## Action
@@ -338,9 +332,9 @@ CXXFLAGS += -I$(ANN_DIR)/include
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
-			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) -L$(ANN_DIR)/lib -l$(ANN_LIBNAME) \
+			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
@@ -414,9 +408,6 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) CUDA_DIR=$(CUDA_DIR)
 
-$(ANN_DIR)/lib/lib$(ANN_LIBNAME).a:
-	@+$(MAKE) -C $(ANN_DIR) $(ANNFLAGS)
-
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean
@@ -424,7 +415,6 @@ deepclean:
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean
-	@+$(MAKE) -C $(ANN_DIR) realclean
 
 clean:
 	@rm -f $(OBJS) $(EXE)

@@ -7,6 +7,8 @@
 #include <vector>
 #include <unordered_map>
 
+#include <nanoflann.hpp>
+
 #include "constants.hpp"
 #include "array2d.hpp"
 
@@ -18,6 +20,8 @@ typedef std::vector<double> double_vec;
 typedef std::vector<int> int_vec;
 typedef std::vector<int_vec> int_vec2D;
 typedef std::vector<uint> uint_vec;
+typedef std::vector<bool> bool_vec;
+typedef std::vector<size_t> size_t_vec;
 
 typedef Array2D<double,NDIMS> array_t;
 typedef Array2D<double,NSTR> tensor_t;
@@ -30,6 +34,7 @@ typedef Array2D<int,NODES_PER_ELEM> conn_t;
 typedef Array2D<int,NDIMS> segment_t;
 typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
+typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
 // forward declaration
 class PhaseChange;
@@ -340,6 +345,24 @@ struct Debug {
     bool dt;
 //    bool has_two_layers_for;
 };
+
+struct PointCloud {
+    const array_t &data;
+
+    PointCloud(const array_t &_data)
+        : data(_data) {}
+
+    inline size_t kdtree_get_point_count() const { return data.size(); }
+
+    inline double kdtree_get_pt(const size_t idx, const size_t d) const {
+        return data[idx][d];
+    }
+
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX&) const { return false; }
+};
+
+using KDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
 
 struct Param {
     Sim sim;

@@ -6,8 +6,6 @@
 #include <nvToolsExt.h> 
 #endif
 
-#include "ANN/ANN.h"
-
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "barycentric-fn.hpp"
@@ -18,38 +16,42 @@
 
 namespace {
 
-    void find_nearest_neighbor(const Variables &var, ANNkd_tree &kdtree,
+    void find_nearest_neighbor(const Variables &var, KDTree &kdtree,
                                int_vec &idx, int_vec &is_changed)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        double **new_center = elem_center(*var.coord, *var.connectivity);
+        array_t *new_center = elem_center(*var.coord, *var.connectivity);
 
-        const int k = 1;
         const double eps = 1e-15;
-        int nn_idx[k];
-        double dd[k];
-        // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
+
+        #pragma omp parallel for default(none) shared(var, kdtree, new_center, idx, is_changed)
         for(int e=0; e<var.nelem; e++) {
-            double *q = new_center[e];
-            kdtree.annkSearch(q, k, nn_idx, dd, eps);
-            idx[e] = nn_idx[0];
-            is_changed[e] = (dd[0] < eps)? 0 : 1;
+
+            double *q = (*new_center)[e];
+            size_t nn_idx;
+            double dd;
+
+            KNNResultSet resultSet(1);
+            resultSet.init(&nn_idx, &dd);  
+            kdtree.findNeighbors(resultSet, q);
+
+            idx[e] = static_cast<int>(nn_idx);
+            is_changed[e] = (dd < eps) ? 0 : 1;
         }
 
-        delete [] new_center[0];
-        delete [] new_center;
+        delete new_center;
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
     }
 
-
     void find_acm_elem_ratios(const Variables &var,
                               const Barycentric_transformation &bary,
                               int_vec &is_changed,
-                              ANNkd_tree &kdtree,
+                              KDTree &kdtree,
+                              int old_nelem,
                               std::vector<int_vec> &elems_vec,
                               std::vector<double_vec> &ratios_vec)
     {
@@ -62,19 +64,25 @@ namespace {
         const double spacing0 = 1.0 / neta0;
         const double spacing1 = 1.0 / neta1;
         const double spacing2 = 1.0 / neta2;
-        const int max_el = std::min(32, kdtree.nPoints());
+        const int max_el = std::min(32, old_nelem);
         const double eps = 0;
-        int nn_idx[32];
-        double dd[32];
 
-        const int nelem_changed = std::accumulate(is_changed.begin(), is_changed.end(), 0);
-        elems_vec.reserve(nelem_changed);
-        ratios_vec.reserve(nelem_changed);
+        int nelem_changed = 0;
+        int_vec idx_changed(var.nelem);
+        for (int e=0; e<var.nelem; e++) {
+            if (is_changed[e]) {
+                idx_changed[e] = nelem_changed;
+                nelem_changed++;
+            }
+        }
 
-        std::map<int, int> elem_count;
+        elems_vec.resize(nelem_changed);
+        ratios_vec.resize(nelem_changed);
 
+        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec,idx_changed) 
         for(int e=0; e<var.nelem; e++) {
             if (is_changed[e]) {
+                std::map<int, int> elem_count;
 
                 /* Procedure:
                  *   1. Create a bunch of temporary points, uniformly distributed in the element.
@@ -108,7 +116,12 @@ namespace {
                                 }
 
                             // find the nearest point nn in old_center
-                            kdtree.annkSearch(x, max_el, nn_idx, dd, eps);
+                            size_t_vec nn_idx(max_el);
+                            double_vec out_dists_sqr(max_el);
+                            KNNResultSet resultSet(max_el);
+                            resultSet.init(nn_idx.data(), out_dists_sqr.data());
+
+                            kdtree.findNeighbors(resultSet, x);
 
                             // std::cout << "  ";
                             // print(std::cout, eta, NODES_PER_ELEM);
@@ -167,12 +180,10 @@ namespace {
                     continue;
                 }
 
-                elems_vec.push_back(int_vec());
-                int_vec &elems = elems_vec.back();
+                int_vec &elems = elems_vec[idx_changed[e]];
                 elems.reserve(elem_count.size());
 
-                ratios_vec.push_back(double_vec());
-                double_vec &ratios = ratios_vec.back();
+                double_vec &ratios = ratios_vec[idx_changed[e]];
                 ratios.reserve(elem_count.size());
 
                 const double inv = 1.0 / total_count;
@@ -181,9 +192,21 @@ namespace {
                     ratios.push_back(i->second * inv);
                 }
 
-                elem_count.clear();
             }
         }
+
+    elems_vec.erase(
+        std::remove_if(elems_vec.begin(), elems_vec.end(),
+                    [](const int_vec& v) { return v.empty(); }),
+        elems_vec.end()
+    );
+
+    ratios_vec.erase(
+        std::remove_if(ratios_vec.begin(), ratios_vec.end(),
+                    [](const double_vec& v) { return v.empty(); }),
+        ratios_vec.end()
+    );
+
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
@@ -196,22 +219,24 @@ namespace {
                                const conn_t &old_connectivity,
                                int_vec &idx,
                                int_vec &is_changed,
-                               std::vector<int_vec> &elems_vec,
+                               int_vec2D &elems_vec,
                                std::vector<double_vec> &ratios_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        // kdtree requires the coordinate as double**
-        double **old_center = elem_center(old_coord, old_connectivity);
-        ANNkd_tree kdtree(old_center, old_connectivity.size(), NDIMS);
+        array_t *old_center = elem_center(old_coord, old_connectivity);
+        int old_nelem = old_connectivity.size();
+
+        PointCloud cloud(*old_center);
+        KDTree kdtree(NDIMS, cloud);
+        kdtree.buildIndex();
 
         find_nearest_neighbor(var, kdtree, idx, is_changed);
 
-        find_acm_elem_ratios(var, bary, is_changed, kdtree, elems_vec, ratios_vec);
+        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec);
 
-        delete [] old_center[0];
-        delete [] old_center;
+        delete old_center;
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif

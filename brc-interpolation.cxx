@@ -4,8 +4,6 @@
 #include "algorithm"
 #include "iostream"
 
-#include "ANN/ANN.h"
-
 #include "constants.hpp"
 #include "parameters.hpp"
 
@@ -78,24 +76,25 @@ void prepare_interpolation(const Variables &var,
 #endif
     // for each new coord point, find the enclosing old element
 
-    // ANN requires double** as input
-    double **points = new double*[old_coord.size()];
-    for (std::size_t i=0; i<old_coord.size(); i++) {
-        points[i] = const_cast<double*>(old_coord[i]);
-    }
-    ANNkd_tree kdtree(points, old_coord.size(), NDIMS);
+    PointCloud cloud(old_coord);
+    KDTree kdtree(NDIMS, cloud);
+    kdtree.buildIndex();
 
     const int k = 1;
-    const double eps = 0;
-    int nn_idx[k];
-    double dd[k];
 
-    // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
+    #pragma omp parallel for default(none)          \
+        shared(var, bary, old_coord, old_connectivity, old_support, kdtree, el, brc) \
+        firstprivate(k)
     for (int i=0; i<var.nnode; i++) {
         double *q = (*var.coord)[i];
+        size_t_vec nn_idx(k);
+        double_vec dd(k);
+        KNNResultSet resultSet(k);
+        resultSet.init(nn_idx.data(), dd.data());
 
         // find the nearest point nn in old_coord
-        kdtree.annkSearch(q, k, nn_idx, dd, eps);
+        kdtree.findNeighbors(resultSet, q);
+
         int nn = nn_idx[0];
 
         // elements surrounding nn
@@ -184,7 +183,7 @@ void prepare_interpolation(const Variables &var,
             // Situation: q must be outside the old domain
             // using nearest old_coord instead
             e = nn_elem[0];
-            bary.transform(points[nn], e, r);
+            bary.transform(old_coord[nn], e, r);
         }
     found:
         el[i] = e;
@@ -195,8 +194,6 @@ void prepare_interpolation(const Variables &var,
         }
         brc[i][NODES_PER_ELEM-1] = 1 - sum;
     }
-
-    delete [] points;
 
     // print(std::cout, *var.coord);
     // std::cout << '\n';

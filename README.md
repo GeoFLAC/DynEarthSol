@@ -103,6 +103,6 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the MIT / X Windows System license. See
 [LICENSE](https://github.com/GeoFLAC/DynEarthSol/blob/master/LICENSE) for the full text.
 
-The files under the subdirectories `3x3-C/`, `ann/`, `tetgen/`
+The files under the subdirectories `3x3-C/`, `nanoflann/`, `tetgen/`
 and `triangles/` are distributed by their own license(s).
 

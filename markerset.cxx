@@ -9,8 +9,6 @@
 #include <nvToolsExt.h>
 #endif
 
-#include "ANN/ANN.h"
-
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "barycentric-fn.hpp"
@@ -582,12 +580,13 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
     allocate_markerdata( max_markers );
 
     // nearest-neighbor search structure
-    double **centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-    ANNkd_tree kdtree(centroid, var.nelem, NDIMS);
+    array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
+
+    PointCloud cloud(*centroid);
+    KDTree kdtree(NDIMS, cloud);
+    kdtree.buildIndex();
+
     const int k = std::min(20, var.nelem);  // how many nearest neighbors to search?
-    const double eps = 0.001; // tolerance of distance error
-    int nn_idx[20];
-    double dd[20];
 
     double_vec new_volume( var.nelem );
     compute_volume( *var.coord, *var.connectivity, new_volume );
@@ -607,8 +606,12 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
         bool found = false;
 
         // Look for nearby elements.
-        // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
-        kdtree.annkSearch(x, k, nn_idx, dd, eps);
+        size_t_vec nn_idx(k);
+        double_vec dd(k);
+        KNNResultSet resultSet(k);
+        resultSet.init(nn_idx.data(), dd.data());
+
+        kdtree.findNeighbors(resultSet, x);
 
         for( int j=0; j<k; j++ ) {
             int e = nn_idx[j];
@@ -638,8 +641,7 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
         }
     }
 
-    delete [] centroid[0];
-    delete [] centroid;
+    delete centroid;
 }
 
 
@@ -860,19 +862,20 @@ namespace {
 
     template <class T>
     void find_markers_in_element(MarkerSet& ms, T& elemmarkers,
-                                 ANNkd_tree& kdtree, const Barycentric_transformation &bary,
+                                 KDTree& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
+#ifdef USE_NPROF
+        nvtxRangePushA(__FUNCTION__);
+#endif
         const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
-        const double eps = 0.001; // tolerance of distance error
-        int nn_idx[20];
-        double dd[20];
-
 
         // Loop over all the old markers and identify a containing element in the new mesh.
         int last_marker = ms.get_nmarkers();
-        int i = 0;
-        while (i < last_marker) {
+        bool_vec removed_markers(last_marker, false);
+
+        #pragma omp parallel for default(none) shared(ms, elemmarkers, kdtree, bary, old_coord, old_connectivity, last_marker,removed_markers)
+        for (int i = 0; i < last_marker; i++) {
             bool found = false;
 
             // 1. Get physical coordinates, x, of an old marker.
@@ -883,14 +886,18 @@ namespace {
                     x[j] += ms.get_eta(i)[k]*
                         old_coord[ old_connectivity[eold][k] ][j];
 
-            if (DEBUG) {
-                std::cout << "marker #" << i << " old_elem " << eold << " x: ";
-                print(std::cout, x, NDIMS);
-            }
+            // if (DEBUG) {
+            //     std::cout << "marker #" << i << " old_elem " << eold << " x: ";
+            //     print(std::cout, x, NDIMS);
+            // }
 
             // 2. look for nearby elements.
-            // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
-            kdtree.annkSearch(x, k, nn_idx, dd, eps);
+            size_t_vec nn_idx(k);
+            double_vec out_dists_sqr(k);
+            KNNResultSet resultSet(k);
+            resultSet.init(nn_idx.data(), out_dists_sqr.data());
+
+            kdtree.findNeighbors(resultSet, x);
 
             for( int j = 0; j < k; j++ ) {
                 int e = nn_idx[j];
@@ -899,10 +906,10 @@ namespace {
                 bary.transform(x, e, r);
 
                 // change this if-condition to (i == N) to debug the N-th marker
-                if (0) {
-                    std::cout << '\n' << j << " check elem #" << e << ' ';
-                    print(std::cout, r, NDIMS);
-                }
+                // if (0) {
+                //     std::cout << '\n' << j << " check elem #" << e << ' ';
+                //     print(std::cout, r, NDIMS);
+                // }
 
                 if (bary.is_inside(r)) {
                     ms.set_eta(i, r);
@@ -910,28 +917,32 @@ namespace {
                     ++elemmarkers[e][ms.get_mattype(i)];
             
                     found = true;
-                    ++i;
-                    if (DEBUG) {
-                        std::cout << " in element " << e << '\n';
-                    }
+                    // ++i;
+                    // if (DEBUG) {
+                    //     std::cout << " in element " << e << '\n';
+                    // }
                     break;
                 }
             }
 
             if( found ) continue;
 
-            if (DEBUG) {
-                std::cout << " not in any element" << '\n';
-            }
+            // if (DEBUG) {
+            //     std::cout << " not in any element" << '\n';
+            // }
 
             /* not found */
-            {
-                // Since no containing element has been found, delete this marker.
-                // Note i is not inc'd.
-                --last_marker;
-                ms.remove_marker(i);
-            }
+            // Since no containing element has been found, delete this marker.
+            removed_markers[i] = true;
         }
+
+        for (int i=last_marker-1; i>=0; i--)
+            if (removed_markers[i])
+                ms.remove_marker(i);
+
+#ifdef USE_NPROF
+        nvtxRangePop();
+#endif
     }
 
 
@@ -1024,7 +1035,7 @@ namespace {
 
 
     void replenish_markers_with_mattype_from_nn_preparation(const Variables &var,
-                                                            ANNkd_tree *&kdtree, double **&points)
+                                                            KDTree *&kdtree, array_t *&points)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -1032,26 +1043,25 @@ namespace {
         const MarkerSet &ms = *var.markersets[0];
         const int nmarkers = ms.get_nmarkers();
 
-        double *tmp = new double[nmarkers*NDIMS];
-        points = new double*[nmarkers];
-        // The caller is responsible to delete [] points[0] and points!
+        points = new array_t(nmarkers);
 
         for (int n=0; n<nmarkers; n++) {
             const int e = ms.get_elem(n);
             const double* eta = ms.get_eta(n);
             const int* conn = (*var.connectivity)[e];
 
-            points[n] = tmp + n*NDIMS;
             for(int d=0; d<NDIMS; d++) {
                 double sum = 0;
                 for(int k=0; k<NODES_PER_ELEM; k++) {
                     sum += (*var.coord)[ conn[k] ][d] * eta[k];
                 }
-                points[n][d] = sum;
+                (*points)[n][d] = sum;
             }
         }
 
-        kdtree = new ANNkd_tree(points, nmarkers, NDIMS);
+        PointCloud cloud(*points);
+        kdtree = new KDTree(NDIMS, cloud);
+        kdtree->buildIndex();
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
@@ -1059,7 +1069,7 @@ namespace {
 
 
     void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
-                                                ANNkd_tree &kdtree,
+                                                KDTree &kdtree,
                                                 int e, int num_marker_in_elem)
     {
 #ifdef USE_NPROF
@@ -1079,13 +1089,13 @@ namespace {
             }
 
             const int k = 1;  // how many nearest neighbors to search?
-            const double eps = 0; // tolerance of distance error
-            int nn_idx[k];
-            double dd[k];
+            size_t_vec nn_idx(k);
+            double_vec dd(k);
+            KNNResultSet resultSet(k);
+            resultSet.init(nn_idx.data(), dd.data());
 
             // Look for nearest marker.
-            // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
-            kdtree.annkSearch(x, k, nn_idx, dd, eps);
+            kdtree.findNeighbors(resultSet, x);
 
             int m = nn_idx[0]; // nearest marker
             const int mt = ms.get_mattype(m);
@@ -1127,8 +1137,11 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         Barycentric_transformation bary( *var.coord, *var.connectivity, new_volume );
 
         // nearest-neighbor search structure
-        double **centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-        ANNkd_tree kdtree(centroid, var.nelem, NDIMS);
+        array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
+
+        PointCloud cloud(*centroid);
+        KDTree kdtree(NDIMS, cloud);
+        kdtree.buildIndex();
 
         find_markers_in_element(*var.markersets[0], *var.elemmarkers,
                                 kdtree, bary, old_coord, old_connectivity);
@@ -1136,13 +1149,12 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
             find_markers_in_element(*var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers,
                                     kdtree, bary, old_coord, old_connectivity);
 
-        delete [] centroid[0];
-        delete [] centroid;
+        delete centroid;
     }
 
     // If any new element has too few markers, generate markers in them.
-    ANNkd_tree *kdtree = NULL;
-    double **points = NULL; // coordinate of markers
+    KDTree *kdtree = NULL;
+    array_t *points = NULL; // coordinate of markers
     if (param.markers.replenishment_option == 2) {
         replenish_markers_with_mattype_from_nn_preparation(var, kdtree, points);
     }
@@ -1172,8 +1184,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
     if (param.markers.replenishment_option == 2) {
         delete kdtree;
-        delete [] points[0];
-        delete [] points;
+        delete points;
     }
 #ifdef USE_NPROF
     nvtxRangePop();
