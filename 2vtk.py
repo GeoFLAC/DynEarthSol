@@ -252,6 +252,8 @@ def main(modelname, start, end, delta):
             effvisc = tII / (srII + 1e-45)
             vtk_dataarray(fvtu, effvisc, 'effective viscosity')
 
+            convert_field(des, frame, 'friction coefficient', fvtu)
+
             # element number for debugging
             vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
 

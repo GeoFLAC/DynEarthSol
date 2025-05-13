@@ -314,7 +314,7 @@ void MatProps::plastic_weakening(int e, double pls,
 
 void MatProps::plastic_weakening_rsf(int e, double pls,
                                  double &cohesion, double &friction_angle,
-                                 double &dilation_angle, double &hardening, double &slip_rate) const
+                                 double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff) const
 {
     double c, f, d, h;
     c = f = d = h = 0;
@@ -369,6 +369,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     cohesion = c / n;
     dilation_angle = d / n;
     hardening = h / n;
+    dyn_fric_coeff = mu_d;
 }
 
 void MatProps::plastic_props(int e, double pls,
@@ -392,11 +393,11 @@ void MatProps::plastic_props(int e, double pls,
 
 void MatProps::plastic_props_rsf(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max, double& slip_rate) const
+                             double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff) const
 {
     double cohesion, phi, psi;
 
-    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate);
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate, dyn_fric_coeff);
 
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);
@@ -408,7 +409,6 @@ void MatProps::plastic_props_rsf(int e, double pls,
 
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
 }
-
 
 double MatProps::rho(int e) const
 {
@@ -521,6 +521,21 @@ double MatProps::beta_mineral(int e) const
 }
 
 // Rate-and-state friction parameters
+double MatProps::ini_static_fric(int e) const
+{
+    double f = 0;
+    int n = 0;
+    for (int m = 0; m < nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        f += (*friction_angle0)[m] * k; 
+        n += k;                         
+    }
+    double friction_angle0_avg = (n > 0) ? (f / n) : 0;
+    double mu_d = std::tan(DEG2RAD * friction_angle0_avg); 
+    return mu_d;
+}
+
 double MatProps::d_a(int e) const
 {
     return arithmetic_mean(direct_a, elemmarkers[e]);
@@ -889,7 +904,6 @@ double MatProps::visc(int e) const
     return visc;
 }
 
-
 void MatProps::plastic_weakening(int e, double pls,
                                  double &cohesion, double &friction_angle,
                                  double &dilation_angle, double &hardening) const
@@ -932,7 +946,7 @@ void MatProps::plastic_weakening(int e, double pls,
 
 void MatProps::plastic_weakening_rsf(int e, double pls,
                                  double &cohesion, double &friction_angle,
-                                 double &dilation_angle, double &hardening, double &slip_rate) const
+                                 double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff) const
 {
     double c, f, d, h;
     c = f = d = h = 0;
@@ -986,6 +1000,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     cohesion = c / n;
     dilation_angle = d / n;
     hardening = h / n;
+    dyn_fric_coeff = mu_d;
 
     // std::cout << "d_a: " << d_a << " e_b: " << e_b << " c_v: " << c_v << " mu_0: " << mu_0 << " mu_d: " << mu_d << " friction_angle: " << friction_angle << std::endl;
 
@@ -1018,11 +1033,11 @@ void MatProps::plastic_props(int e, double pls,
 
 void MatProps::plastic_props_rsf(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max, double& slip_rate) const
+                             double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff) const
 {
     double cohesion, phi, psi;
 
-    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate);
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate, dyn_fric_coeff);
 
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);
@@ -1146,6 +1161,22 @@ double MatProps::beta_mineral(int e) const
 }
 
 // Rate-and-state friction parameters
+double MatProps::ini_static_fric(int e) const
+{
+    double f = 0;
+    int n = 0;
+    for (int m = 0; m < nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        f += (*friction_angle0)[m] * k; 
+        n += k;                         
+    }
+    double friction_angle0_avg = (n > 0) ? (f / n) : 0;
+    double mu_d = std::tan(DEG2RAD * friction_angle0_avg); 
+    return mu_d;
+}
+
+
 double MatProps::d_a(int e) const
 {
     return arithmetic_mean(*direct_a, elemmarkers[e]);

@@ -415,6 +415,13 @@ void initial_weak_zone(const Param &param, const Variables &var,
     delete weakvalue;
 }
 
+void initial_friction_coeff(const Param &param, const Variables &var,
+                             double_vec &friction_coeff)
+{
+    for (int e=0; e<var.nelem; ++e) {
+        friction_coeff[e] = var.mat->ini_static_fric(e);
+    }           
+}
 
 void initial_temperature(const Param &param, const Variables &var,
                          double_vec &temperature, double_vec &radiogenic_source, double &bottom_temperature)

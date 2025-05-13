@@ -17,4 +17,6 @@ void initial_temperature(const Param &param, const Variables &var,
 void initial_hydrostatic_state(const Param &param, const Variables &var,
                           double_vec &ppressure, double_vec &dppressure);
 
+void initial_friction_coeff(const Param &param, const Variables &var,
+                             double_vec &friction_coeff);
 #endif

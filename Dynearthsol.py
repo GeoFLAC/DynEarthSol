@@ -83,7 +83,7 @@ class Dynearthsol:
             shape = (nelem, self.nstr)
         elif name in set(['density', 'material', 'mesh quality',
                           'plastic strain', 'plastic strain-rate',
-                          'viscosity', 'edvoldt', 'volume','radiogenic source']):
+                          'viscosity', 'edvoldt', 'volume','radiogenic source', 'friction coefficient']):
             count = nelem
             shape = (nelem, )
         elif name in set(['connectivity']):

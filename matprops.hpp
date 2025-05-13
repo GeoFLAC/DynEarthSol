@@ -54,6 +54,8 @@ public:
 
     // rate-and-state friction parameters
     #pragma acc routine seq
+    double ini_static_fric(int e) const;
+    #pragma acc routine seq
     double d_a(int e) const;
     #pragma acc routine seq
     double e_b(int e) const;
@@ -67,7 +69,7 @@ public:
     #pragma acc routine seq
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max, double& slip_rate) const;
+                       double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -129,7 +131,7 @@ private:
     #pragma acc routine seq
     void plastic_weakening_rsf(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double &slip_rate) const;
+                           double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff) const;
 };
 
 #else
@@ -175,6 +177,7 @@ public:
     double beta_mineral(int e) const;
 
     // rate-and-state friction parameters
+    double ini_static_fric(int e) const;
     double d_a(int e) const;
     double e_b(int e) const;
     double c_v(int e) const;
@@ -184,7 +187,7 @@ public:
                        double& hardn, double& ten_max) const;
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max, double& slip_rate) const;
+                       double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -243,7 +246,7 @@ private:
 
     void plastic_weakening_rsf(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double &slip_rate) const;
+                           double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff) const;
 };
 
 

@@ -42,6 +42,8 @@ void allocate_variables(const Param &param, Variables& var)
         // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
 
+        var.dyn_fric_coeff = new double_vec(e);
+
 //         // these fields are from Denis' code
 //         var.MAX_shear = new double_vec(e);
 //         var.MAX_shear_0 = new double_vec(e);

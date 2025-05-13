@@ -497,6 +497,9 @@ struct Variables {
     double_vec *dppressure_zero; // delta pore pressure
     double_vec *fluid_source; // injection and pumping of pore water
     
+    // For rate-and-state friction
+    double_vec *dyn_fric_coeff;
+
     // For surface processes
     SurfaceInfo surfinfo;
     int_vec melt_markers;
