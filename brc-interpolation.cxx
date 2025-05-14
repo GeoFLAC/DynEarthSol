@@ -68,7 +68,7 @@ void prepare_interpolation(const Variables &var,
                            const Barycentric_transformation &bary,
                            const array_t &old_coord,
                            const conn_t &old_connectivity,
-                           const std::vector<int_vec> &old_support,
+                           const int_vec2D &old_support,
                            brc_t &brc, int_vec &el)
 {
 #ifdef USE_NPROF
@@ -255,7 +255,7 @@ void barycentric_node_interpolation_forT(const Variables &var,
                                          const Barycentric_transformation &bary,
                                          const array_t &input_coord,
                                          const conn_t &input_connectivity,
-                                         const std::vector<int_vec> &input_support,
+                                         const int_vec2D &input_support,
 					 const double_vec &inputtemperature,
 					 double_vec &outputtemperature)
 {

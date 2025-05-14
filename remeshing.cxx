@@ -2797,7 +2797,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // These should be populated only once at the outset of a simulation
     // and be maintained thereafter.
-    std::vector<int> SENList, sids;
+    int_vec SENList, sids;
     {
         DiscreteGeometryConstraints constraints;
         constraints.verbose_off();
@@ -2816,7 +2816,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     constraints.verbose_off();
     constraints.set_surface_input(ug, SENList, sids);
 
-    std::vector<double> max_len;
+    double_vec max_len;
     constraints.get_constraints(max_len);
 
     // Prepare the field to be used for error analysis: e.g., plastic strain or strain rate.

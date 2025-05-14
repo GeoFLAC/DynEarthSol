@@ -1835,7 +1835,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // For sideset node ordering,
     // refer Table 4.2 on p. 30, "Exodus: A finite element data model" by Sjaardema et al.
     // Retrieved on 2019/09/28 from gsjaardema.github.io/seacas/exodusII-new.pdf.
-    std::vector< std::vector<int> > local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
+    int_vec2D local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
     start = 0;
     const int *conn = var.connectivity->data();
     for (int i=0; i<num_side_sets; i++) {
@@ -2066,7 +2066,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.ylength,
 #endif
                           param.mesh.zlength};
-    std::vector<std::size_t> idx(NDIMS);
+    size_t_vec idx(NDIMS);
     sortindex(lengths, idx);
     int dmin, dmid, dmax;
 
@@ -2107,13 +2107,13 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
     }
 
     // arrays to store the result of sorting
-    std::vector<int> nd_idx(nnode);
-    std::vector<int> el_idx(nelem);
+    int_vec nd_idx(nnode);
+    int_vec el_idx(nelem);
     sortindex(wn, nd_idx);
     sortindex(we, el_idx);
 
     // inverse permutation
-    std::vector<int> nd_inv(nnode);
+    int_vec nd_inv(nnode);
     for(int i=0; i<nnode; i++)
       nd_inv[nd_idx[i]] = i;
 
@@ -2522,7 +2522,7 @@ void create_boundary_facets(Variables& var)
 
 void create_support(Variables& var)
 {
-    var.support = new std::vector<int_vec>(var.nnode);
+    var.support = new int_vec2D(var.nnode);
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
@@ -2539,7 +2539,7 @@ void create_support(Variables& var)
 
 void create_elemmarkers(const Param& param, Variables& var)
 {
-    var.elemmarkers = new int_vec2D( var.nelem, std::vector<int>(param.mat.nmat, 0) );
+    var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     if (param.control.has_hydration_processes)
         var.hydrous_elemmarkers = new Array2D<int,1>( var.nelem, 0 );
 

@@ -52,8 +52,8 @@ namespace {
                               int_vec &is_changed,
                               KDTree &kdtree,
                               int old_nelem,
-                              std::vector<int_vec> &elems_vec,
-                              std::vector<double_vec> &ratios_vec)
+                              int_vec2D &elems_vec,
+                              double_vec2D &ratios_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -220,7 +220,7 @@ namespace {
                                int_vec &idx,
                                int_vec &is_changed,
                                int_vec2D &elems_vec,
-                               std::vector<double_vec> &ratios_vec)
+                               double_vec2D &ratios_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -245,8 +245,8 @@ namespace {
 
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
-                      const std::vector<int_vec> &elems_vec,
-                      const std::vector<double_vec> &ratios_vec,
+                      const int_vec2D &elems_vec,
+                      const double_vec2D &ratios_vec,
                       const double_vec &source,
                       double_vec &target)
     {
@@ -275,8 +275,8 @@ namespace {
 
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
-                      const std::vector<int_vec> &elems_vec,
-                      const std::vector<double_vec> &ratios_vec,
+                      const int_vec2D &elems_vec,
+                      const double_vec2D &ratios_vec,
                       const tensor_t &source,
                       tensor_t &target)
     {
@@ -310,8 +310,8 @@ namespace {
     void nn_interpolate_elem_fields(Variables &var,
                                     const int_vec &idx,
                                     const int_vec &is_changed,
-                                    const std::vector<int_vec> &elems_vec,
-                                    const std::vector<double_vec> &ratios_vec)
+                                    const int_vec2D &elems_vec,
+                                    const double_vec2D &ratios_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -392,8 +392,8 @@ void nearest_neighbor_interpolation(Variables &var,
     int_vec idx(var.nelem); // nearest element
     int_vec is_changed(var.nelem); // is the element changed during remeshing?
 
-    std::vector<int_vec> elems_vec;
-    std::vector<double_vec> ratios_vec;
+    int_vec2D elems_vec;
+    double_vec2D ratios_vec;
 
     prepare_interpolation(var, bary, old_coord, old_connectivity, idx, is_changed, elems_vec, ratios_vec);
 

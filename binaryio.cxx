@@ -134,9 +134,9 @@ void BinaryOutput::write_array(const Array2D<T,N>& A, const char *name, std::siz
 
 // explicit instantiation
 template
-void BinaryOutput::write_array<int>(const std::vector<int>& A, const char *name, std::size_t);
+void BinaryOutput::write_array<int>(const int_vec& A, const char *name, std::size_t);
 template
-void BinaryOutput::write_array<double>(const std::vector<double>& A, const char *name, std::size_t);
+void BinaryOutput::write_array<double>(const double_vec& A, const char *name, std::size_t);
 
 template
 void BinaryOutput::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, std::size_t);
@@ -276,9 +276,9 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name)
 
 // explicit instantiation
 template
-void BinaryInput::read_array<double>(std::vector<double>& A, const char *name);
+void BinaryInput::read_array<double>(double_vec& A, const char *name);
 template
-void BinaryInput::read_array<int>(std::vector<int>& A, const char *name);
+void BinaryInput::read_array<int>(int_vec& A, const char *name);
 template
 void BinaryInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
 template

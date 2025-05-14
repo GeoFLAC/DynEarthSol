@@ -17,7 +17,7 @@ void read_external_temperature_from_comsol(const Param &param,
 {
 
     /* Read the thermal file (x-coord y-coord z-coord temperature). The order of nodes in this file != the order of nodes_per_elem in Coord file.*/
-    std::vector<double> xs, ys, zs, Ts;
+    double_vec xs, ys, zs, Ts;
     {
         std::ifstream inputFile(param.ic.Temp_filename.c_str());
         std::string line;
@@ -44,8 +44,8 @@ void read_external_temperature_from_comsol(const Param &param,
     }
 
     /* Read the Coord file(x-coord y-coord z-coord). The order of nodes in this file != the order of nodes in thermal file.*/
-    std::vector<double>nxs, nys, nzs, nTs;
-    std::vector<int>nis;
+    double_vec nxs, nys, nzs, nTs;
+    int_vec nis;
     {
         std::ifstream ninputFile(param.ic.Nodes_filename.c_str());
         std::string nline;
@@ -91,7 +91,7 @@ void read_external_temperature_from_comsol(const Param &param,
     }
 
     /* Read the Connectivity file(n0 n1 n2).*/
-    std::vector<int> es, n0s, n1s, n2s, n3s;
+    int_vec es, n0s, n1s, n2s, n3s;
     {
         std::ifstream einputFile(param.ic.Connectivity_filename.c_str());
         std::string eline;

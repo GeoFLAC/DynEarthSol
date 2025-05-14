@@ -12,6 +12,7 @@
 #include "constants.hpp"
 #include "array2d.hpp"
 
+typedef std::pair<int,int> int_pair;
 typedef std::pair<double,double> double_pair;
 typedef std::unordered_map<int,int> int_map;
 typedef std::vector<int_map> int_map2D;
@@ -19,6 +20,7 @@ typedef std::vector<int_map> int_map2D;
 typedef std::vector<double> double_vec;
 typedef std::vector<int> int_vec;
 typedef std::vector<int_vec> int_vec2D;
+typedef std::vector<double_vec> double_vec2D;
 typedef std::vector<uint> uint_vec;
 typedef std::vector<bool> bool_vec;
 typedef std::vector<size_t> size_t_vec;
@@ -28,7 +30,6 @@ typedef Array2D<double,NSTR> tensor_t;
 typedef Array2D<double,NODES_PER_ELEM> shapefn;
 typedef Array2D<double,1> regattr_t;
 typedef Array2D<double,NODES_PER_ELEM*3> elem_cache;
-typedef Array2D<double,2> dh_t;
 
 typedef Array2D<int,NODES_PER_ELEM> conn_t;
 typedef Array2D<int,NDIMS> segment_t;
@@ -412,13 +413,6 @@ struct SurfaceInfo {
     double_vec *edvacc_surf;
     int_vec2D *node_and_elems;
     segment_t *elem_and_nodes;
-
-    double_vec *dhacc_oc;
-    double_vec *edhacc_oc;
-
-    std::vector<double_vec> *fcenters;
-    std::vector<double_vec> *normals;
-    std::vector<double_vec> *dips;
 
     int_map arctop_facet_elems;
     int_map arctop_nodes;

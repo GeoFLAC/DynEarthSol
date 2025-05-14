@@ -38,7 +38,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.start_time = get_nanoseconds();
 
     for (int i=0;i<nbdrytypes;++i)
-        var.bfacets[i] = new std::vector< std::pair<int,int> >;
+        var.bfacets[i] = new std::vector<int_pair>;
     for (int i=0;i<nbdrytypes;++i)
         var.bnodes[i] = new int_vec;
     var.bnormals = new array_t(nbdrytypes);
