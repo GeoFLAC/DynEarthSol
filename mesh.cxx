@@ -2526,6 +2526,16 @@ void create_boundary_facets(Variables& var)
                     bfacet_local[k].end());
             }
         }
+
+        #pragma omp barrier
+
+        #pragma omp for
+        for (int n=0; n<nbdrytypes; ++n) {
+            std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
+                    [](const int_pair &a, const int_pair &b) {
+                        return a.first < b.first;
+                    });
+        }
     }
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";
