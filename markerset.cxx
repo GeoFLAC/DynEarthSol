@@ -399,47 +399,54 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
     int_vec delete_marker;
     delete_marker.reserve(100);
 
-    #pragma omp parallel for default(none) shared(var,coord0s,bary,delete_marker)
-    for (int i=0; i<_nmarkers;i++) {
-        double m_coord[NDIMS], new_eta[NDIMS];
-        int e = (*_elem)[i];
-        auto it = find(var.top_elems->begin(), var.top_elems->end(), e);
-        // If element was not found
-        if (it == var.top_elems->end())
-            continue;
-        int e_ind = it - var.top_elems->begin();
+    #pragma omp parallel default(none) shared(var,coord0s,bary,delete_marker)
+    {
+        int_vec delete_local;
 
-        for (int k=0; k<NDIMS; k++) {
-            m_coord[k] = 0.;
-            for (int j=0; j<NODES_PER_ELEM; j++)
-                m_coord[k] += (*_eta)[i][j] * coord0s[e_ind*NODES_PER_ELEM+j][k];
-        }
-        // check if the marker is still in original element
-        bary.transform(m_coord,e_ind,new_eta);
-        if (bary.is_inside(new_eta))
-            set_eta(i, new_eta);
-        else {
-            int inc, new_elem;
-            // std::cout << "Marker " << i << " in element " << e_ind << " is trying to remap in element ";
-            // find new element of the marker
-            remap_marker(var,m_coord,e,new_elem,new_eta,inc);
-            if (inc) {
+        #pragma omp for nowait
+        for (int i=0; i<_nmarkers;i++) {
+            double m_coord[NDIMS], new_eta[NDIMS];
+            int e = (*_elem)[i];
+            auto it = find(var.top_elems->begin(), var.top_elems->end(), e);
+            // If element was not found
+            if (it == var.top_elems->end())
+                continue;
+            int e_ind = it - var.top_elems->begin();
+
+            for (int k=0; k<NDIMS; k++) {
+                m_coord[k] = 0.;
+                for (int j=0; j<NODES_PER_ELEM; j++)
+                    m_coord[k] += (*_eta)[i][j] * coord0s[e_ind*NODES_PER_ELEM+j][k];
+            }
+            // check if the marker is still in original element
+            bary.transform(m_coord,e_ind,new_eta);
+            if (bary.is_inside(new_eta))
                 set_eta(i, new_eta);
-                set_elem(i, new_elem);
-                // std::cout << "... Success!.\n";
-            }
             else {
-                #pragma omp critical
-                delete_marker.push_back(i);
-                // std::cout << "... Fail!. (Erosion might have occurred)\n";
+                int inc, new_elem;
+                // std::cout << "Marker " << i << " in element " << e_ind << " is trying to remap in element ";
+                // find new element of the marker
+                remap_marker(var,m_coord,e,new_elem,new_eta,inc);
+                if (inc) {
+                    set_eta(i, new_eta);
+                    set_elem(i, new_elem);
+                    // std::cout << "... Success!.\n";
+                }
+                else {
+                    delete_local.emplace_back(i);
+                    // std::cout << "... Fail!. (Erosion might have occurred)\n";
+                }
             }
         }
+
+        #pragma omp critical
+        delete_marker.insert(delete_marker.end(), delete_local.begin(), delete_local.end());
     }
 
     // delete recorded marker
     std::sort(delete_marker.rbegin(),delete_marker.rend());
     for (auto m=delete_marker.begin(); m<delete_marker.end(); m++)
-            remove_marker(*m);
+        remove_marker(*m);
 
 #ifdef USE_NPROF
     nvtxRangePop();
