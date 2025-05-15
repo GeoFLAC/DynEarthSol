@@ -1033,18 +1033,15 @@ namespace {
 #endif
     }
 
-
-    void replenish_markers_with_mattype_from_nn_preparation(const Variables &var,
-                                                            KDTree *&kdtree, array_t *&points)
-    {
+    array_t* calculate_marker_coord(const Variables &var) {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
         const MarkerSet &ms = *var.markersets[0];
         const int nmarkers = ms.get_nmarkers();
+        array_t* points = new array_t(nmarkers);
 
-        points = new array_t(nmarkers);
-
+        #pragma omp parallel for default(none) shared(var, ms, points) firstprivate(nmarkers)
         for (int n=0; n<nmarkers; n++) {
             const int e = ms.get_elem(n);
             const double* eta = ms.get_eta(n);
@@ -1052,21 +1049,16 @@ namespace {
 
             for(int d=0; d<NDIMS; d++) {
                 double sum = 0;
-                for(int k=0; k<NODES_PER_ELEM; k++) {
+                for(int k=0; k<NODES_PER_ELEM; k++)
                     sum += (*var.coord)[ conn[k] ][d] * eta[k];
-                }
                 (*points)[n][d] = sum;
             }
         }
-
-        PointCloud cloud(*points);
-        kdtree = new KDTree(NDIMS, cloud);
-        kdtree->buildIndex();
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
+        return points;
     }
-
 
     void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
                                                 KDTree &kdtree,
@@ -1153,38 +1145,42 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     }
 
     // If any new element has too few markers, generate markers in them.
-    KDTree *kdtree = NULL;
-    array_t *points = NULL; // coordinate of markers
     if (param.markers.replenishment_option == 2) {
-        replenish_markers_with_mattype_from_nn_preparation(var, kdtree, points);
-    }
+        array_t *points = calculate_marker_coord(var); // coordinate of markers
+        PointCloud cloud(*points);
+        KDTree kdtree(NDIMS, cloud);
+        kdtree.buildIndex();
 
-    for( int e = 0; e < var.nelem; e++ ) {
-        int num_marker_in_elem = 0;
-        for( int i = 0; i < param.mat.nmat; i++ )
-            num_marker_in_elem += (*(var.elemmarkers))[e][i];
+        for( int e = 0; e < var.nelem; e++ ) {
+            int num_marker_in_elem = 0;
+            for( int i = 0; i < param.mat.nmat; i++ )
+                num_marker_in_elem += (*(var.elemmarkers))[e][i];
 
-        if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
-            switch (param.markers.replenishment_option) {
-            case 0:
-                replenish_markers_with_mattype_0(param, var, e, num_marker_in_elem);
-                break;
-            case 1:
-                replenish_markers_with_mattype_from_cpdf(param, var, e, num_marker_in_elem);
-                break;
-            case 2:
-                replenish_markers_with_mattype_from_nn(param, var, *kdtree, e, num_marker_in_elem);
-                break;
-            default:
-                std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-                std::exit(1);
+            if (num_marker_in_elem < param.markers.min_num_markers_in_element)
+                replenish_markers_with_mattype_from_nn(param, var, kdtree, e, num_marker_in_elem);
+        }
+
+        delete points;
+    } else {
+        for( int e = 0; e < var.nelem; e++ ) {
+            int num_marker_in_elem = 0;
+            for( int i = 0; i < param.mat.nmat; i++ )
+                num_marker_in_elem += (*(var.elemmarkers))[e][i];
+
+            if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+                switch (param.markers.replenishment_option) {
+                case 0:
+                    replenish_markers_with_mattype_0(param, var, e, num_marker_in_elem);
+                    break;
+                case 1:
+                    replenish_markers_with_mattype_from_cpdf(param, var, e, num_marker_in_elem);
+                    break;
+                default:
+                    std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
+                    std::exit(1);
+                }
             }
         }
-    }
-
-    if (param.markers.replenishment_option == 2) {
-        delete kdtree;
-        delete points;
     }
 #ifdef USE_NPROF
     nvtxRangePop();
