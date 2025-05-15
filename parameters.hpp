@@ -24,6 +24,7 @@ typedef std::vector<double_vec> double_vec2D;
 typedef std::vector<uint> uint_vec;
 typedef std::vector<bool> bool_vec;
 typedef std::vector<size_t> size_t_vec;
+typedef std::vector<int_pair> int_pair_vec;
 
 typedef Array2D<double,NDIMS> array_t;
 typedef Array2D<double,NSTR> tensor_t;

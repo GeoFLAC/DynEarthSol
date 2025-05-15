@@ -947,20 +947,25 @@ namespace {
 
 
     void replenish_markers_with_mattype_0(const Param& param, Variables &var,
-                                          int e, int num_marker_in_elem)
+                                          int_pair_vec &unplenished_elems)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
-            const int mt = 0;
-            var.markersets[0]->append_random_marker_in_elem(e, mt);
-            if (DEBUG) {
-                std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
-            }
+        for (const auto& pair : unplenished_elems) {
+            int e = pair.first;
+            int num_marker_in_elem = pair.second;
 
-            ++(*var.elemmarkers)[e][mt];
-            ++num_marker_in_elem;
+            while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
+                const int mt = 0;
+                var.markersets[0]->append_random_marker_in_elem(e, mt);
+                if (DEBUG) {
+                    std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
+                }
+
+                ++(*var.elemmarkers)[e][mt];
+                ++num_marker_in_elem;
+            }
         }
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -969,64 +974,69 @@ namespace {
 
 
     void replenish_markers_with_mattype_from_cpdf(const Param& param, Variables &var,
-                                                  int e, int num_marker_in_elem)
+                                                  int_pair_vec &unplenished_elems)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        // cummulative probability density function of mattype
-        double_vec cpdf(param.mat.nmat, 0);
+        for (const auto& pair : unplenished_elems) {
+            int e = pair.first;
+            int num_marker_in_elem = pair.second;
 
-        if (num_marker_in_elem > 0) {
-            // cpdf of this element
-            cpdf[0] = (*(var.elemmarkers))[e][0] / double(num_marker_in_elem);
-            for( int i = 1; i < param.mat.nmat - 1; i++ )
-                cpdf[i] = cpdf[i-1] + (*(var.elemmarkers))[e][i] / double(num_marker_in_elem);
-        }
-        else {
-            // No markers in this element.
-            // Construct cpdf from neighboring elements
-            int num_markers_in_nbr_elems = 0;
-            // Looping over all neighboring elements (excluding self)
-            for( int kk = 0; kk < NODES_PER_ELEM; kk++) {
-                int n = (*var.connectivity)[e][kk]; // node of this element
-                for( auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
-                    if (*ee == e) continue;
-                    // Note: some (NODES_PER_ELEM) elements will be iterated
-                    // more than once (NDIMS times). These elements are direct neighbors,
-                    // i.e. they share facets (3D) or edges (2D) with element e.
-                    // So they are counted multiple times to reprensent a greater weight.
-                    for( int i = 0; i < param.mat.nmat; i++ ) {
-                        cpdf[i] += (*(var.elemmarkers))[*ee][i];
-                        num_markers_in_nbr_elems += (*(var.elemmarkers))[*ee][i];
+            // cummulative probability density function of mattype
+            double_vec cpdf(param.mat.nmat, 0);
+
+            if (num_marker_in_elem > 0) {
+                // cpdf of this element
+                cpdf[0] = (*(var.elemmarkers))[e][0] / double(num_marker_in_elem);
+                for( int i = 1; i < param.mat.nmat - 1; i++ )
+                    cpdf[i] = cpdf[i-1] + (*(var.elemmarkers))[e][i] / double(num_marker_in_elem);
+            }
+            else {
+                // No markers in this element.
+                // Construct cpdf from neighboring elements
+                int num_markers_in_nbr_elems = 0;
+                // Looping over all neighboring elements (excluding self)
+                for( int kk = 0; kk < NODES_PER_ELEM; kk++) {
+                    int n = (*var.connectivity)[e][kk]; // node of this element
+                    for( auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
+                        if (*ee == e) continue;
+                        // Note: some (NODES_PER_ELEM) elements will be iterated
+                        // more than once (NDIMS times). These elements are direct neighbors,
+                        // i.e. they share facets (3D) or edges (2D) with element e.
+                        // So they are counted multiple times to reprensent a greater weight.
+                        for( int i = 0; i < param.mat.nmat; i++ ) {
+                            cpdf[i] += (*(var.elemmarkers))[*ee][i];
+                            num_markers_in_nbr_elems += (*(var.elemmarkers))[*ee][i];
+                        }
                     }
                 }
-            }
-            for( int i = 1; i < param.mat.nmat - 1; i++ )
-                cpdf[i] += cpdf[i-1];
-            for( int i = 0; i < param.mat.nmat - 1; i++ )
-                cpdf[i] = cpdf[i] / double(num_markers_in_nbr_elems);
-        }
-
-        cpdf[param.mat.nmat - 1] = 1; // fix to 1 to avoid round-off error
-        if (DEBUG > 1) {
-            std::cout << num_marker_in_elem << " markers in element " << e << '\n'
-                      << "  cpdf: ";
-            print(std::cout, cpdf);
-            std::cout << '\n';
-        }
-
-        while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
-            // Determine new marker's matttype based on cpdf
-            auto upper = std::upper_bound(cpdf.begin(), cpdf.end(), rand()/(double)RAND_MAX);
-            const int mt = upper - cpdf.begin();
-            var.markersets[0]->append_random_marker_in_elem(e, mt);
-            if (DEBUG) {
-                std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
+                for( int i = 1; i < param.mat.nmat - 1; i++ )
+                    cpdf[i] += cpdf[i-1];
+                for( int i = 0; i < param.mat.nmat - 1; i++ )
+                    cpdf[i] = cpdf[i] / double(num_markers_in_nbr_elems);
             }
 
-            ++(*var.elemmarkers)[e][mt];
-            ++num_marker_in_elem;
+            cpdf[param.mat.nmat - 1] = 1; // fix to 1 to avoid round-off error
+            if (DEBUG > 1) {
+                std::cout << num_marker_in_elem << " markers in element " << e << '\n'
+                        << "  cpdf: ";
+                print(std::cout, cpdf);
+                std::cout << '\n';
+            }
+
+            while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
+                // Determine new marker's matttype based on cpdf
+                auto upper = std::upper_bound(cpdf.begin(), cpdf.end(), rand()/(double)RAND_MAX);
+                const int mt = upper - cpdf.begin();
+                var.markersets[0]->append_random_marker_in_elem(e, mt);
+                if (DEBUG) {
+                    std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
+                }
+
+                ++(*var.elemmarkers)[e][mt];
+                ++num_marker_in_elem;
+            }
         }
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1061,46 +1071,67 @@ namespace {
     }
 
     void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
-                                                KDTree &kdtree,
-                                                int e, int num_marker_in_elem)
+                                                int_pair_vec &unplenished_elems)
     {
+    if (unplenished_elems.empty()) return;
+
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
+        array_t *points = calculate_marker_coord(var); // coordinate of markers
+        PointCloud cloud(*points);
+
+#ifdef USE_NPROF
+        nvtxRangePushA("create kdtree for markers");
+#endif
+        KDTree kdtree(NDIMS, cloud);
+        kdtree.buildIndex();
+#ifdef USE_NPROF
+        nvtxRangePop();
+#endif
         MarkerSet &ms = *var.markersets[0];
-        while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
-            double eta[NODES_PER_ELEM];
-            ms.random_eta(eta);
+        for (const auto& pair : unplenished_elems) {
+            int e = pair.first;
+            int num_marker_in_elem = pair.second;
 
-            double x[NDIMS] = {0};
-            const int *conn = (*var.connectivity)[e];
-            for (int d=0; d<NDIMS; d++) {
-                for (int i=0; i<NODES_PER_ELEM; i++) {
-                    x[d] += (*var.coord)[ conn[i] ][d] * eta[i];
+            while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
+                double eta[NODES_PER_ELEM];
+                ms.random_eta(eta);
+
+                double x[NDIMS] = {0};
+                const int *conn = (*var.connectivity)[e];
+                for (int d=0; d<NDIMS; d++) {
+                    for (int i=0; i<NODES_PER_ELEM; i++) {
+                        x[d] += (*var.coord)[ conn[i] ][d] * eta[i];
+                    }
                 }
+
+                const int k = 1;  // how many nearest neighbors to search?
+                size_t_vec nn_idx(k);
+                double_vec dd(k);
+                KNNResultSet resultSet(k);
+                resultSet.init(nn_idx.data(), dd.data());
+
+                // Look for nearest marker.
+                kdtree.findNeighbors(resultSet, x);
+
+                int m = nn_idx[0]; // nearest marker
+                const int mt = ms.get_mattype(m);
+                const double fmelt = (*var.melt_fraction)[e];
+    //            const double ti = ms.get_time(m);
+
+                ms.append_marker(eta, e, mt, 0., 0., 0., 0., fmelt);
+                if (DEBUG) {
+                    std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
+                }
+
+                ++(*var.elemmarkers)[e][mt];
+                ++num_marker_in_elem;
             }
-
-            const int k = 1;  // how many nearest neighbors to search?
-            size_t_vec nn_idx(k);
-            double_vec dd(k);
-            KNNResultSet resultSet(k);
-            resultSet.init(nn_idx.data(), dd.data());
-
-            // Look for nearest marker.
-            kdtree.findNeighbors(resultSet, x);
-
-            int m = nn_idx[0]; // nearest marker
-            const int mt = ms.get_mattype(m);
-//            const double ti = ms.get_time(m);
-
-            ms.append_marker(eta, e, mt, 0., 0., 0., 0.);
-            if (DEBUG) {
-                std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
-            }
-
-            ++(*var.elemmarkers)[e][mt];
-            ++num_marker_in_elem;
         }
+
+        delete points;
+
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
@@ -1145,43 +1176,58 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     }
 
     // If any new element has too few markers, generate markers in them.
-    if (param.markers.replenishment_option == 2) {
-        array_t *points = calculate_marker_coord(var); // coordinate of markers
-        PointCloud cloud(*points);
-        KDTree kdtree(NDIMS, cloud);
-        kdtree.buildIndex();
+#ifdef USE_NPROF
+    nvtxRangePushA("find unplenished elements");
+#endif
+    // unplenish markers
+    int_pair_vec unplenished_elems;
 
+    #pragma omp parallel default(none) shared(var, unplenished_elems)
+    {
+        // local pairs
+        int_pair_vec local_pairs;
+
+        #pragma omp for nowait
         for( int e = 0; e < var.nelem; e++ ) {
-            int num_marker_in_elem = 0;
-            for( int i = 0; i < param.mat.nmat; i++ )
-                num_marker_in_elem += (*(var.elemmarkers))[e][i];
+            int num_marker_in_elem = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
 
             if (num_marker_in_elem < param.markers.min_num_markers_in_element)
-                replenish_markers_with_mattype_from_nn(param, var, kdtree, e, num_marker_in_elem);
+                local_pairs.emplace_back(e, num_marker_in_elem);
         }
 
-        delete points;
-    } else {
-        for( int e = 0; e < var.nelem; e++ ) {
-            int num_marker_in_elem = 0;
-            for( int i = 0; i < param.mat.nmat; i++ )
-                num_marker_in_elem += (*(var.elemmarkers))[e][i];
+        #pragma omp critical
+        unplenished_elems.insert(unplenished_elems.end(), 
+                                local_pairs.begin(),
+                                local_pairs.end());
+        #pragma omp barrier
 
-            if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
-                switch (param.markers.replenishment_option) {
-                case 0:
-                    replenish_markers_with_mattype_0(param, var, e, num_marker_in_elem);
-                    break;
-                case 1:
-                    replenish_markers_with_mattype_from_cpdf(param, var, e, num_marker_in_elem);
-                    break;
-                default:
-                    std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-                    std::exit(1);
-                }
-            }
+        #pragma omp single
+        {
+        std::sort(unplenished_elems.begin(), unplenished_elems.end(),
+            [](const int_pair &a, const int_pair &b) {
+                return a.first < b.first;
+            });
         }
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+
+    switch (param.markers.replenishment_option) {
+    case 0:
+        replenish_markers_with_mattype_0(param, var, unplenished_elems);
+        break;
+    case 1:
+        replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems);
+        break;
+    case 2:
+        replenish_markers_with_mattype_from_nn(param, var, unplenished_elems);
+        break;
+    default:
+        std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
+        std::exit(1);
+    }
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
