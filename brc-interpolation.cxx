@@ -76,9 +76,15 @@ void prepare_interpolation(const Variables &var,
 #endif
     // for each new coord point, find the enclosing old element
 
+#ifdef USE_NPROF
+    nvtxRangePushA("create kdtree for coord");
+#endif
     PointCloud cloud(old_coord);
     KDTree kdtree(NDIMS, cloud);
     kdtree.buildIndex();
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 
     const int k = 1;
 

@@ -1,3 +1,6 @@
+#ifdef USE_NPROF
+#include <nvToolsExt.h>
+#endif
 
 #include "barycentric-fn.hpp"
 
@@ -7,6 +10,9 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const double_vec &volume)
     : coeff_(connectivity.size())
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     #pragma omp parallel for default(none) \
         shared(coord, connectivity, volume)
     for (std::size_t e=0; e<connectivity.size(); ++e) {
@@ -27,6 +33,9 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff2d(a, b, c, volume[e], coeff_[e]);
 #endif
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 Barycentric_transformation::Barycentric_transformation(const int_vec &elem,

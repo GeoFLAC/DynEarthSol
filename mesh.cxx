@@ -538,7 +538,6 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
 
     int ind = 0;
     for (int j=0; j<var.nz; j+=2) {
-        int np = var.nx;
         int ind_tmp = ind;
         if (j == var.nz-1) {
             for (int i=0; i<var.nx; ++i) {
@@ -2173,17 +2172,26 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 
 void create_boundary_flags(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     // allocate and init to 0
     if (var.bcflag) delete var.bcflag;
     var.bcflag = new uint_vec(var.nnode);
 
     create_boundary_flags2(*var.bcflag, var.segment->size(),
                            var.segment->data(), var.segflag->data());
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
 void create_boundary_nodes(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     /* var.bnodes[i] contains a list of nodes on the i-th boundary.
      * (See constants.hpp for the order of boundaries.)
      */
@@ -2202,10 +2210,16 @@ void create_boundary_nodes(Variables& var)
     //     print(std::cout, var.bnodes[j]);
     //     std::cout << '\n';
     // }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 void create_top_elems(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     const int top_bdry = iboundz1;
     const int_vec& top_tmp = *var.bnodes[top_bdry];
     const std::size_t ntop = top_tmp.size();
@@ -2242,6 +2256,9 @@ void create_top_elems(Variables& var)
         telems.push_back(*it);
 
     var.top_elems = new int_vec(telems.begin(),telems.end());
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
@@ -2561,6 +2578,9 @@ void create_boundary_facets(Variables& var)
 
 void create_support(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     var.support = new int_vec2D(var.nnode);
 
     // create the inverse mapping of connectivity
@@ -2573,15 +2593,24 @@ void create_support(Variables& var)
     // std::cout << "support:\n";
     // print(std::cout, *var.support);
     // std::cout << "\n";
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
 void create_elemmarkers(const Param& param, Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     if (param.control.has_hydration_processes)
         var.hydrous_elemmarkers = new Array2D<int,1>( var.nelem, 0 );
 
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
@@ -2645,6 +2674,9 @@ void create_new_mesh(const Param& param, Variables& var)
 
 array_t* elem_center(const array_t &coord, const conn_t &connectivity)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     /* Returns the centroid of the elements.
      * Note: center[0] == tmp
      * The caller is responsible to delete [] center[0] and center!
@@ -2663,6 +2695,9 @@ array_t* elem_center(const array_t &coord, const conn_t &connectivity)
             (*center)[e][d] = sum / NODES_PER_ELEM;
         }
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
     return center;
 }
 

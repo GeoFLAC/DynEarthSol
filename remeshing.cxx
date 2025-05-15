@@ -3165,6 +3165,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
+#ifdef USE_NPROF
+    nvtxRangePushA("reset bounrdary condition");
+#endif
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
         param.mesh.remeshing_option==11 ||
@@ -3177,6 +3180,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             (*var.temperature)[n] = var.bottom_temperature;
         }
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 
     if (param.sim.has_output_during_remeshing) {
         // the following variables need to be re-computed only when we are

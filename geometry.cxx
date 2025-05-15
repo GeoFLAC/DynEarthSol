@@ -88,9 +88,6 @@ static double triangle_area(const double *a,
 
 void compute_volume(const double **coord, double &volume)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
     const double *a = coord[0];
     const double *b = coord[1];
     const double *c = coord[2];
@@ -100,10 +97,6 @@ void compute_volume(const double **coord, double &volume)
 #else
     volume = triangle_area(a, b, c);
 #endif
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-
 }
 
 void compute_volume(const array_t &coord, const conn_t &connectivity,

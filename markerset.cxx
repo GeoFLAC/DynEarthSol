@@ -111,9 +111,6 @@ void MarkerSet::random_eta( double *eta )
 
 void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, double z, double distance, double slope)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
         // Resize the marker-related arrays if necessary.
@@ -145,9 +142,6 @@ void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, do
 
     ++_nmarkers;
     ++_last_id;
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
 }
 
 
@@ -1187,7 +1181,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     // unplenish markers
     int_pair_vec unplenished_elems;
 
-    #pragma omp parallel default(none) shared(var, unplenished_elems)
+    #pragma omp parallel default(none) shared(param, var, unplenished_elems)
     {
         // local pairs
         int_pair_vec local_pairs;

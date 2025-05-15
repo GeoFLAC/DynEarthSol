@@ -228,9 +228,15 @@ namespace {
         array_t *old_center = elem_center(old_coord, old_connectivity);
         int old_nelem = old_connectivity.size();
 
+#ifdef USE_NPROF
+        nvtxRangePushA("create kdtree for old elements");
+#endif
         PointCloud cloud(*old_center);
         KDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
+#ifdef USE_NPROF
+        nvtxRangePop();
+#endif
 
         find_nearest_neighbor(var, kdtree, idx, is_changed);
 
