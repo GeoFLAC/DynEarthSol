@@ -831,28 +831,16 @@ void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin)
 
 void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const
 {
+#ifdef USE_NPROF
+    nvtxRangePushA("write markersets");
+#endif
     int_vec itmp(1);
     itmp[0] = _nmarkers;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
 
-    array_t mcoord(_nmarkers, 0);
-    const array_t &coord = *var.coord;
+    array_t *mcoord = calculate_marker_coord(var); // coordinate of markers
 
-    for (int i=0; i<_nmarkers; ++i) {
-        int e = (*_elem)[i];
-        const int *conn = (*var.connectivity)[e];
-        const double *eta = (*_eta)[i];
-        double *x = mcoord[i];
-        for (int j = 0; j < NDIMS; j++)
-            for (int k = 0; k < NODES_PER_ELEM; k++)
-                x[j] += eta[k] * coord[ conn[k] ][j];
-
-        // std::cout << i << '\t';
-        // print(std::cout, x, NDIMS);
-        // std::cout << "\n";
-    }
-
-    bin.write_array(mcoord, (_name + ".coord").c_str(), _nmarkers);
+    bin.write_array(*mcoord, (_name + ".coord").c_str(), _nmarkers);
     bin.write_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
     bin.write_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
     bin.write_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
@@ -862,8 +850,39 @@ void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const
     bin.write_array(*_distance, (_name + ".distance").c_str(), _nmarkers);
     bin.write_array(*_slope, (_name + ".slope").c_str(), _nmarkers);
 
+    delete mcoord;
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
+array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    // const MarkerSet &ms = *var.markersets[0];
+    const int nmarkers = get_nmarkers();
+    array_t* points = new array_t(nmarkers);
+
+    #pragma omp parallel for default(none) shared(var, points) firstprivate(nmarkers)
+    for (int n=0; n<nmarkers; n++) {
+        const int e = get_elem(n);
+        const double* eta = get_eta(n);
+        const int* conn = (*var.connectivity)[e];
+
+        for(int d=0; d<NDIMS; d++) {
+            double sum = 0;
+            for(int k=0; k<NODES_PER_ELEM; k++)
+                sum += (*var.coord)[ conn[k] ][d] * eta[k];
+            (*points)[n][d] = sum;
+        }
+    }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+    return points;
+}
 
 namespace {
 
@@ -1050,33 +1069,6 @@ namespace {
 #endif
     }
 
-    array_t* calculate_marker_coord(const Variables &var) {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
-#endif
-        const MarkerSet &ms = *var.markersets[0];
-        const int nmarkers = ms.get_nmarkers();
-        array_t* points = new array_t(nmarkers);
-
-        #pragma omp parallel for default(none) shared(var, ms, points) firstprivate(nmarkers)
-        for (int n=0; n<nmarkers; n++) {
-            const int e = ms.get_elem(n);
-            const double* eta = ms.get_eta(n);
-            const int* conn = (*var.connectivity)[e];
-
-            for(int d=0; d<NDIMS; d++) {
-                double sum = 0;
-                for(int k=0; k<NODES_PER_ELEM; k++)
-                    sum += (*var.coord)[ conn[k] ][d] * eta[k];
-                (*points)[n][d] = sum;
-            }
-        }
-#ifdef USE_NPROF
-        nvtxRangePop();
-#endif
-        return points;
-    }
-
     void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
                                                 int_pair_vec &unplenished_elems)
     {
@@ -1085,7 +1077,7 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        array_t *points = calculate_marker_coord(var); // coordinate of markers
+        array_t *points = var.markersets[0]->calculate_marker_coord(var); // coordinate of markers
         PointCloud cloud(*points);
 
 #ifdef USE_NPROF
@@ -1169,9 +1161,15 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         // nearest-neighbor search structure
         array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
 
+#ifdef USE_NPROF
+        nvtxRangePushA("create kdtree for new elements");
+#endif
         PointCloud cloud(*centroid);
         KDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
+#ifdef USE_NPROF
+        nvtxRangePop();
+#endif
 
         find_markers_in_element(*var.markersets[0], *var.elemmarkers,
                                 kdtree, bary, old_coord, old_connectivity);

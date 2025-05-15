@@ -42,6 +42,7 @@ public:
     void write_chkpt_file(BinaryOutput &bin) const;
     void read_chkpt_file(Variables &var, BinaryInput &bin);
     void write_save_file(const Variables &var, BinaryOutput &bin) const;
+    array_t* calculate_marker_coord(const Variables &var) const;
 
     inline int get_nmarkers() const { return _nmarkers; }
     inline void set_nmarkers(int n) { _nmarkers = n; }

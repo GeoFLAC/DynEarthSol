@@ -114,6 +114,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         // average_strain_rate = delta_strain / delta_t
         delta_plstrain = &delta_plstrain_avg;
     }
+    #pragma omp parallel for default(none) shared(var, delta_plstrain_avg, inv_dt)
     for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
         delta_plstrain_avg[i] *= inv_dt;
     }
@@ -125,6 +126,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         strain_rate = &strain0;
         double *s0 = strain0.data();
         const double *s = var.strain->data();
+        #pragma omp parallel for default(none) shared(var, strain0, inv_dt, s, s0)
         for (int i=0; i<strain0.num_elements(); ++i) {
             s0[i] = (s[i] - s0[i]) * inv_dt;
         }
@@ -137,6 +139,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
         double tmp = 1.0 / (average_interval + 1);
+        #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
         }
