@@ -149,59 +149,60 @@ void update_temperature(const Param &param, const Variables &var,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result,tdot)
+    {
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int e=0;e<var.nelem;e++) {
+            // diffusion matrix
 
-    #pragma omp parallel for default(none) shared(var,temperature,tmp_result)
-    #pragma acc parallel loop
-    for (int e=0;e<var.nelem;e++) {
-        // diffusion matrix
-
-        const int *conn = (*var.connectivity)[e];
-        double *tr = tmp_result[e];
-        double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
-        double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
-        const double *shpdx = (*var.shpdx)[e];
-#ifdef THREED
-        const double *shpdy = (*var.shpdy)[e];
-#endif
-        const double *shpdz = (*var.shpdz)[e];
-        for (int i=0; i<NODES_PER_ELEM; ++i) {
-            double diffusion = 0.;
-            for (int j=0; j<NODES_PER_ELEM; ++j) {
-#ifdef THREED
-                diffusion += (shpdx[i] * shpdx[j] + \
-                            shpdy[i] * shpdy[j] + \
-                            shpdz[i] * shpdz[j]) * temperature[conn[j]];
-#else
-                diffusion += (shpdx[i] * shpdx[j] + \
-                            shpdz[i] * shpdz[j]) * temperature[conn[j]];
-#endif
+            const int *conn = (*var.connectivity)[e];
+            double *tr = tmp_result[e];
+            double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
+            double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
+            const double *shpdx = (*var.shpdx)[e];
+    #ifdef THREED
+            const double *shpdy = (*var.shpdy)[e];
+    #endif
+            const double *shpdz = (*var.shpdz)[e];
+            for (int i=0; i<NODES_PER_ELEM; ++i) {
+                double diffusion = 0.;
+                for (int j=0; j<NODES_PER_ELEM; ++j) {
+    #ifdef THREED
+                    diffusion += (shpdx[i] * shpdx[j] + \
+                                shpdy[i] * shpdy[j] + \
+                                shpdz[i] * shpdz[j]) * temperature[conn[j]];
+    #else
+                    diffusion += (shpdx[i] * shpdx[j] + \
+                                shpdz[i] * shpdz[j]) * temperature[conn[j]];
+    #endif
+                }
+                tr[i] = diffusion * kv - rh;
             }
-            tr[i] = diffusion * kv - rh;
         }
-    }
 
-    #pragma omp parallel for default(none) \
-        shared(param,var,tdot,temperature,tmp_result)
-    #pragma acc parallel loop
-    for (int n=0;n<var.nnode;n++) {
-        tdot[n]=0;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            const int *conn = (*var.connectivity)[*e];
-            const double *tr = tmp_result[*e];
-            for (int i=0;i<NODES_PER_ELEM;i++) {
-                if (n == conn[i]) {
-                    tdot[n] += tr[i];
-                    break;
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int n=0;n<var.nnode;n++) {
+            tdot[n]=0;
+            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+                const int *conn = (*var.connectivity)[*e];
+                const double *tr = tmp_result[*e];
+                for (int i=0;i<NODES_PER_ELEM;i++) {
+                    if (n == conn[i]) {
+                        tdot[n] += tr[i];
+                        break;
+                    }
                 }
             }
+        // Combining temperature update and bc in the same loop for efficiency,
+        // since only the top boundary has Dirichlet bc, and all the other boundaries
+        // have no heat flux bc.
+            if ((*var.bcflag)[n] & BOUNDZ1)
+                temperature[n] = param.bc.surface_temperature;
+            else
+                temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
         }
-    // Combining temperature update and bc in the same loop for efficiency,
-    // since only the top boundary has Dirichlet bc, and all the other boundaries
-    // have no heat flux bc.
-        if ((*var.bcflag)[n] & BOUNDZ1)
-            temperature[n] = param.bc.surface_temperature;
-        else
-            temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
     }
 
     // Combining temperature update and bc in the same loop for efficiency,
@@ -540,57 +541,60 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    #pragma omp parallel for default(none) shared(var,param,tmp_result)
-    #pragma acc parallel loop
-    for (int e=0;e<var.nelem;e++) {
-        const int *conn = (*var.connectivity)[e];
-        const double *shpdx = (*var.shpdx)[e];
+    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result)
+    {
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int e=0;e<var.nelem;e++) {
+            const int *conn = (*var.connectivity)[e];
+            const double *shpdx = (*var.shpdx)[e];
 #ifdef THREED
-        const double *shpdy = (*var.shpdy)[e];
+            const double *shpdy = (*var.shpdy)[e];
 #endif
-        const double *shpdz = (*var.shpdz)[e];
-        double *s = (*var.stress)[e];
-        double vol = (*var.volume)[e];
-        double *tr = tmp_result[e];
+            const double *shpdz = (*var.shpdz)[e];
+            double *s = (*var.stress)[e];
+            double vol = (*var.volume)[e];
+            double *tr = tmp_result[e];
 
-        double buoy = 0;
-        if (param.control.gravity != 0) {
-            // Calculate buoyancy based on the gravity and element properties
-            // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
-            buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
-        }
+            double buoy = 0;
+            if (param.control.gravity != 0) {
+                // Calculate buoyancy based on the gravity and element properties
+                // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
+                buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
+            }
 
 
-        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            for (int i=0; i<NODES_PER_ELEM; ++i) {
 #ifdef THREED
-            tr[i] = (s[0]*shpdx[i] + s[3]*shpdy[i] + s[4]*shpdz[i]) * vol;
-            tr[i+NODES_PER_ELEM] = (s[3]*shpdx[i] + s[1]*shpdy[i] + s[5]*shpdz[i]) * vol;
-            tr[i+NODES_PER_ELEM*2] = (s[4]*shpdx[i] + s[5]*shpdy[i] + s[2]*shpdz[i] + buoy) * vol;
+                tr[i] = (s[0]*shpdx[i] + s[3]*shpdy[i] + s[4]*shpdz[i]) * vol;
+                tr[i+NODES_PER_ELEM] = (s[3]*shpdx[i] + s[1]*shpdy[i] + s[5]*shpdz[i]) * vol;
+                tr[i+NODES_PER_ELEM*2] = (s[4]*shpdx[i] + s[5]*shpdy[i] + s[2]*shpdz[i] + buoy) * vol;
 #else
-            tr[i] = (s[0]*shpdx[i] + s[2]*shpdz[i]) * vol;
-            tr[i+NODES_PER_ELEM] = (s[2]*shpdx[i] + s[1]*shpdz[i] + buoy) * vol;
+                tr[i] = (s[0]*shpdx[i] + s[2]*shpdz[i]) * vol;
+                tr[i+NODES_PER_ELEM] = (s[2]*shpdx[i] + s[1]*shpdz[i] + buoy) * vol;
 #endif
+            }
         }
-    }
 
-    #pragma omp parallel for default(none) shared(var,force,force_residual,tmp_result)
-    #pragma acc parallel loop
-    for (int n=0;n<var.nnode;n++) {
-        std::fill_n(force[n],NDIMS,0); 
-        double *f = force[n];
-        std::fill_n(force_residual[n],NDIMS,0); 
-        double *f_residual = force_residual[n];
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            const int *conn = (*var.connectivity)[*e];
-            const double *tr = tmp_result[*e];
-            for (int i=0;i<NODES_PER_ELEM;i++) {
-                if (n == conn[i]) {
-                    for (int j=0;j<NDIMS;j++)
-                    {
-                        f[j] -= tr[i+NODES_PER_ELEM*j];
-                        f_residual[j] = tr[i+NODES_PER_ELEM*j];
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int n=0;n<var.nnode;n++) {
+            std::fill_n(force[n],NDIMS,0); 
+            double *f = force[n];
+            std::fill_n(force_residual[n],NDIMS,0); 
+            double *f_residual = force_residual[n];
+            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+                const int *conn = (*var.connectivity)[*e];
+                const double *tr = tmp_result[*e];
+                for (int i=0;i<NODES_PER_ELEM;i++) {
+                    if (n == conn[i]) {
+                        for (int j=0;j<NDIMS;j++)
+                        {
+                            f[j] -= tr[i+NODES_PER_ELEM*j];
+                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         }

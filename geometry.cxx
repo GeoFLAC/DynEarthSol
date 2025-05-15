@@ -654,77 +654,78 @@ void compute_mass(const Param &param, const Variables &var,
     }
 
 #ifdef GPP1X
-    #pragma omp parallel for default(none) shared(var, param, pseudo_speed, pseudo_speed_ATP, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result)
 #else
-    #pragma omp parallel for default(none) shared(var, param, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result)
 #endif
-    #pragma acc parallel loop
-    for (int e=0;e<var.nelem;e++) {
-        double *tr = tmp_result[e];
-        double rho;
+    {
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int e=0;e<var.nelem;e++) {
+            double *tr = tmp_result[e];
+            double rho;
 
-        if(param.control.has_ATS)
-        {
-            double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
+            if(param.control.has_ATS)
+            {
+                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
 
-            rho = (param.control.is_quasi_static) ?
-            (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
-            (*var.mat).rho(e);  // true density for dynamic sim
+                rho = (param.control.is_quasi_static) ?
+                (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
+                (*var.mat).rho(e);  // true density for dynamic sim
 
-            if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                // Modified density considering porosity for hydraulic diffusion
-                    rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                }
-        }
-        else
-        {    
-            rho = (param.control.is_quasi_static) ?
-            (*var.mat).bulkm(e) / (pseudo_speed * pseudo_speed) :  // pseudo density for quasi-static sim
-            (*var.mat).rho(e);  // true density for dynamic sim
+                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
+                    // Modified density considering porosity for hydraulic diffusion
+                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
+                    }
+            }
+            else
+            {    
+                rho = (param.control.is_quasi_static) ?
+                (*var.mat).bulkm(e) / (pseudo_speed * pseudo_speed) :  // pseudo density for quasi-static sim
+                (*var.mat).rho(e);  // true density for dynamic sim
 
-            if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                // Modified density considering porosity for hydraulic diffusion
-                    rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                }
+                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
+                    // Modified density considering porosity for hydraulic diffusion
+                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
+                    }
 
-        }
+            }
 
-        double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-        if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
+            double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
+            if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
 
-        double hm_coeff = (*var.mat).alpha_biot(e) + (*var.mat).phi(e) - (*var.mat).alpha_biot(e) * (*var.mat).phi(e); 
-        double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
-        double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
-        double hm = (hm_coeff * bulk_comp + (*var.mat).phi(e) * (*var.mat).beta_fluid(e)) * (*var.volume)[e] / NODES_PER_ELEM;
-        double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
+            double hm_coeff = (*var.mat).alpha_biot(e) + (*var.mat).phi(e) - (*var.mat).alpha_biot(e) * (*var.mat).phi(e); 
+            double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
+            double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
+            double hm = (hm_coeff * bulk_comp + (*var.mat).phi(e) * (*var.mat).beta_fluid(e)) * (*var.volume)[e] / NODES_PER_ELEM;
+            double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
-        tr[0] = (*var.volume)[e];
-        tr[1] = m;
-        if (param.control.has_thermal_diffusion)
-            tr[2] = tm;
-        tr[3] = hm; // check
-        tr[4] = ym; 
-    }
-
-    #pragma omp parallel for default(none)      \
-        shared(param,var,volume_n,mass,tmass,hmass,ymass,tmp_result)
-
-    #pragma acc parallel loop
-    for (int n=0;n<var.nnode;n++) {
-        volume_n[n]=0;
-        mass[n]=0;
-        tmass[n]=0;
-        hmass[n]=0;
-        ymass[n]=0;
-      
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            double *tr = tmp_result[*e];
-            volume_n[n] += tr[0];
-            mass[n] += tr[1];
+            tr[0] = (*var.volume)[e];
+            tr[1] = m;
             if (param.control.has_thermal_diffusion)
-                tmass[n] += tr[2];
-            hmass[n] += tr[3];
-            ymass[n] += tr[4];
+                tr[2] = tm;
+            tr[3] = hm; // check
+            tr[4] = ym; 
+        }
+
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int n=0;n<var.nnode;n++) {
+            volume_n[n]=0;
+            mass[n]=0;
+            tmass[n]=0;
+            hmass[n]=0;
+            ymass[n]=0;
+        
+            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+                double *tr = tmp_result[*e];
+                volume_n[n] += tr[0];
+                mass[n] += tr[1];
+                if (param.control.has_thermal_diffusion)
+                    tmass[n] += tr[2];
+                hmass[n] += tr[3];
+                ymass[n] += tr[4];
+            }
         }
     }
 
