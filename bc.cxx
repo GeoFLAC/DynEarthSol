@@ -1942,6 +1942,8 @@ void correct_surface_element(const Variables& var, \
     array_t coord0s(ntop_elem*NODES_PER_ELEM,0.);
     double_vec new_volumes(ntop_elem,0.);
 
+    #pragma omp parallel for default(none) \
+        shared(var, coord0s, dhacc, new_volumes, ntop_elem, stress, strain, strain_rate, plstrain)
     for (size_t i=0;i<ntop_elem;i++) {
         const double *coord1[NODES_PER_ELEM];
 
@@ -2001,12 +2003,11 @@ void correct_surface_element(const Variables& var, \
             }
         }
     }
-    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, new_volumes);
-    ms.correct_surface_marker(var, coord0s, bary);
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
-
+    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, new_volumes);
+    ms.correct_surface_marker(var, coord0s, bary);
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
