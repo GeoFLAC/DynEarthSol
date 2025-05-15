@@ -2477,7 +2477,7 @@ void create_boundary_facets(Variables& var)
      */
 
     // Looping through var.segment
-    #pragma omp parallel default(none) shared(var)
+    #pragma omp parallel default(none) shared(var,NODE_OF_FACET,std::cerr)
     {
         // local storage for each thread
         int_pair_vec bfacet_local[nbdrytypes];

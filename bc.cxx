@@ -1942,8 +1942,8 @@ void correct_surface_element(const Variables& var, \
     array_t coord0s(ntop_elem*NODES_PER_ELEM,0.);
     double_vec new_volumes(ntop_elem,0.);
 
-    #pragma omp parallel for default(none) \
-        shared(var, coord0s, dhacc, new_volumes, ntop_elem, stress, strain, strain_rate, plstrain)
+    #pragma omp parallel for default(none) firstprivate(ntop_elem) \
+        shared(var, coord0s, dhacc, new_volumes, stress, strain, strain_rate, plstrain)
     for (size_t i=0;i<ntop_elem;i++) {
         const double *coord1[NODES_PER_ELEM];
 
