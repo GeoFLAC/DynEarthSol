@@ -2452,55 +2452,81 @@ namespace {
 
 void create_boundary_facets(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     /* var.bfacets[i] contains a list of facets (or segments in 2D)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
      */
 
     // Looping through var.segment
-    for (int i=0; i<var.nseg; ++i) {
-        uint flag = static_cast<uint>((*var.segflag)[i][0]);
-        if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
-        // Nodes of this facet
-        OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
-#ifdef THREED
-                      , (*var.segment)[i][2]
-#endif
-                      );
+    #pragma omp parallel default(none) shared(var)
+    {
+        // local storage for each thread
+        std::vector<int_pair> bfacet_local[nbdrytypes];
 
-        // Finding the corresponding element and facet #
-        for (int e=0; e<var.nelem; ++e) {
-            const int *conn = (*var.connectivity)[e];
-            for (int f=0; f<FACETS_PER_ELEM; ++f) {
-                if ((flag & (*var.bcflag)[conn[NODE_OF_FACET[f][0]]]
-                    & (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
+        #pragma omp for nowait
+        for (int i=0; i<var.nseg; ++i) {
+            uint flag = static_cast<uint>((*var.segflag)[i][0]);
+            if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
+            // Nodes of this facet
+            OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
 #ifdef THREED
-                    & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
+                          , (*var.segment)[i][2]
 #endif
-                     ) == 0U) continue; // skip
+                          );
 
-                OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
+            // Finding the corresponding element and facet #
+            bool found = false;
+            for (int e=0; e<var.nelem && !found; ++e) {
+                const int *conn = (*var.connectivity)[e];
+                for (int f=0; f<FACETS_PER_ELEM && !found; ++f) {
+                    uint facet_flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]] &
+                                      (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
 #ifdef THREED
-                              , conn[NODE_OF_FACET[f][2]]
+                                      & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
 #endif
-                              );
-                if (af == bf) {
-                    for (int k=0; k<nbdrytypes; ++k) {
-                        if (flag == (1U << k)) {
-                            var.bfacets[k]->push_back(std::make_pair(e,f));
-                            goto found_facet; // break out of nested loops
+                                      ;
+
+                    if ((flag & facet_flag) == 0U) continue; // skip
+
+                    OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
+#ifdef THREED
+                                  , conn[NODE_OF_FACET[f][2]]
+#endif
+                                  );
+                    if (af == bf) {
+                        for (int k=0; k<nbdrytypes; ++k) {
+                            if (flag == (1U << k)) {
+                                bfacet_local[k].emplace_back(e, f);
+                                found = true; // break out of nested loops
+                                break;
+                            }
                         }
                     }
                 }
             }
+            // not found
+            if (!found) {
+                #pragma omp critical
+                {
+                    std::cerr << "Error: " << i << "-th segment is not on any element\n";
+                    std::exit(12);
+                }
+            }
         }
-        // not found
-        std::cerr << "Error: " << i << "-th segment is not on any element\n";
-        std::exit(12);
 
-    found_facet:
-        continue;
+        // Merge local results into global results
+        #pragma omp critical
+        {
+            for (int k = 0; k < nbdrytypes; ++k) {
+                var.bfacets[k]->insert(
+                    var.bfacets[k]->end(),
+                    bfacet_local[k].begin(),
+                    bfacet_local[k].end());
+            }
+        }
     }
-
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";
     //     print(std::cout, var.bfacets[n]);
@@ -2517,6 +2543,9 @@ void create_boundary_facets(Variables& var)
     //     }
     //     std::cout << '\n';
     // }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
