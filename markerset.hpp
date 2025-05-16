@@ -38,6 +38,8 @@ public:
     void append_random_marker_in_elem( int el, int mt);
     void append_marker( const double *eta, int el, int mt, double time, double z, double distance, double slope);
     void remove_marker(int i);
+    void remove_marker_data(int is, int ie);
+    void remove_markers(int_vec& markers);
     void resize(const int);
     void write_chkpt_file(BinaryOutput &bin) const;
     void read_chkpt_file(Variables &var, BinaryInput &bin);

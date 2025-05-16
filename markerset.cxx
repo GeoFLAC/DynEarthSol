@@ -453,9 +453,7 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
     }
 
     // delete recorded marker
-    std::sort(delete_marker.rbegin(),delete_marker.rend());
-    for (auto m=delete_marker.begin(); m<delete_marker.end(); m++)
-        remove_marker(*m);
+    remove_markers(delete_marker);
 
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -724,6 +722,54 @@ int MarkerSet::custom_initial_mattype( const Param& param, const Variables &var,
     return mt;
 }
 
+void MarkerSet::remove_markers(int_vec& markers)
+{
+    if (markers.empty()) return;
+
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    std::sort(markers.begin(),markers.end());
+
+    int n = markers.size();
+    int_vec replaced_markers(n), a_out, b_out;
+    a_out.reserve(n);
+    b_out.reserve(n);
+
+    #pragma omp parallel default(none) shared(replaced_markers, markers, n, a_out, b_out)
+    {
+        #pragma omp for
+        for (int i=0; i<n; i++)
+            replaced_markers[i] = _nmarkers - n + i;
+
+        #pragma omp sections
+        {
+            #pragma omp section
+            {
+                std::set_difference(markers.begin(), markers.end(),
+                            replaced_markers.begin(), replaced_markers.end(),
+                            std::back_inserter(a_out));
+            }
+            #pragma omp section
+            {
+                std::set_difference(replaced_markers.begin(), replaced_markers.end(),
+                            markers.begin(), markers.end(),
+                            std::back_inserter(b_out));
+            }
+        }
+
+        #pragma omp for
+        for (int i = 0; i < a_out.size(); i++)
+            remove_marker_data(a_out[i],b_out[i]);
+    }
+
+    _nmarkers -= n;
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
 
 void MarkerSet::remove_marker(int i)
 {
@@ -732,17 +778,24 @@ void MarkerSet::remove_marker(int i)
 #endif
     // Replace marker i by the last marker.
     --_nmarkers;
-    std::memcpy( (*_eta)[i], (*_eta)[_nmarkers], sizeof(double)*(NODES_PER_ELEM) );
-    (*_id)[i] = (*_id)[_nmarkers];
-    (*_elem)[i] = (*_elem)[_nmarkers];
-    (*_mattype)[i] = (*_mattype)[_nmarkers];
-    (*_time)[i] = (*_time)[_nmarkers];
-    (*_z)[i] = (*_z)[_nmarkers];
-    (*_distance)[i] = (*_distance)[_nmarkers];
-    (*_slope)[i] = (*_slope)[_nmarkers];
+    remove_marker_data(i, _nmarkers);
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
+}
+
+
+void MarkerSet::remove_marker_data(int is, int ie)
+{
+    // Replace marker i by the target marker ie.
+    std::memcpy( (*_eta)[is], (*_eta)[ie], sizeof(double)*(NODES_PER_ELEM) );
+    (*_id)[is] = (*_id)[ie];
+    (*_elem)[is] = (*_elem)[ie];
+    (*_mattype)[is] = (*_mattype)[ie];
+    (*_time)[is] = (*_time)[ie];
+    (*_z)[is] = (*_z)[ie];
+    (*_distance)[is] = (*_distance)[ie];
+    (*_slope)[is] = (*_slope)[ie];
 }
 
 
@@ -907,73 +960,61 @@ namespace {
 
         // Loop over all the old markers and identify a containing element in the new mesh.
         int last_marker = ms.get_nmarkers();
-        bool_vec removed_markers(last_marker, false);
+        int_vec removed_markers;
 
-        #pragma omp parallel for default(none) shared(ms, elemmarkers, kdtree, bary, old_coord, old_connectivity, last_marker,removed_markers)
-        for (int i = 0; i < last_marker; i++) {
-            bool found = false;
+        #pragma omp parallel default(none) shared(ms, elemmarkers, kdtree, bary, old_coord, old_connectivity, last_marker,removed_markers)
+        {
+            int_vec removed_local;
 
-            // 1. Get physical coordinates, x, of an old marker.
-            int eold = ms.get_elem(i);
-            double x[NDIMS] = {0};
-            for (int j = 0; j < NDIMS; j++)
-                for (int k = 0; k < NODES_PER_ELEM; k++)
-                    x[j] += ms.get_eta(i)[k]*
-                        old_coord[ old_connectivity[eold][k] ][j];
+            #pragma omp for nowait
+            for (int i = 0; i < last_marker; i++) {
+                bool found = false;
 
-            // if (DEBUG) {
-            //     std::cout << "marker #" << i << " old_elem " << eold << " x: ";
-            //     print(std::cout, x, NDIMS);
-            // }
+                // 1. Get physical coordinates, x, of an old marker.
+                int eold = ms.get_elem(i);
+                double x[NDIMS] = {0};
+                for (int j = 0; j < NDIMS; j++)
+                    for (int k = 0; k < NODES_PER_ELEM; k++)
+                        x[j] += ms.get_eta(i)[k]*
+                            old_coord[ old_connectivity[eold][k] ][j];
 
-            // 2. look for nearby elements.
-            size_t_vec nn_idx(k);
-            double_vec out_dists_sqr(k);
-            KNNResultSet resultSet(k);
-            resultSet.init(nn_idx.data(), out_dists_sqr.data());
+                // 2. look for nearby elements.
+                size_t_vec nn_idx(k);
+                double_vec out_dists_sqr(k);
+                KNNResultSet resultSet(k);
+                resultSet.init(nn_idx.data(), out_dists_sqr.data());
 
-            kdtree.findNeighbors(resultSet, x);
+                kdtree.findNeighbors(resultSet, x);
 
-            for( int j = 0; j < k; j++ ) {
-                int e = nn_idx[j];
-                double r[NDIMS];
+                for( int j = 0; j < k; j++ ) {
+                    int e = nn_idx[j];
+                    double r[NDIMS];
 
-                bary.transform(x, e, r);
+                    bary.transform(x, e, r);
 
-                // change this if-condition to (i == N) to debug the N-th marker
-                // if (0) {
-                //     std::cout << '\n' << j << " check elem #" << e << ' ';
-                //     print(std::cout, r, NDIMS);
-                // }
-
-                if (bary.is_inside(r)) {
-                    ms.set_eta(i, r);
-                    ms.set_elem(i, e);
-                    ++elemmarkers[e][ms.get_mattype(i)];
-            
-                    found = true;
-                    // ++i;
-                    // if (DEBUG) {
-                    //     std::cout << " in element " << e << '\n';
-                    // }
-                    break;
+                    // change this if-condition to (i == N) to debug the N-th marker
+                    if (bary.is_inside(r)) {
+                        ms.set_eta(i, r);
+                        ms.set_elem(i, e);
+                        ++elemmarkers[e][ms.get_mattype(i)];
+                
+                        found = true;
+                        break;
+                    }
                 }
+
+                if( found ) continue;
+
+                /* not found */
+                // Since no containing element has been found, delete this marker.
+                removed_local.emplace_back(i);
             }
 
-            if( found ) continue;
-
-            // if (DEBUG) {
-            //     std::cout << " not in any element" << '\n';
-            // }
-
-            /* not found */
-            // Since no containing element has been found, delete this marker.
-            removed_markers[i] = true;
+            #pragma omp critical
+            removed_markers.insert(removed_markers.end(), removed_local.begin(), removed_local.end());
         }
 
-        for (int i=last_marker-1; i>=0; i--)
-            if (removed_markers[i])
-                ms.remove_marker(i);
+        ms.remove_markers(removed_markers);
 
 #ifdef USE_NPROF
         nvtxRangePop();
