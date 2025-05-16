@@ -1932,7 +1932,7 @@ void surface_plstrain_diffusion(const Param &param, \
 
 void correct_surface_element(const Variables& var, \
     const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
-    tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
+    tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain, int_vec2D& elemmarkers)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -2007,7 +2007,7 @@ void correct_surface_element(const Variables& var, \
     nvtxRangePop();
 #endif
     Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, new_volumes);
-    ms.correct_surface_marker(var, coord0s, bary);
+    ms.correct_surface_marker(var, coord0s, bary, elemmarkers);
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
@@ -2106,7 +2106,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             // correct surface marker.
-            correct_surface_element(var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain);
+            correct_surface_element(var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain, elemmarkers);
             std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
             // set marker of sediment.
             markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers);

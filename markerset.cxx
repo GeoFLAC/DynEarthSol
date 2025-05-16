@@ -385,7 +385,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 }
 
 // surface processes correcttion of marker
-void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, Barycentric_transformation &bary) {
+void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, Barycentric_transformation &bary, int_vec2D &elemmarkers)
+{
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
@@ -396,6 +397,7 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
     #pragma omp parallel default(none) shared(var,coord0s,bary,delete_marker)
     {
         int_vec delete_local;
+        int_pair_vec switch_local;
 
         #pragma omp for nowait
         for (int i=0; i<_nmarkers;i++) {
@@ -424,6 +426,7 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
                 if (inc) {
                     set_eta(i, new_eta);
                     set_elem(i, new_elem);
+                    switch_local.emplace_back(e, new_elem);
                     // std::cout << "... Success!.\n";
                 }
                 else {
@@ -435,6 +438,18 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
 
         #pragma omp critical
         delete_marker.insert(delete_marker.end(), delete_local.begin(), delete_local.end());
+
+        for (auto it = delete_local.begin(); it != delete_local.end(); ++it)
+            #pragma omp atomic
+            elemmarkers[(*_elem)[*it]][(*_mattype)[*it]]--;
+
+        for (auto it = switch_local.begin(); it != switch_local.end(); ++it) {
+            #pragma omp atomic
+            elemmarkers[it->first][(*_mattype)[it->first]]--;
+            #pragma omp atomic
+            elemmarkers[it->second][(*_mattype)[it->second]]++;
+        }
+
     }
 
     // delete recorded marker
