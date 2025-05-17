@@ -38,6 +38,19 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
+// Define the struct to store marker data
+struct AppendMarkerData {
+    double_vec eta;
+    int elem;
+    int mattype;
+    double time;
+    double depth;
+    double distance;
+    double slope;
+};
+
+typedef std::vector<AppendMarkerData> AMD_vec;
+
 // forward declaration
 class PhaseChange;
 

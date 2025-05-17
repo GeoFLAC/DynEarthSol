@@ -29,6 +29,7 @@ public:
     }
 
     static void random_eta( double* ); // class method
+    static void random_eta_seed(double*, int);
 //    void create_marker_in_elem(Variables& var);
 //    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
@@ -36,7 +37,10 @@ public:
     void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt);
-    void append_marker( const double *eta, int el, int mt, double time, double z, double distance, double slope);
+    void append_random_marker_in_elem( int el, int mt, double time);
+    void append_marker(const double *eta, int el, int mt, double time, double depth, double distance, double slope);
+    void append_marker_at_i(AppendMarkerData &md, int idx, int last_id);
+    void append_markers(AMD_vec &md);
     void remove_marker(int i);
     void remove_marker_data(int is, int ie);
     void remove_markers(int_vec& markers);

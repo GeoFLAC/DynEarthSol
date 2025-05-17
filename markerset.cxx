@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <set>
 #include <numeric>
+#include <random>
 #ifdef USE_NPROF
 #include <nvToolsExt.h>
 #endif
@@ -108,9 +109,78 @@ void MarkerSet::random_eta( double *eta )
     }
 }
 
+void MarkerSet::random_eta_seed( double *eta, int seed )
+{
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+
+    double sum = 0;
+    for(int n = 0; n < NODES_PER_ELEM; n++) {
+        eta[n] = dist(gen);
+        sum += eta[n];
+    }
+    for(int n = 0; n < NODES_PER_ELEM; n++)
+        eta[n] /= sum;
+}
+
+
+void MarkerSet::append_markers(AMD_vec &md)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    int nmarker = md.size();
+    // Ensure sufficient array size
+    while ( _nmarkers + nmarker > _reserved_space ) {
+        // Resize the marker-related arrays if necessary.
+        const int newsize = _nmarkers * over_alloc_ratio;
+        resize( newsize );
+    }
+
+    int_vec last_ids(nmarker);
+    std::iota(last_ids.begin(), last_ids.end(), _last_id);
+
+    int_vec idxs(nmarker);
+    std::iota(idxs.begin(), idxs.end(), _nmarkers);
+
+    #pragma omp parallel for default(none) shared(md, idxs, last_ids, nmarker)
+    for (int i = 0; i < nmarker; ++i)
+        append_marker_at_i(md[i], idxs[i], last_ids[i]);
+
+    _nmarkers += nmarker;
+    _last_id += nmarker;
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
+
+void MarkerSet::append_marker_at_i(AppendMarkerData &md, int idx, int last_id)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+
+    int m = idx;
+    std::memcpy((*_eta)[m], md.eta.data(), NODES_PER_ELEM*sizeof(double));
+    (*_elem)[m] = md.elem;
+    (*_mattype)[m] = md.mattype;
+    (*_id)[m] = last_id;
+    (*_time)[m] = md.time;
+    (*_z)[m] = md.depth;
+    (*_distance)[m] = md.distance;
+    (*_slope)[m] = md.slope;
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
 
 void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, double z, double distance, double slope)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
         // Resize the marker-related arrays if necessary.
@@ -142,6 +212,9 @@ void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, do
 
     ++_nmarkers;
     ++_last_id;
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
@@ -1119,10 +1192,11 @@ namespace {
 #endif
     }
 
+
     void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
                                                 int_pair_vec &unplenished_elems)
     {
-    if (unplenished_elems.empty()) return;
+        if (unplenished_elems.empty()) return;
 
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -1139,45 +1213,64 @@ namespace {
         nvtxRangePop();
 #endif
         MarkerSet &ms = *var.markersets[0];
-        for (const auto& pair : unplenished_elems) {
-            int e = pair.first;
-            int num_marker_in_elem = pair.second;
+        AMD_vec marker_data_all;
+        int ne = unplenished_elems.size();
 
-            while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
-                double eta[NODES_PER_ELEM];
-                ms.random_eta(eta);
+        #pragma omp parallel default(none) shared(param, var, unplenished_elems, kdtree, ms, marker_data_all,ne)
+        {
+            AMD_vec marker_data_local;
 
-                double x[NDIMS] = {0};
-                const int *conn = (*var.connectivity)[e];
-                for (int d=0; d<NDIMS; d++) {
-                    for (int i=0; i<NODES_PER_ELEM; i++) {
-                        x[d] += (*var.coord)[ conn[i] ][d] * eta[i];
+            #pragma omp for nowait
+            for (int i=0; i<ne; ++i) {
+                int e = unplenished_elems[i].first;
+                int num_marker_in_elem = unplenished_elems[i].second;
+
+                while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
+                    double eta[NODES_PER_ELEM];
+                    ms.random_eta_seed(eta, e+num_marker_in_elem);
+
+                    double x[NDIMS] = {0};
+                    const int *conn = (*var.connectivity)[e];
+                    for (int d=0; d<NDIMS; d++) {
+                        for (int ii=0; ii<NODES_PER_ELEM; ii++) {
+                            x[d] += (*var.coord)[ conn[ii] ][d] * eta[ii];
+                        }
                     }
-                }
 
-                const int k = 1;  // how many nearest neighbors to search?
-                size_t_vec nn_idx(k);
-                double_vec dd(k);
-                KNNResultSet resultSet(k);
-                resultSet.init(nn_idx.data(), dd.data());
+                    const int k = 1;  // how many nearest neighbors to search?
+                    size_t_vec nn_idx(k);
+                    double_vec dd(k);
+                    KNNResultSet resultSet(k);
+                    resultSet.init(nn_idx.data(), dd.data());
 
-                // Look for nearest marker.
-                kdtree.findNeighbors(resultSet, x);
+                    // Look for nearest marker.
+                    kdtree.findNeighbors(resultSet, x);
 
-                int m = nn_idx[0]; // nearest marker
-                const int mt = ms.get_mattype(m);
-                const double fmelt = (*var.melt_fraction)[e];
+                    int m = nn_idx[0]; // nearest marker
+                    const int mt = ms.get_mattype(m);
     //            const double ti = ms.get_time(m);
 
-                ms.append_marker(eta, e, mt, 0., 0., 0., 0., fmelt);
-                if (DEBUG) {
-                    std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
-                }
+                    // ms.append_marker(eta, e, mt, 0., 0., 0., 0.);
 
-                ++(*var.elemmarkers)[e][mt];
-                ++num_marker_in_elem;
+                    double_vec eta_tmp(eta, eta + NODES_PER_ELEM);
+                    marker_data_local.push_back({eta_tmp, e, mt, 0., 0., 0., 0.});
+
+                    ++(*var.elemmarkers)[e][mt];
+                    ++num_marker_in_elem;
+                }
             }
+
+            #pragma omp critical
+            marker_data_all.insert(marker_data_all.end(), marker_data_local.begin(), marker_data_local.end());
         }
+
+        std::stable_sort(marker_data_all.begin(), marker_data_all.end(),
+            [](const AppendMarkerData& a, const AppendMarkerData& b) {
+                return a.elem < b.elem;
+            });
+
+        // Append new markers to the end of the marker set.
+        ms.append_markers(marker_data_all);
 
         delete points;
 
