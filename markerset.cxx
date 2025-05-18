@@ -1069,6 +1069,8 @@ namespace {
                     if (bary.is_inside(r)) {
                         ms.set_eta(i, r);
                         ms.set_elem(i, e);
+
+                        #pragma omp atomic
                         ++elemmarkers[e][ms.get_mattype(i)];
                 
                         found = true;
