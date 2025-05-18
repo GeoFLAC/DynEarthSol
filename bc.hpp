@@ -10,7 +10,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel);
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Param &param, const Variables& var, double_vec& plstrain);
-void correct_surface_element(const Variables& var, const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
+void correct_surface_element(const Param& param, const Variables& var, const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
                               tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain, int_vec2D& elemmarkers);
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
                        tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \

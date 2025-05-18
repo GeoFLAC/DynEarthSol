@@ -458,7 +458,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 }
 
 // surface processes correcttion of marker
-void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, Barycentric_transformation &bary, int_vec2D &elemmarkers)
+void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, array_t& coord0s, Barycentric_transformation &bary, int_vec2D &elemmarkers)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -467,10 +467,10 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
     int_vec delete_marker;
     delete_marker.reserve(100);
 
-    #pragma omp parallel default(none) shared(var,coord0s,bary,delete_marker,elemmarkers)
+    #pragma omp parallel default(none) shared(param,var,coord0s,bary,delete_marker,elemmarkers)
     {
         int_vec delete_local;
-        int_pair_vec switch_local;
+        int_map emarker_local;
 
         #pragma omp for nowait
         for (int i=0; i<_nmarkers;i++) {
@@ -493,36 +493,33 @@ void MarkerSet::correct_surface_marker(const Variables& var, array_t& coord0s, B
                 set_eta(i, new_eta);
             else {
                 int inc, new_elem;
+                int mat = (*_mattype)[i];
                 // std::cout << "Marker " << i << " in element " << e_ind << " is trying to remap in element ";
                 // find new element of the marker
                 remap_marker(var,m_coord,e,new_elem,new_eta,inc);
                 if (inc) {
                     set_eta(i, new_eta);
                     set_elem(i, new_elem);
-                    switch_local.emplace_back(e, new_elem);
+                    emarker_local[new_elem * param.mat.nmat + mat]++;
                     // std::cout << "... Success!.\n";
                 }
                 else {
                     delete_local.emplace_back(i);
                     // std::cout << "... Fail!. (Erosion might have occurred)\n";
                 }
+                emarker_local[e * param.mat.nmat + mat]--;
             }
         }
 
         #pragma omp critical
         delete_marker.insert(delete_marker.end(), delete_local.begin(), delete_local.end());
 
-        for (auto it = delete_local.begin(); it != delete_local.end(); ++it)
-            #pragma omp atomic
-            elemmarkers[(*_elem)[*it]][(*_mattype)[*it]]--;
-
-        for (auto it = switch_local.begin(); it != switch_local.end(); ++it) {
-            #pragma omp atomic
-            elemmarkers[it->first][(*_mattype)[it->first]]--;
-            #pragma omp atomic
-            elemmarkers[it->second][(*_mattype)[it->second]]++;
+        #pragma omp critical
+        for (auto it = emarker_local.begin(); it != emarker_local.end(); ++it) {
+            int e = it->first / param.mat.nmat;
+            int mat = it->first % param.mat.nmat;
+            elemmarkers[e][mat] += it->second;
         }
-
     }
 
     // delete recorded marker
