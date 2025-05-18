@@ -1022,7 +1022,7 @@ array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
 namespace {
 
     template <class T>
-    void find_markers_in_element(MarkerSet& ms, T& elemmarkers,
+    void find_markers_in_element(const Param &param, MarkerSet& ms, T& elemmarkers,
                                  KDTree& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
@@ -1035,9 +1035,11 @@ namespace {
         int last_marker = ms.get_nmarkers();
         int_vec removed_markers;
 
-        #pragma omp parallel default(none) shared(ms, elemmarkers, kdtree, bary, old_coord, old_connectivity, last_marker,removed_markers)
+        #pragma omp parallel default(none) shared(param, ms, elemmarkers, kdtree, \
+            bary, old_coord, old_connectivity, last_marker,removed_markers)
         {
             int_vec removed_local;
+            int_map emarker_local;
 
             #pragma omp for nowait
             for (int i = 0; i < last_marker; i++) {
@@ -1069,9 +1071,7 @@ namespace {
                     if (bary.is_inside(r)) {
                         ms.set_eta(i, r);
                         ms.set_elem(i, e);
-
-                        #pragma omp atomic
-                        ++elemmarkers[e][ms.get_mattype(i)];
+                        emarker_local[e*param.mat.nmat + ms.get_mattype(i)]++;
                 
                         found = true;
                         break;
@@ -1087,6 +1087,13 @@ namespace {
 
             #pragma omp critical
             removed_markers.insert(removed_markers.end(), removed_local.begin(), removed_local.end());
+
+            #pragma omp critical
+            for (const auto& pair : emarker_local) {
+                int e = pair.first / param.mat.nmat;
+                int mt = pair.first % param.mat.nmat;
+                elemmarkers[e][mt] += pair.second;
+            }
         }
 
         ms.remove_markers(removed_markers);
@@ -1316,10 +1323,10 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         nvtxRangePop();
 #endif
 
-        find_markers_in_element(*var.markersets[0], *var.elemmarkers,
+        find_markers_in_element(param, *var.markersets[0], *var.elemmarkers,
                                 kdtree, bary, old_coord, old_connectivity);
         if (param.control.has_hydration_processes)
-            find_markers_in_element(*var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers,
+            find_markers_in_element(param, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers,
                                     kdtree, bary, old_coord, old_connectivity);
 
         delete centroid;
