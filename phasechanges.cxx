@@ -297,21 +297,31 @@ void phase_changes(const Param& param, Variables& var)
     MarkerSet& ms = *(var.markersets[0]);
     int_vec2D& elemmarkers = *var.elemmarkers;
 
-    #pragma omp parallel for default(none)          \
-        shared(ms, elemmarkers, phch)
-    for (int m=0; m<ms.get_nmarkers(); m++) {
-        int current_mt = ms.get_mattype(m);
-        int new_mt = phch(m);
+    #pragma omp parallel default(none)          \
+        shared(param, ms, elemmarkers, phch)
+    {
+        int_map emarker_local;
 
-        if (new_mt != current_mt) {
-            ms.set_mattype(m, new_mt);
+        #pragma omp for nowait
+        for (int m=0; m<ms.get_nmarkers(); m++) {
+            int current_mt = ms.get_mattype(m);
+            int new_mt = phch(m);
 
-            // update marker count
-            int e = ms.get_elem(m);
-            #pragma omp atomic  // prevent concurrent modification on elemmarkers
-            --elemmarkers[e][current_mt];
-            #pragma omp atomic  // prevent concurrent modification on elemmarkers
-            ++elemmarkers[e][new_mt];
+            if (new_mt != current_mt) {
+                ms.set_mattype(m, new_mt);
+
+                // update marker count
+                int e = ms.get_elem(m);
+                emarker_local[e*param.mat.nmat + current_mt]--;
+                emarker_local[e*param.mat.nmat + new_mt]++;
+            }
+        }
+
+        #pragma omp critical
+        for (auto it = emarker_local.begin(); it != emarker_local.end(); ++it) {
+            int e = it->first / param.mat.nmat;
+            int mt = it->first % param.mat.nmat;
+            elemmarkers[e][mt] += it->second;
         }
 
     }
