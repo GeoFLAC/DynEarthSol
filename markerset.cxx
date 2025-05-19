@@ -473,7 +473,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     delete_marker.reserve(100);
 
     #pragma omp parallel default(none) firstprivate(ntop_elem) \
-        shared(var,coord0s,dhacc,bary,delete_marker,elemmarkers)
+        shared(param,var,coord0s,dhacc,bary,delete_marker,elemmarkers)
     {
         int_vec delete_local;
         int_map emarker_local;
