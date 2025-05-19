@@ -1110,7 +1110,6 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         const int bound = static_cast<int>(bdry.size());
 
         // loops over all bdry facets
-        #pragma acc parallel loop
         for (int n=0; n<bound; ++n) {
             // this facet belongs to element e
             int e = bdry[n].first;
@@ -1165,7 +1164,6 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 int nn = conn[NODE_OF_FACET[f][j]];
                 double *f = force[nn];
                 for (int d=0; d<NDIMS; ++d) {
-                    #pragma acc atomic update
                     f[d] -= p * normal[d] / NODES_PER_FACET;
                 }
             }
@@ -1198,7 +1196,6 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     const int bound = static_cast<int>(bdry.size());
 
     // Loop over all boundary facets
-    #pragma acc parallel loop 
     for (int n = 0; n < bound; ++n) {
         int e = bdry[n].first;      // This facet belongs to element e
         int f = bdry[n].second;     // This facet is the f-th facet of element e
@@ -1248,7 +1245,6 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
             // Distribute the traction (stress) to the nodes on the facet
             for (int d = 0; d < NDIMS; ++d) {
                 // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
-                #pragma acc atomic update
                 force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
             }
         }
