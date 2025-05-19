@@ -1280,152 +1280,175 @@ namespace {
 
         const int ntop = surfinfo.ntop;
 
-#ifdef USE_NPROF
-        nvtxRangePushA("prepare variable total_dx");
-#endif
         double *total_dx = var.surfinfo.total_dx->data();
-#ifdef USE_NPROF
-        nvtxRangePop();
-#endif
         double *total_slope = var.surfinfo.total_slope->data();
         double_vec& dh = *var.surfinfo.dh;
 
-        #pragma acc parallel loop
-        for (int i=0;i<var.nnode;i++) {
-            total_dx[i] = 0.;
-            total_slope[i] = 0.;
-        }
-
         // loops over all top facets
-#ifdef THREED
         const size_t tsize = top.size();
-        #pragma acc parallel loop
-        for (std::size_t i=0; i<tsize; ++i) {
-            // this facet belongs to element e
-            int e = top[i].first;
-            // this facet is the f-th facet of e
-            int f = top[i].second;
 
-            const int *conn = (*var.connectivity)[e];
-            int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
-            int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
+        double_vec protected_area_arr(tsize, 0.0);
+        array_t protected_slope_arr(tsize, 0.0);
 
-//#ifdef THREED
-            int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
-
-            double projected_area;
-            {
-                // normal vector of this facet
-                double normal[NDIMS];
-
-                // two vectors n0-n1 and n0-n2
-                // n is the cross product of these two vectors
-                // the length of n is 2 * triangle area
-                double x01, y01, z01, x02, y02, z02;
-                x01 = coord[n1][0] - coord[n0][0];
-                y01 = coord[n1][1] - coord[n0][1];
-                z01 = coord[n1][2] - coord[n0][2];
-                x02 = coord[n2][0] - coord[n0][0];
-                y02 = coord[n2][1] - coord[n0][1];
-                z02 = coord[n2][2] - coord[n0][2];
-
-                normal[0] = y01*z02 - z01*y02;
-                normal[1] = z01*x02 - x01*z02;
-                normal[2] = x01*y02 - y01*x02;
-
-                /* the area of this facet is:
-                 *   0.5 * std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
-                 *
-                 * theta is the angle between this facet and horizontal
-                 *   tan_theta = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1]) / normal[2]
-                 *   cos_theta = normal[2] / (2 * area)
-                 *
-                 * the area projected on the horizontal plane is:
-                 *   projected_area = area * cos_theta = 0.5 * normal[2]
-                 */
-                projected_area = 0.5 * normal[2];
+        #pragma omp parallel default(none) shared(var,top,coord,dh,total_dx,total_slope, \
+            protected_area_arr,protected_slope_arr,NODE_OF_FACET,top_nodes,surfinfo)
+        {
+            #pragma omp for
+            #pragma acc parallel loop
+            for (int i=0; i<var.nnode; i++) {
+                total_dx[i] = 0.;
+                total_slope[i] = 0.;
             }
 
-            #pragma acc atomic update
-            total_dx[n0] += projected_area;
-            #pragma acc atomic update
-            total_dx[n1] += projected_area;
-            #pragma acc atomic update
-            total_dx[n2] += projected_area;
+            #pragma omp for
+            #pragma acc parallel loop
+            for (std::size_t i=0; i<tsize; ++i) {
+#ifdef THREED
+                // this facet belongs to element e
+                int e = top[i].first;
+                // this facet is the f-th facet of e
+                int f = top[i].second;
 
-            double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
-            double iv = 1 / (2 * projected_area);
-            shp2dx[0] = iv * (coord[n1][1] - coord[n2][1]);
-            shp2dx[1] = iv * (coord[n2][1] - coord[n0][1]);
-            shp2dx[2] = iv * (coord[n0][1] - coord[n1][1]);
-            shp2dy[0] = iv * (coord[n2][0] - coord[n1][0]);
-            shp2dy[1] = iv * (coord[n0][0] - coord[n2][0]);
-            shp2dy[2] = iv * (coord[n1][0] - coord[n0][0]);
+                const int *conn = (*var.connectivity)[e];
+                int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
+                int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
+                int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
 
-            double D[NODES_PER_FACET][NODES_PER_FACET];
-            for (int j=0; j<NODES_PER_FACET; j++) {
-                for (int k=0; k<NODES_PER_FACET; k++) {
-                    D[j][k] = (shp2dx[j] * shp2dx[k] +
-                               shp2dy[j] * shp2dy[k]);
+                double projected_area;
+                {
+                    // normal vector of this facet
+                    double normal[NDIMS];
+
+                    // two vectors n0-n1 and n0-n2
+                    // n is the cross product of these two vectors
+                    // the length of n is 2 * triangle area
+                    double x01, y01, z01, x02, y02, z02;
+                    x01 = coord[n1][0] - coord[n0][0];
+                    y01 = coord[n1][1] - coord[n0][1];
+                    z01 = coord[n1][2] - coord[n0][2];
+                    x02 = coord[n2][0] - coord[n0][0];
+                    y02 = coord[n2][1] - coord[n0][1];
+                    z02 = coord[n2][2] - coord[n0][2];
+
+                    normal[0] = y01*z02 - z01*y02;
+                    normal[1] = z01*x02 - x01*z02;
+                    normal[2] = x01*y02 - y01*x02;
+
+                    /* the area of this facet is:
+                    *   0.5 * std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
+                    *
+                    * theta is the angle between this facet and horizontal
+                    *   tan_theta = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1]) / normal[2]
+                    *   cos_theta = normal[2] / (2 * area)
+                    *
+                    * the area projected on the horizontal plane is:
+                    *   projected_area = area * cos_theta = 0.5 * normal[2]
+                    */
+                    projected_area = 0.5 * normal[2];
                 }
+
+                protected_area_arr[i] = projected_area;
+
+                double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
+                double iv = 1 / (2 * projected_area);
+                shp2dx[0] = iv * (coord[n1][1] - coord[n2][1]);
+                shp2dx[1] = iv * (coord[n2][1] - coord[n0][1]);
+                shp2dx[2] = iv * (coord[n0][1] - coord[n1][1]);
+                shp2dy[0] = iv * (coord[n2][0] - coord[n1][0]);
+                shp2dy[1] = iv * (coord[n0][0] - coord[n2][0]);
+                shp2dy[2] = iv * (coord[n1][0] - coord[n0][0]);
+
+                double D[NODES_PER_FACET][NODES_PER_FACET];
+                for (int j=0; j<NODES_PER_FACET; j++) {
+                    for (int k=0; k<NODES_PER_FACET; k++) {
+                        D[j][k] = (shp2dx[j] * shp2dx[k] +
+                                shp2dy[j] * shp2dy[k]);
+                    }
+                }
+
+                const int n[NODES_PER_FACET] = {n0, n1, n2};
+                for (int j=0; j<NODES_PER_FACET; j++) {
+                    double slope = 0;
+                    for (int k=0; k<NODES_PER_FACET; k++)
+                        slope += D[j][k] * coord[n[k]][2];
+                    protected_slope_arr[i][j] = slope * projected_area;
+                }
+#else
+                /* The 1D diffusion operation is implemented ad hoc, not using FEM
+                * formulation (e.g. computing shape function derivation on the edges).
+                */
+                int n0 = top_nodes[i];
+                int n1 = top_nodes[i+1];
+
+                double dx = std::fabs(coord[n1][0] - coord[n0][0]);
+                protected_area_arr[i] = dx;
+
+                protected_slope_arr[i][0] = -(coord[n1][1] - coord[n0][1]) / dx;
+                protected_slope_arr[i][1] = (coord[n1][1] - coord[n0][1]) / dx;
+#endif
             }
 
-            const int n[NODES_PER_FACET] = {n0, n1, n2};
-            for (int j=0; j<NODES_PER_FACET; j++) {
-                double slope = 0;
-                for (int k=0; k<NODES_PER_FACET; k++)
-                    slope += D[j][k] * coord[n[k]][2];
+            #pragma omp for
+            for (int i=0; i<ntop; ++i) {
+                int n = top_nodes[i];
+#ifdef THREED
+                int_vec &surf_sup = (*surfinfo.node_and_elems)[i];
 
-                #pragma acc atomic update
-                total_slope[n[j]] += slope * projected_area;
+                for (int j=0; j<surf_sup.size(); ++j) {
+                    int k = surf_sup[j];
+                    total_dx[n] += protected_area_arr[k];
+
+                    // this facet belongs to element e
+                    int e = top[k].first;
+                    // this facet is the f-th facet of e
+                    int f = top[k].second;
+
+                    const int *conn = (*var.connectivity)[e];
+                    int n0 = conn[NODE_OF_FACET[f][0]];
+                    int n1 = conn[NODE_OF_FACET[f][1]];
+                    int n2 = conn[NODE_OF_FACET[f][2]];
+
+                    const int nn[NODES_PER_FACET] = {n0, n1, n2};
+
+                    for (int m=0; m<NODES_PER_FACET; ++m) {
+                        if (nn[m] == n) {
+                            total_slope[n] += protected_slope_arr[k][m];
+                            break;
+                        }
+                    }
+                }
+#else
+                if (i == 0) {
+                    total_dx[n] = protected_area_arr[i];
+                    total_slope[n] = protected_slope_arr[i][0];
+                } else if (i == ntop-1) {
+                    total_dx[n] = protected_area_arr[i-1];
+                    total_slope[n] = protected_slope_arr[i-1][1];
+                } else {
+                    total_dx[n] = protected_area_arr[i-1] + protected_area_arr[i];
+                    total_slope[n] = protected_slope_arr[i-1][1] + protected_slope_arr[i][0];
+                }
+#endif
             }
 
-            // std::cout << i << ' ' << n0 << ' ' << n1 << ' ' << n2 << "  "
-            //           << projected_area << "  " << slope << '\n';
-#else
-            /* The 1D diffusion operation is implemented ad hoc, not using FEM
-             * formulation (e.g. computing shape function derivation on the edges).
-             */
-        const size_t tsize = ntop-1;
-        #pragma acc parallel loop
-        for (std::size_t i=0; i<tsize;i++) {
-            int n0 = top_nodes[i];
-            int n1 = top_nodes[i+1];
-
-            double dx = std::fabs(coord[n1][0] - coord[n0][0]);
-            #pragma acc atomic update
-            total_dx[n0] += dx;
-            #pragma acc atomic update
-            total_dx[n1] += dx;
-
-            double slope = (coord[n1][1] - coord[n0][1]) / dx;
-            #pragma acc atomic update
-            total_slope[n0] -= slope;
-            #pragma acc atomic update
-            total_slope[n1] += slope;
-
-            // std::cout << i << ' ' << n0 << ' ' << n1 << "  " << dx << "  " << slope << '\n';
-#endif
-        }
-
-#ifdef THREED
-        #pragma acc parallel loop
-#endif
-        for (int i=0; i<ntop; ++i) {
-            // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
-            int n = top_nodes[i];
-            double conv =  surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
-#ifdef THREED
-            dh[i] -= conv;
-#else
-            if ( coord[n][1] >  surfinfo.base_level && conv > 0.) {
-                dh[i] -= surfinfo.diff_ratio_terrig * conv;
-            } else if ( coord[n][1] <= surfinfo.base_level && conv < 0. ) {
-                dh[i] -= surfinfo.diff_ratio_marine * conv;
-            } else {
+            #pragma omp for
+            #pragma acc parallel loop
+            for (int i=0; i<ntop; ++i) {
+                // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
+                int n = top_nodes[i];
+                double conv =  surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
+    #ifdef THREED
                 dh[i] -= conv;
+    #else
+                if ( coord[n][1] >  surfinfo.base_level && conv > 0.) {
+                    dh[i] -= surfinfo.diff_ratio_terrig * conv;
+                } else if ( coord[n][1] <= surfinfo.base_level && conv < 0. ) {
+                    dh[i] -= surfinfo.diff_ratio_marine * conv;
+                } else {
+                    dh[i] -= conv;
+                }
+    #endif
             }
-#endif
         }
 #ifdef USE_NPROF
         nvtxRangePop();
