@@ -2,7 +2,7 @@
 #define DYNEARTHSOL3D_GEOMETRY_HPP
 
 double dist2(const double* a, const double* b);
-void compute_volume(const double **coord, double &volume);
+double compute_volume(const double **coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);

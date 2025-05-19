@@ -86,16 +86,16 @@ static double triangle_area(const double *a,
 #endif
 }
 
-void compute_volume(const double **coord, double &volume)
+double compute_volume(const double **coord)
 {
     const double *a = coord[0];
     const double *b = coord[1];
     const double *c = coord[2];
 #ifdef THREED
     const double *d = coord[3];
-    volume = tetrahedron_volume(a, b, c, d);
+    return tetrahedron_volume(a, b, c, d);
 #else
-    volume = triangle_area(a, b, c);
+    return triangle_area(a, b, c);
 #endif
 }
 

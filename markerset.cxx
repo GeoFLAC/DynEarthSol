@@ -458,19 +458,55 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 }
 
 // surface processes correcttion of marker
-void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, array_t& coord0s, Barycentric_transformation &bary, int_vec2D &elemmarkers)
+void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    // correct surface marker.
+    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
+
+    const size_t ntop_elem = var.top_elems->size();
+    array_t coord0s(ntop_elem*NODES_PER_ELEM, 0.);
 
     int_vec delete_marker;
     delete_marker.reserve(100);
 
-    #pragma omp parallel default(none) shared(param,var,coord0s,bary,delete_marker,elemmarkers)
+    #pragma omp parallel default(none) firstprivate(ntop_elem) \
+        shared(var,coord0s,dhacc,bary,delete_marker,elemmarkers)
     {
         int_vec delete_local;
         int_map emarker_local;
+
+        #pragma omp for
+        for (size_t i=0;i<ntop_elem;i++) {
+            int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
+
+            double *c00 = coord0s[i*NODES_PER_ELEM];
+            double *c01 = coord0s[i*NODES_PER_ELEM+1];
+            double *c02 = coord0s[i*NODES_PER_ELEM+2];
+    #ifdef THREED
+            double *c03 = coord0s[i*NODES_PER_ELEM+3];
+    #endif
+
+            // restore the reference node locations before deposition/erosion 
+            c00[0] = (*var.coord)[tnodes[0]][0];
+            c01[0] = (*var.coord)[tnodes[1]][0];
+            c02[0] = (*var.coord)[tnodes[2]][0];
+
+            c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
+            c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
+            c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
+    #ifdef THREED            
+            c00[1] = (*var.coord)[tnodes[0]][1];
+            c01[1] = (*var.coord)[tnodes[1]][1];
+            c02[1] = (*var.coord)[tnodes[2]][1];
+
+            c03[0] = (*var.coord)[tnodes[3]][0];
+            c03[1] = (*var.coord)[tnodes[3]][1];
+            c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
+    #endif
+        }
 
         #pragma omp for nowait
         for (int i=0; i<_nmarkers;i++) {
@@ -538,7 +574,7 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
     nvtxRangePushA(__FUNCTION__);
 #endif
     const double *coord[NODES_PER_ELEM];
-    double volume, eta[NODES_PER_ELEM];
+    double eta[NODES_PER_ELEM];
     int_vec nodes((*var.connectivity)[e],(*var.connectivity)[e]+NODES_PER_ELEM);
     int_vec searched(var.nelem,0);
     searched[e]=1;
@@ -555,7 +591,7 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
             for (int j=0; j<NODES_PER_ELEM; j++)
                 coord[j] = (*var.coord)[(*var.connectivity)[*ee][j]];
 
-            compute_volume(coord,volume);
+            double volume = compute_volume(coord);
             Barycentric_transformation bary(coord,volume);
             bary.transform(m_coord,0,eta);
 
@@ -815,17 +851,14 @@ void MarkerSet::remove_markers(int_vec& markers)
         #pragma omp sections
         {
             #pragma omp section
-            {
-                std::set_difference(markers.begin(), markers.end(),
-                            replaced_markers.begin(), replaced_markers.end(),
-                            std::back_inserter(a_out));
-            }
+            std::set_difference(markers.begin(), markers.end(),
+                        replaced_markers.begin(), replaced_markers.end(),
+                        std::back_inserter(a_out));
+
             #pragma omp section
-            {
-                std::set_difference(replaced_markers.begin(), replaced_markers.end(),
-                            markers.begin(), markers.end(),
-                            std::back_inserter(b_out));
-            }
+            std::set_difference(replaced_markers.begin(), replaced_markers.end(),
+                        markers.begin(), markers.end(),
+                        std::back_inserter(b_out));
         }
 
         #pragma omp for

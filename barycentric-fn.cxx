@@ -44,6 +44,9 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
                                                        const double_vec &volume)
     : coeff_(elem.size())
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     #pragma omp parallel for default(none) \
         shared(elem, coord, connectivity, volume)
     for (std::size_t i=0; i<elem.size(); ++i) {
@@ -60,11 +63,14 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
         int n3 = connectivity[e][3];
         const double *d = coord[n3];
 
-        compute_coeff3d(a, b, c, d, volume[i], coeff_[i]);
+        compute_coeff3d(a, b, c, d, volume[e], coeff_[i]);
 #else
-        compute_coeff2d(a, b, c, volume[i], coeff_[i]);
+        compute_coeff2d(a, b, c, volume[e], coeff_[i]);
 #endif
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 Barycentric_transformation::Barycentric_transformation(const double** coord,

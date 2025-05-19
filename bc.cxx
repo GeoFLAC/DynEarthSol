@@ -1930,84 +1930,52 @@ void surface_plstrain_diffusion(const Param &param, \
 #endif
 }
 
-void correct_surface_element(const Param &param, const Variables& var, \
-    const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
-    tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain, int_vec2D& elemmarkers)
+void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, \
+    tensor_t& stress, tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    #pragma omp parallel default(none) \
+        shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
+    {
+        #pragma omp for
+        for (size_t i=0; i<var.top_elems->size(); i++) {
+            const double *coord1[NODES_PER_ELEM];
 
-    const size_t ntop_elem = var.top_elems->size();
-    array_t coord0s(ntop_elem*NODES_PER_ELEM,0.);
-    double_vec new_volumes(ntop_elem,0.);
+            auto e = (*var.top_elems)[i];
 
-    #pragma omp parallel for default(none) firstprivate(ntop_elem) \
-        shared(var, coord0s, dhacc, new_volumes, stress, strain, strain_rate, plstrain)
-    for (size_t i=0;i<ntop_elem;i++) {
-        const double *coord1[NODES_PER_ELEM];
+            for (int j=0; j<NODES_PER_ELEM;j++)
+                coord1[j] = (*var.coord)[(*var.connectivity)[e][j]];
+            double new_volumes = compute_volume(coord1);
+            double rdv =  new_volumes / volume[e];
+            volume[e] = new_volumes;
 
-        auto e = (*var.top_elems)[i];
-        int* tnodes = (*var.connectivity)[e];
-        double *c00 = coord0s[i*NODES_PER_ELEM];
-        double *c01 = coord0s[i*NODES_PER_ELEM+1];
-        double *c02 = coord0s[i*NODES_PER_ELEM+2];
-#ifdef THREED
-        double *c03 = coord0s[i*NODES_PER_ELEM+3];
-#endif
-
-        for (int j=0; j<NODES_PER_ELEM;j++)
-            coord1[j] = (*var.coord)[tnodes[j]];
-        compute_volume(coord1, new_volumes[i]);
-
-        // restore the reference node locations before deposition/erosion 
-        c00[0] = (*var.coord)[tnodes[0]][0];
-        c01[0] = (*var.coord)[tnodes[1]][0];
-        c02[0] = (*var.coord)[tnodes[2]][0];
-
-        c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
-        c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
-        c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
-#ifdef THREED            
-        c00[1] = (*var.coord)[tnodes[0]][1];
-        c01[1] = (*var.coord)[tnodes[1]][1];
-        c02[1] = (*var.coord)[tnodes[2]][1];
-
-        c03[0] = (*var.coord)[tnodes[3]][0];
-        c03[1] = (*var.coord)[tnodes[3]][1];
-        c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
-#endif
-
-#ifdef THREED
-        // calculate the volume of the element
-        double dv0 = ((c01[0] - c00[0])*((c02[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c02[2] - c00[2])) \
-                       - (c02[0] - c00[0])*((c01[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c01[2] - c00[2])) \
-                       + (c03[0] - c00[0])*((c01[1] - c00[1])*(c02[2] - c00[2]) - (c02[1] - c00[1])*(c01[2] - c00[2])))/6.0;
-#else
-        double dv0 = ((c01[0] - c00[0])*(c02[1] - c00[1]) \
-                       - (c02[0] - c00[0])*(c01[1] - c00[1]))/2.0;
-#endif
-        // make sure the area is positive
-        dv0 = (dv0 > 0.0) ? dv0 : -dv0;
-
-        double rdv = new_volumes[i] / dv0;
-
-        // correct stress and strain
-        if (rdv > 1.) {
-            // correct the plastic strain overestimation of surface element caused by sedimentation.
-            plstrain[e] /= rdv;
-            for (int i=0;i<NSTR;i++) {
-                stress[e][i] /= rdv;
-                strain[e][i] /= rdv;
-                strain_rate[e][i] /= rdv;
+            // correct stress and strain
+            if (rdv > 1.) {
+                // correct the plastic strain overestimation of surface element caused by sedimentation.
+                plstrain[e] /= rdv;
+                for (int i=0;i<NSTR;i++) {
+                    stress[e][i] /= rdv;
+                    strain[e][i] /= rdv;
+                    strain_rate[e][i] /= rdv;
+                }
             }
         }
+
+        #pragma omp for
+        for (int n=0;n<var.surfinfo.ntop;n++) {
+            int nt = (*var.surfinfo.top_nodes)[n];
+            int_vec &sup = (*var.support)[nt];
+            volume_n[nt] = 0.;
+            for (size_t i=0;i<sup.size();i++)
+                volume_n[nt] += volume[sup[i]];
+        }
     }
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
-    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, new_volumes);
-    ms.correct_surface_marker(param, var, coord0s, bary, elemmarkers);
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
@@ -2058,37 +2026,32 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         std::exit(1);
     }
 
-    // find max surface velocity
-    double maxdh = 0.;
-    // #pragma omp parallel for reduction(max:maxdh) \
-    //     default(none) shared(dh)
-    for (std::size_t i=0; i<ntop; ++i) {
-        double tmp = fabs(dh[i]);
-        if (maxdh < tmp)
-            maxdh = tmp;
-    }
-    surfinfo.max_surf_vel = maxdh / var.dt;
-
-    // go through all surface nodes and abject all surface node by dh
-    // #pragma acc parallel loop
-    // #pragma omp parallel for default(none) \
-    //     shared(top_nodes, coord, dh, dhacc)
-    for (int i=0; i<ntop; i++) {
-        // get global index of node
-        // update coordinate via dh
-        // update dhacc for marker correction
-        int nt = top_nodes[i];
-        coord[nt][NDIMS-1] += dh[i];
-        dhacc[nt] += dh[i];
+    #pragma omp parallel default(none) shared(param, var, surfinfo, top_nodes, coord, dh, dhacc)
+    {
+        // go through all surface nodes and abject all surface node by dh
+        // #pragma acc parallel loop
+        #pragma omp for
+        for (int i=0; i<ntop; i++) {
+            // get global index of node
+            // update coordinate via dh
+            // update dhacc for marker correction
+            int nt = top_nodes[i];
+            coord[nt][NDIMS-1] += dh[i];
+            dhacc[nt] += dh[i];
+        }
 
         // update edvacc_surf of connected elements
-        for (std::size_t j=0; j<(*surfinfo.node_and_elems)[i].size(); j++) {
-            int e = (*surfinfo.node_and_elems)[i][j]; // get local index of surface element
-            int eg = (*surfinfo.top_facet_elems)[e]; // get global index of element
-
+        #pragma omp for
+        for (size_t i=0;i<surfinfo.top_facet_elems->size();i++) {
+            int e = (*surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
-            for (int k=0; k<NDIMS; k++)
-                n[k] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[e][k]];
+            double dh_e = 0.;
+
+            for (int j=0;j<NDIMS;j++) {
+                int k = (*var.surfinfo.elem_and_nodes)[i][j];
+                n[j] = (*var.surfinfo.top_nodes)[k];
+                dh_e += dh[k];
+            }
 
 #ifdef THREED
             double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
@@ -2096,18 +2059,29 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-            double dv = dh[i] * base / NDIMS;
-            (*surfinfo.edvacc_surf)[eg] += dv; // update edvacc_surf of connected elements
-            volume[eg] += dv;
-            volume_n[nt] += dv;
+            (*surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
         }
     }
 
+    // find max surface velocity
+    double maxdh = 0.;
+    #pragma omp parallel default(none) shared(dh) reduction(max:maxdh)
+    for (std::size_t i=0; i<ntop; ++i) {
+        double tmp = fabs(dh[i]);
+
+        if (maxdh < tmp)
+            maxdh = tmp;
+    }
+
+    surfinfo.max_surf_vel = maxdh / var.dt;
+
+    correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
+
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
-            // correct surface marker.
-            correct_surface_element(param, var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain, elemmarkers);
+            markersets[0]->correct_surface_marker(param, var, dhacc, elemmarkers);
             std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
+
             // set marker of sediment.
             markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers);
         }
