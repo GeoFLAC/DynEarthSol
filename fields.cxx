@@ -76,7 +76,7 @@ void allocate_variables(const Param &param, Variables& var)
     var.mat = new MatProps(param, var);
 
     var.tmp_result = new elem_cache(e);
-    var.tmp_result_sg = new double_vec(e);
+    var.etmp = new double_vec(e);
 }
 
 
@@ -137,8 +137,8 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.tmp_result;
     var.tmp_result = new elem_cache(e);
-    delete var.tmp_result_sg;
-    var.tmp_result_sg = new double_vec(e);
+    delete var.etmp;
+    var.etmp = new double_vec(e);
 
 }
 

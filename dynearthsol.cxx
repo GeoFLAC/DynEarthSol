@@ -398,7 +398,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
     for (int n=0; n<iso_steps; n++) {
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -454,7 +454,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             if (param.control.has_moving_mesh)
                 update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -552,7 +552,7 @@ int main(int argc, const char* argv[])
 
         update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -561,7 +561,7 @@ int main(int argc, const char* argv[])
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
-            NMD_stress(param, var, *var.ntmp, *var.stress, *var.tmp_result_sg);
+            NMD_stress(param, var, *var.ntmp, *var.stress, *var.etmp);
             
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -584,7 +584,7 @@ int main(int argc, const char* argv[])
                 if (param.control.has_moving_mesh)
                     update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+                compute_dvoldt(var, *var.ntmp, *var.etmp);
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,

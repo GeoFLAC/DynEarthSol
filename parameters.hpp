@@ -537,7 +537,7 @@ struct Variables {
     tensor_t *strain_rate, *strain, *stress;
     shapefn *shpdx, *shpdy, *shpdz; // gradient of shape function
     elem_cache *tmp_result;
-    double_vec *tmp_result_sg;
+    double_vec *etmp;
 
     // tensor_t *stress_old;
 

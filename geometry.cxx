@@ -162,7 +162,7 @@ void compute_volume(const Variables &var,
 #endif
 }
 
-void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &tmp_result_sg)
+void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -173,7 +173,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &tmp_re
 //    std::fill_n(dvoldt.begin(), var.nnode, 0);
 
     #pragma omp parallel for default(none)      \
-        shared(var, tmp_result_sg)
+        shared(var, etmp)
     #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
@@ -181,16 +181,16 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &tmp_re
         // TODO: try another definition:
         // dj = (volume[e] - volume_old[e]) / volume_old[e] / dt
         double dj = trace(strain_rate);
-        tmp_result_sg[e] = dj * (*var.volume)[e];
+        etmp[e] = dj * (*var.volume)[e];
     }
 
     #pragma omp parallel for default(none)      \
-        shared(var,dvoldt,tmp_result_sg)
+        shared(var,dvoldt,etmp)
     #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dvoldt[n] = 0.;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-	        dvoldt[n] += tmp_result_sg[*e];
+	        dvoldt[n] += etmp[*e];
         dvoldt[n] /= (*var.volume_n)[n];
     }
 
@@ -235,7 +235,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
 
 void NMD_stress(const Param& param, const Variables &var,
-    double_vec &dp_nd, tensor_t& stress, double_vec &tmp_result_sg)
+    double_vec &dp_nd, tensor_t& stress, double_vec &etmp)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -277,20 +277,20 @@ void NMD_stress(const Param& param, const Variables &var,
     } else {
         */
 
-    #pragma omp parallel for default(none) shared(var,tmp_result_sg)
+    #pragma omp parallel for default(none) shared(var,etmp)
     #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         double dp = (*var.dpressure)[e];
-        tmp_result_sg[e] = dp * (*var.volume)[e];
+        etmp[e] = dp * (*var.volume)[e];
     }
 
-    #pragma omp parallel for default(none) shared(var,dp_nd,tmp_result_sg)
+    #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
     #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dp_nd[n] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            dp_nd[n] += tmp_result_sg[*e];
+            dp_nd[n] += etmp[*e];
         dp_nd[n] /= (*var.volume_n)[n];
     }
 //    }
