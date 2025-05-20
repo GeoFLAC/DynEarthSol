@@ -2172,7 +2172,7 @@ void compute_metric_field(const Variables &var, const conn_t &connectivity, cons
 #ifdef GPP1X
     #pragma omp parallel for default(none) shared(var,connectivity,etmp,resolution)
 #else
-    #pragma omp parallel for default(none) shared(var,connectivity,etmp)
+    #pragma omp parallel for default(none) shared(var,connectivity,etmp,resolution)
 #endif
     for (int e=0;e<var.nelem;e++) {
         const int *conn = connectivity[e];

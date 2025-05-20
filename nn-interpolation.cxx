@@ -79,7 +79,7 @@ namespace {
         elems_vec.resize(nelem_changed);
         ratios_vec.resize(nelem_changed);
 
-        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec,idx_changed) 
+        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed, max_el) 
         for(int e=0; e<var.nelem; e++) {
             if (is_changed[e]) {
                 std::map<int, int> elem_count;
