@@ -166,6 +166,8 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
   hydro_diff_max(1e-1),
+  rho_magma(p.mat.rho_magma),
+  has_magmatism(p.control.has_magmatism),
   coord(*var.coord),
   connectivity(*var.connectivity),
   temperature(*var.temperature),
@@ -174,7 +176,10 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
-  dppressure(*var.dppressure)
+  dppressure(*var.dppressure),
+  eff_fmelt(*var.eff_fmelt),
+  magma_fraction(*var.magma_fraction),
+  hydro_diff(*var.hydro_diff)
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
@@ -183,6 +188,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     visc_exponent = p.mat.visc_exponent;
     visc_coefficient = p.mat.visc_coefficient;
     visc_activation_energy = p.mat.visc_activation_energy;
+    visc_activation_volume = p.mat.visc_activation_volume;
     heat_capacity = p.mat.heat_capacity;
     therm_cond = p.mat.therm_cond;
     pls0 = p.mat.pls0;
@@ -215,7 +221,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 MatProps::~MatProps()
 {
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
-    #pragma acc exit data delete(visc_coefficient,visc_activation_energy,heat_capacity,therm_cond,pls0)
+    #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume,heat_capacity,therm_cond,pls0)
     #pragma acc exit data delete(pls1,cohesion0,friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
     #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity)
@@ -247,6 +253,10 @@ double MatProps::visc(int e) const
     }
     T /= NODES_PER_ELEM;
 
+    // stress
+    const double *s = stress[e];
+    double s0 = trace(s) / NDIMS;
+
     // strain-rate
     double edot = second_invariant(strain_rate[e]);
     // min strain rate to prevent viscosity -> inf
@@ -255,11 +265,19 @@ double MatProps::visc(int e) const
     // viscosity law from Chen and Morgan, JGR, 1990
     double result = 0;
     int n = 0;
+    
+        if (has_magmatism) {
+        double fmagma = magma_fraction[e];
+        double T_lava = 1473.; // 1200.+273.
+        T = (1. - fmagma) * T + fmagma * T_lava;
+    }
+
     for (int m=0; m<nmat; m++) {
         double pow = 1 / visc_exponent[m] - 1;
         double pow1 = -1 / visc_exponent[m];
         double visc0 = 0.25 * std::pow(edot, pow) * std::pow(0.75 * visc_coefficient[m], pow1)
-            * std::exp(visc_activation_energy[m] / (visc_exponent[m] * gas_constant * T)) * 1e6;
+            * std::exp((visc_activation_energy[m] + visc_activation_volume[m] * s0)
+            / (visc_exponent[m] * gas_constant * T)) * 1e6;
         result += elemmarkers[e][m] / visc0;
         n += elemmarkers[e][m];
     }
@@ -430,9 +448,119 @@ double MatProps::rho(int e) const
         result += rho0[m] * (1 - alpha[m] * TinCelsius) * elemmarkers[e][m];
         n += elemmarkers[e][m];
     }
-    return result / n;
+    double rho = result / n;
+    if (has_magmatism) {
+        double tt_melt = std::min(1., magma_fraction[e] + eff_fmelt[e]);
+        return (1 - tt_melt) * rho + tt_melt * rho_magma;
+    } else {
+        return rho;
+    }
 }
 
+
+void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
+                        double_vec &var_hydro_diff, double_vec &tdot, elem_cache &tmp_result) const
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    double separate_rate = 10;
+    double half_life = 1e6 * YEAR2SEC;
+    double decay_rate = std::pow(0.5, var.dt/half_life);
+
+    double diff_multi,depth_max,pls_min,t_max,xh1t,yh1t;
+    pls_min = 1.;
+    diff_multi = 6.;
+    depth_max = -20.e3;
+    t_max = 600. + 273.;
+    xh1t = 30.e3;
+    yh1t = 0.e3;
+
+    #pragma omp parallel default(none) shared(param,var,tdot,var_hydro_diff, \
+        tmp_result,separate_rate,decay_rate,coord,connectivity,temperature, \
+        pls_min,diff_multi,depth_max,t_max,xh1t,yh1t)
+    {
+        std::unordered_map<int,double> hydro_diff_local;
+
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int e=0;e<var.nelem;e++) {
+            // diffusion matrix
+            const int *conn = (*var.connectivity)[e];
+            double *tr = tmp_result[e];
+            double kv = separate_rate * (*var.volume)[e];
+            const double *shpdx = (*var.shpdx)[e];
+    #ifdef THREED
+            const double *shpdy = (*var.shpdy)[e];
+    #endif
+            const double *shpdz = (*var.shpdz)[e];
+            for (int i=0; i<NODES_PER_ELEM; ++i) {
+                double diffusion = 0.;
+                for (int j=0; j<NODES_PER_ELEM; ++j) {
+    #ifdef THREED
+                    diffusion += (shpdx[i] * shpdx[j] + \
+                                shpdy[i] * shpdy[j] + \
+                                shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
+    #else
+                    diffusion += (shpdx[i] * shpdx[j] + \
+                                shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
+    #endif
+                }
+                tr[i] = diffusion * kv;
+            }
+        }
+
+        #pragma omp for
+        #pragma acc parallel loop
+        for (int n=0;n<var.nnode;n++) {
+            tdot[n]=0;
+            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+                const int *conn = (*var.connectivity)[*e];
+                const double *tr = tmp_result[*e];
+                for (int i=0;i<NODES_PER_ELEM;i++) {
+                    if (n == conn[i]) {
+                        tdot[n] += tr[i];
+                        break;
+                    }
+                }
+            }
+            var_hydro_diff[n] -= tdot[n] * var.dt / (*var.tmass)[n];
+            var_hydro_diff[n] *= decay_rate;
+        }
+
+        #pragma omp for nowait
+        for (int e=0;e<var.nelem;e++) {
+            if ((*var.plstrain)[e] <= pls_min) continue;
+
+            const int *conn = connectivity[e];
+            double T = 0;
+            for (int i=0; i<NODES_PER_ELEM; ++i)
+                T += temperature[conn[i]];
+            T /= NODES_PER_ELEM;
+            if (T > t_max) continue;
+
+            double pe[NDIMS];
+            for (int i=0; i<NDIMS; ++i) {
+                for (int j=0; j<NODES_PER_ELEM; ++j)
+                    pe[i] += coord[conn[j]][i];
+                pe[i] /= NODES_PER_ELEM;
+            }
+            if (pe[0] > xh1t && pe[1] > yh1t && 
+                pe[0] < (param.mesh.xlength - xh1t) && pe[1] < (param.mesh.ylength - yh1t) &&
+                pe[2] >= depth_max) {
+                for (int i=0; i<NODES_PER_ELEM; ++i)
+                    hydro_diff_local[conn[i]] = diff_multi;
+            }
+        }
+
+        #pragma omp critical
+        for (auto e = hydro_diff_local.begin(); e != hydro_diff_local.end(); ++e)
+            var_hydro_diff[e->first] = e->second;
+    }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
 
 double MatProps::cp(int e) const
 {
@@ -442,7 +570,18 @@ double MatProps::cp(int e) const
 
 double MatProps::k(int e) const
 {
-    return arithmetic_mean(therm_cond, elemmarkers[e]);
+    double ek = arithmetic_mean(therm_cond, elemmarkers[e]);
+
+    if (has_magmatism) {
+        const int* conn = connectivity[e];
+        double ehydro = 0;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            ehydro += hydro_diff[conn[i]];
+        ehydro /= NODES_PER_ELEM;
+        return ek * (1. + ehydro);
+    } else {
+        return ek;
+    }
 }
 
 // hydraulic parameters
