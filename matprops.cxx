@@ -325,7 +325,6 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
 
     double static_friction_angle = 0;
 
-    double 
     int n = 0;
     for (int m=0; m<nmat; m++) {
         int k = elemmarkers[e][m];

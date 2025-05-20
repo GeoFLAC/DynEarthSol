@@ -124,7 +124,7 @@ private:
     #pragma acc routine seq
     void plastic_weakening(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double& slip_rate) const;
+                           double &dilation_angle, double &hardening) const;
 
     #pragma acc routine seq
     void plastic_weakening_rsf(int e, double pls,
