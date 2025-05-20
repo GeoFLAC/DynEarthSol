@@ -467,6 +467,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
     double separate_rate = 10;
     double half_life = 1e6 * YEAR2SEC;
     double decay_rate = std::pow(0.5, var.dt/half_life);
+    double_vec &etmp = *var.etmp;
 
     double diff_multi,depth_max,pls_min,t_max,xh1t,yh1t;
     pls_min = 1.;
@@ -478,10 +479,8 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
 
     #pragma omp parallel default(none) shared(param,var,tdot,var_hydro_diff, \
         tmp_result,separate_rate,decay_rate,coord,connectivity,temperature, \
-        pls_min,diff_multi,depth_max,t_max,xh1t,yh1t)
+        pls_min,diff_multi,depth_max,t_max,xh1t,yh1t,etmp)
     {
-        std::unordered_map<int,double> hydro_diff_local;
-
         #pragma omp for
         #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
@@ -528,7 +527,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
             var_hydro_diff[n] *= decay_rate;
         }
 
-        #pragma omp for nowait
+        #pragma omp for
         for (int e=0;e<var.nelem;e++) {
             if ((*var.plstrain)[e] <= pls_min) continue;
 
@@ -548,14 +547,23 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
             if (pe[0] > xh1t && pe[1] > yh1t && 
                 pe[0] < (param.mesh.xlength - xh1t) && pe[1] < (param.mesh.ylength - yh1t) &&
                 pe[2] >= depth_max) {
-                for (int i=0; i<NODES_PER_ELEM; ++i)
-                    hydro_diff_local[conn[i]] = diff_multi;
+                etmp[i] = diff_multi;
+            } else {
+                etmp[i] = 0;
             }
         }
 
-        #pragma omp critical
-        for (auto e = hydro_diff_local.begin(); e != hydro_diff_local.end(); ++e)
-            var_hydro_diff[e->first] = e->second;
+        #pragma omp for
+        for (int n=0;n<var.nnode;n++) {
+            int_vec &sup = (*var.supper)[n]
+            for (int i=0; i<sup.size();i++) {
+                if (etmp[sup[i]]>0.) {
+                    var_hydro_diff[n] = etmp[sup[i]]
+                    updated = true;
+                    break;
+                }
+            }
+        }
     }
 #ifdef USE_NPROF
     nvtxRangePop();
