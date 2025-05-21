@@ -5,7 +5,8 @@ CFLAGS        = -Wall -O3 -ffast-math #-funsafe-loop-optimizations
 
 ifeq ($(openacc), 1)
 	CC = nvc++
-	CFLAGS = -Wall -O3 -mno-fma -Minfo=mp,accel -I$(CUDA_DIR)/include -acc=gpu -gpu=managed,nofma -Mcuda
+	# CFLAGS = -Wall -O3 -mno-fma -Minfo=mp,accel -I$(CUDA_DIR)/include -acc=gpu -gpu=managed,nofma -Mcuda
+	CFLAGS = -Wall -O3 -mno-fma -Minfo=mp,accel -I$(CUDA_DIR)/include -acc=gpu -gpu=mem:managed,nofma -cuda
 endif
 
 # Archiver
