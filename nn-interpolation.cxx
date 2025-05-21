@@ -134,7 +134,13 @@ namespace {
                                 old_e = nn_idx[jj];
                                 bary.transform(x, old_e, r);
                                 if (bary.is_inside(r)) {
-                                    goto found;
+                                    try {
+                                        ++ elem_count.at(old_e);
+                                    }
+                                    catch (std::out_of_range const &exc) {
+                                        elem_count[old_e] = 1;
+                                    }
+                                    break;
                                 }
                             }
 
@@ -142,14 +148,6 @@ namespace {
                             // std::cout << " not found\n";
                             continue;
 
-                        found:
-                            try {
-                                ++ elem_count.at(old_e);
-                            }
-                            catch (std::out_of_range const &exc) {
-                                elem_count[old_e] = 1;
-                            }
-                            // std::cout << " found in old element " << old_e << "\n";
 #ifdef THREED
                         }
 #endif
