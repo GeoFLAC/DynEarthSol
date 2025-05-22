@@ -87,6 +87,7 @@ void MarkerSet::allocate_markerdata( const int max_markers )
     _z = new double_vec( max_markers );
     _distance = new double_vec( max_markers );
     _slope = new double_vec( max_markers );
+    _tmp = new double_vec( max_markers );
 }
 
 
@@ -908,6 +909,7 @@ void MarkerSet::remove_marker_data(int is, int ie)
     (*_z)[is] = (*_z)[ie];
     (*_distance)[is] = (*_distance)[ie];
     (*_slope)[is] = (*_slope)[ie];
+    (*_tmp)[is] = (*_tmp)[ie];
 }
 
 
@@ -939,6 +941,7 @@ void MarkerSet::resize( const int newsize )
         _z->resize( newsize );
         _distance->resize( newsize );
         _slope->resize( newsize );
+        _tmp->resize( newsize );
     }
     // else if( nmarkers_new < _reserved_space ) {
     //     // TBD: shrink arrays

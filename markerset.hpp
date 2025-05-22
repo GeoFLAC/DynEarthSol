@@ -26,6 +26,7 @@ public:
         delete _eta; 
         delete _elem;
         delete _mattype;
+        delete _tmp;
     }
 
     static void random_eta( double* ); // class method
@@ -80,6 +81,9 @@ public:
     inline const double *get_eta(int m) const { return (*_eta)[m]; }
     inline void set_eta( const int i, const double r[NDIMS] );
 
+    inline double get_tmp(int m) const { return (*_tmp)[m]; }
+    inline void set_tmp(const int m, const double tmp) { (*_tmp)[m] = tmp; }
+
 private:
     const std::string _name;
 
@@ -106,6 +110,8 @@ private:
     double_vec *_distance;
     // Slope of surface
     double_vec *_slope;
+    // temporary storage
+    double_vec *_tmp;
 
     void random_markers( const Param&, Variables& );
     void regularly_spaced_markers( const Param&, Variables& );
