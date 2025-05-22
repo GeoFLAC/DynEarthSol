@@ -506,7 +506,8 @@ struct Variables {
     double_vec vbc_vertical_ratio_x1;
 
     int_vec *top_elems;
-//    int_vec2D *marker_in_elem;
+    int_vec2D *markers_in_elem;
+    int_vec2D *hydrous_markers_in_elem;
 
     int_vec2D *support;
 

@@ -351,7 +351,7 @@ void update_mesh(const Param& param, Variables& var)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers);
+                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     }
     
 //    var.markersets[0]->update_marker_in_elem(var);

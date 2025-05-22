@@ -296,9 +296,10 @@ void phase_changes(const Param& param, Variables& var)
     PhaseChange& phch = *var.phch;
     MarkerSet& ms = *(var.markersets[0]);
     int_vec2D& elemmarkers = *var.elemmarkers;
+    int_vec2D& markers_in_elem = *var.markers_in_elem;
 
     #pragma omp parallel default(none)          \
-        shared(param, ms, elemmarkers, phch)
+        shared(param, ms, elemmarkers, markers_in_elem, phch)
     {
         int_map emarker_local;
 
@@ -313,7 +314,13 @@ void phase_changes(const Param& param, Variables& var)
                 // update marker count
                 int e = ms.get_elem(m);
                 emarker_local[e*param.mat.nmat + current_mt]--;
+                #pragma omp critical
+                markers_in_elem[e].erase(
+                    std::remove(markers_in_elem[e].begin(), markers_in_elem[e].end(), m),
+                    markers_in_elem[e].end());
                 emarker_local[e*param.mat.nmat + new_mt]++;
+                #pragma omp critical
+                markers_in_elem[e].push_back(m);
             }
         }
 

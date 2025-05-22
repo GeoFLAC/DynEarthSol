@@ -33,8 +33,9 @@ public:
 //    void create_marker_in_elem(Variables& var);
 //    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
-    void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers);
-    void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers);
+    void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
+    void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
+                        const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt);
     void append_random_marker_in_elem( int el, int mt, double time);
