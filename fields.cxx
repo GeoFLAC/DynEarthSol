@@ -149,10 +149,16 @@ void update_temperature(const Param &param, const Variables &var,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    // Magma freezing
+#ifndef ACC
     #pragma omp parallel default(none) shared(param,var,temperature,tmp_result,tdot)
+#endif
     {
+#ifndef ACC
         #pragma omp for
+#else
         #pragma acc parallel loop
+#endif
         for (int e=0;e<var.nelem;e++) {
             // diffusion matrix
 
@@ -161,37 +167,41 @@ void update_temperature(const Param &param, const Variables &var,
             double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
             const double *shpdx = (*var.shpdx)[e];
-    #ifdef THREED
+#ifdef THREED
             const double *shpdy = (*var.shpdy)[e];
-    #endif
+#endif
             const double *shpdz = (*var.shpdz)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
-    #ifdef THREED
+#ifdef THREED
                     diffusion += (shpdx[i] * shpdx[j] + \
                                 shpdy[i] * shpdy[j] + \
                                 shpdz[i] * shpdz[j]) * temperature[conn[j]];
-    #else
+#else
                     diffusion += (shpdx[i] * shpdx[j] + \
                                 shpdz[i] * shpdz[j]) * temperature[conn[j]];
-    #endif
+#endif
                 }
                 tr[i] = diffusion * kv - rh;
             }
         }
 
+#ifndef ACC
         #pragma omp for
-        #pragma acc parallel loop
+#else
+        #pragma acc parallel loop async
+#endif
         for (int n=0;n<var.nnode;n++) {
             tdot[n]=0;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
                 const int *conn = (*var.connectivity)[*e];
                 const double *tr = tmp_result[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
+                bool found = false;
+                for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
                     if (n == conn[i]) {
                         tdot[n] += tr[i];
-                        break;
+                        found= true;
                     }
                 }
             }
