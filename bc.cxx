@@ -2084,7 +2084,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
     // find max surface velocity
     double maxdh = 0.;
-    #pragma omp parallel default(none) shared(dh) reduction(max:maxdh)
+    #pragma omp parallel for default(none) shared(dh) firstprivate(ntop) reduction(max:maxdh)
     for (std::size_t i=0; i<ntop; ++i) {
         double tmp = fabs(dh[i]);
 

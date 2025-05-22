@@ -79,7 +79,7 @@ namespace {
         elems_vec.resize(nelem_changed*32,-1);
         ratios_vec.resize(nelem_changed*32);
 
-        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed, max_el)
+        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed) firstprivate(max_el)
         for(int e=0; e<var.nelem; e++) {
             if (is_changed[e]) {
                 int elem_count_buf[32] = {0};
@@ -243,7 +243,7 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed)
+        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed, ratios_vec, elems_vec)
         {
             #pragma omp for
             for (std::size_t i=0; i<target.size(); i++) {
@@ -281,7 +281,7 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed)
+        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed, elems_vec, ratios_vec)
         {
             #pragma omp for
             for (std::size_t i=0; i<target.size(); i++) {
