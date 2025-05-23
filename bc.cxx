@@ -1974,10 +1974,10 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
             if (rdv > 1.) {
                 // correct the plastic strain overestimation of surface element caused by sedimentation.
                 plstrain[e] /= rdv;
-                for (int i=0;i<NSTR;i++) {
-                    stress[e][i] /= rdv;
-                    strain[e][i] /= rdv;
-                    strain_rate[e][i] /= rdv;
+                for (int j=0;j<NSTR;j++) {
+                    stress[e][j] /= rdv;
+                    strain[e][j] /= rdv;
+                    strain_rate[e][j] /= rdv;
                 }
             }
         }
