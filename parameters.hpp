@@ -539,6 +539,7 @@ struct Variables {
     shapefn *shpdx, *shpdy, *shpdz; // gradient of shape function
     elem_cache *tmp_result;
     double_vec *etmp;
+    int_vec *etmp_int;
 
     // tensor_t *stress_old;
 

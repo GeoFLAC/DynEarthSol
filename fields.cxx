@@ -77,6 +77,7 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.tmp_result = new elem_cache(e);
     var.etmp = new double_vec(e);
+    var.etmp_int = new int_vec(e);
 }
 
 
@@ -139,6 +140,8 @@ void reallocate_variables(const Param& param, Variables& var)
     var.tmp_result = new elem_cache(e);
     delete var.etmp;
     var.etmp = new double_vec(e);
+    delete var.etmp_int;
+    var.etmp_int = new int_vec(e);
 
 }
 
