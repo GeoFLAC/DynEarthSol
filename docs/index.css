@@ -233,7 +233,8 @@
   	flex-direction: column;
   	align-items: center;
   	justify-content: flex-end;
-  	padding: 0px 124px;
+/*   	padding: 0px 124px; */
+    padding: 0px 0px;
 }
 .frame-parent {
   	align-self: stretch;
