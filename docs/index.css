@@ -532,6 +532,12 @@
   	color: #533a3a;
   	font-family: Inter;
 }
+.carousel-img {
+  width: 100%;
+  height: auto;         /* Maintains aspect ratio */
+  display: block;       /* Removes unwanted space below images */
+  object-fit: cover;    /* Optional: crops image to cover container */
+}
 .carousel-frame {
   position: relative;
 /*   width: 623px; */
@@ -545,10 +551,11 @@
 }
 .carousel-frame img {
   width: 100%;
-  height: 100%;
+/*   height: 100%; */
+  height: auto;
   object-fit: cover;
   display: block;
-  border-radius: 10px;
+/*   border-radius: 10px; */
 }
 .carousel-nav {
   position: absolute;
