@@ -238,7 +238,7 @@
 .frame-parent {
   	align-self: stretch;
   	background-color: #fff;
-  	height: 500px;
+  	height: 400px;
   	display: flex;
   	flex-direction: row;
   	align-items: center;
@@ -534,9 +534,10 @@
 }
 .carousel-frame {
   position: relative;
-  width: 623px;
+/*   width: 623px; */
 /*   align-self: stretch; */
-  height: 500px;
+  width: 100%;
+  height: 400px;
   margin: auto;
   overflow: hidden;
   border-radius: 10px;
