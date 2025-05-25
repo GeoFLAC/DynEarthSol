@@ -3,7 +3,8 @@
 }
 .user-manual {
   	position: relative;
-  	text-decoration: underline;
+/*   	text-decoration: underline; */
+    text-decoration: bold;
   	color: inherit;
 }
 .about-us {
