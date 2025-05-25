@@ -47,23 +47,15 @@
       			</div>
       			<div class="instance-wrapper">
         				<div class="rectangle-parent">
-          					<img class="instance-child" alt="" src="images/DES3D_Case01.png">
-          					
-          					<div class="page-control">
-            						<div class="frame">
-              							<div class="platter">
-                								<div class="ultrathin">
-                								</div>
-              							</div>
-              							<div class="dot-1">
-              							</div>
-              							<div class="dot-2">
-              							</div>
-              							<div class="dot-3">
-              							</div>
-            						</div>
-          					</div>
-        				</div>
+                    <div class="carousel">
+                        <img id="carousel-image" src="images/DES3D_Case01.png" alt="DynEarthSol Example" />
+                        <div class="carousel-controls">
+                            <button id="prev-btn">&#8592;</button>
+                            <span id="carousel-indicator">1 / 3</span>
+                            <button id="next-btn">&#8594;</button>
+                        </div>
+                    </div>
+                </div>
       			</div>
     		</div>
     		<div class="about-dynearthsol-parent">
@@ -228,5 +220,39 @@
         				}
       			});
     		}
-  	</script></body>
+  	</script>
+    <script>
+      const carouselImages = [
+        'images/DES3D_Case01.png',
+        'images/DES3D_Case02.png',
+        'images/DES3D_Case03.png'
+      ];
+      let currentIndex = 0;
+    
+      const carouselImage = document.getElementById('carousel-image');
+      const indicator = document.getElementById('carousel-indicator');
+      const prevBtn = document.getElementById('prev-btn');
+      const nextBtn = document.getElementById('next-btn');
+    
+      function updateCarousel() {
+        carouselImage.src = carouselImages[currentIndex];
+        indicator.textContent = `${currentIndex + 1} / ${carouselImages.length}`;
+      }
+    
+      prevBtn.addEventListener('click', () => {
+        currentIndex = (currentIndex - 1 + carouselImages.length) % carouselImages.length;
+        updateCarousel();
+      });
+    
+      nextBtn.addEventListener('click', () => {
+        currentIndex = (currentIndex + 1) % carouselImages.length;
+        updateCarousel();
+      });
+    
+      // Optional: Auto-advance every 5 seconds
+      // setInterval(() => nextBtn.click(), 5000);
+    
+      updateCarousel();
+    </script>
+</body>
 </html>
