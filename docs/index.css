@@ -541,15 +541,24 @@
 }
 .carousel-frame {
   position: relative;
-/*   width: 623px; */
+  width: 100%;           /* or your desired width */
+  height: 400px;         /* set your desired height */
+  overflow: hidden;
+  display: flex;
+  align-items: center;   /* optional, centers buttons vertically */
+  justify-content: center; /* optional */
+}
+/* .carousel-frame {
+  position: relative;
   align-self: stretch;
+  width: 623px;
   width: 100%;
   height: 400px;
   margin: auto;
   overflow: hidden;
   border-radius: 10px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.09);
-}
+} */
 .carousel-frame img {
   width: 100%;
   height: 100%;
