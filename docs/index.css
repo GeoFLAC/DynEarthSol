@@ -533,7 +533,8 @@
 }
 .carousel-frame {
   position: relative;
-  width: 623px;
+/*   width: 623px; */
+  align-self: stretch;
   height: 500px;
   margin: auto;
   overflow: hidden;
