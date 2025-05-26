@@ -1343,38 +1343,40 @@ namespace {
          * sedimentation.
          */
 
+#ifndef ACC
+        #pragma omp parallel default(none) shared(var,NODE_OF_FACET)
+#endif
+        #pragma acc parallel
+        {
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
-        const int_vec& top_nodes = *surfinfo.top_nodes;
+            const int_vec& top_nodes = *var.surfinfo.top_nodes;
 
-        const int top_bdry = iboundz1;
-        const auto& top = *(var.bfacets[top_bdry]);
+            const auto& top = *(var.bfacets[iboundz1]);
 
         const int ntop = surfinfo.ntop;
 
-        double *total_dx = var.surfinfo.total_dx->data();
-        double *total_slope = var.surfinfo.total_slope->data();
+            double_vec& total_dx = *var.surfinfo.total_dx;
+            double_vec& total_slope = *var.surfinfo.total_slope;
         double_vec& dh = *var.surfinfo.dh;
 
         // loops over all top facets
-        const size_t tsize = top.size();
+            const int tsize = top.size();
 
-        double_vec protected_area_arr(tsize, 0.0);
-        array_t protected_slope_arr(tsize, 0.0);
-
-        #pragma omp parallel default(none) shared(var,top,coord,dh,total_dx,total_slope, \
-            protected_area_arr,protected_slope_arr,NODE_OF_FACET,top_nodes,surfinfo)
-        {
+#ifndef ACC
             #pragma omp for
-            #pragma acc parallel loop
+#endif
+            #pragma acc loop
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
             }
 
+#ifndef ACC
             #pragma omp for
-            #pragma acc parallel loop
-            for (std::size_t i=0; i<tsize; ++i) {
+#endif
+            #pragma acc loop
+            for (int i=0; i<tsize; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
                 int e = top[i].first;
@@ -1419,7 +1421,7 @@ namespace {
                     projected_area = 0.5 * normal[2];
                 }
 
-                protected_area_arr[i] = projected_area;
+                (*var.etmp)[i] = projected_area;
 
                 double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
                 double iv = 1 / (2 * projected_area);
@@ -1443,7 +1445,7 @@ namespace {
                     double slope = 0;
                     for (int k=0; k<NODES_PER_FACET; k++)
                         slope += D[j][k] * coord[n[k]][2];
-                    protected_slope_arr[i][j] = slope * projected_area;
+                    (*var.tmp_result)[i][j] = slope * projected_area;
                 }
 #else
                 /* The 1D diffusion operation is implemented ad hoc, not using FEM
@@ -1453,14 +1455,17 @@ namespace {
                 int n1 = top_nodes[i+1];
 
                 double dx = std::fabs(coord[n1][0] - coord[n0][0]);
-                protected_area_arr[i] = dx;
+                (*var.etmp)[i] = dx;
 
-                protected_slope_arr[i][0] = -(coord[n1][1] - coord[n0][1]) / dx;
-                protected_slope_arr[i][1] = (coord[n1][1] - coord[n0][1]) / dx;
+                (*var.tmp_result)[i][0] = -(coord[n1][1] - coord[n0][1]) / dx;
+                (*var.tmp_result)[i][1] = (coord[n1][1] - coord[n0][1]) / dx;
 #endif
             }
 
+#ifndef ACC
             #pragma omp for
+#endif
+            #pragma acc loop
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1468,7 +1473,7 @@ namespace {
 
                 for (int j=0; j<surf_sup.size(); ++j) {
                     int k = surf_sup[j];
-                    total_dx[n] += protected_area_arr[k];
+                    total_dx[n] += (*var.etmp)[k];
 
                     // this facet belongs to element e
                     int e = top[k].first;
@@ -1484,27 +1489,29 @@ namespace {
 
                     for (int m=0; m<NODES_PER_FACET; ++m) {
                         if (nn[m] == n) {
-                            total_slope[n] += protected_slope_arr[k][m];
+                            total_slope[n] += (*var.tmp_result)[k][m];
                             break;
                         }
                     }
                 }
 #else
                 if (i == 0) {
-                    total_dx[n] = protected_area_arr[i];
-                    total_slope[n] = protected_slope_arr[i][0];
+                    total_dx[n] = (*var.etmp)[i];
+                    total_slope[n] = (*var.tmp_result)[i][0];
                 } else if (i == ntop-1) {
-                    total_dx[n] = protected_area_arr[i-1];
-                    total_slope[n] = protected_slope_arr[i-1][1];
+                    total_dx[n] = (*var.etmp)[i-1];
+                    total_slope[n] = (*var.tmp_result)[i-1][1];
                 } else {
-                    total_dx[n] = protected_area_arr[i-1] + protected_area_arr[i];
-                    total_slope[n] = protected_slope_arr[i-1][1] + protected_slope_arr[i][0];
+                    total_dx[n] = (*var.etmp)[i-1] + (*var.etmp)[i];
+                    total_slope[n] = (*var.tmp_result)[i-1][1] + (*var.tmp_result)[i][0];
                 }
 #endif
             }
 
+#ifndef ACC
             #pragma omp for
-            #pragma acc parallel loop
+#endif
+            #pragma acc loop
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
