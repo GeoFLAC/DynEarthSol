@@ -1105,11 +1105,29 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
+#ifndef ACC
+        #pragma omp parallel default(none) shared(param, var, force, i)
+#endif
+        #pragma acc parallel
+        {
         const auto& bdry = *(var.bfacets[i]);
+            const int_vec& bnodes = *(var.bnodes[i]);
 
         const int bound = static_cast<int>(bdry.size());
+            const int nbdry_nodes = static_cast<int>(bnodes.size());
+
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc loop
+            for (int e=0; e<var.nelem; ++e)
+                (*var.etmp_int)[e] = -1;
 
         // loops over all bdry facets
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc loop
         for (int n=0; n<bound; ++n) {
             // this facet belongs to element e
             int e = bdry[n].first;
@@ -1159,12 +1177,39 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 p = ref_pressure(param, zcenter);
             }
 
+                (*var.etmp_int)[e] = n;
+                double *tmp = (*var.tmp_result)[n];
             // lithostatc support - Archimed force (normal to the surface)
             for (int j=0; j<NODES_PER_FACET; ++j) {
                 int nn = conn[NODE_OF_FACET[f][j]];
                 double *f = force[nn];
                 for (int d=0; d<NDIMS; ++d) {
-                    f[d] -= p * normal[d] / NODES_PER_FACET;
+                        tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
+                    }
+                }
+            }
+
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc loop
+            for (int j=0; j<nbdry_nodes; ++j) {
+                const int n = bnodes[j];
+                const int_vec& sup = (*var.support)[n];
+                for (int k=0; k<sup.size(); ++k) {
+                    int e = sup[k];
+                    int ibound = (*var.etmp_int)[e];
+                    if (ibound < 0) continue;  // not a boundary element
+
+                    int f = bdry[ibound].second;  // facet index
+                    const int *conn = (*var.connectivity)[e];
+                    for (int l=0; l<NODES_PER_FACET; ++l) {
+                        if (n == conn[NODE_OF_FACET[f][l]]) {
+                            for (int d=0; d<NDIMS; ++d)
+                                force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];  // subtract the force from the facet
+                            break;  // found the node in the facet
+                        }
+                    }
                 }
             }
         }
