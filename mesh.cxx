@@ -2256,6 +2256,7 @@ void create_top_elems(Variables& var)
         telems.push_back(*it);
 
     var.top_elems = new int_vec(telems.begin(),telems.end());
+    var.ntop_elems = telems.size();
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -2274,6 +2275,7 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     double_vec top_x(ntop,0.);
 
     surfinfo.ntop = ntop;
+    surfinfo.etop = etop;
     for (size_t i=0;i<ntop;i++)
         top_x[i] = (*var.coord)[top_tmp[i]][0];
 
@@ -2361,6 +2363,7 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.top_nodes =  new int_vec(top_nodes.begin(),top_nodes.end());
 
     surfinfo.ntop = ntop;
+    surfinfo.etop = etop;
     surfinfo.max_surf_vel = 0;
     surfinfo.base_level = param.control.surf_base_level;
     surfinfo.surf_diff = param.control.surface_diffusivity;

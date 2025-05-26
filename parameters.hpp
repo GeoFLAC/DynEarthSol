@@ -399,6 +399,7 @@ struct SurfaceInfo {
 
     int efacet_top;
     int ntop;
+    int etop;
 
     double base_level;
     double surf_diff;
@@ -508,6 +509,7 @@ struct Variables {
     double_vec vbc_vertical_ratio_x1;
 
     int_vec *top_elems;
+    int ntop_elems;
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;
 
