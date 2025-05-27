@@ -470,20 +470,21 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     // correct surface marker.
     Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
 
-    const size_t ntop_elem = var.top_elems->size();
+    const int ntop_elem = var.top_elems->size();
     array_t coord0s(ntop_elem*NODES_PER_ELEM, 0.);
 
     int_vec delete_marker;
-    delete_marker.reserve(100);
+    int nchange = 0;
 
-    #pragma omp parallel default(none) firstprivate(ntop_elem) \
-        shared(param,var,coord0s,dhacc,bary,delete_marker,elemmarkers,markers_in_elem)
+#ifndef ACC
+    #pragma omp parallel default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc,bary,markers_in_elem) reduction(+:nchange)
+#endif
     {
-        int_vec delete_local;
-        int_map emarker_local;
-
+#ifndef ACC
         #pragma omp for
-        for (size_t i=0;i<ntop_elem;i++) {
+#endif
+        #pragma acc parallel loop
+        for (int i=0;i<ntop_elem;i++) {
             int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
 
             double *c00 = coord0s[i*NODES_PER_ELEM];
@@ -512,62 +513,119 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     #endif
         }
 
-        #pragma omp for nowait
-        for (int i=0; i<_nmarkers;i++) {
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop reduction(+:nchange)
+        for (int i=0; i<ntop_elem;i++) {
+            int e = (*var.top_elems)[i];
+            int_vec &markers = markers_in_elem[e];
+            int nmarker = markers.size();
+            for (int j=0; j<nmarker;j++) {
+                int m = markers[j];
+                (*_tmp)[m] = 0.;
             double m_coord[NDIMS], new_eta[NDIMS];
-            int e = (*_elem)[i];
-            auto it = find(var.top_elems->begin(), var.top_elems->end(), e);
-            // If element was not found
-            if (it == var.top_elems->end())
-                continue;
-            int e_ind = it - var.top_elems->begin();
-
             for (int k=0; k<NDIMS; k++) {
                 m_coord[k] = 0.;
-                for (int j=0; j<NODES_PER_ELEM; j++)
-                    m_coord[k] += (*_eta)[i][j] * coord0s[e_ind*NODES_PER_ELEM+j][k];
+                    for (int l=0; l<NODES_PER_ELEM; l++)
+                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
             }
             // check if the marker is still in original element
-            bary.transform(m_coord,e_ind,new_eta);
-            if (bary.is_inside(new_eta))
-                set_eta(i, new_eta);
-            else {
+                bary.transform(m_coord,i,new_eta);
+                if (bary.is_inside(new_eta)) {
+                    set_eta(m, new_eta);
+                } else {
+                    ++(*_tmp)[m];
+                    ++nchange;
+                }
+            }
+        }
+    }
+
+    if (nchange > 0) {
+        // printf("Correcting %d markers in %d elements.\n", nchange, ntop_elem);
+        delete_marker.reserve(nchange);
+
+#ifndef ACC
+        #pragma omp parallel default(none) firstprivate(ntop_elem) \
+            shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
+#endif
+        {
+#ifndef ACC
+            #pragma omp for
+#else
+            #pragma omp single
+#endif
+            #pragma acc parallel loop
+            for (int i=0; i<ntop_elem;i++) {
+                int e = (*var.top_elems)[i];
+                int_vec &markers = markers_in_elem[e];
+                for (int j=0; j<(int)markers.size();++j) {
+                    int m = markers[j];
+                    if ((*_tmp)[m] < 1.) continue;
+
+                    double m_coord[NDIMS], new_eta[NDIMS];
+
+                    for (int k=0; k<NDIMS; k++) {
+                        m_coord[k] = 0.;
+                        for (int l=0; l<NODES_PER_ELEM; l++)
+                            m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+                    }
+
                 int inc, new_elem;
-                int mat = (*_mattype)[i];
-                // std::cout << "Marker " << i << " in element " << e_ind << " is trying to remap in element ";
+                    int mat = (*_mattype)[m];
                 // find new element of the marker
                 remap_marker(var,m_coord,e,new_elem,new_eta,inc);
                 if (inc) {
-                    set_eta(i, new_eta);
-                    set_elem(i, new_elem);
-                    emarker_local[new_elem * param.mat.nmat + mat]++;
-                    #pragma omp critical
-                    markers_in_elem[new_elem].push_back(i);
-                    // std::cout << "... Success!.\n";
+                        set_eta(m, new_eta);
+                        set_elem(m, new_elem);
+                        ++elemmarkers[e][mat];
+                        (*_tmp)[m] = 2.; // mark as change;
                 }
                 else {
-                    delete_local.emplace_back(i);
-                    // std::cout << "... Fail!. (Erosion might have occurred)\n";
+                        (*_tmp)[m] = -1.;
                 }
-                emarker_local[e * param.mat.nmat + mat]--;
-                #pragma omp critical
-                markers_in_elem[e].erase(std::remove(markers_in_elem[e].begin(), markers_in_elem[e].end(), i), markers_in_elem[e].end());
+                    --elemmarkers[e][mat];
+                }
             }
-        }
 
+            #pragma omp for
+            for (int i=0; i<ntop_elem;i++) {
+                int e = (*var.top_elems)[i];
+                int_vec &markers = markers_in_elem[e];
+                int j = 0;
+                int k = markers.size();
+                while (j < k) {
+                    int m = markers[j];
+                    if ((*_tmp)[m] < -0.5) {
+                        (*_tmp)[m] = 0.;
         #pragma omp critical
-        delete_marker.insert(delete_marker.end(), delete_local.begin(), delete_local.end());
-
+                        markers.erase(markers.begin()+j);
+                        --k;
         #pragma omp critical
-        for (auto it = emarker_local.begin(); it != emarker_local.end(); ++it) {
-            int e = it->first / param.mat.nmat;
-            int mat = it->first % param.mat.nmat;
-            elemmarkers[e][mat] += it->second;
+                        delete_marker.emplace_back(m);
+                    } else if ((*_tmp)[m] > 1.5) { 
+                        (*_tmp)[m] = 0.;
+                        #pragma omp critical
+                        markers.erase(markers.begin()+j);
+                        --k;
+                        #pragma omp critical
+                        {
+                            int_vec &markers_new = markers_in_elem[(*_elem)[m]];
+                            auto it = std::lower_bound(markers_new.begin(),markers_new.end(), m);
+                            markers_new.insert(it, m);
+                        }
+                    } else {
+                        ++j;
+                    }
+                }
         }
     }
 
     // delete recorded marker
+        if (!delete_marker.empty())
     remove_markers(delete_marker);
+    }
 
 #ifdef USE_NPROF
     nvtxRangePop();
