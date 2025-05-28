@@ -8,9 +8,9 @@ header:
 
 # DynEarthSol
 
-Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D.
+Dynamic Earth Solver, a standard finite element transplant of [geoflac](https://github.com/GeoFLAC/geoflac) for unstructured meshes with P1 elements in 2D and 3D.
 
-[User Manual](https://geoflac.github.io/desed/) | [Input Generator](https://geoflac.github.io/des-inputgen/) | [Help](https://github.com/GeoFLAC/DynEarthSol/issues) | [View on GitHub](https://github.com/GeoFLAC/DynEarthSol/)
+[User Manual](https://geoflac.github.io/des3d/) | [Input Generator](https://geoflac.github.io/des-inputgen/) | [Help](https://github.com/GeoFLAC/DynEarthSol/issues) | [View on GitHub](https://github.com/GeoFLAC/DynEarthSol/)
 
 ## Get Started
 
