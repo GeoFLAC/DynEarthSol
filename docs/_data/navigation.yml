@@ -6,7 +6,7 @@ main:
   - title: "About GeoFLAC"
     url: https://github.com/GeoFLAC/
   - title: "Developers"
-    url: https://github.com/GeoFLAC/people
+    url: https://github.com/orgs/GeoFLAC/people
   - title: "License"
     url: /_pages/license/
   - title: "Contact"
