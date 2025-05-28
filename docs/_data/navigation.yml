@@ -2,12 +2,12 @@ main:
   - title: "Home"
     url: /
   - title: "Quickstart"
-    url: /quickstart/
+    url: /_pages/quickstart/
   - title: "About GeoFLAC"
     url: https://github.com/GeoFLAC/
   - title: "Developers"
     url: https://github.com/GeoFLAC/people
   - title: "License"
-    url: /license/
+    url: /_pages/license/
   - title: "Contact"
     url: https://github.com/GeoFLAC/DynEarthSol/issues/
