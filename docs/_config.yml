@@ -1,0 +1,8 @@
+theme: minimal-mistakes-jekyll
+title: DynEarthSol
+url: "https://geoflac.github.io"
+baseurl: "/DynEarthSol"
+logo: "/assets/images/favicon.svg"
+description: "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
+plugins: jekyll-include-cache
+remote_theme: "mmistakes/minimal-mistakes@4.27.1"
