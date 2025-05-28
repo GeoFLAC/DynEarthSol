@@ -3,7 +3,7 @@ title: "DynEarthSol"
 layout: splash
 permalink: /
 header:
-  overlay_image: /assets/images/DES3D_Case01.png
+  overlay_image: /assets/images/banner_lowres.png
 ---
 
 # DynEarthSol
