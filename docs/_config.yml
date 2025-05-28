@@ -6,3 +6,7 @@ description: "Dynamic Earth Solver, a standard finite element transplant of geof
 remote_theme: "mmistakes/minimal-mistakes@4.27.1"
 plugins:
   - jekyll-include-cache
+collections:
+  pages:
+    output: true
+    permalink: /:name/
