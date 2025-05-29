@@ -1,13 +1,20 @@
-# main:
+main:
   - title: "Home"
     url: /
+    target: _blank
   - title: "Quickstart"
     url: /_pages/quickstart/
+    target: _blank
   - title: "About GeoFLAC"
     url: https://github.com/GeoFLAC/
+    target: _blank
   - title: "Developers"
     url: https://github.com/orgs/GeoFLAC/people
+    target: _blank
   - title: "License"
     url: /_pages/license/
+    target: _blank
   - title: "Contact"
     url: https://github.com/GeoFLAC/DynEarthSol/issues/
+    target: _blank
+
