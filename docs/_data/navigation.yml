@@ -5,16 +5,28 @@ main:
   - title: "Quickstart"
     url: /_pages/quickstart/
     target: _blank
-  - title: "About GeoFLAC"
-    url: https://github.com/GeoFLAC/
+  - title: "User Manual"
+    url: https://geoflac.github.io/des3d/
     target: _blank
-  - title: "Developers"
-    url: https://github.com/orgs/GeoFLAC/people
+  - title: "Input Generator"
+    url: https://geoflac.github.io/des-inputgen/
     target: _blank
-  - title: "License"
-    url: /_pages/license/
+  - title: "Help"
+    url: https://github.com/GeoFLAC/DynEarthSol/issues
     target: _blank
-  - title: "Contact"
-    url: https://github.com/GeoFLAC/DynEarthSol/issues/
+  - title: "View on GitHub"
+    url: https://github.com/GeoFLAC/DynEarthSol/
     target: _blank
+  # - title: "About GeoFLAC"
+  #   url: https://github.com/GeoFLAC/
+  #   target: _blank
+  # - title: "Developers"
+  #   url: https://github.com/orgs/GeoFLAC/people
+  #   target: _blank
+  # - title: "License"
+  #   url: /_pages/license/
+  #   target: _blank
+  # - title: "Contact"
+  #   url: https://github.com/GeoFLAC/DynEarthSol/issues/
+  #   target: _blank
 
