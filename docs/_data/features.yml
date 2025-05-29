@@ -5,9 +5,9 @@ feature_row:
     # alt: "Globe"
   - title: "Updated Lagrangian scheme"
     excerpt: "DynEarthSol can simulate large deformations within the framework of small-strain kinematics and naturally keep track of free boundary deformation. It also enjoys the power of dynamic mesh adaption."
-    image_path: /assets/images/Globe.svg
-    alt: "Globe"
+    # image_path: /assets/images/Globe.svg
+    # alt: "Globe"
   - title: "Various material models"
     excerpt: "DynEarthSol provides linear elasticity, poro-elasticity, Mohr-Coulomb plasticity with strain or rate-and-state weakening, and Maxwell viscoelasticity. DynEarthSol make it  easy to implement new material models."
-    image_path: /assets/images/Globe.svg
-    alt: "Globe"
+    # image_path: /assets/images/Globe.svg
+    # alt: "Globe"
