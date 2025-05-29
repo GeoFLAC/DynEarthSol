@@ -5,27 +5,9 @@ permalink: /
 header:
   overlay_image: /assets/images/banner_lowres.png
   tagline: "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
-feature_row:
-  - image_path: /assets/images/Globe.svg
-    alt: "Globe"
-    title: "Explicit dynamic relaxation"
-    excerpt: "DynEarthSol finds static or quasi-static equilibrium through dynamic relaxation. Combined with explicit time marching, this feature significantly improves stability and allows for large deformations."
-  - image_path: /assets/images/Globe.svg
-    alt: "Globe"
-    title: "Updated Lagrangian scheme"
-    excerpt: "Can simulate large deformations within the framework of small-strain kinematics and keeps track of free boundary deformation."
-  - image_path: /assets/images/Globe.svg
-    alt: "Globe"
-    title: "Various material models"
-    excerpt: "Provides linear elasticity, poro-elasticity, Mohr-Coulomb plasticity, and Maxwell viscoelasticity."
 ---
 
-{{ site.data.features.feature_row | inspect }}
-
-<!-- {% raw %} -->
-<!-- {% include feature_row feature_row=site.data.features.feature_row %} -->
-<!-- {% include feature_row %}
-{% endraw %} -->
+{% include feature_row feature_row=site.data.features.feature_row %}
 
 # Get Started
 
