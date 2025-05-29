@@ -3,7 +3,7 @@ main:
   #   url: /
   #   target: _blank
   - title: "Quickstart"
-    url: /index.md#get-started
+    url: /#get-started
     target: _blank
   - title: "User Manual"
     url: https://geoflac.github.io/des3d/
