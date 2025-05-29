@@ -8,7 +8,7 @@ tagline: "Dynamic Earth Solver, a standard finite element transplant of geoflac 
 ---
 
 <!-- {% raw %} -->
-{% include feature_row feature_row=site.data.features %}
+{% include feature_row feature_row=site.data.features.feature_row %}
 <!-- {% include feature_row %}
 {% endraw %} -->
 
