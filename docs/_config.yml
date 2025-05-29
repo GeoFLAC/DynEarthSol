@@ -19,7 +19,7 @@ locale                   : "en-US"
 rtl                      : # true, false (default) # turns direction of the page into right to left for RTL languages
 title                    : "DynEarthSol"
 title_separator          : "-"
-subtitle                 : "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
+subtitle                 : "Dynamic Earth Solver, a versatile tectonic modeling tool"
 name                     : #"GeoFLAC Team"
 description              : "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
 url                      : "https://geoflac.github.io"

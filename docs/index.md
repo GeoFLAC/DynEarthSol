@@ -4,6 +4,7 @@ layout: splash
 permalink: /
 header:
   overlay_image: /assets/images/banner_lowres.png
+tagline: "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
 ---
 
 {% include feature_row id="main_features" %}
