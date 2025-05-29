@@ -7,9 +7,10 @@ header:
 tagline: "Dynamic Earth Solver, a standard finite element transplant of geoflac for unstructured meshes with P1 elements in 2D and 3D."
 ---
 
-{% raw %}
-{% include feature_row %}
-{% endraw %}
+<!-- {% raw %} -->
+{% include feature_row feature_row=site.data.features %}
+<!-- {% include feature_row %}
+{% endraw %} -->
 
 # Get Started
 
