@@ -20,6 +20,8 @@ feature_row:
     excerpt: "Provides linear elasticity, poro-elasticity, Mohr-Coulomb plasticity, and Maxwell viscoelasticity."
 ---
 
+{{ site.data.features.feature_row | inspect }}
+
 <!-- {% raw %} -->
 <!-- {% include feature_row feature_row=site.data.features.feature_row %} -->
 <!-- {% include feature_row %}
