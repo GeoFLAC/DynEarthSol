@@ -1546,7 +1546,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
     int nx_new, nz_new, nnode_new, nelem_new, nseg_new;
-    int ind;
 
     // find sides    
     int side_top[var.nx], side_bottom[var.nx+1-var.nz%2], side_left[var.nz], side_right[var.nz];
@@ -1579,7 +1578,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         inz[j][1] = p[1];
     }
     // give assign z value to the new mesh
-    ind = 0;
     double ddz = (old_coord[side_left[0]][1] - 0.)/(nz_new-1);
 
     for (int j=0; j<nz_new; ++j) {
@@ -1611,7 +1609,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     }
 
     // give assign z value to the new mesh
-    ind = 0;
     ddz = (old_coord[side_right[0]][1] - 0.)/(nz_new-1);
     for (int j=0; j<nz_new; ++j) {
         if (j == nz_new-1) {
