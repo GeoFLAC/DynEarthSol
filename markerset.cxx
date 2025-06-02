@@ -179,9 +179,6 @@ void MarkerSet::append_marker_at_i(AppendMarkerData &md, int idx, int last_id)
 
 void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, double z, double distance, double slope)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
         // Resize the marker-related arrays if necessary.
@@ -213,9 +210,6 @@ void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, do
 
     ++_nmarkers;
     ++_last_id;
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
 }
 
 
