@@ -147,14 +147,14 @@ void reallocate_variables(const Param& param, Variables& var)
 
 
 void update_temperature(const Param &param, const Variables &var,
-                        double_vec &temperature, double_vec &tdot, elem_cache &tmp_result)
+                        double_vec &temperature, elem_cache &tmp_result)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     // Magma freezing
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result,tdot)
+    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result)
 #endif
     {
 #ifndef ACC
@@ -196,25 +196,27 @@ void update_temperature(const Param &param, const Variables &var,
         #pragma acc parallel loop async
 #endif
         for (int n=0;n<var.nnode;n++) {
-            tdot[n]=0;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const int *conn = (*var.connectivity)[*e];
-                const double *tr = tmp_result[*e];
-                bool found = false;
-                for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
-                    if (n == conn[i]) {
-                        tdot[n] += tr[i];
-                        found= true;
-                    }
-                }
-            }
-        // Combining temperature update and bc in the same loop for efficiency,
-        // since only the top boundary has Dirichlet bc, and all the other boundaries
-        // have no heat flux bc.
             if ((*var.bcflag)[n] & BOUNDZ1)
                 temperature[n] = param.bc.surface_temperature;
-            else
-                temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
+            else {
+                double tmp = 0;
+
+                for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+                    const int *conn = (*var.connectivity)[*e];
+                    const double *tr = tmp_result[*e];
+                    bool found = false;
+                    for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
+                        if (n == conn[i]) {
+                            tmp += tr[i];
+                            found= true;
+                        }
+                    }
+                }
+                // Combining temperature update and bc in the same loop for efficiency,
+                // since only the top boundary has Dirichlet bc, and all the other boundaries
+                // have no heat flux bc.
+                temperature[n] -= tmp * var.dt / (*var.tmass)[n];
+            }
         }
     }
 

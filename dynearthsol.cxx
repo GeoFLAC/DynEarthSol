@@ -548,7 +548,7 @@ int main(int argc, const char* argv[])
         var.time += var.dt;
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
-            update_temperature(param, var, *var.temperature, *var.ntmp, *var.tmp_result);
+            update_temperature(param, var, *var.temperature, *var.tmp_result);
 
         update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
         update_strain_rate(var, *var.strain_rate);
