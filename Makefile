@@ -406,7 +406,7 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) CUDA_DIR=$(CUDA_DIR)
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nprof=$(nprof) CUDA_DIR=$(CUDA_DIR)
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)

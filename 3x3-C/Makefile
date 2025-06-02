@@ -3,10 +3,23 @@
 CC            = g++
 CFLAGS        = -Wall -O3 -ffast-math #-funsafe-loop-optimizations
 
+ifeq ($(nprof), 1)
+	CC = nvc++
+endif
 ifeq ($(openacc), 1)
 	CC = nvc++
-	# CFLAGS = -Wall -O3 -mno-fma -Minfo=mp,accel -I$(CUDA_DIR)/include -acc=gpu -gpu=managed,nofma -Mcuda
-	CFLAGS = -Wall -O3 -mno-fma -Minfo=mp,accel -I$(CUDA_DIR)/include -acc=gpu -gpu=mem:managed,nofma -cuda
+endif
+
+ifneq (, $(findstring nvc++, $(CC)))
+	CFLAGS = Wall -O3 -mno-fma
+
+	ifeq ($(nprof), 1)
+		CFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include
+	endif
+	ifeq ($(openacc), 1)
+		CFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda
+	endif
+
 endif
 
 # Archiver
