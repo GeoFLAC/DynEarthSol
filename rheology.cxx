@@ -643,19 +643,23 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 
     // Interpolate pore pressure from nodes to element level
-    double_vec ppressure_element(var.nelem, 0.0);
-    double_vec dppressure_element(var.nelem, 0.0);
+    // double_vec ppressure_element(var.nelem, 0.0);
+    // double_vec dppressure_element(var.nelem, 0.0);
     // Define element velocity arrays
-    double_vec velocity_x_element(var.nelem, 0.0);
-    double_vec velocity_y_element(var.nelem, 0.0);
-    double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
+    // double_vec velocity_x_element(var.nelem, 0.0);
+    // double_vec velocity_y_element(var.nelem, 0.0);
+    // double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
 
-    #pragma omp parallel default(none) shared(param, var, ppressure, ppressure_element, dppressure, dppressure_element, \
-        vel, velocity_x_element, velocity_y_element, velocity_z_element, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
+// #ifndef ACC
+    #pragma omp parallel default(none) shared(param, var, ppressure, dppressure, \
+        vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
                 strain_rate, std::cerr)
+// #endif
     {
+// #ifndef ACC
         #pragma omp for
-        #pragma acc parallel loop
+// #endif
+        // 1 #pragma acc parallel loop
         for (int e = 0; e < var.nelem; e++) {
             const int *conn = (*var.connectivity)[e];
             double pp_element = 0.0;
@@ -679,18 +683,30 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
             #endif
             }
-            ppressure_element[e] = pp_element;  // Store element-level pore pressure 
-            dppressure_element[e] = dpp_element;  // Store element-level pore pressure rate
-            velocity_x_element[e] = vx_element;  // Store element-level velocity in x direction
-            velocity_y_element[e] = vy_element;  // Store element-level velocity in y direction
-            #ifdef THREED
-            velocity_z_element[e] = vz_element;  // Store element-level velocity in z direction
-            #endif
-        }
+            // ppressure_element[e] = pp_element;  // Store element-level pore pressure 
+            // dppressure_element[e] = dpp_element;  // Store element-level pore pressure rate
+            // velocity_x_element[e] = vx_element;  // Store element-level velocity in x direction
+            // velocity_y_element[e] = vy_element;  // Store element-level velocity in y direction
+            // #ifdef THREED
+            // velocity_z_element[e] = vz_element;  // Store element-level velocity in z direction
+            // #endif
 
-        #pragma omp for
-        #pragma acc parallel loop
-        for (int e=0; e<var.nelem; ++e) {
+            double pp = pp_element;  // Store element-level pore pressure 
+            double dpp = dpp_element;  // Store element-level pore pressure rate
+            double vx = vx_element;  // Store element-level velocity in x direction
+            double vy = vy_element;  // Store element-level velocity in y direction
+            #ifdef THREED
+            double vz = vz_element;  // Store element-level velocity in z direction
+            #endif
+
+
+//         }
+
+// #ifndef ACC
+//         #pragma omp for
+// #endif
+//         // // 1 #pragma acc parallel loop
+//         for (int e=0; e<var.nelem; ++e) {
             // stress, strain and strain_rate of this element
             double* s = stress[e];
             double& syy = stressyy[e];
@@ -700,12 +716,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
             // Calculate effective pore pressure using Biot's coefficient
             double alpha_b = var.mat->alpha_biot(e); // Biot coefficient
-            double pp = ppressure_element[e];        // Use element-level interpolated pore pressure
-            double dpp = dppressure_element[e];        // Use element-level interpolated pore pressure rate
+            // double pp = ppressure_element[e];        // Use element-level interpolated pore pressure
+            // double dpp = dppressure_element[e];        // Use element-level interpolated pore pressure rate
 
-            double vx = velocity_x_element[e];        // Use element-level interpolated velocity in x direction
-            double vy = velocity_y_element[e];        // Use element-level interpolated velocity in y direction
-            double vz = velocity_z_element[e];        // Use element-level interpolated velocity in z direction
+            // double vx = velocity_x_element[e];        // Use element-level interpolated velocity in x direction
+            // double vy = velocity_y_element[e];        // Use element-level interpolated velocity in y direction
+            // double vz = velocity_z_element[e];        // Use element-level interpolated velocity in z direction
 
             // // Calculate the center of the element
             // const int *conn = (*var.connectivity)[e];
