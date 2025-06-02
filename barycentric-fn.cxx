@@ -8,14 +8,14 @@
 Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(connectivity.size())
+    : coeff_(connectivity.size()), nelem_(connectivity.size())
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     #pragma omp parallel for default(none) \
         shared(coord, connectivity, volume)
-    for (std::size_t e=0; e<connectivity.size(); ++e) {
+    for (int e=0; e<nelem_; ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
@@ -42,14 +42,14 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
                                                        const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(elem.size())
+    : coeff_(elem.size()), nelem_(elem.size())
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     #pragma omp parallel for default(none) \
         shared(elem, coord, connectivity, volume)
-    for (std::size_t i=0; i<elem.size(); ++i) {
+    for (int i=0; i<nelem_; ++i) {
         int e = elem[i];
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -75,7 +75,7 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
 
 Barycentric_transformation::Barycentric_transformation(const double** coord,
                                                        const double volume)
-    : coeff_(1)
+    : coeff_(1), nelem_(1)
 {
     const double *a = coord[0];
     const double *b = coord[1];
