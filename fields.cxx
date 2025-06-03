@@ -360,11 +360,12 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    double *v[NODES_PER_ELEM];
 
-    #pragma omp parallel for default(none) shared(var, strain_rate) private(v)
-    #pragma acc parallel loop private(v)
+    #pragma omp parallel for default(none) shared(var, strain_rate)
+    #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
+        double *v[NODES_PER_ELEM];
+
         const int *conn = (*var.connectivity)[e];
         const double *shpdx = (*var.shpdx)[e];
         const double *shpdz = (*var.shpdz)[e];
