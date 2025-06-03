@@ -514,6 +514,8 @@ struct Variables {
     int_vec2D *hydrous_markers_in_elem;
 
     int_vec2D *support;
+    int_vec *support_arr;
+    int_vec *support_idx;
 
     double_vec *volume, *volume_old, *volume_n;
     double_vec *mass, *tmass;

@@ -2579,18 +2579,50 @@ void create_boundary_facets(Variables& var)
 }
 
 
+int get_support(const Variables& var, const int inode, const int isup)
+{
+    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
+    return (*var.support_arr)[start + isup];
+}
+
+int get_sup_size(const Variables& var, const int inode)
+{
+    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
+    const int end = (*var.support_idx)[inode];
+    return end - start;
+}
+
+
 void create_support(Variables& var)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     var.support = new int_vec2D(var.nnode);
+    var.support_idx = new int_vec(var.nnode, 0);
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             (*var.support)[conn[i]].push_back(e);
+            (*var.support_idx)[conn[i]]++;
+        }
+    }
+    // create suppert 1D for ACC
+    for (int n=1; n<var.nnode; ++n)
+        (*var.support_idx)[n] = (*var.support_idx)[n-1] + (*var.support_idx)[n];
+
+    int nsup = (*var.support_idx)[var.nnode-1];
+
+    var.support_arr = new int_vec((*var.support_idx)[var.nnode-1]);
+
+    // fill support_arr
+    for (int n=0; n<var.nnode; ++n) {
+        int start = (n == 0) ? 0 : (*var.support_idx)[n-1];
+        int end = (*var.support_idx)[n];
+        for (int i=start; i<end; ++i) {
+            (*var.support_arr)[i] = (*var.support)[n][i-start];
         }
     }
     // std::cout << "support:\n";
