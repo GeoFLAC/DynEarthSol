@@ -1106,7 +1106,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
 #ifndef ACC
-        #pragma omp parallel default(none) shared(param, var, force, i)
+        #pragma omp parallel default(none) shared(param, var, force, i, NODE_OF_FACET)
 #endif
         #pragma acc parallel
         {
