@@ -500,6 +500,8 @@ struct Variables {
     double vbc_val_z1_loading_period;
 
     std::map<std::pair<int,int>, double*> edge_vectors;
+    double_vec edge_vec;
+    int_vec edge_vec_idx;
     double_vec vbc_vertical_div_x0;
     double_vec vbc_vertical_div_x1;
     double_vec vbc_vertical_ratio_x0;

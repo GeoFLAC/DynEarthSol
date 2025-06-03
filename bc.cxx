@@ -96,7 +96,7 @@ double find_max_vbc(const BC &bc)
 
 
 void create_boundary_normals(const Variables &var, array_t &bnormals,
-                             std::map<std::pair<int,int>, double*>  &edge_vectors)
+                             std::map<std::pair<int,int>, double*>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx)
 {
     /* This subroutine finds the outward normal unit vectors of boundaries.
      * There are two types of boundaries: ibound{x,y,z}? and iboundn?.
@@ -182,6 +182,12 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
             s[1] = 1;
 #endif
             edge_vectors[std::make_pair(i, j)] = s;
+            edge_vec_idx.push_back(i*nbdrytypes + j);
+            edge_vec.push_back(s[0]);
+            edge_vec.push_back(s[1]);
+#ifdef THREED
+            edge_vec.push_back(s[2]);
+#endif
         }
     }
 }
@@ -267,7 +273,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
 
     // diverging x-boundary
-    const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
+    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
 
 
     int bc_x0 = bc.vbc_x0;
@@ -294,7 +300,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -302,7 +308,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -516,7 +522,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -554,7 +566,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -720,7 +738,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 #endif
 
     // diverging x-boundary
-    const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
+    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
 
 
     int bc_x0 = bc.vbc_x0;
@@ -747,7 +765,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -755,7 +773,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -970,7 +988,14 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
+                                    // auto edge = edgevec->at(std::make_pair(ic, ib));
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -1008,7 +1033,13 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
