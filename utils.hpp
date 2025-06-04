@@ -187,12 +187,25 @@ static void check_nan(const Variables& var) {
             for (int i=0; i<NSTR; i++)
                 if (std::isnan((*var.stress)[e][i]))
                     out_nan_error("stress", e, i);
+
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdx)[e][i]))
+                    out_nan_error("shpdx", e, i);
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdy)[e][i]))
+                    out_nan_error("shpdy", e, i);
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdz)[e][i]))
+                    out_nan_error("shpdz", e, i);
         }
 
         #pragma omp for
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
                 out_nan_error("temperature", n);
+
+            if (std::isnan((*var.tmass)[n]))
+                out_nan_error("tmass", n);
 
             for (int i=0; i<NDIMS; i++) {
                 if (std::isnan((*var.force)[n][i]))
