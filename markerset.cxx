@@ -461,177 +461,6 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
 }
 
-// surface processes correcttion of marker
-void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem)
-{
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
-    // correct surface marker.
-    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
-
-    const int ntop_elem = var.top_elems->size();
-    array_t coord0s(ntop_elem*NODES_PER_ELEM, 0.);
-
-    int_vec delete_marker;
-    int nchange = 0;
-
-#ifndef ACC
-    #pragma omp parallel default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc,bary,markers_in_elem) reduction(+:nchange)
-#endif
-    {
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop
-        for (int i=0;i<ntop_elem;i++) {
-            int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
-
-            double *c00 = coord0s[i*NODES_PER_ELEM];
-            double *c01 = coord0s[i*NODES_PER_ELEM+1];
-            double *c02 = coord0s[i*NODES_PER_ELEM+2];
-    #ifdef THREED
-            double *c03 = coord0s[i*NODES_PER_ELEM+3];
-    #endif
-
-            // restore the reference node locations before deposition/erosion 
-            c00[0] = (*var.coord)[tnodes[0]][0];
-            c01[0] = (*var.coord)[tnodes[1]][0];
-            c02[0] = (*var.coord)[tnodes[2]][0];
-
-            c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
-            c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
-            c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
-    #ifdef THREED            
-            c00[1] = (*var.coord)[tnodes[0]][1];
-            c01[1] = (*var.coord)[tnodes[1]][1];
-            c02[1] = (*var.coord)[tnodes[2]][1];
-
-            c03[0] = (*var.coord)[tnodes[3]][0];
-            c03[1] = (*var.coord)[tnodes[3]][1];
-            c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
-    #endif
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop reduction(+:nchange)
-        for (int i=0; i<ntop_elem;i++) {
-            int e = (*var.top_elems)[i];
-            int_vec &markers = markers_in_elem[e];
-            int nmarker = markers.size();
-            for (int j=0; j<nmarker;j++) {
-                int m = markers[j];
-                (*_tmp)[m] = 0.;
-            double m_coord[NDIMS], new_eta[NDIMS];
-            for (int k=0; k<NDIMS; k++) {
-                m_coord[k] = 0.;
-                    for (int l=0; l<NODES_PER_ELEM; l++)
-                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
-            }
-            // check if the marker is still in original element
-                bary.transform(m_coord,i,new_eta);
-                if (bary.is_inside(new_eta)) {
-                    set_eta(m, new_eta);
-                } else {
-                    ++(*_tmp)[m];
-                    ++nchange;
-                }
-            }
-        }
-    }
-
-    if (nchange > 0) {
-        // printf("Correcting %d markers in %d elements.\n", nchange, ntop_elem);
-        delete_marker.reserve(nchange);
-
-#ifndef ACC
-        #pragma omp parallel default(none) firstprivate(ntop_elem) \
-            shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
-#endif
-        {
-#ifndef ACC
-            #pragma omp for
-#else
-            #pragma omp single
-#endif
-            #pragma acc parallel loop
-            for (int i=0; i<ntop_elem;i++) {
-                int e = (*var.top_elems)[i];
-                int_vec &markers = markers_in_elem[e];
-                for (int j=0; j<(int)markers.size();++j) {
-                    int m = markers[j];
-                    if ((*_tmp)[m] < 1.) continue;
-
-                    double m_coord[NDIMS], new_eta[NDIMS];
-
-                    for (int k=0; k<NDIMS; k++) {
-                        m_coord[k] = 0.;
-                        for (int l=0; l<NODES_PER_ELEM; l++)
-                            m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
-                    }
-
-                int inc, new_elem;
-                    int mat = (*_mattype)[m];
-                // find new element of the marker
-                remap_marker(var,m_coord,e,new_elem,new_eta,inc);
-                if (inc) {
-                        set_eta(m, new_eta);
-                        set_elem(m, new_elem);
-                        ++elemmarkers[e][mat];
-                        (*_tmp)[m] = 2.; // mark as change;
-                }
-                else {
-                        (*_tmp)[m] = -1.;
-                }
-                    --elemmarkers[e][mat];
-                }
-            }
-
-            #pragma omp for
-            for (int i=0; i<ntop_elem;i++) {
-                int e = (*var.top_elems)[i];
-                int_vec &markers = markers_in_elem[e];
-                int j = 0;
-                int k = markers.size();
-                while (j < k) {
-                    int m = markers[j];
-                    if ((*_tmp)[m] < -0.5) {
-                        (*_tmp)[m] = 0.;
-        #pragma omp critical
-                        markers.erase(markers.begin()+j);
-                        --k;
-        #pragma omp critical
-                        delete_marker.emplace_back(m);
-                    } else if ((*_tmp)[m] > 1.5) { 
-                        (*_tmp)[m] = 0.;
-                        #pragma omp critical
-                        markers.erase(markers.begin()+j);
-                        --k;
-                        #pragma omp critical
-                        {
-                            int_vec &markers_new = markers_in_elem[(*_elem)[m]];
-                            auto it = std::lower_bound(markers_new.begin(),markers_new.end(), m);
-                            markers_new.insert(it, m);
-                        }
-                    } else {
-                        ++j;
-                    }
-                }
-        }
-    }
-
-    // delete recorded marker
-        if (!delete_marker.empty())
-    remove_markers(delete_marker);
-    }
-
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-}
-
 
 void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
                     const int e, int& new_elem, double *new_eta, int& inc)
@@ -1209,7 +1038,7 @@ namespace {
     }
 
 
-    void replenish_markers_with_mattype_0(const Param& param, Variables &var,
+    void replenish_markers_with_mattype_0(const Param& param, const Variables &var,
                                           int_pair_vec &unplenished_elems)
     {
 #ifdef USE_NPROF
@@ -1237,7 +1066,7 @@ namespace {
     }
 
 
-    void replenish_markers_with_mattype_from_cpdf(const Param& param, Variables &var,
+    void replenish_markers_with_mattype_from_cpdf(const Param& param, const Variables &var,
                                                   int_pair_vec &unplenished_elems)
     {
 #ifdef USE_NPROF
@@ -1309,7 +1138,7 @@ namespace {
     }
 
 
-    void replenish_markers_with_mattype_from_nn(const Param& param, Variables &var,
+    void replenish_markers_with_mattype_from_nn(const Param& param, const Variables &var,
                                                 int_pair_vec &unplenished_elems)
     {
         if (unplenished_elems.empty()) return;
@@ -1343,7 +1172,7 @@ namespace {
 
                 while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
                     double eta[NODES_PER_ELEM];
-                    ms.random_eta_seed(eta, e+num_marker_in_elem);
+                    ms.random_eta_seed(eta, e+num_marker_in_elem+var.steps);
 
                     double x[NDIMS] = {0};
                     const int *conn = (*var.connectivity)[e];
@@ -1402,6 +1231,206 @@ namespace {
     }
 
 } // anonymous namespace
+
+
+// surface processes correcttion of marker
+void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    // correct surface marker.
+    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
+
+    const int ntop_elem = var.top_elems->size();
+    array_t coord0s(ntop_elem*NODES_PER_ELEM, 0.);
+
+    int_vec delete_marker;
+    int nchange = 0;
+
+#ifndef ACC
+    #pragma omp parallel default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc,bary,markers_in_elem) reduction(+:nchange)
+#endif
+    {
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop
+        for (int i=0;i<ntop_elem;i++) {
+            int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
+
+            double *c00 = coord0s[i*NODES_PER_ELEM];
+            double *c01 = coord0s[i*NODES_PER_ELEM+1];
+            double *c02 = coord0s[i*NODES_PER_ELEM+2];
+    #ifdef THREED
+            double *c03 = coord0s[i*NODES_PER_ELEM+3];
+    #endif
+
+            // restore the reference node locations before deposition/erosion 
+            c00[0] = (*var.coord)[tnodes[0]][0];
+            c01[0] = (*var.coord)[tnodes[1]][0];
+            c02[0] = (*var.coord)[tnodes[2]][0];
+
+            c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
+            c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
+            c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
+    #ifdef THREED            
+            c00[1] = (*var.coord)[tnodes[0]][1];
+            c01[1] = (*var.coord)[tnodes[1]][1];
+            c02[1] = (*var.coord)[tnodes[2]][1];
+
+            c03[0] = (*var.coord)[tnodes[3]][0];
+            c03[1] = (*var.coord)[tnodes[3]][1];
+            c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
+    #endif
+        }
+
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop reduction(+:nchange)
+        for (int i=0; i<ntop_elem;i++) {
+            int e = (*var.top_elems)[i];
+            int_vec &markers = markers_in_elem[e];
+            int nmarker = markers.size();
+            for (int j=0; j<nmarker;j++) {
+                int m = markers[j];
+                (*_tmp)[m] = 0.;
+            double m_coord[NDIMS], new_eta[NDIMS];
+            for (int k=0; k<NDIMS; k++) {
+                m_coord[k] = 0.;
+                    for (int l=0; l<NODES_PER_ELEM; l++)
+                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+            }
+            // check if the marker is still in original element
+                bary.transform(m_coord,i,new_eta);
+                if (bary.is_inside(new_eta)) {
+                    set_eta(m, new_eta);
+                } else {
+                    ++(*_tmp)[m];
+                    ++nchange;
+                }
+            }
+        }
+    }
+
+    if (nchange > 0) {
+        delete_marker.reserve(nchange);
+
+        // #pragma omp parallel for default(none) firstprivate(ntop_elem) \
+        //     shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
+        for (int i=0; i<ntop_elem;i++) {
+            int e = (*var.top_elems)[i];
+            int_vec &markers = markers_in_elem[e];
+            for (int j=0; j<(int)markers.size();++j) {
+                int m = markers[j];
+                if ((*_tmp)[m] < 1.) continue;
+
+                double m_coord[NDIMS], new_eta[NDIMS];
+
+                for (int k=0; k<NDIMS; k++) {
+                    m_coord[k] = 0.;
+                    for (int l=0; l<NODES_PER_ELEM; l++)
+                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+                }
+
+                int inc, new_elem;
+                int mat = (*_mattype)[m];
+                // find new element of the marker
+                remap_marker(var,m_coord,e,new_elem,new_eta,inc);
+                if (inc) {
+                    set_eta(m, new_eta);
+                    set_elem(m, new_elem);
+                    (*_tmp)[m] = 2.; // mark as change;
+                } else {
+                    (*_tmp)[m] = -1.;
+                }
+            }
+        }
+
+        for (int i=0; i<ntop_elem;i++) {
+            int e = (*var.top_elems)[i];
+            int_vec &markers = markers_in_elem[e];
+            int j = 0;
+            int k = markers.size();
+            while (j < k) {
+                int m = markers[j];
+                if ((*_tmp)[m] < -0.5) {
+                    (*_tmp)[m] = 0.;
+                    markers.erase(markers.begin()+j);
+                    --k;
+                    --elemmarkers[e][(*_mattype)[m]];
+                    delete_marker.emplace_back(m);
+                } else if ((*_tmp)[m] > 1.5) { 
+                    (*_tmp)[m] = 0.;
+                    markers.erase(markers.begin()+j);
+                    --k;
+                    --elemmarkers[e][(*_mattype)[m]];
+                    ++elemmarkers[(*_elem)[m]][(*_mattype)[m]];
+
+                    int_vec &markers_new = markers_in_elem[(*_elem)[m]];
+                    auto it = std::lower_bound(markers_new.begin(),markers_new.end(), m);
+                    markers_new.insert(it, m);
+
+                } else {
+                    ++j;
+                }
+            }
+        }
+        // delete recorded marker
+        if (!delete_marker.empty())
+            remove_markers(delete_marker);
+
+        int_pair_vec unplenished_elems;
+        for (int i=0; i<ntop_elem; i++) {
+            int e = (*var.top_elems)[i];
+            int  nmarkers = markers_in_elem[e].size();
+
+            if (nmarkers < param.markers.min_num_markers_in_element)
+                unplenished_elems.emplace_back(e, nmarkers);
+        }
+
+        if (unplenished_elems.size() > 0) {
+            printf("replenish markers in %d elements.\n", (int)unplenished_elems.size());
+            for (int i=0; i<(int)unplenished_elems.size(); i++) {
+                int e = unplenished_elems[i].first;
+                int nmarkers = unplenished_elems[i].second;
+                printf("  Element %d has %d markers.\n", e, nmarkers);
+            }
+        }
+
+        switch (param.markers.replenishment_option) {
+        case 0:
+            replenish_markers_with_mattype_0(param, var, unplenished_elems);
+            break;
+        case 1:
+            replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems);
+            break;
+        case 2:
+            replenish_markers_with_mattype_from_nn(param, var, unplenished_elems);
+            break;
+        default:
+            std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
+            std::exit(1);
+        }
+
+        for (int i=0; i<ntop_elem; i++) {
+            int e = (*var.top_elems)[i];
+            int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
+            int  nmarkers = (*var.markers_in_elem)[e].size();
+            if (nemarker0 != nmarkers) {
+                std::cerr << "Error: number of markers in element " << e
+                        << " does not match number of elemmarkers: "
+                        << nmarkers << " vs. " << nemarker0 << '\n';
+                std::exit(1);
+            }
+        }
+    }
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
 
 
 void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
