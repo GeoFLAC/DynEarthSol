@@ -5,6 +5,7 @@ CASE := test-3d-tiny.cfg
 #CASE := test-topo.cfg
 FRAME := 4
 OMP := 1
+ACC := 0
 TFLAG = # time -v
 DEBUG := 0
 NSYS := 0
@@ -16,11 +17,15 @@ FUNC := compute_mass
 GITID = $(shell git rev-parse HEAD | cut -c1-7)
 
 ifeq ($(DEBUG), 1)
-	DEBUGFLAG = valgrind --tool=helgrind --log-file=valgrind-out.txt -v
+	ifeq ($(ACC), 1)
+		DEBUGFLAG = CUDA_LAUNCH_BLOCKING=1 CUDA_MEMCHECK=1 # NV_ACC_NOTIFY=3 NV_ACC_DEBUG=0x800  # compute-sanitizer #  # 
+	else
+		DEBUGFLAG = valgrind --tool=helgrind --log-file=valgrind-out.txt -v
+	endif
 endif
 ifeq ($(NSYS), 1)
-	DEBUGFLAG = nsys profile --trace=cuda,nvtx,osrt,openmp --output=benchmark.${GITID}.${CASE}.${OMP}
-#	NSYSSUM = nsys stats -o benchmark.${GITID}.${CASE}.${OMP}.csv benchmark.${GITID}.${CASE}.${OMP}.qdrep 
+	DEBUGFLAG = nsys profile --trace=cuda,nvtx,osrt,openmp,openacc --output=benchmark.${GITID}.${CASE}.${OMP}
+	# NSYSSUM = nsys stats -o benchmark.${GITID}.${CASE}.${OMP}.csv benchmark.${GITID}.${CASE}.${OMP}.nsys-rep
 endif
 ifeq ($(VTK), 1)
 	VTKFLAG = ${MAKE} vtk
