@@ -1128,6 +1128,11 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     //
     // Gravity-induced (hydrostatic and lithostatic) stress BCs
     //
+
+    #pragma omp parallel for
+    for (int e=0; e<var.nelem; ++e)
+        (*var.etmp_int)[e] = -1;
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.vbc_types[i] != 0 &&
             var.vbc_types[i] != 2 &&
@@ -1136,94 +1141,87 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
-#ifndef ACC
+// #ifndef ACC
         #pragma omp parallel default(none) shared(param, var, force, i, NODE_OF_FACET)
-#endif
-        #pragma acc parallel
+// #endif
+        // #pragma acc parallel
         {
-        const auto& bdry = *(var.bfacets[i]);
+            const auto& bdry = *(var.bfacets[i]);
             const int_vec& bnodes = *(var.bnodes[i]);
 
-        const int bound = static_cast<int>(bdry.size());
+            const int bound = static_cast<int>(bdry.size());
             const int nbdry_nodes = static_cast<int>(bnodes.size());
 
-#ifndef ACC
-            #pragma omp for
-#endif
-            #pragma acc loop
-            for (int e=0; e<var.nelem; ++e)
-                (*var.etmp_int)[e] = -1;
-
         // loops over all bdry facets
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
-        for (int n=0; n<bound; ++n) {
-            // this facet belongs to element e
-            int e = bdry[n].first;
-            // this facet is the f-th facet of e
-            int f = bdry[n].second;
-            const int *conn = (*var.connectivity)[e];
+// #endif
+            // #pragma acc loop
+            for (int n=0; n<bound; ++n) {
+                // this facet belongs to element e
+                int e = bdry[n].first;
+                // this facet is the f-th facet of e
+                int f = bdry[n].second;
+                const int *conn = (*var.connectivity)[e];
 
-            // the outward-normal vector
-            double normal[NDIMS];
-            // the z-coordinate of the facet center
-            double zcenter;
+                // the outward-normal vector
+                double normal[NDIMS];
+                // the z-coordinate of the facet center
+                double zcenter;
 
-            normal_vector_of_facet(f, conn, *var.coord, normal, zcenter);
+                normal_vector_of_facet(f, conn, *var.coord, normal, zcenter);
 
-            double p;
-            if (i==iboundz0 && param.bc.has_winkler_foundation) {
-                double rho_effective = var.mat->rho(e);  // Base density of the solid material
+                double p;
+                if (i==iboundz0 && param.bc.has_winkler_foundation) {
+                    double rho_effective = var.mat->rho(e);  // Base density of the solid material
 
-                // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
-                if (param.control.has_hydraulic_diffusion) {
-                    rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
-                    // 1000.0 is the fluid density (e.g., water, in kg/m³)
-                    // Winkler foundation for the bottom boundary with adjusted effective density
-                    p = var.compensation_pressure - 
-                        (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                        param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
+                    if (param.control.has_hydraulic_diffusion) {
+                        rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
+                        // 1000.0 is the fluid density (e.g., water, in kg/m³)
+                        // Winkler foundation for the bottom boundary with adjusted effective density
+                        p = var.compensation_pressure - 
+                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
+                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    }
+                    else
+                    {
+                        // Winkler foundation for the bottom boundary with adjusted effective density
+                        p = var.compensation_pressure - 
+                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
+                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    }
                 }
-                else
-                {
-                    // Winkler foundation for the bottom boundary with adjusted effective density
-                    p = var.compensation_pressure - 
-                        (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                        param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                else if (i==iboundz1 && param.bc.has_water_loading) {
+                    // hydrostatic water loading for the surface boundary
+                    p = 0;
+                    if (zcenter < param.control.surf_base_level) {
+                        // below sea level
+                        const double sea_water_density = 1030;
+                        p = sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
+                    }
                 }
-            }
-            else if (i==iboundz1 && param.bc.has_water_loading) {
-                // hydrostatic water loading for the surface boundary
-                p = 0;
-                if (zcenter < param.control.surf_base_level) {
-                    // below sea level
-                    const double sea_water_density = 1030;
-                    p = sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
+                else {
+                    // sidewalls
+                    p = ref_pressure(param, zcenter);
                 }
-            }
-            else {
-                // sidewalls
-                p = ref_pressure(param, zcenter);
-            }
 
                 (*var.etmp_int)[e] = n;
                 double *tmp = (*var.tmp_result)[n];
-            // lithostatc support - Archimed force (normal to the surface)
-            for (int j=0; j<NODES_PER_FACET; ++j) {
-                int nn = conn[NODE_OF_FACET[f][j]];
-                double *f = force[nn];
-                for (int d=0; d<NDIMS; ++d) {
-                        tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
+                // lithostatc support - Archimed force (normal to the surface)
+                for (int j=0; j<NODES_PER_FACET; ++j) {
+                    int nn = conn[NODE_OF_FACET[f][j]];
+                    double *f = force[nn];
+                    for (int d=0; d<NDIMS; ++d) {
+                            tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
                     }
                 }
             }
 
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
+// #endif
+            // #pragma acc loop
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = bnodes[j];
                 const int_vec& sup = (*var.support)[n];
@@ -1242,6 +1240,12 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                         }
                     }
                 }
+            }
+
+            #pragma omp for
+            for (int n=0; n<bound; ++n) {
+                const int e = bdry[n].first;
+                (*var.etmp_int)[e] = -1;
             }
         }
     }
