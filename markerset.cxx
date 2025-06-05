@@ -1242,54 +1242,45 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     int_vec delete_marker;
     int nchange = 0;
 
-#ifndef ACC
-    #pragma omp parallel default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc,bary,markers_in_elem) reduction(+:nchange)
+    #pragma omp parallel for default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc)
+    // #pragma acc parallel loop
+    for (int i=0;i<ntop_elem;i++) {
+        int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
+
+        double *c00 = coord0s[i*NODES_PER_ELEM];
+        double *c01 = coord0s[i*NODES_PER_ELEM+1];
+        double *c02 = coord0s[i*NODES_PER_ELEM+2];
+#ifdef THREED
+        double *c03 = coord0s[i*NODES_PER_ELEM+3];
 #endif
-    {
-#ifndef ACC
-        #pragma omp for
+
+        // restore the reference node locations before deposition/erosion 
+        c00[0] = (*var.coord)[tnodes[0]][0];
+        c01[0] = (*var.coord)[tnodes[1]][0];
+        c02[0] = (*var.coord)[tnodes[2]][0];
+
+        c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
+        c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
+        c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
+#ifdef THREED
+        c00[1] = (*var.coord)[tnodes[0]][1];
+        c01[1] = (*var.coord)[tnodes[1]][1];
+        c02[1] = (*var.coord)[tnodes[2]][1];
+
+        c03[0] = (*var.coord)[tnodes[3]][0];
+        c03[1] = (*var.coord)[tnodes[3]][1];
+        c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
 #endif
-        #pragma acc parallel loop
-        for (int i=0;i<ntop_elem;i++) {
-            int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
+    }
 
-            double *c00 = coord0s[i*NODES_PER_ELEM];
-            double *c01 = coord0s[i*NODES_PER_ELEM+1];
-            double *c02 = coord0s[i*NODES_PER_ELEM+2];
-    #ifdef THREED
-            double *c03 = coord0s[i*NODES_PER_ELEM+3];
-    #endif
-
-            // restore the reference node locations before deposition/erosion 
-            c00[0] = (*var.coord)[tnodes[0]][0];
-            c01[0] = (*var.coord)[tnodes[1]][0];
-            c02[0] = (*var.coord)[tnodes[2]][0];
-
-            c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
-            c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
-            c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
-    #ifdef THREED            
-            c00[1] = (*var.coord)[tnodes[0]][1];
-            c01[1] = (*var.coord)[tnodes[1]][1];
-            c02[1] = (*var.coord)[tnodes[2]][1];
-
-            c03[0] = (*var.coord)[tnodes[3]][0];
-            c03[1] = (*var.coord)[tnodes[3]][1];
-            c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
-    #endif
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop reduction(+:nchange)
-        for (int i=0; i<ntop_elem;i++) {
-            int e = (*var.top_elems)[i];
-            int_vec &markers = markers_in_elem[e];
-            int nmarker = markers.size();
-            for (int j=0; j<nmarker;j++) {
-                int m = markers[j];
-                (*_tmp)[m] = 0.;
+    // #pragma omp parallel for default(none) firstprivate(ntop_elem) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange) TODO: fine result of non deterministic when parallelized
+    for (int i=0; i<ntop_elem;i++) {
+        int e = (*var.top_elems)[i];
+        int_vec &markers = markers_in_elem[e];
+        int nmarker = markers.size();
+        for (int j=0; j<nmarker;j++) {
+            int m = markers[j];
+            (*_tmp)[m] = 0.;
             double m_coord[NDIMS], new_eta[NDIMS];
             for (int k=0; k<NDIMS; k++) {
                 m_coord[k] = 0.;
@@ -1297,13 +1288,12 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                         m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
             }
             // check if the marker is still in original element
-                bary.transform(m_coord,i,new_eta);
-                if (bary.is_inside(new_eta)) {
-                    set_eta(m, new_eta);
-                } else {
-                    ++(*_tmp)[m];
-                    ++nchange;
-                }
+            bary.transform(m_coord,i,new_eta);
+            if (bary.is_inside(new_eta)) {
+                set_eta(m, new_eta);
+            } else {
+                ++(*_tmp)[m];
+                ++nchange;
             }
         }
     }
