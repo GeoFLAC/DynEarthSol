@@ -2046,26 +2046,25 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
         shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
     {
         #pragma omp for
-        for (size_t i=0; i<var.top_elems->size(); i++) {
+        for (int i=0; i<var.ntop_elems; i++) {
             const double *coord1[NODES_PER_ELEM];
 
-            auto e = (*var.top_elems)[i];
+            const int e = (*var.top_elems)[i];
 
             for (int j=0; j<NODES_PER_ELEM;j++)
                 coord1[j] = (*var.coord)[(*var.connectivity)[e][j]];
             double new_volumes = compute_volume(coord1);
             double rdv =  new_volumes / volume[e];
             volume[e] = new_volumes;
+            if (rdv < 1.0) continue;
 
             // correct stress and strain
-            if (rdv > 1.) {
-                // correct the plastic strain overestimation of surface element caused by sedimentation.
-                plstrain[e] /= rdv;
-                for (int j=0;j<NSTR;j++) {
-                    stress[e][j] /= rdv;
-                    strain[e][j] /= rdv;
-                    strain_rate[e][j] /= rdv;
-                }
+            plstrain[e] /= rdv;
+            // correct the plastic strain overestimation of surface element caused by sedimentation.
+            for (int j=0;j<NSTR;j++) {
+                stress[e][j] /= rdv;
+                strain[e][j] /= rdv;
+                strain_rate[e][j] /= rdv;
             }
         }
 
