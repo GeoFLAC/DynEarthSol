@@ -182,7 +182,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
-	CXXFLAGS = -mno-fma
+	CXXFLAGS = -mno-fma -g
 	LDFLAGS =
 	TETGENFLAGS = 
 
