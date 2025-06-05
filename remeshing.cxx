@@ -3119,6 +3119,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 
         delete var.support;
+        delete var.support_arr;
+        delete var.support_idx;
         create_support(var);
 
         std::cout << "    Remapping markers.\n";
