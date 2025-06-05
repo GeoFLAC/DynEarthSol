@@ -2148,7 +2148,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
         // update edvacc_surf of connected elements
         #pragma omp for
-        for (size_t i=0;i<surfinfo.top_facet_elems->size();i++) {
+        for (int i=0;i<var.surfinfo.etop;i++) {
             int e = (*surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
             double dh_e = 0.;
@@ -2172,7 +2172,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     // find max surface velocity
     double maxdh = 0.;
     #pragma omp parallel for default(none) shared(dh) firstprivate(ntop) reduction(max:maxdh)
-    for (std::size_t i=0; i<ntop; ++i) {
+    for (int i=0; i<ntop; ++i) {
         double tmp = fabs(dh[i]);
 
         if (maxdh < tmp)
