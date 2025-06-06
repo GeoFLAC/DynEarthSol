@@ -292,44 +292,29 @@ void phase_changes_init(const Param& param, Variables& var)
 void phase_changes(const Param& param, Variables& var)
 {
     if (var.phch == 0) return;  // no phase change
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
 
     PhaseChange& phch = *var.phch;
     MarkerSet& ms = *(var.markersets[0]);
-    int_vec2D& elemmarkers = *var.elemmarkers;
-    int_vec2D& markers_in_elem = *var.markers_in_elem;
+    #pragma omp parallel for default(none) shared(param, var, ms, phch)
+    for (int e=0; e<var.nelem; ++e) {
+        int nmarkers = (*var.markers_in_elem)[e].size();
+        for (int i=0; i<nmarkers; ++i) {
+            int m = (*var.markers_in_elem)[e][i];
 
-    #pragma omp parallel default(none)          \
-        shared(param, ms, elemmarkers, markers_in_elem, phch)
-    {
-        int_map emarker_local;
-
-        #pragma omp for nowait
-        for (int m=0; m<ms.get_nmarkers(); m++) {
             int current_mt = ms.get_mattype(m);
             int new_mt = phch(m);
 
             if (new_mt != current_mt) {
                 ms.set_mattype(m, new_mt);
-
-                // update marker count
-                int e = ms.get_elem(m);
-                emarker_local[e*param.mat.nmat + current_mt]--;
-                #pragma omp critical
-                markers_in_elem[e].erase(
-                    std::remove(markers_in_elem[e].begin(), markers_in_elem[e].end(), m),
-                    markers_in_elem[e].end());
-                emarker_local[e*param.mat.nmat + new_mt]++;
-                #pragma omp critical
-                markers_in_elem[e].push_back(m);
+                --(*var.elemmarkers)[e][current_mt];
+                ++(*var.elemmarkers)[e][new_mt];
             }
         }
-
-        #pragma omp critical
-        for (auto it = emarker_local.begin(); it != emarker_local.end(); ++it) {
-            int e = it->first / param.mat.nmat;
-            int mt = it->first % param.mat.nmat;
-            elemmarkers[e][mt] += it->second;
-        }
-
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
