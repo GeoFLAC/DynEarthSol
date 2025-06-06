@@ -719,7 +719,7 @@ int MarkerSet::custom_initial_mattype( const Param& param, const Variables &var,
     return mt;
 }
 
-void MarkerSet::remove_markers(int_vec& markers)
+void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
 {
     if (markers.empty()) return;
 
@@ -733,7 +733,7 @@ void MarkerSet::remove_markers(int_vec& markers)
     a_out.reserve(n);
     b_out.reserve(n);
 
-    #pragma omp parallel default(none) shared(replaced_markers, markers, n, a_out, b_out)
+    #pragma omp parallel default(none) shared(markers_in_elem,replaced_markers, markers, n, a_out, b_out)
     {
         #pragma omp for
         for (int i=0; i<n; i++)
@@ -753,8 +753,12 @@ void MarkerSet::remove_markers(int_vec& markers)
         }
 
         #pragma omp for
-        for (int i = 0; i < a_out.size(); i++)
+        for (int i = 0; i < a_out.size(); i++) {
+            int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
+            auto it = std::find(emarkers.begin(), emarkers.end(), b_out[i]);
+            emarkers[it - emarkers.begin()] = a_out[i];
             remove_marker_data(a_out[i],b_out[i]);
+        }
     }
 
     _nmarkers -= n;
@@ -1024,7 +1028,7 @@ namespace {
             }
         }
 
-        ms.remove_markers(removed_markers);
+        ms.remove_markers(removed_markers, markers_in_elem);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1363,7 +1367,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         }
         // delete recorded marker
         if (!delete_marker.empty())
-            remove_markers(delete_marker);
+            remove_markers(delete_marker, markers_in_elem);
 
         int_pair_vec unplenished_elems;
         for (int i=0; i<ntop_elem; i++) {
