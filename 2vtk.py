@@ -24,6 +24,7 @@ import base64, zlib, glob
 import numpy as np
 from scipy import spatial
 from numpy.linalg  import eigh
+from fractions import Fraction
 from Dynearthsol import Dynearthsol
 
 # Save in ASCII or encoded binary.
@@ -48,6 +49,9 @@ output_melting = False
 # Calculate heat flow?
 output_heatflux = False
 conductivity = 3.3
+
+# min mutiprocessing threads
+mutiprocessing_threads = 4
 
 ########################
 # Is numpy version < 1.8?
@@ -85,260 +89,282 @@ if npmajor < 1 or (npmajor == 1 and npminor < 8):
     eigh_vectorized = False
 
 
-def main(modelname, start, end, delta):
-    prefix = modelname
-    if output_in_cwd:
-        output_prefix = os.path.basename(modelname)
-    else:
-        output_prefix = modelname
+def process_single_frame(args):
+    des, output_prefix, i = args
 
+    frame = des.frames[i]
+    nnode = des.nnode_list[i]
+    nelem = des.nelem_list[i]
+    step = des.steps[i]
+    time_in_yr = des.time[i] / (365.2425 * 86400)
+
+    des.read_header(frame)
+    suffix = '{0:0=6}'.format(frame)
+
+    filename = '{0}.{1}.vtu'.format(output_prefix, suffix)
+    fvtu = open(filename, 'w')
+
+    try:
+        vtu_header(fvtu, nnode, nelem, time_in_yr, step)
+
+        #
+        # node-based field
+        #
+        fvtu.write('  <PointData>\n')
+
+        # averaged velocity is more stable and is preferred
+        try:
+            convert_field(des, frame, 'velocity averaged', fvtu)
+        except KeyError:
+            convert_field(des, frame, 'velocity', fvtu)
+
+        convert_field(des, frame, 'force', fvtu)
+        coord0 = des.read_field(frame, 'coord0')
+        coord = des.read_field(frame, 'coordinate')
+        disp = np.zeros((nnode, 3), dtype=coord.dtype)
+        disp[:,0:des.ndims] = coord - coord0
+        vtk_dataarray(fvtu, disp, 'total displacement', 3)
+        horizon = np.zeros((nnode), dtype=coord.dtype)
+        horizon[:] = coord0[:,-1]
+        vtk_dataarray(fvtu, horizon, 'horizon', 1)
+
+
+
+
+        '''
+        # find nearest neighbour marker of nodes
+        markersetname = 'markerset'
+        marker_data = des.read_markers(frame, markersetname)
+        nmarkers = marker_data['size']
+        if nmarkers <= 0:
+            raise MarkerSizeError()
+        marker_coord = marker_data[markersetname + '.coord']
+        marker_mattype = marker_data[markersetname + '.mattype']
+        kdtree = spatial.KDTree(marker_coord)
+        nn = kdtree.query(coord,1)
+        nnmattype = np.zeros((nnode), dtype=marker_mattype.dtype)
+
+        try:
+            marker_time = marker_data[markersetname + '.time']
+            nnchron = np.zeros((nnode), dtype=marker_time.dtype)
+            nnchron[:] = marker_time[nn[1]]
+        except:
+            pass
+
+        # abjust horizon of sediment node
+        horizon_max = max(horizon)
+        for j in range(nnode):
+            if marker_mattype[nn[1][j]] == 3:
+                horizon[j] = horizon_max
+            else:
+                try:
+                    nnchron[j] = 0.
+                except:
+                    pass
+
+
+        try:
+            vtk_dataarray(fvtu, nnchron, 'chron', 1)
+        except:
+            pass
+        '''
+
+        convert_field(des, frame, 'temperature', fvtu)
+        convert_field(des, frame, 'bcflag', fvtu)
+        #convert_field(des, frame, 'mass', fvtu)
+        #convert_field(des, frame, 'tmass', fvtu)
+        #convert_field(des, frame, 'volume_n', fvtu)
+        convert_field(des, frame, 'pore pressure', fvtu)
+
+        # node number for debugging
+        vtk_dataarray(fvtu, np.arange(nnode, dtype=np.int32), 'node number')
+
+        fvtu.write('  </PointData>\n')
+        #
+        # element-based field
+        #
+        fvtu.write('  <CellData>\n')
+
+        #convert_field(des, frame, 'volume', fvtu)
+        #convert_field(des, frame, 'edvoldt', fvtu)
+
+        convert_field(des, frame, 'mesh quality', fvtu)
+        convert_field(des, frame, 'plastic strain', fvtu)
+        convert_field(des, frame, 'plastic strain-rate', fvtu)
+        try:
+            convert_field(des, frame, 'radiogenic source', fvtu)
+        except KeyError:
+            pass
+
+        strain_rate = des.read_field(frame, 'strain-rate')
+        srII = second_invariant(strain_rate)
+        vtk_dataarray(fvtu, np.log10(srII+1e-45), 'strain-rate II log10')
+        if output_tensor_components:
+            for d in range(des.nstr):
+                vtk_dataarray(fvtu, strain_rate[:,d], 'strain-rate ' + des.component_names[d])
+
+        strain = des.read_field(frame, 'strain')
+        sI = first_invariant(strain)
+        sII = second_invariant(strain)
+        vtk_dataarray(fvtu, sI, 'strain I')
+        vtk_dataarray(fvtu, sII, 'strain II')
+        if output_tensor_components:
+            for d in range(des.nstr):
+                vtk_dataarray(fvtu, strain[:,d], 'strain ' + des.component_names[d])
+
+        # averaged stress is more stable and is preferred
+        try:
+            stress = des.read_field(frame, 'stress averaged')
+        except KeyError:
+            stress = des.read_field(frame, 'stress')
+        tI = first_invariant(stress)
+        
+        tII = second_invariant(stress)
+        vtk_dataarray(fvtu, tI, 'stress I')
+        vtk_dataarray(fvtu, tII, 'stress II')
+        if output_tensor_components:
+            # for d in range(des.ndims):
+            #     vtk_dataarray(fvtu, stress[:,d] - tI, 'stress ' + des.component_names[d] + ' dev.')
+            for d in range(des.ndims):
+                vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])                    
+            for d in range(des.ndims, des.nstr):
+                vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])
+        if output_principle_stress:
+            s1, s3 = compute_principal_stress(stress)
+            vtk_dataarray(fvtu, s1, 's1', 3)
+            vtk_dataarray(fvtu, s3, 's3', 3)
+
+        convert_field(des, frame, 'density', fvtu)
+        convert_field(des, frame, 'material', fvtu)
+        convert_field(des, frame, 'viscosity', fvtu)
+        effvisc = tII / (srII + 1e-45)
+        vtk_dataarray(fvtu, effvisc, 'effective viscosity')
+
+        # element number for debugging
+        vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
+
+        # melting mantle
+        if output_melting:
+            material = des.read_field(frame, 'material')
+            temperature = des.read_field(frame, 'temperature')
+            connectivity = des.read_field(frame, 'connectivity')
+            # Calculate the temperature of element
+            ecoord = np.array([coord[connectivity[e,:],:].mean(axis=0) for e in range(nelem)])
+            etemp = np.array([temperature[connectivity[e,:]].mean(axis=0) for e in range(nelem)])
+
+            melting = np.zeros(sI.shape)
+
+            # find surface
+            bcflag = des.read_field(frame, 'bcflag')
+            filter = Filter()
+            surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
+            orders = np.argsort(surfx)
+            surface = np.vstack((surfx[orders],surfz[orders]))
+            depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
+            pressure = depth * 9.8 * 2900.
+            # Hirschmann, 2000  https://doi.org/10.1029/2000GC000070
+            # Assumeing solidus is a line between (0 GPa, 1120 C) - (7 GPa, 1800 C)
+            #                                                    adibatic  themral gradient 0.3 C/km
+            melting[:] = -1000
+            ind = material < 2
+            melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
+            vtk_dataarray(fvtu, melting, 'melting')
+
+        # # heat flux
+        # # 3D is not implemented and tested yet
+        # if output_heatflux:               
+        #     flux, flux_val = des.load_calculation(frame, 'heat flux')
+
+        #     vtk_dataarray(fvtu, flux[0], 'heat flux x')
+        #     if des.ndims == 3:
+        #         vtk_dataarray(fvtu, flux[1], 'heat flux y')
+        #     vtk_dataarray(fvtu, flux[-1], 'heat flux z')
+        #     vtk_dataarray(fvtu, flux_val, 'heat flux magnitude')
+
+        fvtu.write('  </CellData>\n')
+
+        #
+        # node coordinate
+        #
+        fvtu.write('  <Points>\n')
+        convert_field(des, frame, 'coordinate', fvtu)
+        fvtu.write('  </Points>\n')
+
+        #
+        # element connectivity & types
+        #
+        fvtu.write('  <Cells>\n')
+        convert_field(des, frame, 'connectivity', fvtu)
+        vtk_dataarray(fvtu, (des.ndims+1)*np.array(range(1, nelem+1), dtype=np.int32), 'offsets')
+        if des.ndims == 2:
+            # VTK_ TRIANGLE == 5
+            celltype = 5
+        else:
+            # VTK_ TETRA == 10
+            celltype = 10
+        vtk_dataarray(fvtu, celltype*np.ones((nelem,), dtype=np.int32), 'types')
+        fvtu.write('  </Cells>\n')
+
+        vtu_footer(fvtu)
+        fvtu.close()
+
+    except:
+        # delete partial vtu file
+        fvtu.close()
+        os.remove(filename)
+        raise
+
+    #
+    # Converting marker
+    #
+    if output_markers:
+        # ordinary markerset
+        filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
+        output_vtp_file(des, frame, filename, 'markerset', time_in_yr, step)
+
+        # hydrous markerset
+        if 'hydrous-markerset size' in des.field_pos:
+            filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
+            output_vtp_file(des, frame, filename, 'hydrous-markerset', time_in_yr, step)
+
+    return suffix
+
+def main(modelname, start, end, delta):
     des = Dynearthsol(modelname)
+    prefix = os.path.basename(modelname) if output_in_cwd else modelname
 
     if start == -1:
         vtulist = sorted(glob.glob(modelname + '.*.vtu'))
         lastframe = int(vtulist[-1][(len(modelname)+1):-4]) if vtulist else des.frames[0]
         start = des.frames.index(lastframe) + 1
-
     if end == -1:
         end = len(des.frames)
 
-    for i in range(start, end, delta):
-        frame = des.frames[i]
-        nnode = des.nnode_list[i]
-        nelem = des.nelem_list[i]
-        step = des.steps[i]
-        time_in_yr = des.time[i] / (365.2425 * 86400)
+    indices = list(range(start, end, delta))
 
-        des.read_header(frame)
-        suffix = '{0:0=6}'.format(frame)
-        print('Converting frame #{0}'.format(suffix), end='\r', file=sys.stderr)
+    nout = len(indices)
+    ndigit = len(str(nout))
+    ndone = 0
+    
+    try:
+        import multiprocessing as mp
+        print(f'Using {mutiprocessing_threads} threads (-ncpu {mutiprocessing_threads}) for conversion (system max: {mp.cpu_count()}).', file=sys.stderr)
 
-        filename = '{0}.{1}.vtu'.format(output_prefix, suffix)
-        fvtu = open(filename, 'w')
+        args_list = [(des, prefix, i) for i in indices]
 
-        try:
-            vtu_header(fvtu, nnode, nelem, time_in_yr, step)
+        with mp.Pool(processes = mutiprocessing_threads) as pool:
+            for result in pool.imap_unordered(process_single_frame, args_list):
+                ndone += 1
+                print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
 
-            #
-            # node-based field
-            #
-            fvtu.write('  <PointData>\n')
-
-            # averaged velocity is more stable and is preferred
-            try:
-                convert_field(des, frame, 'velocity averaged', fvtu)
-            except KeyError:
-                convert_field(des, frame, 'velocity', fvtu)
-
-            convert_field(des, frame, 'force', fvtu)
-            coord0 = des.read_field(frame, 'coord0')
-            coord = des.read_field(frame, 'coordinate')
-            disp = np.zeros((nnode, 3), dtype=coord.dtype)
-            disp[:,0:des.ndims] = coord - coord0
-            vtk_dataarray(fvtu, disp, 'total displacement', 3)
-            horizon = np.zeros((nnode), dtype=coord.dtype)
-            horizon[:] = coord0[:,-1]
-            vtk_dataarray(fvtu, horizon, 'horizon', 1)
-
-
-
-
-            '''
-            # find nearest neighbour marker of nodes
-            markersetname = 'markerset'
-            marker_data = des.read_markers(frame, markersetname)
-            nmarkers = marker_data['size']
-            if nmarkers <= 0:
-                raise MarkerSizeError()
-            marker_coord = marker_data[markersetname + '.coord']
-            marker_mattype = marker_data[markersetname + '.mattype']
-            kdtree = spatial.KDTree(marker_coord)
-            nn = kdtree.query(coord,1)
-            nnmattype = np.zeros((nnode), dtype=marker_mattype.dtype)
-
-            try:
-                marker_time = marker_data[markersetname + '.time']
-                nnchron = np.zeros((nnode), dtype=marker_time.dtype)
-                nnchron[:] = marker_time[nn[1]]
-            except:
-                pass
-
-            # abjust horizon of sediment node
-            horizon_max = max(horizon)
-            for j in range(nnode):
-                if marker_mattype[nn[1][j]] == 3:
-                    horizon[j] = horizon_max
-                else:
-                    try:
-                        nnchron[j] = 0.
-                    except:
-                        pass
-
-
-            try:
-                vtk_dataarray(fvtu, nnchron, 'chron', 1)
-            except:
-                pass
-            '''
-
-            convert_field(des, frame, 'temperature', fvtu)
-            convert_field(des, frame, 'bcflag', fvtu)
-            #convert_field(des, frame, 'mass', fvtu)
-            #convert_field(des, frame, 'tmass', fvtu)
-            #convert_field(des, frame, 'volume_n', fvtu)
-            convert_field(des, frame, 'pore pressure', fvtu)
-
-            # node number for debugging
-            vtk_dataarray(fvtu, np.arange(nnode, dtype=np.int32), 'node number')
-
-            fvtu.write('  </PointData>\n')
-            #
-            # element-based field
-            #
-            fvtu.write('  <CellData>\n')
-
-            #convert_field(des, frame, 'volume', fvtu)
-            #convert_field(des, frame, 'edvoldt', fvtu)
-
-            convert_field(des, frame, 'mesh quality', fvtu)
-            convert_field(des, frame, 'plastic strain', fvtu)
-            convert_field(des, frame, 'plastic strain-rate', fvtu)
-            try:
-                convert_field(des, frame, 'radiogenic source', fvtu)
-            except KeyError:
-                pass
-
-            strain_rate = des.read_field(frame, 'strain-rate')
-            srII = second_invariant(strain_rate)
-            vtk_dataarray(fvtu, np.log10(srII+1e-45), 'strain-rate II log10')
-            if output_tensor_components:
-                for d in range(des.nstr):
-                    vtk_dataarray(fvtu, strain_rate[:,d], 'strain-rate ' + des.component_names[d])
-
-            strain = des.read_field(frame, 'strain')
-            sI = first_invariant(strain)
-            sII = second_invariant(strain)
-            vtk_dataarray(fvtu, sI, 'strain I')
-            vtk_dataarray(fvtu, sII, 'strain II')
-            if output_tensor_components:
-                for d in range(des.nstr):
-                    vtk_dataarray(fvtu, strain[:,d], 'strain ' + des.component_names[d])
-
-            # averaged stress is more stable and is preferred
-            try:
-                stress = des.read_field(frame, 'stress averaged')
-            except KeyError:
-                stress = des.read_field(frame, 'stress')
-            tI = first_invariant(stress)
+    except ImportError:
+        print('Multiprocessing is not available, using single thread instead.')
+        for i in indices:
+            result = process_single_frame((des, prefix, i))
+            ndone += 1
+            print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
             
-            tII = second_invariant(stress)
-            vtk_dataarray(fvtu, tI, 'stress I')
-            vtk_dataarray(fvtu, tII, 'stress II')
-            if output_tensor_components:
-                # for d in range(des.ndims):
-                #     vtk_dataarray(fvtu, stress[:,d] - tI, 'stress ' + des.component_names[d] + ' dev.')
-                for d in range(des.ndims):
-                    vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])                    
-                for d in range(des.ndims, des.nstr):
-                    vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])
-            if output_principle_stress:
-                s1, s3 = compute_principal_stress(stress)
-                vtk_dataarray(fvtu, s1, 's1', 3)
-                vtk_dataarray(fvtu, s3, 's3', 3)
-
-            convert_field(des, frame, 'density', fvtu)
-            convert_field(des, frame, 'material', fvtu)
-            convert_field(des, frame, 'viscosity', fvtu)
-            effvisc = tII / (srII + 1e-45)
-            vtk_dataarray(fvtu, effvisc, 'effective viscosity')
-
-            # element number for debugging
-            vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
-
-            # melting mantle
-            if output_melting:
-                material = des.read_field(frame, 'material')
-                temperature = des.read_field(frame, 'temperature')
-                connectivity = des.read_field(frame, 'connectivity')
-                # Calculate the temperature of element
-                ecoord = np.array([coord[connectivity[e,:],:].mean(axis=0) for e in range(nelem)])
-                etemp = np.array([temperature[connectivity[e,:]].mean(axis=0) for e in range(nelem)])
-
-                melting = np.zeros(sI.shape)
-
-                # find surface
-                bcflag = des.read_field(frame, 'bcflag')
-                filter = Filter()
-                surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
-                orders = np.argsort(surfx)
-                surface = np.vstack((surfx[orders],surfz[orders]))
-                depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
-                pressure = depth * 9.8 * 2900.
-                # Hirschmann, 2000  https://doi.org/10.1029/2000GC000070
-                # Assumeing solidus is a line between (0 GPa, 1120 C) - (7 GPa, 1800 C)
-                #                                                    adibatic  themral gradient 0.3 C/km
-                melting[:] = -1000
-                ind = material < 2
-                melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
-                vtk_dataarray(fvtu, melting, 'melting')
-
-            # # heat flux
-            # # 3D is not implemented and tested yet
-            # if output_heatflux:               
-            #     flux, flux_val = des.load_calculation(frame, 'heat flux')
-
-            #     vtk_dataarray(fvtu, flux[0], 'heat flux x')
-            #     if des.ndims == 3:
-            #         vtk_dataarray(fvtu, flux[1], 'heat flux y')
-            #     vtk_dataarray(fvtu, flux[-1], 'heat flux z')
-            #     vtk_dataarray(fvtu, flux_val, 'heat flux magnitude')
-
-            fvtu.write('  </CellData>\n')
-
-            #
-            # node coordinate
-            #
-            fvtu.write('  <Points>\n')
-            convert_field(des, frame, 'coordinate', fvtu)
-            fvtu.write('  </Points>\n')
-
-            #
-            # element connectivity & types
-            #
-            fvtu.write('  <Cells>\n')
-            convert_field(des, frame, 'connectivity', fvtu)
-            vtk_dataarray(fvtu, (des.ndims+1)*np.array(range(1, nelem+1), dtype=np.int32), 'offsets')
-            if des.ndims == 2:
-                # VTK_ TRIANGLE == 5
-                celltype = 5
-            else:
-                # VTK_ TETRA == 10
-                celltype = 10
-            vtk_dataarray(fvtu, celltype*np.ones((nelem,), dtype=np.int32), 'types')
-            fvtu.write('  </Cells>\n')
-
-            vtu_footer(fvtu)
-            fvtu.close()
-
-        except:
-            # delete partial vtu file
-            fvtu.close()
-            os.remove(filename)
-            raise
-
-        #
-        # Converting marker
-        #
-        if output_markers:
-            # ordinary markerset
-            filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
-            output_vtp_file(des, frame, filename, 'markerset', time_in_yr, step)
-
-            # hydrous markerset
-            if 'hydrous-markerset size' in des.field_pos:
-                filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
-                output_vtp_file(des, frame, filename, 'hydrous-markerset', time_in_yr, step)
-
+        
     print()
     return
 
@@ -601,6 +627,50 @@ def compute_principal_stress(stress):
 
     return s1, s3
 
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+def is_fraction(s):
+    try:
+        Fraction(s)
+        return True
+    except (ValueError, ZeroDivisionError):
+        return False
+
+def parse_thread_number(value):
+    try:
+        value = float(value)
+        if (value < 1 and value > 0):
+            value = int(mp.cpu_count() * value)
+        else:
+            value = min(mp.cpu_count(), int(value))
+        value = int(value)
+    except ValueError:
+        if value in ('True', 'true', 'all', 'yes'):
+            value = mp.cpu_count()
+        elif is_fraction(value):
+            value = int(Fraction(value) * mp.cpu_count())
+        else:
+            raise ValueError(f'Invalid value for -ncpu: {value}')
+
+    return min(mp.cpu_count(), value)
+
+def read_and_remove_option_value(option):
+    idx = sys.argv.index(option)
+    try:
+        value = sys.argv[idx+1]
+    except IndexError:
+        raise ValueError(f'Option {option} requires a value, but no value was provided.')
+    if value[0] == '-' and not is_number(value[1:]):
+        raise ValueError(f'Option {option} requires a value, but got {value}.')
+        
+    del sys.argv[idx+1:idx+2]
+    return value
+
 
 if __name__ == '__main__':
 
@@ -627,14 +697,23 @@ if __name__ == '__main__':
         output_melting = True
     if '-heat' in sys.argv:
         output_heatflux = False
+    if '-ncpu' in sys.argv:
+        try:
+            import multiprocessing as mp
+            value = read_and_remove_option_value('-ncpu')
+            mutiprocessing_threads = parse_thread_number(value)
+        except ImportError:
+            raise ImportError('Multiprocessing is not available, please install it to use -ncpu option.')
 
     # delete options
-    for i in range(len(sys.argv)):
-        if sys.argv[1][0] == '-':
-            del sys.argv[1]
+    narvg = len(sys.argv)
+    idx = 0
+    while (idx < narvg):
+        if sys.argv[idx][0] == '-' and not is_number(sys.argv[idx][1:]):
+            del sys.argv[idx]
+            narvg -= 1
         else:
-            # the rest of argv cannot be options
-            break
+            idx += 1
 
     modelname = sys.argv[1]
 
