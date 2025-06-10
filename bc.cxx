@@ -1347,10 +1347,10 @@ namespace {
          * sedimentation.
          */
 
-#ifndef ACC
+// #ifndef ACC
         #pragma omp parallel default(none) shared(var,NODE_OF_FACET)
-#endif
-        #pragma acc parallel
+// #endif
+        // #pragma acc parallel
         {
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
@@ -1367,19 +1367,19 @@ namespace {
         // loops over all top facets
             const int tsize = top.size();
 
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
+// #endif
+            // #pragma acc loop
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
             }
 
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
+// #endif
+            // #pragma acc loop
             for (int i=0; i<tsize; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
@@ -1466,10 +1466,10 @@ namespace {
 #endif
             }
 
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
+// #endif
+            // #pragma acc loop
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1512,10 +1512,10 @@ namespace {
 #endif
             }
 
-#ifndef ACC
+// #ifndef ACC
             #pragma omp for
-#endif
-            #pragma acc loop
+// #endif
+            // #pragma acc loop
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
@@ -2100,7 +2100,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     double_vec &dh_oc = *var.surfinfo.dh_oc;
     double_vec &dhacc = *var.surfinfo.dhacc;
 
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int i=0;i<ntop;i++)
         dh[i] = 0.;
 

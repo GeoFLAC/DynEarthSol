@@ -255,7 +255,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
     double diff_max_local = 1.0e-38;
 
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param, diff_max_local)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e = 0; e < var.nelem; e++) {
         const int *conn = (*var.connectivity)[e];
         double *tr = tmp_result[e];
@@ -319,7 +319,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
     var.mat->hydro_diff_max = diff_max_local;
 
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
         for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
@@ -361,7 +361,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #endif
 
     #pragma omp parallel for default(none) shared(var, strain_rate)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         double *v[NODES_PER_ELEM];
 
@@ -452,7 +452,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         #pragma omp parallel for default(none) \
             shared(var, param, force)  firstprivate(small_vel)
 #endif
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++)
                 if (std::fabs((*var.vel)[i][j]) > small_vel) {
@@ -464,7 +464,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         // damping prop. to force
         #pragma omp parallel for default(none) \
             shared(var, param, force)
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++)
                 force[i][j] -= param.control.damping_factor * force[i][j];
@@ -474,7 +474,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         // damping when force and velocity are parallel
         // weakly acclerating when force and velocity are anti-parallel
         #pragma omp parallel for default(none) shared(var, param, force)
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++) {
                 if ((force[i][j]<0) == ((*var.vel)[i][j]<0)) {
@@ -497,7 +497,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         #pragma omp parallel for default(none) \
             shared(var, param, force)  firstprivate(small_vel)
 #endif
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
             double mass = (*var.mass)[i];
             double young = (*var.ymass)[i];
@@ -557,7 +557,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result)
     {
         #pragma omp for
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             const int *conn = (*var.connectivity)[e];
             const double *shpdx = (*var.shpdx)[e];
@@ -590,7 +590,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
         }
 
         #pragma omp for
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             std::fill_n(force[n],NDIMS,0); 
             double *f = force[n];
@@ -641,7 +641,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
     double num = var.nnode * NDIMS;
 
     #pragma omp parallel for default(none) shared(var, force_residual, num) reduction(+:l2)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int i = 0; i < var.nnode; ++i)
         for (int j = 0; j < NDIMS; ++j)
             l2 += std::pow(force_residual[i][j], 2) / num;
@@ -661,7 +661,7 @@ void update_velocity(const Variables& var, array_t& vel)
 #endif
 
     #pragma omp parallel for default(none) shared(var, vel)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int i=0; i<var.nnode; ++i)
         for (int j=0;j<NDIMS;j++)
             vel[i][j] += var.dt * (*var.force)[i][j] / (*var.mass)[i];
@@ -678,7 +678,7 @@ void update_velocity_PT(const Variables& var, array_t& vel)
 #endif
 
     #pragma omp parallel for default(none) shared(var, vel)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int i=0; i<var.nnode; ++i)
         for (int j=0;j<NDIMS;j++)
             vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
@@ -699,7 +699,7 @@ void update_coordinate(const Variables& var, array_t& coord)
     // for gpu parallelization dt and bound need to be sent to 
 
     #pragma omp parallel for default(none) shared(var)
-    #pragma acc parallel loop collapse(2) 
+    // #pragma acc parallel loop collapse(2) 
     for (int i=0; i<var.nnode; ++i) {
         for (int j=0 ; j<NDIMS; ++j){
             (*var.coord)[i][j] += (*var.vel)[i][j] * var.dt;
@@ -774,7 +774,7 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
     // sj[5] = dt * ( s1 * w5 - s2 * w5 + s3 * w4 + s4 * w3)
 
     #pragma omp parallel for default(none) shared(var, stress, strain)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
 

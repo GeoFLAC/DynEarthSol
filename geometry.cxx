@@ -108,7 +108,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
-    #pragma acc parallel loop 
+    // #pragma acc parallel loop 
     for (int e=0; e<volume.size(); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -139,7 +139,7 @@ void compute_volume(const Variables &var,
 #endif
 
     #pragma omp parallel for default(none) shared(var, volume)
-    #pragma acc parallel loop 
+    // #pragma acc parallel loop 
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -174,7 +174,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 
     #pragma omp parallel for default(none)      \
         shared(var, etmp)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         const double *strain_rate= (*var.strain_rate)[e];
@@ -186,7 +186,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dvoldt[n] = 0.;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -215,7 +215,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         double dj = 0;
@@ -278,7 +278,7 @@ void NMD_stress(const Param& param, const Variables &var,
         */
 
     #pragma omp parallel for default(none) shared(var,etmp)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         double dp = (*var.dpressure)[e];
@@ -286,7 +286,7 @@ void NMD_stress(const Param& param, const Variables &var,
     }
 
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dp_nd[n] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -298,7 +298,7 @@ void NMD_stress(const Param& param, const Variables &var,
     /* dp_el is the averaged (i.e. smoothed) dp_nd on the element.
      */
     #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
 
         double factor;
@@ -367,7 +367,7 @@ double compute_dt(const Param& param, Variables& var)
         reduction(max: global_max_vem) \
         default(none) shared(param, var, velocity_x_element, velocity_y_element, velocity_z_element) \
         private(vx_element, vy_element, vz_element)
-    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem)
 
     for (int e=0; e<var.nelem; ++e) {
@@ -533,7 +533,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
 
     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
         default(none) shared(param,var)
-    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
+    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -660,7 +660,7 @@ void compute_mass(const Param &param, const Variables &var,
 #endif
     {
         #pragma omp for
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             double *tr = tmp_result[e];
             double rho;
@@ -709,7 +709,7 @@ void compute_mass(const Param &param, const Variables &var,
         }
 
         #pragma omp for
-        #pragma acc parallel loop
+        // #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             volume_n[n]=0;
             mass[n]=0;
@@ -742,7 +742,7 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
 
     #pragma omp parallel for default(none)      \
         shared(var, shpdx, shpdy, shpdz)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
 
         int n0 = (*var.connectivity)[e][0];

@@ -974,7 +974,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
 
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, old_mean_stress)
-    #pragma acc parallel loop
+    // #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         double* s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
