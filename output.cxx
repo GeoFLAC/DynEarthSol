@@ -235,6 +235,7 @@ void Output::write_exact(const Variables& var)
     _write(var, true);
     // check for NaN in var
     check_nan(var);
+    (var.markersets)[0]->check_marker_elem_consistency(var);
 }
 
 

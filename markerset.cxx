@@ -1231,6 +1231,51 @@ namespace {
 } // anonymous namespace
 
 
+void MarkerSet::check_marker_elem_consistency(const Variables &var) const
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    int ncount = 0;
+    #pragma omp parallel for reduction(+:ncount) default(none) shared(var,std::cerr)
+    for (int e=0; e<var.nelem; ++e) {
+        int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
+        int elenmarkers = (*var.markers_in_elem)[e].size();
+
+        if (elenmarkers != nmarker_mat) {
+            std::cerr << "Error: melt production markers count mismatch in element " << e
+                        << ": " << elenmarkers << " vs " << nmarker_mat << '\n';
+            std::exit(1);
+        }
+
+        for (int i=0; i<elenmarkers; ++i) {
+            int m = (*var.markers_in_elem)[e][i];
+            if (m < 0 || m >= _nmarkers) {
+                std::cerr << "Error: melt production marker " << m << " in element " << e
+                            << " is out of range [0," << _nmarkers << ")\n";
+                std::exit(1);
+            }
+            int me = (*_elem)[m];
+            if (me != e) {
+                std::cerr << "Error: melt production marker " << m << " in element " << me
+                            << " is not in element " << e << '\n';
+                std::exit(1);
+            }
+        }
+        ncount += elenmarkers;
+    }
+
+    if (_nmarkers != ncount) {
+        std::cerr << "Error: melt production markers count mismatch: " << _nmarkers << " vs " << ncount << '\n';
+        std::exit(1);
+    }
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
+
 // surface processes correcttion of marker
 void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem)
 {
