@@ -1352,17 +1352,16 @@ namespace {
 // #endif
         // #pragma acc parallel
         {
-        const array_t& coord = *var.coord;
-        const SurfaceInfo& surfinfo = var.surfinfo;
+            const array_t& coord = *var.coord;
             const int_vec& top_nodes = *var.surfinfo.top_nodes;
 
             const auto& top = *(var.bfacets[iboundz1]);
 
-        const int ntop = surfinfo.ntop;
+            const int ntop = var.surfinfo.ntop;
 
             double_vec& total_dx = *var.surfinfo.total_dx;
             double_vec& total_slope = *var.surfinfo.total_slope;
-        double_vec& dh = *var.surfinfo.dh;
+            double_vec& dh = *var.surfinfo.dh;
 
         // loops over all top facets
             const int tsize = top.size();
@@ -1473,7 +1472,7 @@ namespace {
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
-                int_vec &surf_sup = (*surfinfo.node_and_elems)[i];
+                int_vec &surf_sup = (*var.surfinfo.node_and_elems)[i];
 
                 for (int j=0; j<surf_sup.size(); ++j) {
                     int k = surf_sup[j];
@@ -1519,14 +1518,14 @@ namespace {
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
-                double conv =  surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
+                double conv =  var.surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
     #ifdef THREED
                 dh[i] -= conv;
     #else
-                if ( coord[n][1] >  surfinfo.base_level && conv > 0.) {
-                    dh[i] -= surfinfo.diff_ratio_terrig * conv;
-                } else if ( coord[n][1] <= surfinfo.base_level && conv < 0. ) {
-                    dh[i] -= surfinfo.diff_ratio_marine * conv;
+                if ( coord[n][1] >  var.surfinfo.base_level && conv > 0.) {
+                    dh[i] -= var.surfinfo.diff_ratio_terrig * conv;
+                } else if ( coord[n][1] <= var.surfinfo.base_level && conv < 0. ) {
+                    dh[i] -= var.surfinfo.diff_ratio_marine * conv;
                 } else {
                     dh[i] -= conv;
                 }
