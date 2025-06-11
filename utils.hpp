@@ -68,6 +68,26 @@ void print(std::ostream& os, const Array& A)
 }
 
 #pragma acc routine seq
+static double pow_gpu(double x, double y) {
+    return exp(y * log(x));
+}
+
+#pragma acc routine seq
+static double pow_1_5(double x) {
+    return x * sqrt(x);
+}
+
+#pragma acc routine seq
+static double pow_2(double x) {
+    return x * x;
+}
+
+#pragma acc routine seq
+static double pow_2_3(double x) {
+    return cbrt(x * x);
+}
+
+#pragma acc routine seq
 static double trace(const double* s)
 {
 #ifdef THREED
