@@ -2091,17 +2091,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    const int_vec &top_nodes = *surfinfo.top_nodes;
-    const int slow_updates_interval = 10;
-    bool has_partial_melting = false;
-    const int ntop = var.surfinfo.ntop;
-    double_vec &dh = *var.surfinfo.dh;
-    double_vec &dh_oc = *var.surfinfo.dh_oc;
-    double_vec &dhacc = *var.surfinfo.dhacc;
 
     // #pragma acc parallel loop
-    for (int i=0;i<ntop;i++)
-        dh[i] = 0.;
+    for (int i=0;i<var.surfinfo.ntop;i++)
+        (*var.surfinfo.dh)[i] = 0.;
 
     switch (param.control.surface_process_option) {
     case 0:
@@ -2131,31 +2124,32 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         std::exit(1);
     }
 
-    #pragma omp parallel default(none) shared(param, var, surfinfo, top_nodes, coord, dh, dhacc)
+    #pragma omp parallel default(none) shared(param, var, coord)
     {
         // go through all surface nodes and abject all surface node by dh
         // #pragma acc parallel loop
         #pragma omp for
-        for (int i=0; i<ntop; i++) {
+        for (int i=0; i<var.surfinfo.ntop; i++) {
             // get global index of node
             // update coordinate via dh
             // update dhacc for marker correction
-            int nt = top_nodes[i];
-            coord[nt][NDIMS-1] += dh[i];
-            dhacc[nt] += dh[i];
+            (*var.surfinfo.dh)[i] += -0.1;
+            int nt = (*var.surfinfo.top_nodes)[i];
+            coord[nt][NDIMS-1] += (*var.surfinfo.dh)[i];
+            (*var.surfinfo.dhacc)[nt] += (*var.surfinfo.dh)[i];
         }
 
         // update edvacc_surf of connected elements
         #pragma omp for
         for (int i=0;i<var.surfinfo.etop;i++) {
-            int e = (*surfinfo.top_facet_elems)[i];
+            int e = (*var.surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
             double dh_e = 0.;
 
             for (int j=0;j<NDIMS;j++) {
                 int k = (*var.surfinfo.elem_and_nodes)[i][j];
                 n[j] = (*var.surfinfo.top_nodes)[k];
-                dh_e += dh[k];
+                dh_e += (*var.surfinfo.dh)[k];
             }
 
 #ifdef THREED
@@ -2164,15 +2158,14 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-            (*surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
+            (*var.surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
         }
     }
 
-    // find max surface velocity
     double maxdh = 0.;
-    #pragma omp parallel for default(none) shared(dh) firstprivate(ntop) reduction(max:maxdh)
-    for (int i=0; i<ntop; ++i) {
-        double tmp = fabs(dh[i]);
+    #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
+    for (int i=0; i<var.surfinfo.ntop; ++i) {
+        double tmp = fabs((*var.surfinfo.dh)[i]);
 
         if (maxdh < tmp)
             maxdh = tmp;
@@ -2184,39 +2177,12 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
-            markersets[0]->correct_surface_marker(param, var, dhacc, elemmarkers, markers_in_elem);
-            std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
+            markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
+            std::fill(var.surfinfo.dhacc->begin(), var.surfinfo.dhacc->end(), 0.);
 
             // set marker of sediment.
-            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
-    }
-
-    if ( param.mat.phase_change_option == 2) {
-#ifdef THREED
-        std::cout << "3D simple_igneous processes is not ready yet.";
-        exit(168);
-#else
-        simple_igneous(param,var, dh_oc, has_partial_melting);
-
-        if ( has_partial_melting ) {
-            // go through all surface nodes and abject all surface node by dh_oc
-            // as same as dh
-            for (int i=0; i<ntop; i++) {
-                int n = (*surfinfo.top_nodes)[i];
-                (coord)[n][NDIMS-1] += dh_oc[i];
-                (*surfinfo.dhacc_oc)[n] += dh_oc[i];
-            }
-
-            if (!(var.steps % param.mesh.quality_check_step_interval)) {
-                // correct surface marker.
-                correct_surface_element(var, *surfinfo.dhacc_oc, *markersets[0], stress, strain, strain_rate, plstrain);
-                std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
-                // set marker of sediment.
-                markersets[0]->set_surface_marker(var,param.mesh.smallest_size,param.mat.mattype_oceanic_crust,*surfinfo.edhacc_oc,elemmarkers);
-            }
-        }
-#endif
     }
 
 #ifdef THREED
@@ -2228,9 +2194,9 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
     if ( param.control.is_reporting_terrigenous_info && var.steps%10000 == 0 &&  var.steps != 0  ) {
         double max_dh = 0., min_dh = 0., max_dh_oc = 0.;
-        for (int i=0;i<ntop;i++) {
-            max_dh = std::max(max_dh, dh[i]);
-            min_dh = std::min(min_dh, dh[i]);
+        for (int i=0;i<var.surfinfo.ntop;i++) {
+            max_dh = std::max(max_dh, (*var.surfinfo.dh)[i]);
+            min_dh = std::min(min_dh, (*var.surfinfo.dh)[i]);
             // std::cout << n << "  dh:  " << dh << '\n';
         }
 
@@ -2238,12 +2204,6 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                     << std::fixed << std::setprecision(3) << min_dh / var.dt * 1000. * YEAR2SEC << " / "
                     << std::fixed << std::setprecision(3) << max_dh / var.dt * 1000. * YEAR2SEC << '\n';
 
-        if ( param.mat.phase_change_option == 2) {
-            for (int i=0;i<ntop;i++)
-                max_dh_oc = std::max(max_dh_oc, dh_oc[i]);
-            std::cout << "\tMax igneous eruption rate (mm/yr):  "
-                        << std::fixed << std::setprecision(3) << max_dh_oc / var.dt * 1000. * YEAR2SEC << '\n';
-        }
     }
 #endif
 
