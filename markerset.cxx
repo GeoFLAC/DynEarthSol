@@ -1242,25 +1242,17 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
         int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
         int elenmarkers = (*var.markers_in_elem)[e].size();
 
-        if (elenmarkers != nmarker_mat) {
-            std::cerr << "Error: melt production markers count mismatch in element " << e
-                        << ": " << elenmarkers << " vs " << nmarker_mat << '\n';
-            std::exit(1);
-        }
+        if (elenmarkers != nmarker_mat)
+            printf("Error: melt production markers count mismatch in element %d: %d vs %d\n", e, elenmarkers, nmarker_mat);
 
         for (int i=0; i<elenmarkers; ++i) {
             int m = (*var.markers_in_elem)[e][i];
-            if (m < 0 || m >= _nmarkers) {
-                std::cerr << "Error: melt production marker " << m << " in element " << e
-                            << " is out of range [0," << _nmarkers << ")\n";
-                std::exit(1);
-            }
+            if (m < 0 || m >= _nmarkers)
+                printf("Error: melt production marker %d in element %d is out of range [0,%d)\n", m, e, _nmarkers);
+
             int me = (*_elem)[m];
-            if (me != e) {
-                std::cerr << "Error: melt production marker " << m << " in element " << me
-                            << " is not in element " << e << '\n';
-                std::exit(1);
-            }
+            if (me != e)
+                printf("Error: melt production marker %d in element %d is not in element %d\n", m, me, e);
         }
         ncount += elenmarkers;
     }
