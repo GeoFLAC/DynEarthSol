@@ -1277,15 +1277,12 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     // correct surface marker.
     Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
 
-    const int ntop_elem = var.top_elems->size();
-    array_t coord0s(ntop_elem*NODES_PER_ELEM, 0.);
+    array_t coord0s(var.ntop_elems*NODES_PER_ELEM, 0.);
 
     int_vec delete_marker;
     int nchange = 0;
-
-    #pragma omp parallel for default(none) firstprivate(ntop_elem) shared(var,coord0s,dhacc)
-    // #pragma acc parallel loop
-    for (int i=0;i<ntop_elem;i++) {
+    #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
+    for (int i=0;i<var.ntop_elems;i++) {
         int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
 
         double *c00 = coord0s[i*NODES_PER_ELEM];
@@ -1314,8 +1311,8 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #endif
     }
 
-    // #pragma omp parallel for default(none) firstprivate(ntop_elem) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange) TODO: fine result of non deterministic when parallelized
-    for (int i=0; i<ntop_elem;i++) {
+    #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
+    for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
         int nmarker = markers.size();
@@ -1342,9 +1339,9 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     if (nchange > 0) {
         delete_marker.reserve(nchange);
 
-        // #pragma omp parallel for default(none) firstprivate(ntop_elem) \
-        //     shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
-        for (int i=0; i<ntop_elem;i++) {
+        #pragma omp parallel for default(none) \
+            shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
+        for (int i=0; i<var.ntop_elems;i++) {
             int e = (*var.top_elems)[i];
             int_vec &markers = markers_in_elem[e];
             for (int j=0; j<(int)markers.size();++j) {
@@ -1373,7 +1370,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             }
         }
 
-        for (int i=0; i<ntop_elem;i++) {
+        for (int i=0; i<var.ntop_elems;i++) {
             int e = (*var.top_elems)[i];
             int_vec &markers = markers_in_elem[e];
             int j = 0;
@@ -1407,7 +1404,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             remove_markers(delete_marker, markers_in_elem);
 
         int_pair_vec unplenished_elems;
-        for (int i=0; i<ntop_elem; i++) {
+        for (int i=0; i<var.ntop_elems; i++) {
             int e = (*var.top_elems)[i];
             int  nmarkers = markers_in_elem[e].size();
 
@@ -1439,7 +1436,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             std::exit(1);
         }
 
-        for (int i=0; i<ntop_elem; i++) {
+        for (int i=0; i<var.ntop_elems; i++) {
             int e = (*var.top_elems)[i];
             int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
             int  nmarkers = (*var.markers_in_elem)[e].size();
