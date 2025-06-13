@@ -363,20 +363,30 @@ double compute_dt(const Param& param, Variables& var)
     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
 
     // dynamic dt
+    #pragma acc serial
     double dt_maxwell = std::numeric_limits<double>::max();
+    #pragma acc serial
     double dt_diffusion = std::numeric_limits<double>::max();
+    #pragma acc serial
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
+    #pragma acc serial
     double minl = std::numeric_limits<double>::max();
     int mattype_ref = param.mat.mattype_mantle;
 
     // Define element velocity arrays
+    #pragma acc serial
     double_vec velocity_x_element(var.nelem, 0.0);
+    #pragma acc serial
     double_vec velocity_y_element(var.nelem, 0.0);
+    #pragma acc serial
     double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
+    #pragma acc serial
     double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
     // Global max velocity for elements
     // double global_max_vem = std::max(std::max(var.max_vbc_val, 0.0), 1E-20);
+    #pragma acc serial
     double global_max_vem = 0.0;  // 
+    #pragma acc serial
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
 #ifndef ACC
@@ -387,7 +397,6 @@ double compute_dt(const Param& param, Variables& var)
 #endif
     #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem)
-
     for (int e=0; e<var.nelem; ++e) {
 
         vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -403,23 +412,23 @@ double compute_dt(const Param& param, Variables& var)
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
             vx_element += vel[conn[j]][0] * weight;
             vy_element += vel[conn[j]][1] * weight;
-            #ifdef THREED
+#ifdef THREED
             vz_element += vel[conn[j]][2] * weight;
-            #endif
+#endif
         }
 
         velocity_x_element[e] = vx_element;
         velocity_y_element[e] = vy_element;
-        #ifdef THREED
+#ifdef THREED
         velocity_z_element[e] = vz_element;
-        #endif
+#endif
 
         // min height of this element
-        #ifdef THREED  
+#ifdef THREED
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element + vz_element*vz_element);
-        #else
+#else
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element);
-        #endif
+#endif
 
         // Find global max velocity
         global_max_vem = std::max(global_max_vem, max_vem);
@@ -487,8 +496,12 @@ double compute_dt(const Param& param, Variables& var)
     var.global_dt_min = global_dt_min;
     
     {
+        #pragma acc serial
         double max_vel = 0;
+#ifndef ACC
         #pragma omp parallel for reduction(max:max_vel) default(none) shared(var)
+#endif
+        #pragma acc parallel loop reduction(max:max_vel)
         for (auto n=var.surfinfo.top_nodes->begin(); n<var.surfinfo.top_nodes->end(); ++n) {
             double vel = 0;
             for (int i=0; i<NDIMS; ++i)
