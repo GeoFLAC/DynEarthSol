@@ -649,12 +649,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     // double_vec velocity_y_element(var.nelem, 0.0);
     // double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
 
-// #ifndef ACC
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate)
-// #endif
-    // #pragma acc parallel loop // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+#endif
+    #pragma acc parallel loop // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         const int *conn = (*var.connectivity)[e];
         double pp_element = 0.0;
