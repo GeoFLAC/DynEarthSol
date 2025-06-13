@@ -11,7 +11,7 @@ ifeq ($(openacc), 1)
 endif
 
 ifneq (, $(findstring nvc++, $(CC)))
-	CFLAGS = Wall -O3 -mno-fma
+	CFLAGS = -Wall -O3 -mno-fma
 
 	ifeq ($(nprof), 1)
 		CFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include
