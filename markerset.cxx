@@ -459,9 +459,6 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
                     const int e, int& new_elem, double *new_eta, int& inc)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
     const double *coord[NODES_PER_ELEM];
     double eta[NODES_PER_ELEM];
     int_vec nodes((*var.connectivity)[e],(*var.connectivity)[e]+NODES_PER_ELEM);
@@ -490,9 +487,6 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
 
                 new_elem = *ee;
                 inc = 1;
-#ifdef USE_NPROF
-                nvtxRangePop();
-#endif
                 return;
             }
             for (int j=0; j<NODES_PER_ELEM; j++)   
@@ -500,16 +494,10 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
         }
     }
     inc = 0;
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
 }
 
 void MarkerSet::append_random_marker_in_elem( int el, int mt)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
     double eta[NODES_PER_ELEM];
     random_eta(eta);
     append_marker(eta, el, mt, 0., 0., 0., 0.);
@@ -518,6 +506,12 @@ void MarkerSet::append_random_marker_in_elem( int el, int mt)
 #endif
 }
 
+void MarkerSet::append_random_marker_in_elem( int el, int mt, double time)
+{
+    double eta[NODES_PER_ELEM];
+    random_eta(eta);
+    append_marker(eta, el, mt, time, 0., 0., 0.);
+}
 
 void MarkerSet::random_markers( const Param& param, Variables &var )
 {
