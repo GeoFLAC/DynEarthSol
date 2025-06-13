@@ -130,6 +130,20 @@ void init_var(const Param& param, Variables& var)
                      (var.ny-1) * (var.nz-1) + \
                      (var.nz-1) * (var.nx-1) );
 #endif
+
+#ifdef USE_NPROF
+    var.log_table = new double_vec(LOG_TABLE_SIZE);
+    for (int i=0; i<LOG_TABLE_SIZE; ++i)
+        (*var.log_table)[i] = std::log(LOG_XDELTA * i + LOG_XMIN);
+
+    var.tan_table = new double_vec(TAN_TABLE_SIZE);
+    for (int i=0; i<TAN_TABLE_SIZE; ++i)
+        (*var.tan_table)[i] = std::tan(TAN_XDELTA * i + TAN_XMIN);
+
+    var.sin_table = new double_vec(SIN_TABLE_SIZE);
+    for (int i=0; i<SIN_TABLE_SIZE; ++i)
+        (*var.sin_table)[i] = std::sin(SIN_XDELTA * i + SIN_XMIN);
+#endif
 }
 
 

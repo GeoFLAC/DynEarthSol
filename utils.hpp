@@ -67,24 +67,104 @@ void print(std::ostream& os, const Array& A)
   os << "]";
 }
 
+#ifdef USE_NPROF
+
 #pragma acc routine seq
-static double pow_gpu(double x, double y) {
-    return exp(y * log(x));
+static inline double log_lookup(const double_vec& log_table, double x) {
+    if (x <= 0.0)
+        printf("Error: log_lookup called with x <= 0 (%g)\n", x);
+
+    int exponent = 0;
+    while (x < LOG_XMIN) {
+        x *= 10.0;
+        exponent -= 1;
+    }
+    while (x > LOG_XMAX) {
+        x *= 0.1;
+        exponent += 1;
+    }
+
+    int idx = static_cast<int>((x - LOG_XMIN) / LOG_XDELTA);
+    double dx = x - (LOG_XMIN + idx * LOG_XDELTA);
+    double slope = (log_table[idx + 1] - log_table[idx]) / LOG_XDELTA;
+    return log_table[idx] + slope * dx + exponent * 2.302585092994046; // LN_10
 }
 
 #pragma acc routine seq
-static double pow_1_5(double x) {
+static inline double tan_lookup(const double_vec& tan_table, const double x) {
+    if (x < TAN_XMIN || x > TAN_XMAX) {
+        printf("Error: tan_lookup called with x out of range (%g)\n", x);
+    }
+
+    int idx = static_cast<int>((x - TAN_XMIN) / TAN_XDELTA);
+    double dx = x - (TAN_XMIN + idx * TAN_XDELTA);
+    double slope = (tan_table[idx + 1] - tan_table[idx]) / TAN_XDELTA;
+    return tan_table[idx] + slope * dx;
+}
+
+#pragma acc routine seq
+static inline double sin_lookup(const double_vec& sin_table, const double x) {
+    if (x < SIN_XMIN || x > SIN_XMAX) {
+        printf("Error: sin_lookup called with x out of range (%g)\n", x);
+    }
+
+    int idx = static_cast<int>((x - SIN_XMIN) / SIN_XDELTA);
+    double dx = x - (SIN_XMIN + idx * SIN_XDELTA);
+    double slope = (sin_table[idx + 1] - sin_table[idx]) / SIN_XDELTA;
+    return sin_table[idx] + slope * dx;
+}
+
+#endif
+
+#pragma acc routine seq
+static inline double tan_safe(const double_vec& tan_table, const double x) {
+#ifdef USE_NPROF
+    return tan_lookup(tan_table, x);
+#else
+    return std::tan(x);
+#endif
+}
+
+#pragma acc routine seq
+static inline double log_safe(const double_vec& log_table, const double x) {
+#ifdef USE_NPROF
+    return log_lookup(log_table, x);
+#else
+    return std::log(x);
+#endif
+}
+
+#pragma acc routine seq
+static inline double sin_safe(const double_vec& sin_table, const double x) {
+#ifdef USE_NPROF
+    return sin_lookup(sin_table, x);
+#else
+    return std::sin(x);
+#endif
+}
+
+#pragma acc routine seq
+static double pow_safe(const double_vec& log_table, const double x, const double y) {
+#ifdef USE_NPROF
+    if (x < 0.) {
+        printf("Error: pow_safe called with x < 0 (%g)\n", x);
+    } else if (x == 0.) {
+        return 0.0; // Avoid log(0) which is undefined
+    } else
+        return exp(y * log_lookup(log_table, x));
+#else
+    return std::pow(x, y);
+#endif
+}
+
+#pragma acc routine seq
+static double pow_1_5(const double x) {
     return x * sqrt(x);
 }
 
 #pragma acc routine seq
-static double pow_2(double x) {
+static double pow_2(const double x) {
     return x * x;
-}
-
-#pragma acc routine seq
-static double pow_2_3(double x) {
-    return cbrt(x * x);
 }
 
 #pragma acc routine seq

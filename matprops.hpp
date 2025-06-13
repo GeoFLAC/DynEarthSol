@@ -104,6 +104,9 @@ private:
     const double_vec &eff_fmelt;
     const double_vec &magma_fraction;
     const double_vec &hydro_diff;
+    const double_vec &log_table;
+    const double_vec &tan_table;
+    const double_vec &sin_table;
 
     VectorBase rho0, alpha;
     VectorBase bulk_modulus, shear_modulus;
@@ -222,6 +225,9 @@ private:
     // const tensor_t &stress_old;
     const tensor_t &strain_rate;
     const int_vec2D &elemmarkers;
+    const double_vec &log_table;
+    const double_vec &tan_table;
+    const double_vec &sin_table;
 
     const VectorBase *rho0, *alpha;
     const VectorBase *bulk_modulus, *shear_modulus;

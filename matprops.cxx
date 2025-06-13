@@ -179,7 +179,10 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   dppressure(*var.dppressure),
   eff_fmelt(*var.eff_fmelt),
   magma_fraction(*var.magma_fraction),
-  hydro_diff(*var.hydro_diff)
+  hydro_diff(*var.hydro_diff),
+  log_table(*var.log_table),
+  tan_table(*var.tan_table),
+  sin_table(*var.sin_table)
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
@@ -275,7 +278,7 @@ double MatProps::visc(int e) const
     for (int m=0; m<nmat; m++) {
         double pow = 1 / visc_exponent[m] - 1;
         double pow1 = -1 / visc_exponent[m];
-        double visc0 = 0.25 * std::pow(edot, pow) * std::pow(0.75 * visc_coefficient[m], pow1)
+        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table, 0.75 * visc_coefficient[m], pow1)
             * std::exp((visc_activation_energy[m] + visc_activation_volume[m] * s0)
             / (visc_exponent[m] * gas_constant * T)) * 1e6;
         result += elemmarkers[e][m] / visc0;
@@ -398,14 +401,14 @@ void MatProps::plastic_props(int e, double pls,
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
 
     // derived variables
-    double sphi = std::sin(phi * DEG2RAD);
-    double spsi = std::sin(psi * DEG2RAD);
+    double sphi = sin_safe(sin_table,phi * DEG2RAD);
+    double spsi = sin_safe(sin_table,psi * DEG2RAD);
 
     anphi = (1 + sphi) / (1 - sphi);
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
 void MatProps::plastic_props_rsf(int e, double pls,
@@ -906,7 +909,11 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
-  dppressure(*var.dppressure)
+  dppressure(*var.dppressure),
+  log_table(*var.log_table),
+  tan_table(*var.tan_table),
+  sin_table(*var.sin_table)
+
 {
     rho0 = VectorBase::create(p.mat.rho0, nmat);
     alpha = VectorBase::create(p.mat.alpha, nmat);
@@ -1022,7 +1029,7 @@ double MatProps::visc(int e) const
     for (int m=0; m<nmat; m++) {
         double pow = 1 / (*visc_exponent)[m] - 1;
         double pow1 = -1 / (*visc_exponent)[m];
-        double visc0 = 0.25 * std::pow(edot, pow) * std::pow(0.75 * (*visc_coefficient)[m], pow1)
+        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table,0.75 * (*visc_coefficient)[m], pow1)
             * std::exp(((*visc_activation_energy)[m] + (*visc_activation_volume)[m] * s0)
             / ((*visc_exponent)[m] * gas_constant * T)) * 1e6;
         result += elemmarkers[e][m] / visc0;
@@ -1129,7 +1136,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     c_v /= n; // characteristic velocity
     static_friction_angle = f / n; // friction angle
     mu_0 = std::tan(DEG2RAD * static_friction_angle); // static friction coefficient
-    mu_d = mu_0 + (d_a - e_b) * log(slip_rate / c_v); // dynamic friction angle
+    mu_d = mu_0 + (d_a - e_b) * log_safe(log_table,slip_rate / c_v); // dynamic friction angle
     friction_angle = std::atan(mu_d) / DEG2RAD;
     cohesion = c / n;
     dilation_angle = d / n;
@@ -1154,14 +1161,14 @@ void MatProps::plastic_props(int e, double pls,
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
 
     // derived variables
-    double sphi = std::sin(phi * DEG2RAD);
-    double spsi = std::sin(psi * DEG2RAD);
+    double sphi = sin_safe(sin_table,phi * DEG2RAD);
+    double spsi = sin_safe(sin_table,psi * DEG2RAD);
 
     anphi = (1 + sphi) / (1 - sphi);
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
 void MatProps::plastic_props_rsf(int e, double pls,

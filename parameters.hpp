@@ -567,6 +567,10 @@ struct Variables {
         vbc_vertical_ratio_x1.resize(4);
     }
 
+    double_vec *log_table; // for log(x) lookup table
+    double_vec *tan_table; // for tan(x) lookup table
+    double_vec *sin_table; // for sin(x) lookup table
+
 };
 
 #endif
