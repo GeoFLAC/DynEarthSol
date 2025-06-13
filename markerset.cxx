@@ -746,7 +746,12 @@ void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
                         std::back_inserter(b_out));
         }
 
+#ifndef ACC
         #pragma omp for
+#else
+        #pragma omp single
+        #pragma acc parallel loop
+#endif
         for (int i = 0; i < a_out.size(); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
             auto it = std::find(emarkers.begin(), emarkers.end(), b_out[i]);
@@ -1231,7 +1236,10 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
     nvtxRangePushA(__FUNCTION__);
 #endif
     int ncount = 0;
+#ifndef ACC
     #pragma omp parallel for reduction(+:ncount) default(none) shared(var,std::cerr)
+#endif
+    #pragma acc parallel loop reduction(+:ncount)
     for (int e=0; e<var.nelem; ++e) {
         int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
         int elenmarkers = (*var.markers_in_elem)[e].size();
@@ -1275,7 +1283,10 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
     int_vec delete_marker;
     int nchange = 0;
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
+#endif
+    #pragma acc parallel loop
     for (int i=0;i<var.ntop_elems;i++) {
         int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
 
@@ -1305,7 +1316,10 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #endif
     }
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
+#endif
+    #pragma acc parallel loop reduction(+:nchange)
     for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
@@ -1333,8 +1347,11 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     if (nchange > 0) {
         delete_marker.reserve(nchange);
 
+#ifndef ACC
         #pragma omp parallel for default(none) \
             shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
+#endif
+        // #pragma acc parallel loop
         for (int i=0; i<var.ntop_elems;i++) {
             int e = (*var.top_elems)[i];
             int_vec &markers = markers_in_elem[e];

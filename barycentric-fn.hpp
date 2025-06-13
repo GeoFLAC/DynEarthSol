@@ -29,8 +29,10 @@ public:
                                const double volume);
     ~Barycentric_transformation();
 
+    #pragma acc routine seq
     void transform(const double *point, int e, double *result) const;
     bool is_inside_elem(const double *point, int elem) const;
+    #pragma acc routine seq
     bool is_inside(const double *result) const;
 
 private:

@@ -480,40 +480,46 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
     xh1t = 30.e3;
     yh1t = 0.e3;
 
+#ifndef ACC
     #pragma omp parallel default(none) shared(param,var,tdot,var_hydro_diff, \
         tmp_result,separate_rate,decay_rate,coord,connectivity,temperature, \
         pls_min,diff_multi,depth_max,t_max,xh1t,yh1t,etmp)
+#endif
     {
+#ifndef ACC
         #pragma omp for
-        // #pragma acc parallel loop
+#endif
+        #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             // diffusion matrix
             const int *conn = (*var.connectivity)[e];
             double *tr = tmp_result[e];
             double kv = separate_rate * (*var.volume)[e];
             const double *shpdx = (*var.shpdx)[e];
-    #ifdef THREED
+#ifdef THREED
             const double *shpdy = (*var.shpdy)[e];
-    #endif
+#endif
             const double *shpdz = (*var.shpdz)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
-    #ifdef THREED
+#ifdef THREED
                     diffusion += (shpdx[i] * shpdx[j] + \
                                 shpdy[i] * shpdy[j] + \
                                 shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
-    #else
+#else
                     diffusion += (shpdx[i] * shpdx[j] + \
                                 shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
-    #endif
+#endif
                 }
                 tr[i] = diffusion * kv;
             }
         }
 
+#ifndef ACC
         #pragma omp for
-        // #pragma acc parallel loop
+#endif
+        #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             tdot[n]=0;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
@@ -530,7 +536,10 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
             var_hydro_diff[n] *= decay_rate;
         }
 
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             if ((*var.plstrain)[e] <= pls_min) continue;
 
@@ -556,7 +565,10 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
             }
         }
 
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             int_vec &sup = (*var.supper)[n]
             for (int i=0; i<sup.size();i++) {

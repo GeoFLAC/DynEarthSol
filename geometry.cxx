@@ -106,9 +106,11 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     nvtxRangePushA(__FUNCTION__);
 #endif
 
+#ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
-    // #pragma acc parallel loop 
+#endif
+    #pragma acc parallel loop 
     for (int e=0; e<volume.size(); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -138,8 +140,10 @@ void compute_volume(const Variables &var,
     nvtxRangePushA(__FUNCTION__);
 #endif
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var, volume)
-    // #pragma acc parallel loop 
+#endif
+    #pragma acc parallel loop 
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -172,9 +176,11 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
      */
 //    std::fill_n(dvoldt.begin(), var.nnode, 0);
 
+#ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(var, etmp)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         const double *strain_rate= (*var.strain_rate)[e];
@@ -184,9 +190,11 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
         etmp[e] = dj * (*var.volume)[e];
     }
 
+#ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dvoldt[n] = 0.;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -213,9 +221,11 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
      * It is used in update_stress() to prevent mesh locking.
      */
 
+#ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         double dj = 0;
@@ -277,16 +287,20 @@ void NMD_stress(const Param& param, const Variables &var,
     } else {
         */
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         double dp = (*var.dpressure)[e];
         etmp[e] = dp * (*var.volume)[e];
     }
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int n=0;n<var.nnode;n++) {
         dp_nd[n] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -297,8 +311,10 @@ void NMD_stress(const Param& param, const Variables &var,
 
     /* dp_el is the averaged (i.e. smoothed) dp_nd on the element.
      */
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
 
         double factor;
@@ -363,11 +379,13 @@ double compute_dt(const Param& param, Variables& var)
     double global_max_vem = 0.0;  // 
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
+#ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
         default(none) shared(param, var, velocity_x_element, velocity_y_element, velocity_z_element) \
         private(vx_element, vy_element, vz_element)
-    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+#endif
+    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem)
 
     for (int e=0; e<var.nelem; ++e) {
@@ -627,25 +645,30 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    // Retrieve hydraulic properties for the element
-    double perm_e = var.mat->perm(0);                // Intrinsic permeability 
-    double mu_e = var.mat->mu_fluid(0);              // Fluid dynamic viscosity
-    double alpha_b = var.mat->alpha_biot(0);         // Biot coefficient
-    double rho_f = var.mat->rho_fluid(0);            // Fluid density
-    double phi_e = var.mat->phi(0);        // Element porosity
-    double comp_fluid = var.mat->beta_fluid(0);        // fluid comporessibility
-    double bulkm = var.mat->bulkm(0);
-    double shearm = var.mat->shearm(0);
-    double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+    double diff_e;
 
-    rho_f = 1000.0; 
-    double gamma_w = rho_f * param.control.gravity; // specific weight
-    
-    // Hydraulic conductivity using permeability and viscosity
-    double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-    
-    // Compute element diffusivity and update max using reduction
-    double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
+    #pragma acc serial
+    {
+        // Retrieve hydraulic properties for the element
+        double perm_e = var.mat->perm(0);                // Intrinsic permeability 
+        double mu_e = var.mat->mu_fluid(0);              // Fluid dynamic viscosity
+        double alpha_b = var.mat->alpha_biot(0);         // Biot coefficient
+        double rho_f = var.mat->rho_fluid(0);            // Fluid density
+        double phi_e = var.mat->phi(0);        // Element porosity
+        double comp_fluid = var.mat->beta_fluid(0);        // fluid comporessibility
+        double bulkm = var.mat->bulkm(0);
+        double shearm = var.mat->shearm(0);
+        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+
+        rho_f = 1000.0; 
+        double gamma_w = rho_f * param.control.gravity; // specific weight
+        
+        // Hydraulic conductivity using permeability and viscosity
+        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
+        
+        // Compute element diffusivity and update max using reduction
+        diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
+    }
 
     if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
     {
@@ -653,14 +676,18 @@ void compute_mass(const Param &param, const Variables &var,
         std::exit(11);
     }
 
+#ifndef ACC
 #ifdef GPP1X
     #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result)
 #else
     #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result)
 #endif
+#endif
     {
+#ifndef ACC
         #pragma omp for
-        // #pragma acc parallel loop
+#endif
+        #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             double *tr = tmp_result[e];
             double rho;
@@ -708,8 +735,10 @@ void compute_mass(const Param &param, const Variables &var,
             tr[4] = ym; 
         }
 
+#ifndef ACC
         #pragma omp for
-        // #pragma acc parallel loop
+#endif
+        #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             volume_n[n]=0;
             mass[n]=0;
@@ -740,9 +769,11 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
     nvtxRangePushA(__FUNCTION__);
 #endif
 
+#ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(var, shpdx, shpdy, shpdz)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop
     for (int e=0;e<var.nelem;e++) {
 
         int n0 = (*var.connectivity)[e][0];

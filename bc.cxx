@@ -19,7 +19,7 @@
 
 namespace {
 
-//#pragma acc routine seq
+#pragma acc routine seq
 void normal_vector_of_facet(int f, const int *conn, const array_t &coord,
                             double *normal, double &zcenter)
 {
@@ -300,7 +300,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    // #pragma acc parallel loop
+    #pragma acc parallel loop
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -308,7 +308,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    // #pragma acc parallel loop
+    #pragma acc parallel loop
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -765,7 +765,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    // #pragma acc parallel loop
+    #pragma acc parallel loop
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -773,7 +773,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    // #pragma acc parallel loop
+    #pragma acc parallel loop
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -1129,7 +1129,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     // Gravity-induced (hydrostatic and lithostatic) stress BCs
     //
 
+#ifndef ACC
     #pragma omp parallel for
+#endif
+    #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e)
         (*var.etmp_int)[e] = -1;
 
@@ -1141,10 +1144,9 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
-// #ifndef ACC
+#ifndef ACC
         #pragma omp parallel default(none) shared(param, var, force, i, NODE_OF_FACET)
-// #endif
-        // #pragma acc parallel
+#endif
         {
             const auto& bdry = *(var.bfacets[i]);
             const int_vec& bnodes = *(var.bnodes[i]);
@@ -1153,10 +1155,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
             const int nbdry_nodes = static_cast<int>(bnodes.size());
 
         // loops over all bdry facets
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int n=0; n<bound; ++n) {
                 // this facet belongs to element e
                 int e = bdry[n].first;
@@ -1218,10 +1220,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 }
             }
 
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = bnodes[j];
                 const int_vec& sup = (*var.support)[n];
@@ -1242,7 +1244,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 }
             }
 
+#ifndef ACC
             #pragma omp for
+#endif
+            #pragma acc parallel loop
             for (int n=0; n<bound; ++n) {
                 const int e = bdry[n].first;
                 (*var.etmp_int)[e] = -1;
@@ -1347,10 +1352,9 @@ namespace {
          * sedimentation.
          */
 
-// #ifndef ACC
+#ifndef ACC
         #pragma omp parallel default(none) shared(var,NODE_OF_FACET)
-// #endif
-        // #pragma acc parallel
+#endif
         {
             const array_t& coord = *var.coord;
             const int_vec& top_nodes = *var.surfinfo.top_nodes;
@@ -1366,19 +1370,19 @@ namespace {
         // loops over all top facets
             const int tsize = top.size();
 
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
             }
 
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int i=0; i<tsize; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
@@ -1465,10 +1469,10 @@ namespace {
 #endif
             }
 
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1511,10 +1515,10 @@ namespace {
 #endif
             }
 
-// #ifndef ACC
+#ifndef ACC
             #pragma omp for
-// #endif
-            // #pragma acc loop
+#endif
+            #pragma acc parallel loop
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
@@ -1923,10 +1927,15 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+#ifndef ACC
     #pragma omp parallel default(none) \
         shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
+#endif
     {
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int i=0; i<var.ntop_elems; i++) {
             const double *coord1[NODES_PER_ELEM];
 
@@ -1949,7 +1958,10 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
             }
         }
 
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
             int_vec &sup = (*var.support)[nt];
@@ -1973,8 +1985,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-
-    // #pragma acc parallel loop
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop
     for (int i=0;i<var.surfinfo.ntop;i++)
         (*var.surfinfo.dh)[i] = 0.;
 
@@ -2006,23 +2020,29 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         std::exit(1);
     }
 
+#ifndef ACC
     #pragma omp parallel default(none) shared(param, var, coord)
+#endif
     {
         // go through all surface nodes and abject all surface node by dh
-        // #pragma acc parallel loop
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int i=0; i<var.surfinfo.ntop; i++) {
             // get global index of node
             // update coordinate via dh
             // update dhacc for marker correction
-            (*var.surfinfo.dh)[i] += -0.1;
             int nt = (*var.surfinfo.top_nodes)[i];
             coord[nt][NDIMS-1] += (*var.surfinfo.dh)[i];
             (*var.surfinfo.dhacc)[nt] += (*var.surfinfo.dh)[i];
         }
 
         // update edvacc_surf of connected elements
+#ifndef ACC
         #pragma omp for
+#endif
+        #pragma acc parallel loop
         for (int i=0;i<var.surfinfo.etop;i++) {
             int e = (*var.surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
@@ -2045,7 +2065,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     }
 
     double maxdh = 0.;
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
+#endif
+    #pragma acc parallel loop reduction(max:maxdh)
     for (int i=0; i<var.surfinfo.ntop; ++i) {
         double tmp = fabs((*var.surfinfo.dh)[i]);
 
