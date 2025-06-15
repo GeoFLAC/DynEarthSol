@@ -1386,7 +1386,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             int_vec &markers = markers_in_elem[e];
             int j = 0;
             int k = markers.size();
-            while (j < k) {
+            while (j < k && k > 1) {
                 int m = markers[j];
                 if ((*_tmp)[m] < -0.5) {
                     (*_tmp)[m] = 0.;
