@@ -481,24 +481,20 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
             shared(var, param, force, small_vel)
 #else
         #pragma omp parallel for default(none) \
-        shared(var, param, force) firstprivate(small_vel)
+            shared(var, param, force)  firstprivate(small_vel)
 #endif
         #pragma acc parallel loop
         for (int i=0; i<var.nnode; ++i) {
             double mass = (*var.mass)[i];
             double young = (*var.ymass)[i];
             double critical_coeff = 2.0 * std::sqrt(mass * young);
-            
-            for (int i=0; i<var.nnode; ++i) {
-                for (int j=0;j<NDIMS;j++)
-                    if (std::fabs((*var.vel)[i][j]) > small_vel) {
-
-                        double f_C = param.control.damping_factor * std::copysign(force[i][j], (*var.vel)[i][j]);
-                        double f_V = critical_coeff * (*var.vel)[i][j];
-                        double f_damping = (std::fabs(f_C) < std::fabs(f_V)) ? f_V : f_C;
-                        force[i][j] -= f_damping;
-                    }
-            }
+            for (int j=0;j<NDIMS;j++)
+                if (std::fabs((*var.vel)[i][j]) > small_vel) {
+                    double f_C = param.control.damping_factor * std::copysign(force[i][j], (*var.vel)[i][j]);
+                    double f_V = critical_coeff * (*var.vel)[i][j];
+                    double f_damping = (std::fabs(f_C) < std::fabs(f_V)) ? f_V : f_C;
+                    force[i][j] -= f_damping;
+                }
         }
         break;
     default:
