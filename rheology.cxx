@@ -845,7 +845,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     syy = spyy;
                 }
             }
-            case MatProps::rh_ep_rsf: // rate-and-state frition model
+            break;
+        case MatProps::rh_ep_rsf: // rate-and-state frition model
             {
                 double depls = 0;
                 double bulkm = var.mat->bulkm(e);
