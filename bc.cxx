@@ -1144,26 +1144,28 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
+        int bound, nbdry_nodes;
+
+        #pragma acc kernels
+        {
+            bound = static_cast<int>(var.bfacets[i]->size());
+            nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
+        }
+
 #ifndef ACC
         #pragma omp parallel default(none) shared(param, var, force, i, NODE_OF_FACET)
 #endif
         {
-            const auto& bdry = *(var.bfacets[i]);
-            const int_vec& bnodes = *(var.bnodes[i]);
-
-            const int bound = static_cast<int>(bdry.size());
-            const int nbdry_nodes = static_cast<int>(bnodes.size());
-
-        // loops over all bdry facets
+            // loops over all bdry facets
 #ifndef ACC
             #pragma omp for
 #endif
             #pragma acc parallel loop
             for (int n=0; n<bound; ++n) {
                 // this facet belongs to element e
-                int e = bdry[n].first;
+                int e = (*var.bfacets[i])[n].first;
                 // this facet is the f-th facet of e
-                int f = bdry[n].second;
+                int f = (*var.bfacets[i])[n].second;
                 const int *conn = (*var.connectivity)[e];
 
                 // the outward-normal vector
@@ -1225,14 +1227,14 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 #endif
             #pragma acc parallel loop
             for (int j=0; j<nbdry_nodes; ++j) {
-                const int n = bnodes[j];
+                const int n = (*var.bnodes[i])[j];
                 const int_vec& sup = (*var.support)[n];
                 for (int k=0; k<sup.size(); ++k) {
                     int e = sup[k];
                     int ibound = (*var.etmp_int)[e];
                     if (ibound < 0) continue;  // not a boundary element
 
-                    int f = bdry[ibound].second;  // facet index
+                    int f = (*var.bfacets[i])[ibound].second;  // facet index
                     const int *conn = (*var.connectivity)[e];
                     for (int l=0; l<NODES_PER_FACET; ++l) {
                         if (n == conn[NODE_OF_FACET[f][l]]) {
@@ -1249,7 +1251,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 #endif
             #pragma acc parallel loop
             for (int n=0; n<bound; ++n) {
-                const int e = bdry[n].first;
+                const int e = (*var.bfacets[i])[n].first;
                 (*var.etmp_int)[e] = -1;
             }
         }
