@@ -38,6 +38,14 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
+// Update markers in surface elements
+struct MarkerUpdate {
+    int m;
+    int src_elem;
+    int dst_elem;
+    int inc; // 1=move, 0=remove
+};
+
 // Define the struct to store marker data
 struct AppendMarkerData {
     double_vec eta;

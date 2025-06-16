@@ -1347,69 +1347,69 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     if (nchange > 0) {
         delete_marker.reserve(nchange);
 
-#ifndef ACC
-        #pragma omp parallel for default(none) \
-            shared(var,coord0s,delete_marker,elemmarkers,markers_in_elem)
-#endif
-        // #pragma acc parallel loop
-        for (int i=0; i<var.ntop_elems;i++) {
-            int e = (*var.top_elems)[i];
-            int_vec &markers = markers_in_elem[e];
-            for (int j=0; j<(int)markers.size();++j) {
-                int m = markers[j];
-                if ((*_tmp)[m] < 1.) continue;
+        std::vector<MarkerUpdate> updates;
 
-                double m_coord[NDIMS], new_eta[NDIMS];
+        #pragma omp parallel default(none) \
+                shared(var,coord0s,markers_in_elem, updates, elemmarkers)
+        {
+            std::vector<MarkerUpdate> local_updates;
 
-                for (int k=0; k<NDIMS; k++) {
-                    m_coord[k] = 0.;
-                    for (int l=0; l<NODES_PER_ELEM; l++)
-                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+            #pragma omp for nowait
+            for (int i=0; i<var.ntop_elems;i++) {
+                int e = (*var.top_elems)[i];
+                int_vec &markers = markers_in_elem[e];
+                for (int j=0; j<(int)markers.size();++j) {
+                    int m = markers[j];
+                    if ((*_tmp)[m] < 1.) continue;
+
+                    double m_coord[NDIMS], new_eta[NDIMS];
+
+                    for (int k=0; k<NDIMS; k++) {
+                        m_coord[k] = 0.;
+                        for (int l=0; l<NODES_PER_ELEM; l++)
+                            m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+                    }
+
+                    int inc, new_elem;
+                    int mat = (*_mattype)[m];
+                    // find new element of the marker
+                    remap_marker(var,m_coord,e,new_elem,new_eta,inc);
+
+                    MarkerUpdate u;
+                    u.m = m;
+                    u.src_elem = e;
+                    u.dst_elem = new_elem;
+                    u.inc = inc;
+                    local_updates.push_back(u);
+
+                    if (inc) {
+                        set_eta(m, new_eta);
+                        set_elem(m, new_elem);
+                        #pragma omp atomic update
+                        ++elemmarkers[new_elem][mat];
+                    }
+                    --elemmarkers[e][mat];
                 }
+            }
 
-                int inc, new_elem;
-                int mat = (*_mattype)[m];
-                // find new element of the marker
-                remap_marker(var,m_coord,e,new_elem,new_eta,inc);
-                if (inc) {
-                    set_eta(m, new_eta);
-                    set_elem(m, new_elem);
-                    (*_tmp)[m] = 2.; // mark as change;
-                } else {
-                    (*_tmp)[m] = -1.;
-                }
+            #pragma omp critical
+            updates.insert(updates.end(), local_updates.begin(), local_updates.end());
+        }
+
+        // vector operations cannot be parallelized
+        for (const auto& u : updates) {
+            int_vec& old_markers = markers_in_elem[u.src_elem];
+            old_markers.erase(std::find(old_markers.begin(), old_markers.end(), u.m));
+
+            if (u.inc) {
+                int_vec& new_markers = markers_in_elem[u.dst_elem];
+                auto it = std::lower_bound(new_markers.begin(), new_markers.end(), u.m);
+                new_markers.insert(it, u.m);
+            } else {
+                delete_marker.push_back(u.m);
             }
         }
 
-        for (int i=0; i<var.ntop_elems;i++) {
-            int e = (*var.top_elems)[i];
-            int_vec &markers = markers_in_elem[e];
-            int j = 0;
-            int k = markers.size();
-            while (j < k && k > 1) {
-                int m = markers[j];
-                if ((*_tmp)[m] < -0.5) {
-                    (*_tmp)[m] = 0.;
-                    markers.erase(markers.begin()+j);
-                    --k;
-                    --elemmarkers[e][(*_mattype)[m]];
-                    delete_marker.emplace_back(m);
-                } else if ((*_tmp)[m] > 1.5) { 
-                    (*_tmp)[m] = 0.;
-                    markers.erase(markers.begin()+j);
-                    --k;
-                    --elemmarkers[e][(*_mattype)[m]];
-                    ++elemmarkers[(*_elem)[m]][(*_mattype)[m]];
-
-                    int_vec &markers_new = markers_in_elem[(*_elem)[m]];
-                    auto it = std::lower_bound(markers_new.begin(),markers_new.end(), m);
-                    markers_new.insert(it, m);
-
-                } else {
-                    ++j;
-                }
-            }
-        }
         // delete recorded marker
         if (!delete_marker.empty())
             remove_markers(delete_marker, markers_in_elem);
