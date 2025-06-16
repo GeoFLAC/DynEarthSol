@@ -1678,11 +1678,12 @@ namespace {
             dh_terrig[i] = coeff * exp(-C1*basin_depth[i+1]) * (basin_slope[i+1] - basin_slope[i]) / basin_dx[i];
 
         // set boundary condition if basin is larger than 1
-        if (nbasin > 1)
+        if (nbasin > 1) {
             if (option == 0)
                 dh_terrig[nbasin-1] = 0.;
             else
                 dh_terrig[0] = 0.;
+        }
 
         for (int i=0;i<nbasin;i++)
             // make sure the sedimentation is positive
