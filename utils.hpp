@@ -255,69 +255,87 @@ static void print_time_ns(const int64_t duration) {
 
 #endif
 
-static void out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
+#pragma acc routine seq
+static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
     if (idx1 >= 0)
-        std::cerr << "Error: " << msg <<"[" << idx0 << "][" << idx1 << "] becomes NaN" << std::endl;
+        printf("Error: %s[%d][%d] becomes NaN\n", msg, idx0, idx1);
     else
-        std::cerr << "Error: " << msg <<"[" << idx0 << "] becomes NaN" << std::endl;
-    std::exit(11);
+        printf("Error: %s[%d] becomes NaN\n", msg, idx0);
+    return 1;
 }
 
 static void check_nan(const Variables& var) {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    #pragma omp parallel default(none) shared(var)
+
+    #pragma acc serial
+    int is_nan = 0;
+
+#ifndef ACC
+    #pragma omp parallel default(none) shared(var,is_nan)
+#endif
     {
-        #pragma omp for
+#ifndef ACC
+        #pragma omp for reduction(+:is_nan)
+#endif
+        #pragma acc parallel loop reduction(+:is_nan)
         for (int e=0; e<var.nelem;e++) {
             if (std::isnan((*var.volume)[e]))
-                out_nan_error("volume", e);
+                is_nan += out_nan_error("volume", e);
             
             if (std::isnan((*var.dpressure)[e]))
-                out_nan_error("dpressure", e);
+                is_nan += out_nan_error("dpressure", e);
 
             if (std::isnan((*var.viscosity)[e]))
-                out_nan_error("viscosity", e);
+               is_nan +=  out_nan_error("viscosity", e);
             
             for (int i=0; i<NODES_PER_ELEM;i++)
                 if(std::isnan((*var.connectivity)[e][i]))
-                    out_nan_error("connectivity", e, i);
+                    is_nan += out_nan_error("connectivity", e, i);
 
             for (int i=0; i<NSTR; i++)
                 if (std::isnan((*var.stress)[e][i]))
-                    out_nan_error("stress", e, i);
+                    is_nan += out_nan_error("stress", e, i);
 
             for (int i=0; i<NODES_PER_ELEM; i++)
                 if(std::isnan((*var.shpdx)[e][i]))
-                    out_nan_error("shpdx", e, i);
+                    is_nan += out_nan_error("shpdx", e, i);
             for (int i=0; i<NODES_PER_ELEM; i++)
                 if(std::isnan((*var.shpdy)[e][i]))
-                    out_nan_error("shpdy", e, i);
+                    is_nan += out_nan_error("shpdy", e, i);
             for (int i=0; i<NODES_PER_ELEM; i++)
                 if(std::isnan((*var.shpdz)[e][i]))
-                    out_nan_error("shpdz", e, i);
+                    is_nan += out_nan_error("shpdz", e, i);
         }
 
-        #pragma omp for
+#ifndef ACC
+        #pragma omp for reduction(+:is_nan)
+#endif
+        #pragma acc parallel loop reduction(+:is_nan)
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
-                out_nan_error("temperature", n);
+                is_nan += out_nan_error("temperature", n);
 
             if (std::isnan((*var.tmass)[n]))
-                out_nan_error("tmass", n);
+                is_nan += out_nan_error("tmass", n);
 
             for (int i=0; i<NDIMS; i++) {
                 if (std::isnan((*var.force)[n][i]))
-                    out_nan_error("force", n, i);
+                    is_nan += out_nan_error("force", n, i);
 
                 if (std::isnan((*var.vel)[n][i]))
-                    out_nan_error("vel", n, i);
+                    is_nan += out_nan_error("vel", n, i);
 
                 if (std::isnan((*var.coord)[n][i]))
-                    out_nan_error("coord", n, i);                
+                    is_nan += out_nan_error("coord", n, i);                
             }
         }
+    }
+
+    if (is_nan > 0) {
+        std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
+        std::exit(1);
     }
 #ifdef USE_NPROF
     nvtxRangePop();

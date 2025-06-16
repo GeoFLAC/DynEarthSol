@@ -1235,32 +1235,40 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    int ncount = 0;
+    #pragma acc serial
+    int ncount = 0, is_error = 0;
 #ifndef ACC
-    #pragma omp parallel for reduction(+:ncount) default(none) shared(var,std::cerr)
+    #pragma omp parallel for reduction(+:ncount,is_error) default(none) shared(var,std::cerr)
 #endif
-    #pragma acc parallel loop reduction(+:ncount)
+    #pragma acc parallel loop reduction(+:ncount,is_error)
     for (int e=0; e<var.nelem; ++e) {
         int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
         int elenmarkers = (*var.markers_in_elem)[e].size();
 
-        if (elenmarkers != nmarker_mat)
-            printf("Error: melt production markers count mismatch in element %d: %d vs %d\n", e, elenmarkers, nmarker_mat);
-
+        if (elenmarkers != nmarker_mat) {
+            printf("Error: markers count mismatch in element %d: %d vs %d\n", e, elenmarkers, nmarker_mat);
+            ++is_error;
+        }
         for (int i=0; i<elenmarkers; ++i) {
             int m = (*var.markers_in_elem)[e][i];
-            if (m < 0 || m >= _nmarkers)
+            if (m < 0 || m >= _nmarkers) {
                 printf("Error: melt production marker %d in element %d is out of range [0,%d)\n", m, e, _nmarkers);
+                ++is_error;
+            }
 
             int me = (*_elem)[m];
-            if (me != e)
-                printf("Error: melt production marker %d in element %d is not in element %d\n", m, me, e);
+            if (me != e) {
+                printf("Error: marker %d in element %d is not in element %d\n", m, me, e);
+                ++is_error;
+            }
         }
         ncount += elenmarkers;
     }
 
     if (_nmarkers != ncount) {
-        std::cerr << "Error: melt production markers count mismatch: " << _nmarkers << " vs " << ncount << '\n';
+        std::cerr << "Error: markers count mismatch: " << _nmarkers << " vs " << ncount << '\n';
+        std::exit(1);
+    } else if (is_error > 0) {
         std::exit(1);
     }
 
