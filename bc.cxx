@@ -1369,9 +1369,7 @@ namespace {
             double_vec& total_slope = *var.surfinfo.total_slope;
             double_vec& dh = *var.surfinfo.dh;
 
-        // loops over all top facets
-            const int tsize = top.size();
-
+            // loops over all top facets
 #ifndef ACC
             #pragma omp for
 #endif
@@ -1385,7 +1383,7 @@ namespace {
             #pragma omp for
 #endif
             #pragma acc parallel loop
-            for (int i=0; i<tsize; ++i) {
+            for (int i=0; i<var.surfinfo.etop; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
                 int e = top[i].first;
