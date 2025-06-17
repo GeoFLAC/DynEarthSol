@@ -2725,8 +2725,11 @@ array_t* elem_center(const array_t &coord, const conn_t &connectivity)
      */
     int nelem = connectivity.size();
     array_t* center = new array_t(nelem, NDIMS);
+#ifndef ACC
     #pragma omp parallel for default(none)          \
         shared(nelem, coord, connectivity, center)
+#endif
+    #pragma acc parallel loop
     for(int e=0; e<nelem; e++) {
         const int* conn = connectivity[e];
         for(int d=0; d<NDIMS; d++) {
