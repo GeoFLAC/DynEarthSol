@@ -3158,10 +3158,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
-    #pragma acc wait
-
     // TODO: using edvoldt and volume to get volume_old
-    std::copy(var.volume->begin(), var.volume->end(), var.volume_old->begin());
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e)
+        (*var.volume_old)[e] = (*var.volume)[e];
 
     if(param.control.has_ATS)
         var.dt = compute_dt(param, var);
@@ -3173,15 +3176,18 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePushA("reset bounrdary condition");
 #endif
 
-    #pragma acc wait
-
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
         param.mesh.remeshing_option==11 ||
         param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
-        for (auto i=var.bnodes[iboundz0]->begin(); i<var.bnodes[iboundz0]->end(); ++i) {
-            int n = *i;
+        int nbot = static_cast<int>(var.bnodes[iboundz0]->size());
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var)
+#endif
+        #pragma acc parallel loop async
+        for (int i=0; i<nbot; ++i) {
+            int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;
             // Reest temperature of the bottom nodes to mantle temperature
             (*var.temperature)[n] = var.bottom_temperature;
