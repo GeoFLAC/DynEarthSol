@@ -232,6 +232,8 @@ static double interp1(const double_vec& x, const double_vec& y, double x_new)
 }
 
 static int64_t get_nanoseconds() {
+    #pragma acc wait
+
     #if defined(_WIN32)
     LARGE_INTEGER frequency, counter;
     QueryPerformanceFrequency(&frequency);
