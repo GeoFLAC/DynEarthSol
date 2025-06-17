@@ -23,14 +23,14 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    #pragma acc serial
+    #pragma acc serial async
     int ntarget = target.size();
 
 #ifndef ACC
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
@@ -53,14 +53,14 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    #pragma acc serial
+    #pragma acc serial async
     int ntarget = target.size();
 
 #ifndef ACC
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
@@ -240,31 +240,37 @@ void barycentric_node_interpolation(Variables &var,
     brc_t brc(var.nnode);
     prepare_interpolation(var, bary, old_coord, old_connectivity, *var.support, brc, el);
 
-    double_vec *a;
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.temperature, *a);
+    double_vec *new_temperature = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature);
+
+    double_vec *new_ppressure = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure);
+
+    double_vec *new_dppressure = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
+
+    array_t *new_vel = new array_t(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
+
+    array_t *new_coord0 = new array_t(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
+
+    #pragma acc wait
+
     delete var.temperature;
-    var.temperature = a;
+    var.temperature = new_temperature;
 
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.ppressure, *a);
     delete var.ppressure;
-    var.ppressure = a;
+    var.ppressure = new_ppressure;
 
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.dppressure, *a);
     delete var.dppressure;
-    var.dppressure = a;
+    var.dppressure = new_dppressure;
 
-    array_t *b = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.vel, *b);
     delete var.vel;
-    var.vel = b;
+    var.vel = new_vel;
 
-    b = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.coord0, *b);
     delete var.coord0;
-    var.coord0 = b;
+    var.coord0 = new_coord0;
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif

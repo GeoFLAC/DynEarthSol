@@ -489,7 +489,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int e=0;e<var.nelem;e++) {
             // diffusion matrix
             const int *conn = (*var.connectivity)[e];
@@ -519,7 +519,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int n=0;n<var.nnode;n++) {
             tdot[n]=0;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
@@ -539,7 +539,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int e=0;e<var.nelem;e++) {
             if ((*var.plstrain)[e] <= pls_min) continue;
 
@@ -568,7 +568,7 @@ void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int n=0;n<var.nnode;n++) {
             int_vec &sup = (*var.supper)[n]
             for (int i=0; i<sup.size();i++) {

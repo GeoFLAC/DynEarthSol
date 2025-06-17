@@ -174,12 +174,17 @@ void init(const Param& param, Variables& var)
             (*var.coord0)[i][d] = (*var.coord)[i][d];
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+
+    #pragma acc wait
+
     *var.volume_old = *var.volume;
     apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
     // apply_vbcs(param, var, *var.vel); move to above compute_mass
@@ -288,6 +293,9 @@ void restart(const Param& param, Variables& var)
     bin_chkpt.read_array(*var.volume_old, "volume_old");
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
+
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
 
     // Initializing field variables
@@ -374,7 +382,7 @@ void update_mesh(const Param& param, Variables& var)
 #ifdef USE_NPROF
     nvtxRangePushA("swap vectors");
 #endif
-    #pragma serial
+    #pragma serial async
     {
         double_vec *tmp = var.volume;
         var.volume = var.volume_old;
@@ -673,6 +681,8 @@ int main(int argc, const char* argv[])
                                        *var.hydrous_elemmarkers);
             var.dt = compute_dt(param, var);
         }
+
+        #pragma acc wait
 
         if (param.sim.is_outputting_averaged_fields)
             output.average_fields(var);

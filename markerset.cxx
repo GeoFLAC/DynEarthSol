@@ -596,6 +596,8 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
     compute_volume( *var.coord, *var.connectivity, new_volume );
     Barycentric_transformation bary(*var.coord, *var.connectivity, new_volume);
 
+    #pragma acc wait
+
     for (int n=0; n< num_markers; ++n) {
         int ix = n % nx;
         int iy = (n / nx) % ny;
@@ -1294,7 +1296,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int i=0;i<var.ntop_elems;i++) {
         int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
 
@@ -1327,7 +1329,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
 #endif
-    #pragma acc parallel loop reduction(+:nchange)
+    #pragma acc parallel loop reduction(+:nchange) async
     for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
@@ -1351,6 +1353,8 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             }
         }
     }
+
+    #pragma acc wait
 
     if (nchange > 0) {
         delete_marker.reserve(nchange);

@@ -654,7 +654,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate)
 #endif
-    #pragma acc parallel loop // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         const int *conn = (*var.connectivity)[e];
         double pp_element = 0.0;
@@ -970,7 +970,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, old_mean_stress)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
         double* s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;

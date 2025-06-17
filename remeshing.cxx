@@ -1327,6 +1327,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         double_vec new_volume(new_nelem);
         compute_volume(new_coord, new_connectivity, new_volume);
 
+        #pragma acc wait
+
         const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
         bad_quality = 0;
         for (int e=0; e<new_nelem; e++) {
@@ -3155,6 +3157,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
      */
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+
+    #pragma acc wait
+
     // TODO: using edvoldt and volume to get volume_old
     std::copy(var.volume->begin(), var.volume->end(), var.volume_old->begin());
 

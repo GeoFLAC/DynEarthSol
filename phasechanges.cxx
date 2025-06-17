@@ -298,6 +298,9 @@ void phase_changes(const Param& param, Variables& var)
 
     PhaseChange& phch = *var.phch;
     MarkerSet& ms = *(var.markersets[0]);
+
+    #pragma acc wait // here is no GPU parallelized yet
+
     #pragma omp parallel for default(none) shared(param, var, ms, phch)
     for (int e=0; e<var.nelem; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();

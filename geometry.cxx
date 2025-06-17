@@ -110,7 +110,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
 #endif
-    #pragma acc parallel loop 
+    #pragma acc parallel loop async
     for (int e=0; e<volume.size(); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -143,7 +143,7 @@ void compute_volume(const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, volume)
 #endif
-    #pragma acc parallel loop 
+    #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -180,7 +180,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var, etmp)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         const double *strain_rate= (*var.strain_rate)[e];
@@ -194,7 +194,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int n=0;n<var.nnode;n++) {
         dvoldt[n] = 0.;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -225,7 +225,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         double dj = 0;
@@ -290,7 +290,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         double dp = (*var.dpressure)[e];
@@ -300,7 +300,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int n=0;n<var.nnode;n++) {
         dp_nd[n] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -314,7 +314,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
 
         double factor;
@@ -386,7 +386,7 @@ double compute_dt(const Param& param, Variables& var)
         private(vx_element, vy_element, vz_element)
 #endif
     #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem)
+        reduction(max: global_max_vem) async
     for (int e=0; e<var.nelem; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -470,6 +470,8 @@ double compute_dt(const Param& param, Variables& var)
         global_dt_min = std::min(global_dt_min, minl/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
     }
 
+    #pragma acc wait
+
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
         max_vbc_val = var.max_vbc_val;
@@ -490,13 +492,16 @@ double compute_dt(const Param& param, Variables& var)
 #ifndef ACC
         #pragma omp parallel for reduction(max:max_vel) default(none) shared(var)
 #endif
-        #pragma acc parallel loop reduction(max:max_vel)
+        #pragma acc parallel loop reduction(max:max_vel) async
         for (auto n=var.surfinfo.top_nodes->begin(); n<var.surfinfo.top_nodes->end(); ++n) {
             double vel = 0;
             for (int i=0; i<NDIMS; ++i)
                 vel += (*var.vel)[*n][i] * (*var.vel)[*n][i];
             max_vel = std::max(max_vel, vel);
         }
+
+        #pragma acc wait
+
         max_vbc_val = std::max(max_vbc_val, std::sqrt(max_vel));
     }
 
@@ -672,6 +677,8 @@ void compute_mass(const Param &param, const Variables &var,
         diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
     }
 
+    #pragma acc wait
+
     if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
     {
         std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
@@ -689,7 +696,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int e=0;e<var.nelem;e++) {
             double *tr = tmp_result[e];
             double rho;
@@ -740,7 +747,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
         for (int n=0;n<var.nnode;n++) {
             volume_n[n]=0;
             mass[n]=0;
@@ -759,6 +766,7 @@ void compute_mass(const Param &param, const Variables &var,
             }
         }
     }
+    #pragma acc wait
 
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -775,7 +783,7 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
     #pragma omp parallel for default(none)      \
         shared(var, shpdx, shpdy, shpdz)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for (int e=0;e<var.nelem;e++) {
 
         int n0 = (*var.connectivity)[e][0];

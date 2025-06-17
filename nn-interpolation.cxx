@@ -244,7 +244,7 @@ namespace {
         nvtxRangePushA(__FUNCTION__);
 #endif
 
-        #pragma acc serial
+        #pragma acc serial async
         int ntarget = target.size();
 
 #ifndef ACC
@@ -255,7 +255,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 target[i] = source[n];
@@ -264,7 +264,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -295,7 +295,7 @@ namespace {
         nvtxRangePushA(__FUNCTION__);
 #endif
 
-        #pragma acc serial
+        #pragma acc serial async
         int ntarget = target.size();
 
 #ifndef ACC
@@ -306,7 +306,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 for (int d=0; d<NSTR; d++) {
@@ -317,7 +317,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -348,61 +348,65 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        const int n = var.nnode;
         const int e = var.nelem;
 
-        double_vec *a;
+        double_vec *new_plstrain = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.plstrain, *new_plstrain);
 
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.plstrain, *a);
+        double_vec *new_delta_pls = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *new_delta_pls);
+
+        double_vec *new_eff_pls = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.eff_pls, *new_eff_pls);
+
+        tensor_t *new_strain = new tensor_t(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain);
+
+        tensor_t *new_stress = new tensor_t(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress);
+
+        double_vec *new_stressyy = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy);
+
+        double_vec *new_old_mean_stress = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress);
+
+        double_vec *new_radiogenic_source = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source);
+
+        double_vec *new_edvacc_surf = new double_vec(e);
+        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.surfinfo.edvacc_surf, *new_edvacc_surf);
+
+        #pragma acc wait
+
         delete var.plstrain;
-        var.plstrain = a;
+        var.plstrain = new_plstrain;
 
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *a);
         delete var.delta_plstrain;
-        var.delta_plstrain = a;
+        var.delta_plstrain = new_delta_pls;
 
-        tensor_t *b;
-        b = new tensor_t(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *b);
         delete var.strain;
-        var.strain = b;
+        var.strain = new_strain;
 
-        b = new tensor_t(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *b);
         delete var.stress;
-        var.stress = b;
+        var.stress = new_stress;
 
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *a);
         delete var.stressyy;
-        var.stressyy = a;
+        var.stressyy = new_stressyy;
 
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *a);
         delete var.old_mean_stress;
-        var.old_mean_stress = a;
+        var.old_mean_stress = new_old_mean_stress;
+
+        delete var.radiogenic_source;
+        var.radiogenic_source = new_radiogenic_source;
+
+        delete var.surfinfo.edvacc_surf;
+        var.surfinfo.edvacc_surf = new_edvacc_surf;
 
         // b = new tensor_t(e);
         // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
         // delete var.stress_old;
         // var.stress_old = b;
-
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *a);
-        delete var.radiogenic_source;
-        var.radiogenic_source = a;
-
-        a = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.surfinfo.edvacc_surf, *a);
-        delete var.surfinfo.edvacc_surf;
-        var.surfinfo.edvacc_surf = a;
-
-        a = new double_vec(e);
-        inject_field(idx, is_changed, elems_vec, ratios_vec, *var.surfinfo.edhacc_oc, *a);
-        delete var.surfinfo.edhacc_oc;
-        var.surfinfo.edhacc_oc = a;
 
 
 #ifdef USE_NPROF

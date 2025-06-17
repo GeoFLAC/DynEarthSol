@@ -2729,7 +2729,7 @@ array_t* elem_center(const array_t &coord, const conn_t &connectivity)
     #pragma omp parallel for default(none)          \
         shared(nelem, coord, connectivity, center)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
     for(int e=0; e<nelem; e++) {
         const int* conn = connectivity[e];
         for(int d=0; d<NDIMS; d++) {
@@ -2740,6 +2740,9 @@ array_t* elem_center(const array_t &coord, const conn_t &connectivity)
             (*center)[e][d] = sum / NODES_PER_ELEM;
         }
     }
+
+    #pragma acc wait
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
