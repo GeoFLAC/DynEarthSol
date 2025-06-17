@@ -3183,7 +3183,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         /* Reset coord0 of the bottom nodes */
         int nbot = static_cast<int>(var.bnodes[iboundz0]->size());
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var)
+        #pragma omp parallel for default(none) shared(param, var, nbot)
 #endif
         #pragma acc parallel loop async
         for (int i=0; i<nbot; ++i) {

@@ -1155,7 +1155,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         }
 
 #ifndef ACC
-        #pragma omp parallel default(none) shared(param, var, force, i, NODE_OF_FACET)
+        #pragma omp parallel default(none) \
+            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes)
 #endif
         {
             // loops over all bdry facets

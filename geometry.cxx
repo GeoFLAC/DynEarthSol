@@ -382,7 +382,7 @@ double compute_dt(const Param& param, Variables& var)
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
-        default(none) shared(param, var, velocity_x_element, velocity_y_element, velocity_z_element) \
+        default(none) shared(param, var) //, velocity_x_element, velocity_y_element, velocity_z_element) \
         private(vx_element, vy_element, vz_element)
 #endif
     #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
