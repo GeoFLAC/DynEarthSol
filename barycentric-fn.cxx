@@ -13,8 +13,11 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+#ifndef ACC
     #pragma omp parallel for default(none) \
         shared(coord, connectivity, volume)
+#endif
+    #pragma acc parallel loop
     for (int e=0; e<nelem_; ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -47,8 +50,11 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+#ifndef ACC
     #pragma omp parallel for default(none) \
         shared(elem, coord, connectivity, volume)
+#endif
+    #pragma acc parallel loop
     for (int i=0; i<nelem_; ++i) {
         int e = elem[i];
         int n0 = connectivity[e][0];

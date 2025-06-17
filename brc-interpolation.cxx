@@ -22,9 +22,16 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma acc serial
+    int ntarget = target.size();
+
+#ifndef ACC
     #pragma omp parallel for default(none)          \
-        shared(brc, el, connectivity, source, target)
-    for (std::size_t i=0; i<target.size(); i++) {
+        shared(brc, el, connectivity, source, target,ntarget)
+#endif
+    #pragma acc parallel loop
+    for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
         double result = 0;
@@ -45,9 +52,16 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma acc serial
+    int ntarget = target.size();
+
+#ifndef ACC
     #pragma omp parallel for default(none)          \
-        shared(brc, el, connectivity, source, target)
-    for (std::size_t i=0; i<target.size(); i++) {
+        shared(brc, el, connectivity, source, target,ntarget)
+#endif
+    #pragma acc parallel loop
+    for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
         for (int d=0; d<NDIMS; d++) {

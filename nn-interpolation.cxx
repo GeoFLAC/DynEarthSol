@@ -243,21 +243,34 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed, ratios_vec, elems_vec)
+
+        #pragma acc serial
+        int ntarget = target.size();
+
+#ifndef ACC
+        #pragma omp parallel default(none) shared(idx, source, \
+            target, is_changed, idx_changed, ratios_vec, elems_vec, ntarget)
+#endif
         {
+#ifndef ACC
             #pragma omp for
-            for (std::size_t i=0; i<target.size(); i++) {
+#endif
+            #pragma acc parallel loop
+            for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 target[i] = source[n];
             }
 
+#ifndef ACC
             #pragma omp for
-            for (std::size_t i=0; i<target.size(); i++) {
+#endif
+            #pragma acc parallel loop
+            for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
 
                     target[i] = 0;
-                    for (std::size_t j=0; j<32; j++) {
+                    for (int j=0; j<32; j++) {
                         if (elems_vec[n*32+j] < 0) break;
                         target[i] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ];
                     }
@@ -281,24 +294,37 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        #pragma omp parallel default(none) shared(idx, source, target, is_changed, idx_changed, elems_vec, ratios_vec)
+
+        #pragma acc serial
+        int ntarget = target.size();
+
+#ifndef ACC
+        #pragma omp parallel default(none) shared(idx, source, \
+            target, is_changed, idx_changed, elems_vec, ratios_vec, ntarget)
+#endif
         {
+#ifndef ACC
             #pragma omp for
-            for (std::size_t i=0; i<target.size(); i++) {
+#endif
+            #pragma acc parallel loop
+            for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 for (int d=0; d<NSTR; d++) {
                     target[i][d] = source[n][d];
                 }
             }
 
+#ifndef ACC
             #pragma omp for
-            for (std::size_t i=0; i<target.size(); i++) {
+#endif
+            #pragma acc parallel loop
+            for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
 
                     for (int d=0; d<NSTR; d++) {
                         target[i][d] = 0;
-                        for (std::size_t j=0; j<32; j++) {
+                        for (int j=0; j<32; j++) {
                             if (elems_vec[n*32+j] < 0) break;
                             target[i][d] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ][d];
                         }
