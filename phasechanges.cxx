@@ -263,6 +263,8 @@ namespace {
 
 void phase_changes_init(const Param& param, Variables& var)
 {
+    #pragma acc wait // here is no GPU parallelized yet
+
     PhaseChange *phch = 0;
     if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return;
 

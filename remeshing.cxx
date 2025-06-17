@@ -3172,6 +3172,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifdef USE_NPROF
     nvtxRangePushA("reset bounrdary condition");
 #endif
+
+    #pragma acc wait
+
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
         param.mesh.remeshing_option==11 ||

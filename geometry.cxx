@@ -654,7 +654,7 @@ void compute_mass(const Param &param, const Variables &var,
 
     double diff_e;
 
-    #pragma acc serial
+    #pragma acc serial async
     {
         // Retrieve hydraulic properties for the element
         double perm_e = var.mat->perm(0);                // Intrinsic permeability 
@@ -766,7 +766,6 @@ void compute_mass(const Param &param, const Variables &var,
             }
         }
     }
-    #pragma acc wait
 
 #ifdef USE_NPROF
     nvtxRangePop();

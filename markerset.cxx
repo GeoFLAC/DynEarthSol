@@ -752,7 +752,7 @@ void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
         #pragma omp for
 #else
         #pragma omp single
-        #pragma acc parallel loop
+        #pragma acc parallel loop async
 #endif
         for (int i = 0; i < a_out.size(); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
@@ -761,6 +761,10 @@ void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
             remove_marker_data(a_out[i],b_out[i]);
         }
     }
+
+    printf("  Removed %d markers from markerset.\n", n);
+
+    #pragma acc wait
 
     _nmarkers -= n;
 
@@ -960,6 +964,8 @@ namespace {
         nvtxRangePushA(__FUNCTION__);
 #endif
         const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
+
+        #pragma acc wait
 
         // Loop over all the old markers and identify a containing element in the new mesh.
         int last_marker = ms.get_nmarkers();
@@ -1426,6 +1432,8 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         if (!delete_marker.empty())
             remove_markers(delete_marker, markers_in_elem);
 
+        #pragma acc wait
+
         int_pair_vec unplenished_elems;
         for (int i=0; i<var.ntop_elems; i++) {
             int e = (*var.top_elems)[i];
@@ -1518,6 +1526,8 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         if (param.control.has_hydration_processes)
             find_markers_in_element(param, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers, *var.hydrous_markers_in_elem,
                                     kdtree, bary, old_coord, old_connectivity);
+
+        #pragma acc wait
 
         delete centroid;
     }

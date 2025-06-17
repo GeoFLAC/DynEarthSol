@@ -184,8 +184,6 @@ void init(const Param& param, Variables& var)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
-    #pragma acc wait
-
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
     // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
@@ -293,8 +291,6 @@ void restart(const Param& param, Variables& var)
     bin_chkpt.read_array(*var.volume_old, "volume_old");
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-
-    #pragma acc wait
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
 
@@ -658,8 +654,10 @@ int main(int argc, const char* argv[])
 
 
         // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) // ignoring poroelastic effect due to inital imbalance 
+        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
+            #pragma acc wait // following founction is not ACC parallelized
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
+        }
 
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
@@ -669,6 +667,7 @@ int main(int argc, const char* argv[])
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain);
 
+        #pragma acc wait
         const int slow_updates_interval = 10;
         if (var.steps % slow_updates_interval == 0) {
             // The functions inside this if-block are expensive in computation is expensive,

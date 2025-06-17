@@ -110,6 +110,8 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
      * normal will not change with time.
      */
 
+    #pragma acc wait
+
     for (int i=0; i<nbdrytypes; i++) {
         double normal[NDIMS] = {0};
         if (var.bfacets[i]->size() == 0) continue;
@@ -1276,6 +1278,9 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma wait // here is not ACC parallelized
+
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
     // Check if there is a stress BC applied on this boundary
@@ -1546,6 +1551,8 @@ namespace {
 
     void custom_surface_processes(const Variables& var, array_t& coord)
     {
+        #pragma acc wait // here is not ACC parallelized yet
+
         const int top_bdry = iboundz1;
         const int_vec& top_nodes = *var.bnodes[top_bdry];
         const std::size_t ntop = top_nodes.size();
@@ -1791,6 +1798,8 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
+        #pragma acc wait // here is not ACC parallelized yet
+
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
         const int_vec& top_nodes = *surfinfo.top_nodes;
