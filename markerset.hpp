@@ -85,6 +85,9 @@ public:
     inline double get_tmp(int m) const { return (*_tmp)[m]; }
     inline void set_tmp(const int m, const double tmp) { (*_tmp)[m] = tmp; }
 
+    #pragma acc routine seq
+    void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
+
 private:
     const std::string _name;
 

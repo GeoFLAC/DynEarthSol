@@ -18,6 +18,7 @@
 #include "mesh.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
+#include "matprops.hpp"
 
 
 namespace {
@@ -925,6 +926,23 @@ void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const
     nvtxRangePop();
 #endif
 }
+
+
+void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const {
+        // Get depth and temperature at the marker
+        Z = T = 0;
+        const double* eta = (*_eta)[m];
+        const int *conn = (*var.connectivity)[(*_elem)[m]];
+        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            Z += (*var.coord)[conn[i]][NDIMS-1] * eta[i];
+            T += (*var.temperature)[conn[i]] * eta[i];
+        }
+
+        // Get pressure, which is constant in the element
+        // P = - trace((*var.stress)[e]) / NDIMS;
+        P = ref_pressure(param, Z);    
+}
+
 
 array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
 #ifdef USE_NPROF

@@ -197,7 +197,6 @@ void init(const Param& param, Variables& var)
 
     initial_weak_zone(param, var, *var.plstrain);
 
-    phase_changes_init(param, var);
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -342,7 +341,6 @@ void restart(const Param& param, Variables& var)
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
-    phase_changes_init(param, var);
 }
 
 

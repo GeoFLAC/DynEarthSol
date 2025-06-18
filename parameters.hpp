@@ -59,10 +59,6 @@ struct AppendMarkerData {
 
 typedef std::vector<AppendMarkerData> AMD_vec;
 
-// forward declaration
-class PhaseChange;
-
-
 //
 // Structures for input parameters
 //
@@ -564,8 +560,6 @@ struct Variables {
 
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
-
-    PhaseChange *phch;
 
     Variables()
     {
