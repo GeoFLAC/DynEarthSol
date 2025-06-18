@@ -1639,6 +1639,8 @@ void advect_hydrous_markers(const Param& param, const Variables& var, double dt_
     std::unordered_map<int, Barycentric_transformation*> cache;
     Barycentric_transformation *bary;
 
+    #pragma acc wait // here is not ACC parallelized yet
+
     int last_marker = hydms.get_nmarkers();
     int m = 0;
     while (m < last_marker) {
