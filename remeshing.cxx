@@ -3110,14 +3110,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 
         {
-            std::cout << "    Interpolating fields.\n";
+            // std::cout << "    Interpolating fields.\n";
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
 
             // interpolating fields defined on elements
-            nearest_neighbor_interpolation(var, bary, old_coord, old_connectivity);
+            nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
 
             // interpolating fields defined on nodes
-            barycentric_node_interpolation(var, bary, old_coord, old_connectivity);
+            barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
         delete var.support;

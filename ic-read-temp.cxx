@@ -138,7 +138,7 @@ void read_external_temperature_from_comsol(const Param &param,
     //print(std::cout, volume);
 
     Barycentric_transformation bary(input_coord, input_connectivity, volume);
-    barycentric_node_interpolation_forT(var, bary, input_coord, input_connectivity, input_support, inputtemperature, temperature);
+    barycentric_node_interpolation_forT(param ,var, bary, input_coord, input_connectivity, input_support, inputtemperature, temperature);
 
     return;
 }

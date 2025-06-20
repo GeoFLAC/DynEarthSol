@@ -588,7 +588,7 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
     array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
 
     PointCloud cloud(*centroid);
-    KDTree kdtree(NDIMS, cloud);
+    NANOKDTree kdtree(NDIMS, cloud);
     kdtree.buildIndex();
 
     const int k = std::min(20, var.nelem);  // how many nearest neighbors to search?
@@ -763,7 +763,7 @@ void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
         }
     }
 
-    printf("  Removed %d markers from markerset.\n", n);
+    printf("    Removed %d markers from markerset.\n", n);
 
     #pragma acc wait
 
@@ -983,10 +983,35 @@ namespace {
 #endif
         const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
+        int last_marker = ms.get_nmarkers();
+
+#ifdef ACC
+        double3_vec queries(last_marker);
+
+        #pragma acc parallel loop async
+        for (int i = 0; i < last_marker; i++) {
+            bool found = false;
+
+            // 1. Get physical coordinates, x, of an old marker.
+            int eold = ms.get_elem(i);
+            double x[NDIMS] = {0};
+            for (int j = 0; j < NDIMS; j++)
+                for (int k = 0; k < NODES_PER_ELEM; k++)
+                    x[j] += ms.get_eta(i)[k]*
+                        old_coord[ old_connectivity[eold][k] ][j];
+
+            queries[i] = {x[0], x[1], x[2]};
+        }
+
+
+        neighbor_vec neighbors(last_marker*k);
+
         #pragma acc wait
 
+        kdtree.search_grid(queries, neighbors, k, 3);
+#endif
+
         // Loop over all the old markers and identify a containing element in the new mesh.
-        int last_marker = ms.get_nmarkers();
         int_vec removed_markers;
 
         #pragma omp parallel default(none) shared(param, ms, elemmarkers, markers_in_elem, kdtree, \
@@ -1002,6 +1027,16 @@ namespace {
                 // 1. Get physical coordinates, x, of an old marker.
                 int eold = ms.get_elem(i);
                 double x[NDIMS] = {0};
+#ifdef ACC
+                x[0] = queries[i].x;
+                x[1] = queries[i].y;
+#ifdef THREED
+                x[2] = queries[i].z;
+#endif
+
+                // 2. look for nearby elements.
+                neighbor* nn_idx = neighbors.data() + i*k;
+#else
                 for (int j = 0; j < NDIMS; j++)
                     for (int k = 0; k < NODES_PER_ELEM; k++)
                         x[j] += ms.get_eta(i)[k]*
@@ -1014,9 +1049,13 @@ namespace {
                 resultSet.init(nn_idx.data(), out_dists_sqr.data());
 
                 kdtree.findNeighbors(resultSet, x);
-
+#endif
                 for( int j = 0; j < k; j++ ) {
+#ifdef ACC
+                    int e = nn_idx[j].idx;
+#else
                     int e = nn_idx[j];
+#endif
                     double r[NDIMS];
 
                     bary.transform(x, e, r);
@@ -1031,6 +1070,7 @@ namespace {
                         markers_in_elem[e].push_back(i);
                 
                         found = true;
+                        ms.set_tmp(i, 1.0);
                         break;
                     }
                 }
@@ -1040,6 +1080,7 @@ namespace {
                 /* not found */
                 // Since no containing element has been found, delete this marker.
                 removed_local.emplace_back(i);
+                ms.set_tmp(i, 0.0); // mark this marker for removal
             }
 
             #pragma omp critical
@@ -1175,7 +1216,7 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA("create kdtree for markers");
 #endif
-        KDTree kdtree(NDIMS, cloud);
+        NANOKDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1532,9 +1573,17 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifdef USE_NPROF
         nvtxRangePushA("create kdtree for new elements");
 #endif
+
+#ifdef ACC
+        double3_vec points(var.nelem);
+        elem_center3(*var.coord, *var.connectivity,points); // centroid of elements
+        CudaKNN kdtree(param, points);
+#else
         PointCloud cloud(*centroid);
         KDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
+#endif
+
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif

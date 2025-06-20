@@ -48,7 +48,7 @@ CXX_BACKEND = ${CXX}
 
 
 ## path to cuda's base directory
-CUDA_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2/cuda
+NVHPC_DIR = /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
 BOOST_ROOT_DIR =
@@ -182,7 +182,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
-	CXXFLAGS = -mno-fma -g
+	CXXFLAGS = -g -Minfo=mp,accel
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -193,10 +193,17 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(openacc), 1)
-		# CXXFLAGS += -acc=gpu -gpu=managed,nofma -Mcuda -DACC
-		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
-		CXXFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda -DACC
+		CXXFLAGS += -acc=gpu -cuda -DACC
 		LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		# CXXFLAGS += -acc=gpu -Mcuda -DACC
+		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
+		ifeq ($(nprof), 1)
+			CXXFLAGS += -gpu=mem:managed,nofma -mno-fma
+			# CXXFLAGS += -gpu=managed,nofma -mno-fma
+		else
+			CXXFLAGS += -gpu=mem:managed
+			# CXXFLAGS += -gpu=managed
+		endif
 	endif
 
 	ifeq ($(openmp), 1)
@@ -205,8 +212,8 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(nprof), 1)
-		CXXFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include -DUSE_NPROF
-		LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt -g
+		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
+		LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXXFLAGS = -march=core2
@@ -227,8 +234,8 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 	endif
 
 	ifeq ($(nprof), 1)
-			CXXFLAGS += -Minfo=mp -I$(CUDA_DIR)/include -DUSE_NPROF
-			LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt
+			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
+			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else
 # the only way to display the error message in Makefile ...
@@ -406,7 +413,7 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nprof=$(nprof) CUDA_DIR=$(CUDA_DIR)
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nprof=$(nprof) CUDA_DIR=$(NVHPC_DIR)/cuda
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)

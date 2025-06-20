@@ -31,6 +31,9 @@ int get_sup_size(const Variables& var, const int inode);
 void create_elemmarkers(const Param&, Variables&);
 void create_markers(const Param&, Variables&);
 void create_new_mesh(const Param&, Variables&);
+#ifdef ACC
+void elem_center3(const array_t &coord, const conn_t &connectivity, std::vector<double3>& points);
+#endif
 array_t* elem_center(const array_t &coord, const conn_t &connectivity);
 void create_equilateral_elem(const Variables& var, int *&connectivity);
 void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags);

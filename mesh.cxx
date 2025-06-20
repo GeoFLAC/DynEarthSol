@@ -2714,6 +2714,47 @@ void create_new_mesh(const Param& param, Variables& var)
     // std::cout << '\n';
 }
 
+#ifdef ACC
+
+void elem_center3(const array_t &coord, const conn_t &connectivity, std::vector<double3>& center)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    int nelem = connectivity.size();
+
+    #pragma acc parallel loop async
+    for(int e=0; e<nelem; e++) {
+        const int* conn = connectivity[e];
+        double sum = 0;
+        for(int k=0; k<NODES_PER_ELEM; k++) {
+            sum += coord[conn[k]][0];
+        }
+        center[e].x = sum / NODES_PER_ELEM;
+
+        sum = 0;
+        for(int k=0; k<NODES_PER_ELEM; k++) {
+            sum += coord[conn[k]][1];
+        }
+        center[e].y = sum / NODES_PER_ELEM;
+
+        sum = 0;
+        for(int k=0; k<NODES_PER_ELEM; k++) {
+            sum += coord[conn[k]][2];
+        }
+        center[e].z = sum / NODES_PER_ELEM;
+
+    }
+
+    #pragma acc wait
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
+#endif // ACC
+
 array_t* elem_center(const array_t &coord, const conn_t &connectivity)
 {
 #ifdef USE_NPROF
