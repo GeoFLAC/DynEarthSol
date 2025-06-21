@@ -290,7 +290,11 @@ INCS =	\
 CXX_OBJS = $(SRCS:.cxx=.$(ndims)d.o)
 CU_OBJS = $(CU_SRCS:.cu=.$(ndims)d.o)
 
-OBJS = $(CXX_OBJS) $(CU_OBJS)
+OBJS = $(CXX_OBJS) 
+
+ifeq ($(openacc), 1)
+	OBJS += $(CU_OBJS)
+endif
 
 EXE = dynearthsol$(ndims)d
 
@@ -396,8 +400,10 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
+ifeq ($(openacc), 1)
 $(CU_OBJS): %.$(ndims)d.o : %.cu $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
+endif
 
 $(CXX_OBJS): %.$(ndims)d.o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
