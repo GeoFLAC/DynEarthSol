@@ -18,6 +18,7 @@
 #include "mesh.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
+#include "knn.cuh"
 #include "matprops.hpp"
 
 

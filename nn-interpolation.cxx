@@ -10,6 +10,7 @@
 #include "barycentric-fn.hpp"
 #include "mesh.hpp"
 #include "utils.hpp"
+#include "knn.cuh"
 #include "nn-interpolation.hpp"
 
 

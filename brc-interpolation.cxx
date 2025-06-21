@@ -9,6 +9,7 @@
 
 #include "barycentric-fn.hpp"
 #include "utils.hpp"
+#include "knn.cuh"
 #include "brc-interpolation.hpp"
 
 namespace { // anonymous namespace

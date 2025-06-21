@@ -271,6 +271,8 @@ SRCS =	\
 	rheology.cxx \
 	markerset.cxx
 
+CU_SRCS = knn.cu
+
 INCS =	\
 	array2d.hpp \
 	barycentric-fn.hpp \
@@ -282,9 +284,13 @@ INCS =	\
 	utils.hpp \
 	mesh.hpp \
 	markerset.hpp \
-	output.hpp
+	output.hpp \
+	knn.cuh
 
-OBJS = $(SRCS:.cxx=.$(ndims)d.o)
+CXX_OBJS = $(SRCS:.cxx=.$(ndims)d.o)
+CU_OBJS = $(CU_SRCS:.cu=.$(ndims)d.o)
+
+OBJS = $(CXX_OBJS) $(CU_OBJS)
 
 EXE = dynearthsol$(ndims)d
 
@@ -390,7 +396,10 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+$(CU_OBJS): %.$(ndims)d.o : %.cu $(INCS)
+	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
+
+$(CXX_OBJS): %.$(ndims)d.o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(TRI_OBJS): %.o : %.c $(TRI_INCS)
