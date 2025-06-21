@@ -292,11 +292,11 @@ void CudaKNN::search_grid(const double3_vec& queries, neighbor_vec& neighbors,
     double maxDist = resoTimes * resolution;
     double cell_size = maxDist;
 
-    long max_size = 1024 * 1024 * 128;
+    long max_size = 1024 * 1024 * 256;
     int nqueries = queries.size();
     int npoints = points.size();
 
-    int nblocks = (double)nqueries * k / (double)max_size + 1;
+    int nblocks = (double)nqueries * k / (double)max_size;
     if (nblocks < 1) nblocks = 1;
     printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, npoints, max_size, nblocks);
 

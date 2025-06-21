@@ -100,12 +100,14 @@ namespace {
         ratios_vec.resize(nelem_changed*32);
 
 #ifdef ACC
-        printf("    Creating queries for cuda knn...\n");
         int nqueries = 0;
-        #pragma acc parallel loop reduction(+:nqueries)
+        int_vec queries_starts(nelem_changed+1);
+
         for(int e=0; e<var.nelem; e++) {
             if (is_changed[e]) {
-                const int* conn = (*var.connectivity)[e];
+                queries_starts[idx_changed[e]] = nqueries;
+
+                #pragma omp parallel for reduction(+:nqueries)
                 for (int i=0; i<neta0; i++)
                     for (int j=0; j<neta1; j++) {
                         for (int k=0; k<neta2; k++) {
@@ -120,187 +122,229 @@ namespace {
                     }
             }
         }
+        queries_starts[nelem_changed] = nqueries;
 
-        double3_vec queries(nqueries);
-        neighbor_vec neighbors(nqueries * max_el);
+        // number of neighbors exceeding computational limit
+        int queries_max = 1024 * 1024 * 8;
+        // calculate average number of queries per element
+        int nqueries_avg = nqueries / nelem_changed;
+
+        double3_vec queries;
+        neighbor_vec neighbors;
+
+        int elems_per_block = queries_max / nqueries_avg;
+        if (elems_per_block < 1) elems_per_block = 1;
+        int nblocks = (nelem_changed + elems_per_block - 1) / elems_per_block;
+        printf("  Using %d blocks, elements per block: %d, total queries: %d\n",
+               nblocks, elems_per_block, nqueries);
+
+        for (int b=0; b<nblocks; b++) {
+            int start = b * elems_per_block;
+            int end = std::min((b + 1) * elems_per_block, var.nelem);
+            if (start >= end) continue;
+
+            printf("    Block %d: element from %d to %d\n", b, start, end);
+
+            int nqueries_block = 0;
+            #pragma acc parallel loop reduction(+:nqueries_block)
+            for(int e=start; e<end; e++)
+                if (is_changed[e])
+                    nqueries_block += queries_starts[idx_changed[e] + 1] - queries_starts[idx_changed[e]];
+
+            queries.resize(nqueries_block);
+            neighbors.resize(nqueries_block * max_el);
+
 #ifdef USE_NPROF
-        nvtxRangePushA("create queries for kdtree");
+            nvtxRangePushA("create queries for kdtree");
 #endif
-        int count = 0;
-        for(int e=0; e<var.nelem; e++) {
-            if (is_changed[e]) {
-                const int* conn = (*var.connectivity)[e];
-                for (int i=0; i<neta0; i++)
-                    for (int j=0; j<neta1; j++) {
-                        for (int k=0; k<neta2; k++) {
-                            double eta[4] = {(i + 0.5) * spacing0,
-                                             (j + 0.5) * spacing1,
-                                             (k + 0.5) * spacing2,
-                                             1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-                            if (eta[NODES_PER_ELEM-1] < 0) continue;
+            #pragma acc parallel loop async
+            for (int e=start; e<end; e++) {
+                if (is_changed[e]) {
+                    int query_start = queries_starts[idx_changed[e]] - queries_starts[idx_changed[start]];
+                    int count = 0;
+                    const int* conn = (*var.connectivity)[e];
+                    for (int i=0; i<neta0; i++)
+                        for (int j=0; j<neta1; j++) {
+                            for (int k=0; k<neta2; k++) {
+                                double eta[4] = {(i + 0.5) * spacing0,
+                                                (j + 0.5) * spacing1,
+                                                (k + 0.5) * spacing2,
+                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
+                                if (eta[NODES_PER_ELEM-1] < 0) continue;
 
-                            double x[NDIMS] = {0}; // coordinate of temporary point
-                            for (int d=0; d<NDIMS; d++)
-                                for (int n=0; n<NODES_PER_ELEM; n++) {
-                                    x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
-                                }
-                            
-                            queries[count] = make_double3(x[0], x[1], x[2]);
-                            count++;
-                        }
-                    }
-            }
-        }
-#ifdef USE_NPROF
-        nvtxRangePop(); // create queries for kdtree
-#endif
-        printf("    Finding knn for acm element ratios...\n");
-
-        kdtree.search_grid(queries, neighbors, max_el, 3.);
-
-        count = 0;
-#else
-        #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed) firstprivate(max_el)
-#endif
-        // #pragma acc parallel loop async
-        for(int e=0; e<var.nelem; e++) {
-            if (is_changed[e]) {
-                int elem_count_buf[32] = {0};
-                int elem_keys[32] = {0};
-                int elem_size = 0;
-                /* Procedure:
-                 *   1. Create a bunch of temporary points, uniformly distributed in the element.
-                 *   2. Locate these points on old elements.
-                 *   3. The percentage of points in each old elements is used as (approximate)
-                 *      volume weighting for the mapping.
-                 */
-                const int* conn = (*var.connectivity)[e];
-                for (int i=0; i<neta0; i++)
-                    for (int j=0; j<neta1; j++) {
-#ifdef THREED
-                        for (int k=0; k<neta2; k++) {
-                            double eta[4] = {(i + 0.5) * spacing0,
-                                             (j + 0.5) * spacing1,
-                                             (k + 0.5) * spacing2,
-                                             1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-#else
-                            double eta[3] = {(i + 0.5) * spacing0,
-                                             (j + 0.5) * spacing1,
-                                             1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
-#endif
-                            if (eta[NODES_PER_ELEM-1] < 0) continue;
-
-                            double x[NDIMS] = {0}; // coordinate of temporary point
-                            for (int d=0; d<NDIMS; d++)
-                                for (int n=0; n<NODES_PER_ELEM; n++) {
-                                    x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
-                                }
-
-                            // find the nearest point nn in old_center
-#ifdef ACC
-                            neighbor *nn_idx = neighbors.data() + count * max_el;
-                            count++;
-#else
-                            size_t_vec nn_idx(max_el);
-                            double_vec out_dists_sqr(max_el);
-                            KNNResultSet resultSet(max_el);
-                            resultSet.init(nn_idx.data(), out_dists_sqr.data());
-
-                            kdtree.findNeighbors(resultSet, x);
-#endif
-                            // bool is_consist = true;
-                            // for (int jj=0; jj<max_el; jj++) {
-                            //     // compare the nn_idx[jj] with neighbors[jj].idx
-                            //     if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                            //         is_consist = false;
-                            //         break;
-                            //     }
-                            // }
-                            // if (!is_consist) {
-                            //     printf("Inconsistent neighbors for element %d, query %d:\n", e, count);
-                            //     for (int jj=0; jj<max_el; jj++) {
-                            //         printf("  nn_idx[%4d] = %6d, dist2 = %10.1f | ", jj, nn_idx[jj], out_dists_sqr[jj]);
-                            //         printf("  neighbors[%4d] = %6d, dist2 = %10.1f", jj, nn_idx_ptr[jj].idx, nn_idx_ptr[jj].dist2);
-                            //         if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                            //             printf(" *\n");
-                            //         } else {
-                            //             printf("  \n");
-                            //         }
-                            //     }
-                            //     printf("\n");
-                            // }
-
-                            // std::cout << "  ";
-                            // print(std::cout, eta, NODES_PER_ELEM);
-                            // print(std::cout, x, NDIMS);
-
-                            // find the old element that is enclosing x
-                            double r[NDIMS];
-                            int old_e;
-                            for (int jj=0; jj<max_el; jj++) {
-#ifdef ACC
-                                old_e = nn_idx[jj].idx;
-#else
-                                old_e = static_cast<int>(nn_idx[jj]);
-#endif
-                                bary.transform(x, old_e, r);
-                                if (bary.is_inside(r)) {
-                                    bool found = false;
-                                    for (int ei = 0; ei < elem_size; ++ei) {
-                                        if (elem_keys[ei] == old_e) {
-                                            elem_count_buf[ei]++;
-                                            found = true;
-                                            break;
-                                        }
+                                double x[NDIMS] = {0}; // coordinate of temporary point
+                                for (int d=0; d<NDIMS; d++)
+                                    for (int n=0; n<NODES_PER_ELEM; n++) {
+                                        x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
                                     }
-                                    if (!found && elem_size < 32) {
-                                        elem_keys[elem_size] = old_e;
-                                        elem_count_buf[elem_size] = 1;
-                                        elem_size++;
-                                    }
-                                    break;
-                                }
+                                
+                                queries[query_start + count] = make_double3(x[0], x[1], x[2]);
+                                count++;
                             }
-
-                            /* not found, do nothing */
-                            // std::cout << " not found\n";
-                            continue;
-#ifdef THREED
                         }
-#endif
-                    }
-
-                // Count
-                int total_count = 0;
-                for (int i=0; i<=elem_size; ++i)
-                    total_count += elem_count_buf[i];
-
-                // std::cout << "  has " << total_count << " points\n";
-
-                if (total_count == 0) {
-                    // This happens when new material is added during remeshing,
-                    // and this element is completely within the new material.
-                    // Mark the element as unchanged instead to keep the result
-                    // of nearest neighbor interpolation.
-                    is_changed[e] = -1;
-                    continue;
-                }
-
-                if (elem_size == 1) {
-                    // This happens when the new is completely within the old element.
-                    // Mark the element as unchanged instead to keep the result
-                    // of nearest neighbor interpolation.
-                    is_changed[e] = -1;
-                    continue;
-                }
-
-                const double inv = 1.0 / total_count;
-                for (int i=0; i<elem_size; ++i) {
-                    elems_vec[idx_changed[e]*32+i] = elem_keys[i];
-                    ratios_vec[idx_changed[e]*32+i] = elem_count_buf[i] * inv;
                 }
             }
-        }
+#ifdef USE_NPROF
+            nvtxRangePop(); // create queries for kdtree
+#endif
+            printf("    Finding knn for acm element ratios...\n");
+
+            kdtree.search_grid(queries, neighbors, max_el, 3.);
+
+            #pragma acc parallel loop async
+            for (int e=start; e<end; e++) {
+#else
+            #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed) firstprivate(max_el)
+            for(int e=0; e<var.nelem; e++) {
+#endif
+                if (is_changed[e]) {
+                    int count = 0;
+#ifdef ACC
+                    int query_start = queries_starts[idx_changed[e]] - queries_starts[idx_changed[start]];
+#endif
+                    int elem_count_buf[32] = {0};
+                    int elem_keys[32] = {0};
+                    int elem_size = 0;
+                    /* Procedure:
+                    *   1. Create a bunch of temporary points, uniformly distributed in the element.
+                    *   2. Locate these points on old elements.
+                    *   3. The percentage of points in each old elements is used as (approximate)
+                    *      volume weighting for the mapping.
+                    */
+                    const int* conn = (*var.connectivity)[e];
+                    for (int i=0; i<neta0; i++)
+                        for (int j=0; j<neta1; j++) {
+    #ifdef THREED
+                            for (int k=0; k<neta2; k++) {
+                                double eta[4] = {(i + 0.5) * spacing0,
+                                                (j + 0.5) * spacing1,
+                                                (k + 0.5) * spacing2,
+                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
+    #else
+                                double eta[3] = {(i + 0.5) * spacing0,
+                                                (j + 0.5) * spacing1,
+                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
+    #endif
+                                if (eta[NODES_PER_ELEM-1] < 0) continue;
+
+                                double x[NDIMS] = {0}; // coordinate of temporary point
+
+                                // find the nearest point nn in old_center
+    #ifdef ACC
+                                x[0] = queries[query_start + count].x;
+                                x[1] = queries[query_start + count].y;
+                                x[2] = queries[query_start + count].z;
+                                neighbor *nn_idx = neighbors.data() + (query_start + count) * max_el;
+                                count++;
+    #else
+                                for (int d=0; d<NDIMS; d++)
+                                    for (int n=0; n<NODES_PER_ELEM; n++) {
+                                        x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
+                                    }
+
+                                size_t_vec nn_idx(max_el);
+                                double_vec out_dists_sqr(max_el);
+                                KNNResultSet resultSet(max_el);
+                                resultSet.init(nn_idx.data(), out_dists_sqr.data());
+
+                                kdtree.findNeighbors(resultSet, x);
+    #endif
+                                // bool is_consist = true;
+                                // for (int jj=0; jj<max_el; jj++) {
+                                //     // compare the nn_idx[jj] with neighbors[jj].idx
+                                //     if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
+                                //         is_consist = false;
+                                //         break;
+                                //     }
+                                // }
+                                // if (!is_consist) {
+                                //     printf("Inconsistent neighbors for element %d, query %d:\n", e, count);
+                                //     for (int jj=0; jj<max_el; jj++) {
+                                //         printf("  nn_idx[%4d] = %6d, dist2 = %10.1f | ", jj, nn_idx[jj], out_dists_sqr[jj]);
+                                //         printf("  neighbors[%4d] = %6d, dist2 = %10.1f", jj, nn_idx_ptr[jj].idx, nn_idx_ptr[jj].dist2);
+                                //         if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
+                                //             printf(" *\n");
+                                //         } else {
+                                //             printf("  \n");
+                                //         }
+                                //     }
+                                //     printf("\n");
+                                // }
+
+                                // std::cout << "  ";
+                                // print(std::cout, eta, NODES_PER_ELEM);
+                                // print(std::cout, x, NDIMS);
+
+                                // find the old element that is enclosing x
+                                double r[NDIMS];
+                                int old_e;
+                                for (int jj=0; jj<max_el; jj++) {
+    #ifdef ACC
+                                    old_e = nn_idx[jj].idx;
+    #else
+                                    old_e = static_cast<int>(nn_idx[jj]);
+    #endif
+                                    bary.transform(x, old_e, r);
+                                    if (bary.is_inside(r)) {
+                                        bool found = false;
+                                        for (int ei = 0; ei < elem_size; ++ei) {
+                                            if (elem_keys[ei] == old_e) {
+                                                elem_count_buf[ei]++;
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!found && elem_size < 32) {
+                                            elem_keys[elem_size] = old_e;
+                                            elem_count_buf[elem_size] = 1;
+                                            elem_size++;
+                                        }
+                                        break;
+                                    }
+                                }
+
+                                /* not found, do nothing */
+                                // std::cout << " not found\n";
+                                continue;
+    #ifdef THREED
+                            }
+    #endif
+                        }
+
+                    // Count
+                    int total_count = 0;
+                    for (int i=0; i<=elem_size; ++i)
+                        total_count += elem_count_buf[i];
+
+                    // std::cout << "  has " << total_count << " points\n";
+
+                    if (total_count == 0) {
+                        // This happens when new material is added during remeshing,
+                        // and this element is completely within the new material.
+                        // Mark the element as unchanged instead to keep the result
+                        // of nearest neighbor interpolation.
+                        is_changed[e] = -1;
+                        continue;
+                    }
+
+                    if (elem_size == 1) {
+                        // This happens when the new is completely within the old element.
+                        // Mark the element as unchanged instead to keep the result
+                        // of nearest neighbor interpolation.
+                        is_changed[e] = -1;
+                        continue;
+                    }
+
+                    const double inv = 1.0 / total_count;
+                    for (int i=0; i<elem_size; ++i) {
+                        elems_vec[idx_changed[e]*32+i] = elem_keys[i];
+                        ratios_vec[idx_changed[e]*32+i] = elem_count_buf[i] * inv;
+                    }
+                }
+            }
+#ifdef ACC
+        } // end of for (int b=0; b<nblocks; b++)
+#endif
 
 #ifdef USE_NPROF
         nvtxRangePop();
