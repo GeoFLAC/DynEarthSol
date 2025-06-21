@@ -306,7 +306,10 @@ void CudaKNN::search_grid(const double3_vec& queries, neighbor_vec& neighbors,
         int end = std::min(start + block_size, nqueries);
         if (start >= end) continue;
 
+        size_t free_mem, total_mem;
+        cudaMemGetInfo(&free_mem, &total_mem);
         printf("          Block %3d: %10d to %10d\n", b, start, end);
+        printf("            GPU memory: free = %zu MB, total = %zu MB\n", free_mem / (1024 * 1024), total_mem / (1024 * 1024));
 
         knnSearchCuda_hashgrid(points.data(), npoints, queries.data() + start, end - start,
             neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
