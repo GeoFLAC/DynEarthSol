@@ -8,20 +8,6 @@
 
 #ifdef ACC
 
-struct HashGridParams {
-    double3 origin;
-    double cell_size;
-    int3 grid_dim;
-};
-
-struct HashGrid {
-    // Flat arrays for CUDA-friendly access
-    int* cell_starts; // size = num_cells+1
-    int* point_indices; // size = npoints
-    HashGridParams params;
-    int num_cells;
-};
-
 __device__ static double distance2_cuda(const double3 &a, const double3 &b) {
     double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return dx*dx + dy*dy + dz*dz;
@@ -163,20 +149,37 @@ __global__ static void knn_hashgrid_kernel(
     }
 }
 
-static inline void cudaCheckSync(const char* msg) {
-    cudaDeviceSynchronize();
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Sync Error (%s): %s\n", msg, cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
+CudaKNN::CudaKNN(const Param& param, const double3_vec& points_vec,
+            double resoTimes_) : 
+    resolution(param.mesh.resolution),
+    points(points_vec.data()), numPoints(points_vec.size()),
+    resoTimes(resoTimes_)
+{
+    build_hash_grid(resolution * resoTimes);
+
+    cudaMallocManaged(&d_grid, sizeof(HashGrid));
+    *d_grid = grid;
+
+    cudaMallocManaged(&d_points, numPoints * sizeof(double3));
+    // cudaMemcpy(d_points, points, numPoints * sizeof(double3), cudaMemcpyHostToDevice);
+
+    // cudaDeviceSynchronize();
 }
 
+CudaKNN::~CudaKNN()
+{
+    cudaFree(grid.cell_starts);
+    cudaFree(grid.point_indices);
+    cudaFree(d_grid);
+
+    cudaFree(d_points);
+};
+
 // Host: build hash grid (for simplicity, on host then copy to device)
-static void build_hash_grid(const double3* points, int npoints, double cell_size, HashGrid& grid) {
+void CudaKNN::build_hash_grid(double cell_size) {
     // Compute bounds
     double3 minp = points[0], maxp = points[0];
-    for (int i = 1; i < npoints; ++i) {
+    for (int i = 1; i < numPoints; ++i) {
         minp.x = std::min(minp.x, points[i].x);
         minp.y = std::min(minp.y, points[i].y);
         minp.z = std::min(minp.z, points[i].z);
@@ -200,8 +203,8 @@ static void build_hash_grid(const double3* points, int npoints, double cell_size
 
     // First, count points in each cell
     std::vector<int> cell_counts(num_cells, 0);
-    std::vector<unsigned int> cell_codes(npoints);
-    for (int i = 0; i < npoints; ++i) {
+    std::vector<unsigned int> cell_codes(numPoints);
+    for (int i = 0; i < numPoints; ++i) {
         int cx = int((points[i].x - minp.x) / cell_size);
         int cy = int((points[i].y - minp.y) / cell_size);
         int cz = int((points[i].z - minp.z) / cell_size);
@@ -220,38 +223,31 @@ static void build_hash_grid(const double3* points, int npoints, double cell_size
     }
     // Fill point_indices (bucket sort)
     std::vector<int> next_indices(num_cells, 0);
-    std::vector<int> point_indices(npoints);
+    std::vector<int> point_indices(numPoints);
     for (int i = 0; i < num_cells; ++i) next_indices[i] = cell_starts[i];
-    for (int i = 0; i < npoints; ++i) {
+    for (int i = 0; i < numPoints; ++i) {
         int c = cell_codes[i];
         point_indices[next_indices[c]++] = i;
     }
     // Allocate & copy to device
     cudaMallocManaged(&grid.cell_starts, sizeof(int) * (num_cells + 1));
     cudaMemcpy(grid.cell_starts, cell_starts.data(), sizeof(int) * (num_cells + 1), cudaMemcpyHostToDevice);
-    cudaMallocManaged(&grid.point_indices, sizeof(int) * npoints);
-    cudaMemcpy(grid.point_indices, point_indices.data(), sizeof(int) * npoints, cudaMemcpyHostToDevice);
+    cudaMallocManaged(&grid.point_indices, sizeof(int) * numPoints);
+    cudaMemcpy(grid.point_indices, point_indices.data(), sizeof(int) * numPoints, cudaMemcpyHostToDevice);
 }
 
-static void knnSearchCuda_hashgrid(const double3* points, int numPoints,
-                      const double3* queries, int numQueries,
+void CudaKNN::knnSearchCuda_hashgrid(const double3* queries, int numQueries,
                       neighbor* results, int k, int nheap, 
                       double radius2, double cell_size) {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    // Build hash grid
-    HashGrid grid;
-    build_hash_grid(points, numPoints, cell_size, grid);
-    // Copy grid struct to device (params is trivially copyable)
-    HashGrid* d_grid;
-    cudaMallocManaged(&d_grid, sizeof(HashGrid));
-    *d_grid = grid;
 
     // points and queries already on device or managed
-    double3* d_points;
-    cudaMallocManaged(&d_points, numPoints * sizeof(double3));
+    // double3* d_points;
+    // cudaMallocManaged(&d_points, numPoints * sizeof(double3));
     cudaMemcpy(d_points, points, numPoints * sizeof(double3), cudaMemcpyHostToDevice);
+
     double3* d_queries;
     cudaMallocManaged(&d_queries, numQueries * sizeof(double3));
     cudaMemcpy(d_queries, queries, numQueries * sizeof(double3), cudaMemcpyHostToDevice);
@@ -268,12 +264,10 @@ static void knnSearchCuda_hashgrid(const double3* points, int numPoints,
 
     cudaMemcpy(results, d_results, numQueries * k * sizeof(neighbor), cudaMemcpyDeviceToHost);
     // Cleanup
-    cudaFree(d_points);
+    // cudaFree(d_points);
     cudaFree(d_queries);
     cudaFree(d_results);
-    cudaFree(grid.cell_starts);
-    cudaFree(grid.point_indices);
-    cudaFree(d_grid);
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -285,7 +279,7 @@ void CudaKNN::search_grid(const double3_vec& queries, neighbor_vec& neighbors,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    std::cout << "      Running knn query on " << points.size()
+    std::cout << "      Running knn query on " << numPoints
             << " points (spatial hash grid)" << std::endl;
 
     int heapSize = k * 100;
@@ -294,11 +288,10 @@ void CudaKNN::search_grid(const double3_vec& queries, neighbor_vec& neighbors,
 
     long max_size = 1024 * 1024 * 256;
     int nqueries = queries.size();
-    int npoints = points.size();
 
     int nblocks = (double)nqueries * k / (double)max_size;
     if (nblocks < 1) nblocks = 1;
-    printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, npoints, max_size, nblocks);
+    printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, numPoints, max_size, nblocks);
 
     int block_size = (nqueries + nblocks - 1) / nblocks;
     for (int b=0; b<nblocks; b++) {
@@ -311,7 +304,7 @@ void CudaKNN::search_grid(const double3_vec& queries, neighbor_vec& neighbors,
         printf("          Block %3d: %10d to %10d\n", b, start, end);
         printf("            GPU memory: free = %zu MB, total = %zu MB\n", free_mem / (1024 * 1024), total_mem / (1024 * 1024));
 
-        knnSearchCuda_hashgrid(points.data(), npoints, queries.data() + start, end - start,
+        knnSearchCuda_hashgrid(queries.data() + start, end - start,
             neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
     }
 
