@@ -26,7 +26,7 @@ namespace {
 #endif
 
 #ifdef ACC
-        double3_vec queries(var.nelem);
+        array_t queries(var.nelem);
 
         elem_center3(*var.coord, *var.connectivity, queries);
 
@@ -129,7 +129,7 @@ namespace {
         // calculate average number of queries per element
         int nqueries_avg = nqueries / nelem_changed;
 
-        double3_vec queries;
+        array_t queries(1);
         neighbor_vec neighbors;
 
         int elems_per_block = queries_max / nqueries_avg;
@@ -172,13 +172,12 @@ namespace {
                                                 1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
                                 if (eta[NODES_PER_ELEM-1] < 0) continue;
 
-                                double x[NDIMS] = {0}; // coordinate of temporary point
-                                for (int d=0; d<NDIMS; d++)
-                                    for (int n=0; n<NODES_PER_ELEM; n++) {
+                                double *x = queries[query_start + count];
+                                for (int d=0; d<NDIMS; d++) {
+                                    x[d] = 0;
+                                    for (int n=0; n<NODES_PER_ELEM; n++)
                                         x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
-                                    }
-                                
-                                queries[query_start + count] = make_double3(x[0], x[1], x[2]);
+                                }
                                 count++;
                             }
                         }
@@ -231,10 +230,10 @@ namespace {
 
                                 // find the nearest point nn in old_center
     #ifdef ACC
-                                x[0] = queries[query_start + count].x;
-                                x[1] = queries[query_start + count].y;
-                                x[2] = queries[query_start + count].z;
-                                neighbor *nn_idx = neighbors.data() + (query_start + count) * max_el;
+                                for (int d=0; d<NDIMS; d++)
+                                    x[d] = queries[query_start + count][d];
+
+                                neighbor *nn_idx_ptr = neighbors.data() + (query_start + count) * max_el;
                                 count++;
     #else
                                 for (int d=0; d<NDIMS; d++)
@@ -373,7 +372,7 @@ namespace {
 #endif
 
 #ifdef ACC
-        double3_vec points(old_nelem);
+        array_t points(old_nelem);
         elem_center3(old_coord, old_connectivity, points);
         CudaKNN kdtree(param, points);
 #else

@@ -4,9 +4,18 @@
 #ifdef ACC
 
 struct HashGridParams {
-    double3 origin;
+    double origin[NDIMS];
     double cell_size;
-    int3 grid_dim;
+    int grid_dim[NDIMS];
+    int *D3;
+    int *D5;
+#ifdef THREED
+    int ND5 = 5*5*5;
+    int ND3 = 3*3*3;
+#else
+    int ND5 = 5*5;
+    ND3 = 3*3; 
+#endif
 };
 
 struct HashGrid {
@@ -20,26 +29,26 @@ struct HashGrid {
 class CudaKNN
 {
 public:
-    CudaKNN(const Param& param, const double3_vec& points_vec_, 
+    CudaKNN(const Param& param, const array_t& points_vec_, 
             double resoTimes = 3);
     ~CudaKNN();
 
-    void search_grid(const double3_vec& queries, neighbor_vec& neighbors, 
+    void search_grid(const array_t& queries, neighbor_vec& neighbors, 
             int k, double resoTimes = 3);
 private:
-    const double3* points;
+    const double* points;
     int numPoints;
 
     const int resolution;
     const int resoTimes;
     HashGrid grid;
-    HashGrid* d_grid;
+    // HashGrid* d_grid;
 
-    double3* d_points;
+    // double3* d_points;
 
     void build_hash_grid(double cell_size);
 
-    void knnSearchCuda_hashgrid(const double3* queries, int numQueries,
+    void knnSearchCuda_hashgrid(const double* queries, int numQueries,
                         neighbor* results, int k, int nheap, 
                         double radius2, double cell_size);
 

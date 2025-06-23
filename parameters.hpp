@@ -44,7 +44,6 @@ struct neighbor {
     double dist2;
 };
 typedef std::vector<neighbor> neighbor_vec;
-typedef std::vector<double3> double3_vec;
 #endif
 
 // Update markers in surface elements

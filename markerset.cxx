@@ -989,7 +989,7 @@ namespace {
         int last_marker = ms.get_nmarkers();
 
 #ifdef ACC
-        double3_vec queries(last_marker);
+        array_t queries(last_marker);
 
         #pragma acc parallel loop async
         for (int i = 0; i < last_marker; i++) {
@@ -998,12 +998,12 @@ namespace {
             // 1. Get physical coordinates, x, of an old marker.
             int eold = ms.get_elem(i);
             double x[NDIMS] = {0};
-            for (int j = 0; j < NDIMS; j++)
+            for (int j = 0; j < NDIMS; j++) {
+                const double *eta = ms.get_eta(i);
                 for (int k = 0; k < NODES_PER_ELEM; k++)
-                    x[j] += ms.get_eta(i)[k]*
+                    queries[i][j] += eta[k]*
                         old_coord[ old_connectivity[eold][k] ][j];
-
-            queries[i] = {x[0], x[1], x[2]};
+            }
         }
 
 
@@ -1031,11 +1031,8 @@ namespace {
                 int eold = ms.get_elem(i);
                 double x[NDIMS] = {0};
 #ifdef ACC
-                x[0] = queries[i].x;
-                x[1] = queries[i].y;
-#ifdef THREED
-                x[2] = queries[i].z;
-#endif
+                for (int j = 0; j < NDIMS; j++)
+                    x[j] = queries[i][j];
 
                 // 2. look for nearby elements.
                 neighbor* nn_idx = neighbors.data() + i*k;
@@ -1578,7 +1575,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 
 #ifdef ACC
-        double3_vec points(var.nelem);
+        array_t points(var.nelem);
         elem_center3(*var.coord, *var.connectivity,points); // centroid of elements
         CudaKNN kdtree(param, points);
 #else

@@ -98,19 +98,11 @@ void prepare_interpolation(const Param& param, const Variables &var,
 #endif
 
 #ifdef ACC
-    double3_vec old_coord3(old_coord.size());
-    for (std::size_t i = 0; i < old_coord.size(); ++i) {
-        old_coord3[i] = {old_coord[i][0], old_coord[i][1], old_coord[i][2]};
-    }
-    KDTree kdtree(param, old_coord3);
-    double3_vec queries(var.nnode);
-    for (int i = 0; i < var.nnode; ++i) {
-        queries[i] = {(*var.coord)[i][0], (*var.coord)[i][1], (*var.coord)[i][2]};
-    }
+    KDTree kdtree(param, old_coord);
     neighbor_vec neighbors(var.nnode);
 
     printf("    Finding knn for barycentric node interpolation...\n");
-    kdtree.search_grid(queries, neighbors, 1, 3.0);
+    kdtree.search_grid(*var.coord, neighbors, 1, 3.0);
 
 #else
     PointCloud cloud(old_coord);
