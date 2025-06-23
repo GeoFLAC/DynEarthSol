@@ -99,30 +99,36 @@ namespace {
         elems_vec.resize(nelem_changed*32,-1);
         ratios_vec.resize(nelem_changed*32);
 
+        double_vec2D sample_eta;
+        for (int i=0; i<neta0; i++)
+            for (int j=0; j<neta1; j++) {
+#ifdef THREED
+                for (int k=0; k<neta2; k++) {
+                    double eta[4] = {(i + 0.5) * spacing0,
+                                    (j + 0.5) * spacing1,
+                                    (k + 0.5) * spacing2,
+                                    1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
+#else
+                    double eta[3] = {(i + 0.5) * spacing0,
+                                    (j + 0.5) * spacing1,
+                                    1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
+#endif
+                    if (eta[NODES_PER_ELEM-1] < 0) continue;
+
+                    sample_eta.push_back(double_vec(eta, eta + NODES_PER_ELEM));
+#ifdef THREED
+                }
+#endif
+            }
+        int nsample = sample_eta.size();
+
 #ifdef ACC
-        int nqueries = 0;
+        int nqueries = nelem_changed * nsample;
         int_vec queries_starts(nelem_changed+1);
 
-        for(int e=0; e<var.nelem; e++) {
-            if (is_changed[e]) {
-                queries_starts[idx_changed[e]] = nqueries;
-
-                #pragma omp parallel for reduction(+:nqueries)
-                for (int i=0; i<neta0; i++)
-                    for (int j=0; j<neta1; j++) {
-                        for (int k=0; k<neta2; k++) {
-                            double eta[4] = {(i + 0.5) * spacing0,
-                                             (j + 0.5) * spacing1,
-                                             (k + 0.5) * spacing2,
-                                             1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-                            if (eta[NODES_PER_ELEM-1] < 0) continue;
-
-                            nqueries++;
-                        }
-                    }
-            }
-        }
-        queries_starts[nelem_changed] = nqueries;
+        #pragma acc parallel loop
+        for (int e=0; e<nelem_changed+1; e++)
+            queries_starts[e] = e * nsample;
 
         // number of neighbors exceeding computational limit
         int queries_max = 1024 * 1024 * 8;
@@ -161,26 +167,16 @@ namespace {
             for (int e=start; e<end; e++) {
                 if (is_changed[e]) {
                     int query_start = queries_starts[idx_changed[e]] - queries_starts[idx_changed[start]];
-                    int count = 0;
                     const int* conn = (*var.connectivity)[e];
-                    for (int i=0; i<neta0; i++)
-                        for (int j=0; j<neta1; j++) {
-                            for (int k=0; k<neta2; k++) {
-                                double eta[4] = {(i + 0.5) * spacing0,
-                                                (j + 0.5) * spacing1,
-                                                (k + 0.5) * spacing2,
-                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-                                if (eta[NODES_PER_ELEM-1] < 0) continue;
 
-                                double *x = queries[query_start + count];
-                                for (int d=0; d<NDIMS; d++) {
-                                    x[d] = 0;
-                                    for (int n=0; n<NODES_PER_ELEM; n++)
-                                        x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
-                                }
-                                count++;
-                            }
+                    for (int i=0; i<nsample; i++) {
+                        double *x = queries[query_start+i];
+                        for (int d=0; d<NDIMS; d++) {
+                            x[d] = 0;
+                            for (int n=0; n<NODES_PER_ELEM; n++)
+                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[i][n];
                         }
+                    }
                 }
             }
 #ifdef USE_NPROF
@@ -193,7 +189,9 @@ namespace {
             #pragma acc parallel loop async
             for (int e=start; e<end; e++) {
 #else
-            #pragma omp parallel for default(none) shared(var, bary, is_changed, kdtree, elems_vec, ratios_vec, idx_changed) firstprivate(max_el)
+            #pragma omp parallel for default(none) shared(var, bary, is_changed, \
+                kdtree, elems_vec, ratios_vec, idx_changed, sample_eta, \
+                nsample) firstprivate(max_el)
             for(int e=0; e<var.nelem; e++) {
 #endif
                 if (is_changed[e]) {
@@ -211,104 +209,88 @@ namespace {
                     *      volume weighting for the mapping.
                     */
                     const int* conn = (*var.connectivity)[e];
-                    for (int i=0; i<neta0; i++)
-                        for (int j=0; j<neta1; j++) {
-    #ifdef THREED
-                            for (int k=0; k<neta2; k++) {
-                                double eta[4] = {(i + 0.5) * spacing0,
-                                                (j + 0.5) * spacing1,
-                                                (k + 0.5) * spacing2,
-                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-    #else
-                                double eta[3] = {(i + 0.5) * spacing0,
-                                                (j + 0.5) * spacing1,
-                                                1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
-    #endif
-                                if (eta[NODES_PER_ELEM-1] < 0) continue;
+                    for (int i=0; i<nsample; i++) {
 
-                                double x[NDIMS] = {0}; // coordinate of temporary point
+                        double x[NDIMS] = {0}; // coordinate of temporary point
 
-                                // find the nearest point nn in old_center
-    #ifdef ACC
-                                for (int d=0; d<NDIMS; d++)
-                                    x[d] = queries[query_start + count][d];
+                        // find the nearest point nn in old_center
+#ifdef ACC
+                        for (int d=0; d<NDIMS; d++)
+                            x[d] = queries[query_start + count][d];
 
-                                neighbor *nn_idx_ptr = neighbors.data() + (query_start + count) * max_el;
-                                count++;
-    #else
-                                for (int d=0; d<NDIMS; d++)
-                                    for (int n=0; n<NODES_PER_ELEM; n++) {
-                                        x[d] += (*var.coord)[ conn[n] ][d] * eta[n];
-                                    }
+                        neighbor *nn_idx = neighbors.data() + (query_start + count) * max_el;
+                        count++;
+#else
+                        for (int d=0; d<NDIMS; d++)
+                            for (int n=0; n<NODES_PER_ELEM; n++) {
+                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[i][n];
+                            }
 
-                                size_t_vec nn_idx(max_el);
-                                double_vec out_dists_sqr(max_el);
-                                KNNResultSet resultSet(max_el);
-                                resultSet.init(nn_idx.data(), out_dists_sqr.data());
+                        size_t_vec nn_idx(max_el);
+                        double_vec out_dists_sqr(max_el);
+                        KNNResultSet resultSet(max_el);
+                        resultSet.init(nn_idx.data(), out_dists_sqr.data());
 
-                                kdtree.findNeighbors(resultSet, x);
-    #endif
-                                // bool is_consist = true;
-                                // for (int jj=0; jj<max_el; jj++) {
-                                //     // compare the nn_idx[jj] with neighbors[jj].idx
-                                //     if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                                //         is_consist = false;
-                                //         break;
-                                //     }
-                                // }
-                                // if (!is_consist) {
-                                //     printf("Inconsistent neighbors for element %d, query %d:\n", e, count);
-                                //     for (int jj=0; jj<max_el; jj++) {
-                                //         printf("  nn_idx[%4d] = %6d, dist2 = %10.1f | ", jj, nn_idx[jj], out_dists_sqr[jj]);
-                                //         printf("  neighbors[%4d] = %6d, dist2 = %10.1f", jj, nn_idx_ptr[jj].idx, nn_idx_ptr[jj].dist2);
-                                //         if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                                //             printf(" *\n");
-                                //         } else {
-                                //             printf("  \n");
-                                //         }
-                                //     }
-                                //     printf("\n");
-                                // }
+                        kdtree.findNeighbors(resultSet, x);
+#endif
+                        // bool is_consist = true;
+                        // for (int jj=0; jj<max_el; jj++) {
+                        //     // compare the nn_idx[jj] with neighbors[jj].idx
+                        //     if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
+                        //         is_consist = false;
+                        //         break;
+                        //     }
+                        // }
+                        // if (!is_consist) {
+                        //     printf("Inconsistent neighbors for element %d, query %d:\n", e, count);
+                        //     for (int jj=0; jj<max_el; jj++) {
+                        //         printf("  nn_idx[%4d] = %6d, dist2 = %10.1f | ", jj, nn_idx[jj], out_dists_sqr[jj]);
+                        //         printf("  neighbors[%4d] = %6d, dist2 = %10.1f", jj, nn_idx_ptr[jj].idx, nn_idx_ptr[jj].dist2);
+                        //         if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
+                        //             printf(" *\n");
+                        //         } else {
+                        //             printf("  \n");
+                        //         }
+                        //     }
+                        //     printf("\n");
+                        // }
 
-                                // std::cout << "  ";
-                                // print(std::cout, eta, NODES_PER_ELEM);
-                                // print(std::cout, x, NDIMS);
+                        // std::cout << "  ";
+                        // print(std::cout, eta, NODES_PER_ELEM);
+                        // print(std::cout, x, NDIMS);
 
-                                // find the old element that is enclosing x
-                                double r[NDIMS];
-                                int old_e;
-                                for (int jj=0; jj<max_el; jj++) {
-    #ifdef ACC
-                                    old_e = nn_idx[jj].idx;
-    #else
-                                    old_e = static_cast<int>(nn_idx[jj]);
-    #endif
-                                    bary.transform(x, old_e, r);
-                                    if (bary.is_inside(r)) {
-                                        bool found = false;
-                                        for (int ei = 0; ei < elem_size; ++ei) {
-                                            if (elem_keys[ei] == old_e) {
-                                                elem_count_buf[ei]++;
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found && elem_size < 32) {
-                                            elem_keys[elem_size] = old_e;
-                                            elem_count_buf[elem_size] = 1;
-                                            elem_size++;
-                                        }
+                        // find the old element that is enclosing x
+                        double r[NDIMS];
+                        int old_e;
+                        for (int jj=0; jj<max_el; jj++) {
+#ifdef ACC
+                            old_e = nn_idx[jj].idx;
+#else
+                            old_e = static_cast<int>(nn_idx[jj]);
+#endif
+                            bary.transform(x, old_e, r);
+                            if (bary.is_inside(r)) {
+                                bool found = false;
+                                for (int ei = 0; ei < elem_size; ++ei) {
+                                    if (elem_keys[ei] == old_e) {
+                                        elem_count_buf[ei]++;
+                                        found = true;
                                         break;
                                     }
                                 }
-
-                                /* not found, do nothing */
-                                // std::cout << " not found\n";
-                                continue;
-    #ifdef THREED
+                                if (!found && elem_size < 32) {
+                                    elem_keys[elem_size] = old_e;
+                                    elem_count_buf[elem_size] = 1;
+                                    elem_size++;
+                                }
+                                break;
                             }
-    #endif
                         }
+
+                        /* not found, do nothing */
+                        // std::cout << " not found\n";
+                        continue;
+                    }
 
                     // Count
                     int total_count = 0;
