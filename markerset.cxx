@@ -977,7 +977,8 @@ array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
 namespace {
 
     template <class T>
-    void find_markers_in_element(const Param &param, MarkerSet& ms, T& elemmarkers, int_vec2D& markers_in_elem,
+    void find_markers_in_element(const Param &param, const Variables& var, MarkerSet& ms,
+                                 T& elemmarkers, int_vec2D& markers_in_elem,
                                  KDTree& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
@@ -1000,9 +1001,9 @@ namespace {
             double x[NDIMS] = {0};
             for (int j = 0; j < NDIMS; j++) {
                 const double *eta = ms.get_eta(i);
-                for (int k = 0; k < NODES_PER_ELEM; k++)
-                    queries[i][j] += eta[k]*
-                        old_coord[ old_connectivity[eold][k] ][j];
+                for (int l = 0; l < NODES_PER_ELEM; l++)
+                    queries[i][j] += eta[l]*
+                        old_coord[ old_connectivity[eold][l] ][j];
             }
         }
 
@@ -1017,80 +1018,83 @@ namespace {
         // Loop over all the old markers and identify a containing element in the new mesh.
         int_vec removed_markers;
 
-        #pragma omp parallel default(none) shared(param, ms, elemmarkers, markers_in_elem, kdtree, \
-            bary, old_coord, old_connectivity, last_marker,removed_markers)
-        {
-            int_vec removed_local;
-            int_map emarker_local;
-
-            #pragma omp for nowait
-            for (int i = 0; i < last_marker; i++) {
-                bool found = false;
-
-                // 1. Get physical coordinates, x, of an old marker.
-                int eold = ms.get_elem(i);
-                double x[NDIMS] = {0};
-#ifdef ACC
-                for (int j = 0; j < NDIMS; j++)
-                    x[j] = queries[i][j];
-
-                // 2. look for nearby elements.
-                neighbor* nn_idx = neighbors.data() + i*k;
-#else
-                for (int j = 0; j < NDIMS; j++)
-                    for (int k = 0; k < NODES_PER_ELEM; k++)
-                        x[j] += ms.get_eta(i)[k]*
-                            old_coord[ old_connectivity[eold][k] ][j];
-
-                // 2. look for nearby elements.
-                size_t_vec nn_idx(k);
-                double_vec out_dists_sqr(k);
-                KNNResultSet resultSet(k);
-                resultSet.init(nn_idx.data(), out_dists_sqr.data());
-
-                kdtree.findNeighbors(resultSet, x);
+#ifndef ACC
+        #pragma omp parallel default(none) shared(param, ms, kdtree, bary, old_coord, old_connectivity, \
+            last_marker)
 #endif
-                for( int j = 0; j < k; j++ ) {
+        #pragma acc parallel loop
+        for (int i = 0; i < last_marker; i++) {
+            bool found = false;
+
+            // 1. Get physical coordinates, x, of an old marker.
+            int eold = ms.get_elem(i);
+            double x[NDIMS] = {0};
 #ifdef ACC
-                    int e = nn_idx[j].idx;
+            for (int j = 0; j < NDIMS; j++)
+                x[j] = queries[i][j];
+
+            // 2. look for nearby elements.
+            neighbor* nn_idx = neighbors.data() + i*k;
 #else
-                    int e = nn_idx[j];
+            for (int j = 0; j < NDIMS; j++)
+                for (int k = 0; k < NODES_PER_ELEM; k++)
+                    x[j] += ms.get_eta(i)[k]*
+                        old_coord[ old_connectivity[eold][k] ][j];
+
+            // 2. look for nearby elements.
+            size_t_vec nn_idx(k);
+            double_vec out_dists_sqr(k);
+            KNNResultSet resultSet(k);
+            resultSet.init(nn_idx.data(), out_dists_sqr.data());
+
+            kdtree.findNeighbors(resultSet, x);
 #endif
-                    double r[NDIMS];
+            for( int j = 0; j < k; j++ ) {
+#ifdef ACC
+                int e = nn_idx[j].idx;
+#else
+                int e = nn_idx[j];
+#endif
+                double r[NDIMS];
 
-                    bary.transform(x, e, r);
+                bary.transform(x, e, r);
 
-                    // change this if-condition to (i == N) to debug the N-th marker
-                    if (bary.is_inside(r)) {
-                        ms.set_eta(i, r);
-                        ms.set_elem(i, e);
-                        emarker_local[e*param.mat.nmat + ms.get_mattype(i)]++;
-
-                        #pragma omp critical
-                        markers_in_elem[e].push_back(i);
-                
-                        found = true;
-                        ms.set_tmp(i, 1.0);
-                        break;
-                    }
+                // change this if-condition to (i == N) to debug the N-th marker
+                if (bary.is_inside(r)) {
+                    ms.set_eta(i, r);
+                    ms.set_elem(i, e);            
+                    found = true;
+                    break;
                 }
-
-                if( found ) continue;
-
-                /* not found */
-                // Since no containing element has been found, delete this marker.
-                removed_local.emplace_back(i);
-                ms.set_tmp(i, 0.0); // mark this marker for removal
             }
 
-            #pragma omp critical
-            removed_markers.insert(removed_markers.end(), removed_local.begin(), removed_local.end());
+            if( found ) continue;
 
-            #pragma omp critical
-            for (const auto& pair : emarker_local) {
-                int e = pair.first / param.mat.nmat;
-                int mt = pair.first % param.mat.nmat;
-                elemmarkers[e][mt] += pair.second;
+            /* not found */
+            // Since no containing element has been found, delete this marker.
+            ms.set_elem(i, -1.); // mark this marker for removal
+        }
+
+        for (int i = 0; i < last_marker; i++) {
+            int e = ms.get_elem(i);
+            if (e >= 0)
+                markers_in_elem[e].push_back(i);
+            else
+                removed_markers.push_back(i);
+        }
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(ms, markers_in_elem, elemmarkers)
+#endif
+        #pragma acc parallel loop async
+        for (int e = 0; e < var.nelem; e++) {
+            int_vec &markers = markers_in_elem[e];
+            for (int i = 0; i < markers.size(); i++) {
+                int m = markers[i];
+                if (ms.get_elem(m) >= 0) {
+                    // This marker is not removed, so we need to update the element markers.
+                    elemmarkers[e][ms.get_mattype(m)]++;
+                }
             }
         }
 
@@ -1568,8 +1572,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         Barycentric_transformation bary( *var.coord, *var.connectivity, new_volume );
 
         // nearest-neighbor search structure
-        array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-
 #ifdef USE_NPROF
         nvtxRangePushA("create kdtree for new elements");
 #endif
@@ -1579,6 +1581,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         elem_center3(*var.coord, *var.connectivity,points); // centroid of elements
         CudaKNN kdtree(param, points);
 #else
+        array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
         PointCloud cloud(*centroid);
         KDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
@@ -1588,51 +1591,65 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         nvtxRangePop();
 #endif
 
-        find_markers_in_element(param, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem,
+        find_markers_in_element(param, var, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem,
                                 kdtree, bary, old_coord, old_connectivity);
         if (param.control.has_hydration_processes)
-            find_markers_in_element(param, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers, *var.hydrous_markers_in_elem,
+            find_markers_in_element(param, var, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers, *var.hydrous_markers_in_elem,
                                     kdtree, bary, old_coord, old_connectivity);
 
         #pragma acc wait
 
+#ifndef ACC
         delete centroid;
+#endif
     }
 
     // If any new element has too few markers, generate markers in them.
 #ifdef USE_NPROF
     nvtxRangePushA("find unplenished elements");
 #endif
+
+    int nunplenished = 0;
+
+#ifndef ACC
+    #pragma omp parallel default(none) shared(param, var)
+#endif
+    #pragma acc parallel loop reduction(+:nunplenished)
+    for (int e = 0; e < var.nelem; e++) {
+        int num_marker_in_elem = (*var.markers_in_elem)[e].size();
+        if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+            (*var.etmp_int)[e] = num_marker_in_elem;
+            ++nunplenished;            
+        } else {
+            (*var.etmp_int)[e] = -1;
+        }
+    }
+
     // unplenish markers
     int_pair_vec unplenished_elems;
+    unplenished_elems.reserve(nunplenished);
 
-    #pragma omp parallel default(none) shared(param, var, unplenished_elems)
+    #pragma omp parallel default(none) shared(var, unplenished_elems)
     {
-        // local pairs
         int_pair_vec local_pairs;
 
         #pragma omp for nowait
-        for( int e = 0; e < var.nelem; e++ ) {
-            int num_marker_in_elem = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
-
-            if (num_marker_in_elem < param.markers.min_num_markers_in_element)
-                local_pairs.emplace_back(e, num_marker_in_elem);
+        for (int e = 0; e < var.nelem; e++) {
+            if ((*var.etmp_int)[e] >= 0) {
+                local_pairs.emplace_back(e, (*var.etmp_int)[e]);
+            }
         }
-
         #pragma omp critical
         unplenished_elems.insert(unplenished_elems.end(), 
                                 local_pairs.begin(),
                                 local_pairs.end());
-        #pragma omp barrier
-
-        #pragma omp single
-        {
-        std::sort(unplenished_elems.begin(), unplenished_elems.end(),
-            [](const int_pair &a, const int_pair &b) {
-                return a.first < b.first;
-            });
-        }
     }
+
+    std::sort(unplenished_elems.begin(), unplenished_elems.end(),
+        [](const int_pair &a, const int_pair &b) {
+            return a.first < b.first;
+        });
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
