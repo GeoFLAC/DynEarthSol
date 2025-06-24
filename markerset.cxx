@@ -1098,7 +1098,7 @@ namespace {
         }
 
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(ms, markers_in_elem, elemmarkers)
+        #pragma omp parallel for default(none) shared(var, ms, markers_in_elem, elemmarkers)
 #endif
         #pragma acc parallel loop async
         for (int e = 0; e < var.nelem; e++) {
@@ -1626,7 +1626,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     int nunplenished = 0;
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param, var)
+    #pragma omp parallel default(none) shared(param, var) reduction(+:nunplenished)
 #endif
     #pragma acc parallel loop reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {
