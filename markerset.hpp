@@ -31,6 +31,7 @@ public:
 
     static void random_eta( double* ); // class method
     static void random_eta_seed(double*, int);
+    static void random_eta_seed_surface(double*, int);
 //    void create_marker_in_elem(Variables& var);
 //    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
