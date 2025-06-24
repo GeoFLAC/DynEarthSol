@@ -1011,7 +1011,7 @@ namespace {
 
         #pragma acc wait
 
-        kdtree.search_grid(queries, neighbors, k, 3);
+        kdtree.search(queries, neighbors, k, 3);
 #endif
 
         // Loop over all the old markers and identify a containing element in the new mesh.

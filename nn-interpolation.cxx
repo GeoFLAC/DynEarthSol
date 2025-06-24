@@ -32,7 +32,7 @@ namespace {
 
         neighbor_vec neighbors(var.nelem);
 
-        kdtree.search_grid(queries, neighbors, 1, 3.);
+        kdtree.search(queries, neighbors, 1, 3.);
 
         for (int e=0; e<var.nelem; e++) {
             idx[e] = int(neighbors[e].idx);
@@ -184,7 +184,7 @@ namespace {
 #endif
             printf("    Finding knn for acm element ratios...\n");
 
-            kdtree.search_grid(queries, neighbors, max_el, 3.);
+            kdtree.search(queries, neighbors, max_el, 3.);
 
             #pragma acc parallel loop async
             for (int e=start; e<end; e++) {

@@ -102,7 +102,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     neighbor_vec neighbors(var.nnode);
 
     printf("    Finding knn for barycentric node interpolation...\n");
-    kdtree.search_grid(*var.coord, neighbors, 1, 3.0);
+    kdtree.search(*var.coord, neighbors, 1, 3.0);
 
 #else
     PointCloud cloud(old_coord);

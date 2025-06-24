@@ -1,8 +1,6 @@
 #ifndef DYNEARTHSOL3D_KNN_CU
 #define DYNEARTHSOL3D_KNN_CU
 
-#ifdef ACC
-
 struct HashGridParams {
     double origin[NDIMS];
     double cell_size;
@@ -14,7 +12,7 @@ struct HashGridParams {
     int ND3 = 3*3*3;
 #else
     int ND5 = 5*5;
-    ND3 = 3*3; 
+    int ND3 = 3*3; 
 #endif
 };
 
@@ -33,7 +31,7 @@ public:
             double resoTimes = 3);
     ~CudaKNN();
 
-    void search_grid(const array_t& queries, neighbor_vec& neighbors, 
+    void search(const array_t& queries, neighbor_vec& neighbors, 
             int k, double resoTimes = 3);
 private:
     const double* points;
@@ -63,6 +61,5 @@ private:
 
 };
 
-#endif
 
 #endif // DYNEARTHSOL3D_KNN_CU

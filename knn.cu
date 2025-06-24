@@ -6,8 +6,6 @@
 #include "parameters.hpp"
 #include "knn.cuh"
 
-#ifdef ACC
-
 __device__ static double distance2_cuda(const double *a, const double *b) {
     double sum = 0.0;
     for (int i = 0; i < NDIMS; ++i) {
@@ -17,20 +15,8 @@ __device__ static double distance2_cuda(const double *a, const double *b) {
     return sum;
 }
 
-
 __device__ static inline int clampi(int v, int a, int b) {
     return v < a ? a : (v > b ? b : v);
-}
-
-// Device: locate cell index for a point
-__device__ static int get_cell_index(const double3& p, const HashGridParams& params) {
-    int cx = int((p.x - params.origin.x) / params.cell_size);
-    int cy = int((p.y - params.origin.y) / params.cell_size);
-    int cz = int((p.z - params.origin.z) / params.cell_size);
-    cx = clampi(cx, 0, params.grid_dim.x - 1);
-    cy = clampi(cy, 0, params.grid_dim.y - 1);
-    cz = clampi(cz, 0, params.grid_dim.z - 1);
-    return (cz * params.grid_dim.y + cy) * params.grid_dim.x + cx;
 }
 
 // CUDA kernel using spatial hash grid for KNN
@@ -119,7 +105,7 @@ CudaKNN::CudaKNN(const Param& param, const array_t& points_vec,
     points(points_vec.data()), numPoints(points_vec.size()),
     resoTimes(resoTimes_)
 {
-    build_hash_grid(resolution * resoTimes);
+    build_hash_grid(resolution * 2.5);
 
     // use managed memory
     // cudaMallocManaged(&d_grid, sizeof(HashGrid));
@@ -286,7 +272,7 @@ void CudaKNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
 #endif
 }
 
-void CudaKNN::search_grid(const array_t& queries, neighbor_vec& neighbors, 
+void CudaKNN::search(const array_t& queries, neighbor_vec& neighbors, 
         int k, double resoTimes)
 {
 #ifdef USE_NPROF
@@ -326,4 +312,3 @@ void CudaKNN::search_grid(const array_t& queries, neighbor_vec& neighbors,
     nvtxRangePop();
 #endif
 }
-#endif // ACC
