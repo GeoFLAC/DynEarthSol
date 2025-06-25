@@ -4,7 +4,8 @@
 #endif
 
 #include "parameters.hpp"
-#include "knn.cuh"
+#include "knn.hpp"
+
 
 __device__ static double distance2_cuda(const double *a, const double *b) {
     double sum = 0.0;

@@ -19,7 +19,7 @@
 #include "geometry.hpp"
 #include "utils.hpp"
 #ifdef ACC
-#include "knn.cuh"
+#include "knn.hpp"
 #endif
 #include "matprops.hpp"
 

@@ -269,9 +269,8 @@ SRCS =	\
 	phasechanges.cxx \
 	remeshing.cxx \
 	rheology.cxx \
-	markerset.cxx
-
-CU_SRCS = knn.cu
+	markerset.cxx \
+	knn.cxx
 
 INCS =	\
 	array2d.hpp \
@@ -285,16 +284,9 @@ INCS =	\
 	mesh.hpp \
 	markerset.hpp \
 	output.hpp \
-	knn.cuh
+	knn.hpp
 
-CXX_OBJS = $(SRCS:.cxx=.$(ndims)d.o)
-CU_OBJS = $(CU_SRCS:.cu=.$(ndims)d.o)
-
-OBJS = $(CXX_OBJS) 
-
-ifeq ($(openacc), 1)
-	OBJS += $(CU_OBJS)
-endif
+OBJS = $(SRCS:.cxx=.$(ndims)d.o)
 
 EXE = dynearthsol$(ndims)d
 
@@ -400,12 +392,7 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-ifeq ($(openacc), 1)
-$(CU_OBJS): %.$(ndims)d.o : %.cu $(INCS)
-	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
-endif
-
-$(CXX_OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(TRI_OBJS): %.o : %.c $(TRI_INCS)
