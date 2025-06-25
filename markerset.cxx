@@ -18,9 +18,7 @@
 #include "mesh.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
-#ifdef ACC
 #include "knn.hpp"
-#endif
 #include "matprops.hpp"
 
 
@@ -602,9 +600,10 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
     allocate_markerdata( max_markers );
 
     // nearest-neighbor search structure
-    array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
+    array_t centroid(var.nelem);
+    elem_center(*var.coord, *var.connectivity, centroid);
 
-    PointCloud cloud(*centroid);
+    PointCloud cloud(centroid);
     NANOKDTree kdtree(NDIMS, cloud);
     kdtree.buildIndex();
 
@@ -666,7 +665,6 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
         }
     }
 
-    delete centroid;
 }
 
 
@@ -993,7 +991,7 @@ namespace {
     template <class T>
     void find_markers_in_element(const Param &param, const Variables& var, MarkerSet& ms,
                                  T& elemmarkers, int_vec2D& markers_in_elem,
-                                 KDTree& kdtree, const Barycentric_transformation &bary,
+                                 KNN& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
 #ifdef USE_NPROF
@@ -1003,7 +1001,6 @@ namespace {
 
         int last_marker = ms.get_nmarkers();
 
-#ifdef ACC
         array_t queries(last_marker);
 
         #pragma acc parallel loop async
@@ -1027,14 +1024,13 @@ namespace {
         #pragma acc wait
 
         kdtree.search(queries, neighbors, k, 3);
-#endif
 
         // Loop over all the old markers and identify a containing element in the new mesh.
         int_vec removed_markers;
 
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(param, ms, kdtree, bary, old_coord, old_connectivity, \
-            last_marker)
+        #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
+            last_marker, queries, neighbors)
 #endif
         #pragma acc parallel loop
         for (int i = 0; i < last_marker; i++) {
@@ -1043,32 +1039,14 @@ namespace {
             // 1. Get physical coordinates, x, of an old marker.
             int eold = ms.get_elem(i);
             double x[NDIMS] = {0};
-#ifdef ACC
             for (int j = 0; j < NDIMS; j++)
                 x[j] = queries[i][j];
 
             // 2. look for nearby elements.
             neighbor* nn_idx = neighbors.data() + i*k;
-#else
-            for (int j = 0; j < NDIMS; j++)
-                for (int l = 0; l < NODES_PER_ELEM; l++)
-                    x[j] += ms.get_eta(i)[l]*
-                        old_coord[ old_connectivity[eold][l] ][j];
 
-            // 2. look for nearby elements.
-            size_t_vec nn_idx(k);
-            double_vec out_dists_sqr(k);
-            KNNResultSet resultSet(k);
-            resultSet.init(nn_idx.data(), out_dists_sqr.data());
-
-            kdtree.findNeighbors(resultSet, x);
-#endif
             for( int j = 0; j < k; j++ ) {
-#ifdef ACC
                 int e = nn_idx[j].idx;
-#else
-                int e = nn_idx[j];
-#endif
                 double r[NDIMS];
 
                 bary.transform(x, e, r);
@@ -1590,16 +1568,18 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         nvtxRangePushA("create kdtree for new elements");
 #endif
 
-#ifdef ACC
         array_t points(var.nelem);
-        elem_center3(*var.coord, *var.connectivity,points); // centroid of elements
-        CudaKNN kdtree(param, points);
+        elem_center(*var.coord, *var.connectivity, points); // centroid of elements
+
+#ifdef ACC
+        array_t point_tmp(1);
+        PointCloud cloud(point_tmp);
 #else
-        array_t *centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-        PointCloud cloud(*centroid);
-        KDTree kdtree(NDIMS, cloud);
-        kdtree.buildIndex();
+        PointCloud cloud(points);
 #endif
+
+        NANOKDTree nano_kdtree(NDIMS, cloud);
+        KNN kdtree(param, points,nano_kdtree);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1612,10 +1592,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
                                     kdtree, bary, old_coord, old_connectivity);
 
         #pragma acc wait
-
-#ifndef ACC
-        delete centroid;
-#endif
     }
 
     // If any new element has too few markers, generate markers in them.

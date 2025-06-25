@@ -24,12 +24,12 @@ struct HashGrid {
     int num_cells;
 };
 
-class CudaKNN
+class KNN
 {
 public:
-    CudaKNN(const Param& param, const array_t& points_vec_, 
+    KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_,
             double resoTimes = 3);
-    ~CudaKNN();
+    ~KNN();
 
     void search(const array_t& queries, neighbor_vec& neighbors, 
             int k, double resoTimes = 3);
@@ -40,10 +40,11 @@ private:
     const int resolution;
     const int resoTimes;
     HashGrid grid;
+    NANOKDTree& nano_kdtree;
     // HashGrid* d_grid;
 
     // double3* d_points;
-
+#ifdef ACC
     void build_hash_grid(double cell_size);
 
     void knnSearchCuda_hashgrid(const double* queries, int numQueries,
@@ -58,6 +59,7 @@ private:
             exit(EXIT_FAILURE);
         }
     };
+#endif
 
 };
 

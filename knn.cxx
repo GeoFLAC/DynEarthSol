@@ -6,6 +6,7 @@
 #include "parameters.hpp"
 #include "knn.hpp"
 
+#ifdef ACC
 
 __device__ static double distance2_cuda(const double *a, const double *b) {
     double sum = 0.0;
@@ -100,14 +101,20 @@ __global__ static void knn_hashgrid_kernel(
     }
 }
 
-CudaKNN::CudaKNN(const Param& param, const array_t& points_vec,
+#endif
+
+KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_,
             double resoTimes_) : 
     resolution(param.mesh.resolution),
     points(points_vec.data()), numPoints(points_vec.size()),
+    nano_kdtree(nano_kdtree_),
     resoTimes(resoTimes_)
 {
+#ifdef ACC
     build_hash_grid(resolution * 2.5);
-
+#else
+    nano_kdtree.buildIndex();
+#endif
     // use managed memory
     // cudaMallocManaged(&d_grid, sizeof(HashGrid));
     // *d_grid = grid;
@@ -118,10 +125,12 @@ CudaKNN::CudaKNN(const Param& param, const array_t& points_vec,
     // cudaDeviceSynchronize();
 }
 
-CudaKNN::~CudaKNN()
+KNN::~KNN()
 {
+#ifdef ACC
     delete [] grid.params.D3;
     delete [] grid.params.D5;
+#endif
     // use managed memory
     // cudaFree(grid.cell_starts);
     // cudaFree(grid.point_indices);
@@ -130,8 +139,10 @@ CudaKNN::~CudaKNN()
     // cudaFree(d_points);
 };
 
+#ifdef ACC
+
 // Host: build hash grid (for simplicity, on host then copy to device)
-void CudaKNN::build_hash_grid(double cell_size) {
+void KNN::build_hash_grid(double cell_size) {
     // Compute bounds
     double minp[NDIMS], maxp[NDIMS];
     for (int i = 0; i < NDIMS; ++i) {
@@ -234,7 +245,7 @@ void CudaKNN::build_hash_grid(double cell_size) {
 
 }
 
-void CudaKNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
+void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
                       neighbor* results, int k, int nheap, 
                       double radius2, double cell_size) {
 #ifdef USE_NPROF
@@ -273,42 +284,73 @@ void CudaKNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
 #endif
 }
 
-void CudaKNN::search(const array_t& queries, neighbor_vec& neighbors, 
+#endif // ACC
+
+void KNN::search(const array_t& queries, neighbor_vec& neighbors, 
         int k, double resoTimes)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    std::cout << "      Running knn query on " << numPoints
-            << " points (spatial hash grid)" << std::endl;
+    printf("      Running knn query on %d points ", numPoints);
+
+#ifdef ACC
+    printf("(cuda spatial hash grid)\n");
 
     int heapSize = k * 100;
     double maxDist = resoTimes * resolution;
     double cell_size = maxDist;
 
-    long max_size = 1024 * 1024 * 256;
-    int nqueries = queries.size();
+    knnSearchCuda_hashgrid(queries.data(), queries.size(),
+        neighbors.data(), k, heapSize, maxDist * maxDist, cell_size);
 
-    int nblocks = (double)nqueries * k / (double)max_size;
-    if (nblocks < 1) nblocks = 1;
-    printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, numPoints, max_size, nblocks);
+    // long max_size = 1024 * 1024 * 256;
+    // int nqueries = queries.size();
 
-    int block_size = (nqueries + nblocks - 1) / nblocks;
-    for (int b=0; b<nblocks; b++) {
-        int start = b * block_size;
-        int end = std::min(start + block_size, nqueries);
-        if (start >= end) continue;
+    // int nblocks = (double)nqueries * k / (double)max_size;
+    // if (nblocks < 1) nblocks = 1;
+    // printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, numPoints, max_size, nblocks);
 
-        size_t free_mem, total_mem;
-        cudaMemGetInfo(&free_mem, &total_mem);
-        printf("          Block %3d: %10d to %10d\n", b, start, end);
-        printf("            GPU memory: free = %zu MB, total = %zu MB\n", free_mem / (1024 * 1024), total_mem / (1024 * 1024));
+    // int block_size = (nqueries + nblocks - 1) / nblocks;
+    // for (int b=0; b<nblocks; b++) {
+    //     int start = b * block_size;
+    //     int end = std::min(start + block_size, nqueries);
+    //     if (start >= end) continue;
 
-        knnSearchCuda_hashgrid(queries.data() + start, end - start,
-            neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
-    }
+    //     size_t free_mem, total_mem;
+    //     cudaMemGetInfo(&free_mem, &total_mem);
+    //     printf("          Block %3d: %10d to %10d\n", b, start, end);
+    //     printf("            GPU memory: free = %zu MB, total = %zu MB\n", free_mem / (1024 * 1024), total_mem / (1024 * 1024));
+
+    //     knnSearchCuda_hashgrid(queries.data() + start, end - start,
+    //         neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
+    // }
 
     cudaDeviceSynchronize();
+
+#else
+    printf("(nano-kdtree)\n");
+
+    #pragma omp parallel for default(none) \
+        shared(queries, neighbors, k, nano_kdtree)
+    for (int i = 0; i < queries.size(); ++i) {
+        neighbor *result = neighbors.data() + i * k;
+
+        size_t_vec nn_idx(k);
+        double_vec out_dists_sqr(k);
+        KNNResultSet resultSet(k);
+        resultSet.init(nn_idx.data(), out_dists_sqr.data());
+
+        nano_kdtree.findNeighbors(resultSet, queries.data() + i * NDIMS);
+
+        for (int j = 0; j < k; ++j) {
+            result[j].idx = nn_idx[j];
+            result[j].dist2 = out_dists_sqr[j];
+        }
+    }
+
+#endif
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif

@@ -38,13 +38,11 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
-#ifdef ACC
 struct neighbor {
     int idx;
     double dist2;
 };
 typedef std::vector<neighbor> neighbor_vec;
-#endif
 
 // Update markers in surface elements
 struct MarkerUpdate {
@@ -388,15 +386,6 @@ struct PointCloud {
     template <class BBOX>
     bool kdtree_get_bbox(BBOX&) const { return false; }
 };
-
-// forward declaration
-class CudaKNN;
-
-#ifdef ACC
-using KDTree = CudaKNN;
-#else
-using KDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
-#endif
 
 using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
 

@@ -9,9 +9,7 @@
 
 #include "barycentric-fn.hpp"
 #include "utils.hpp"
-#ifdef ACC
 #include "knn.hpp"
-#endif
 #include "brc-interpolation.hpp"
 
 namespace { // anonymous namespace
@@ -98,17 +96,18 @@ void prepare_interpolation(const Param& param, const Variables &var,
 #endif
 
 #ifdef ACC
-    KDTree kdtree(param, old_coord);
+    array_t point_tmp(1);
+    PointCloud cloud(point_tmp);
+#else
+    PointCloud cloud(old_coord);
+#endif
+
+    NANOKDTree nano_kdtree(NDIMS, cloud);
+    KNN kdtree(param, old_coord, nano_kdtree);
     neighbor_vec neighbors(var.nnode);
 
     printf("    Finding knn for barycentric node interpolation...\n");
     kdtree.search(*var.coord, neighbors, 1, 3.0);
-
-#else
-    PointCloud cloud(old_coord);
-    NANOKDTree kdtree(NDIMS, cloud);
-    kdtree.buildIndex();
-#endif // ACC
 
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -116,32 +115,14 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
     const int k = 1;
 
-#ifdef ACC
     #pragma omp parallel for default(none)          \
-        shared(var, bary, old_coord, old_connectivity, old_support, kdtree, el, brc, neighbors) \
+        shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors) \
         firstprivate(k)
-#else
-    #pragma omp parallel for default(none)          \
-        shared(var, bary, old_coord, old_connectivity, old_support, kdtree, el, brc) \
-        firstprivate(k)
-#endif
     for (int i=0; i<var.nnode; i++) {
         double *q = (*var.coord)[i];
 
-#ifdef ACC
         int nn = neighbors[i].idx;
         double dd = neighbors[i].dist2;
-#else
-        size_t_vec nn_idx(k);
-        double_vec dd_arr(k);
-        KNNResultSet resultSet(k);
-        resultSet.init(nn_idx.data(), dd_arr.data());
-
-        // find the nearest point nn in old_coord
-        kdtree.findNeighbors(resultSet, q);
-        int nn = nn_idx[0];
-        double dd = dd_arr[0];
-#endif // ACC
 
         // elements surrounding nn
         const int_vec &nn_elem = old_support[nn];

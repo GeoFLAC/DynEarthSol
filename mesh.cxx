@@ -2714,9 +2714,8 @@ void create_new_mesh(const Param& param, Variables& var)
     // std::cout << '\n';
 }
 
-#ifdef ACC
 
-void elem_center3(const array_t &coord, const conn_t &connectivity, array_t& center)
+void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -2745,42 +2744,3 @@ void elem_center3(const array_t &coord, const conn_t &connectivity, array_t& cen
     nvtxRangePop();
 #endif
 }
-
-#endif // ACC
-
-array_t* elem_center(const array_t &coord, const conn_t &connectivity)
-{
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
-    /* Returns the centroid of the elements.
-     * Note: center[0] == tmp
-     * The caller is responsible to delete [] center[0] and center!
-     */
-    int nelem = connectivity.size();
-    array_t* center = new array_t(nelem, NDIMS);
-#ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop async
-    for(int e=0; e<nelem; e++) {
-        const int* conn = connectivity[e];
-        for(int d=0; d<NDIMS; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_ELEM; k++) {
-                sum += coord[conn[k]][d];
-            }
-            (*center)[e][d] = sum / NODES_PER_ELEM;
-        }
-    }
-
-    #pragma acc wait
-
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-    return center;
-}
-
-

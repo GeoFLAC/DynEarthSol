@@ -10,15 +10,13 @@
 #include "barycentric-fn.hpp"
 #include "mesh.hpp"
 #include "utils.hpp"
-#ifdef ACC
 #include "knn.hpp"
-#endif
 #include "nn-interpolation.hpp"
 
 
 namespace {
 
-    void find_nearest_neighbor(const Variables &var, KDTree &kdtree,
+    void find_nearest_neighbor(const Variables &var, KNN &kdtree,
                                int_vec &idx, int_vec &is_changed,
                                int_vec &idx_changed, int_vec &changed)
     {
@@ -28,10 +26,9 @@ namespace {
 
         double eps = 1e-15;
 
-#ifdef ACC
         array_t queries(var.nelem);
 
-        elem_center3(*var.coord, *var.connectivity, queries);
+        elem_center(*var.coord, *var.connectivity, queries);
 
         neighbor_vec neighbors(var.nelem);
 
@@ -42,26 +39,6 @@ namespace {
             idx[e] = int(neighbors[e].idx);
             is_changed[e] = (neighbors[e].dist2 < eps) ? 0 : 1;
         }
-#else
-        array_t *new_center = elem_center(*var.coord, *var.connectivity);
-
-        #pragma omp parallel for default(none) shared(var, kdtree, new_center, idx, is_changed, eps)
-        for(int e=0; e<var.nelem; e++) {
-
-            double *q = (*new_center)[e];
-            size_t nn_idx;
-            double dd;
-
-            KNNResultSet resultSet(1);
-            resultSet.init(&nn_idx, &dd);  
-            kdtree.findNeighbors(resultSet, q);
-
-            idx[e] = static_cast<int>(nn_idx);
-            is_changed[e] = (dd < eps) ? 0 : 1;
-        }
-
-        delete new_center;
-#endif
 
         int nchanged = 0;
         for (int e=0; e<var.nelem; e++) {
@@ -80,7 +57,7 @@ namespace {
     void find_acm_elem_ratios(const Variables &var,
                               const Barycentric_transformation &bary,
                               int_vec &is_changed,
-                              KDTree &kdtree,
+                              KNN &kdtree,
                               int old_nelem,
                               int_vec &elems_vec,
                               double_vec &ratios_vec,
@@ -125,14 +102,11 @@ namespace {
 #endif
             }
         int nsample = sample_eta.size();
-
-#ifdef ACC
         int nqueries = nchanged * nsample;
 
         // number of neighbors exceeding computational limit
-        int queries_max = 1024 * 1024;
+        int queries_max = 1024 * 1024 * 16;
 
-        array_t queries(1);
         neighbor_vec neighbors;
 
         int elems_per_block = queries_max / nsample;
@@ -141,15 +115,21 @@ namespace {
         printf("  Using %d blocks, elements per block: %d, total queries: %d\n",
                nblocks, elems_per_block, nqueries);
 
+        array_t queries(elems_per_block*nsample);
+
         for (int b=0; b<nblocks; b++) {
             int start = b * elems_per_block;
             int end = std::min((b + 1) * elems_per_block, nchanged);
             if (start >= end) continue;
 
-            printf("    Block %d: element from %d to %d\n", b, start, end);
+            printf("    Block %3d: element from %7d to %7d", b, start, end);
 
             queries.resize((end-start) * nsample);
 
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(var,start, end, \
+                sample_eta, nsample, queries, changed)
+#endif
             #pragma acc parallel loop async
             for (int i=start; i<end; i++) {
                 int e = changed[i];
@@ -172,14 +152,13 @@ namespace {
 
             kdtree.search(queries, neighbors, max_el, 3.);
 
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(var, bary, is_changed, \
+                elems_vec, ratios_vec, sample_eta, \
+                nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
+#endif
             #pragma acc parallel loop async
             for (int i=start; i<end; i++) {
-#else
-            #pragma omp parallel for default(none) shared(var, bary, is_changed, \
-                kdtree, elems_vec, ratios_vec, sample_eta, \
-                nsample, nchanged, changed) firstprivate(max_el)
-            for(int i=0; i<nchanged; i++) {
-#endif
                 int e = changed[i];
                 int elem_count_buf[32] = {0};
                 int elem_keys[32] = {0};
@@ -196,25 +175,12 @@ namespace {
                     double x[NDIMS] = {0}; // coordinate of temporary point
 
                     // find the nearest point nn in old_center
-#ifdef ACC
                     int query_start = i - start;
                     for (int d=0; d<NDIMS; d++)
                         x[d] = queries[query_start * nsample + j][d];
 
                     neighbor *nn_idx = neighbors.data() + (query_start * nsample + j) * max_el;
-#else
-                    for (int d=0; d<NDIMS; d++)
-                        for (int n=0; n<NODES_PER_ELEM; n++) {
-                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
-                        }
 
-                    size_t_vec nn_idx(max_el);
-                    double_vec out_dists_sqr(max_el);
-                    KNNResultSet resultSet(max_el);
-                    resultSet.init(nn_idx.data(), out_dists_sqr.data());
-
-                    kdtree.findNeighbors(resultSet, x);
-#endif
                     // bool is_consist = true;
                     // for (int jj=0; jj<max_el; jj++) {
                     //     // compare the nn_idx[jj] with neighbors[jj].idx
@@ -245,11 +211,7 @@ namespace {
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-#ifdef ACC
                         old_e = nn_idx[jj].idx;
-#else
-                        old_e = static_cast<int>(nn_idx[jj]);
-#endif
                         bary.transform(x, old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
@@ -304,9 +266,7 @@ namespace {
                     ratios_vec[i*32+k] = elem_count_buf[k] * inv;
                 }
             }
-#ifdef ACC
         } // end of for (int b=0; b<nblocks; b++)
-#endif
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -335,16 +295,18 @@ namespace {
         nvtxRangePushA("create kdtree for old elements");
 #endif
 
-#ifdef ACC
         array_t points(old_nelem);
-        elem_center3(old_coord, old_connectivity, points);
-        KDTree kdtree(param, points);
+        elem_center(old_coord, old_connectivity, points);
+
+#ifdef ACC
+        array_t point_tmp(1);
+        PointCloud cloud(point_tmp);
 #else
-        array_t *old_center = elem_center(old_coord, old_connectivity);
-        PointCloud cloud(*old_center);
-        KDTree kdtree(NDIMS, cloud);
-        kdtree.buildIndex();
+        PointCloud cloud(points);
 #endif
+
+        NANOKDTree nano_kdtree(NDIMS, cloud);
+        KNN kdtree(param, points, nano_kdtree);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -355,9 +317,6 @@ namespace {
         printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, changed);
 
-#ifndef ACC
-        delete old_center;
-#endif
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
