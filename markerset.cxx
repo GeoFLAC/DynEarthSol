@@ -1033,7 +1033,7 @@ namespace {
         int_vec removed_markers;
 
 #ifndef ACC
-        #pragma omp parallel default(none) shared(param, ms, kdtree, bary, old_coord, old_connectivity, \
+        #pragma omp parallel for default(none) shared(param, ms, kdtree, bary, old_coord, old_connectivity, \
             last_marker)
 #endif
         #pragma acc parallel loop
@@ -1051,9 +1051,9 @@ namespace {
             neighbor* nn_idx = neighbors.data() + i*k;
 #else
             for (int j = 0; j < NDIMS; j++)
-                for (int k = 0; k < NODES_PER_ELEM; k++)
-                    x[j] += ms.get_eta(i)[k]*
-                        old_coord[ old_connectivity[eold][k] ][j];
+                for (int l = 0; l < NODES_PER_ELEM; l++)
+                    x[j] += ms.get_eta(i)[l]*
+                        old_coord[ old_connectivity[eold][l] ][j];
 
             // 2. look for nearby elements.
             size_t_vec nn_idx(k);
