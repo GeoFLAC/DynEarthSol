@@ -138,6 +138,7 @@ void phase_changes(const Param& param, Variables& var)
                 // marker_loop_wrapper(param, var, ms, *var.elemmarkers, custom_phase_change);
                 break;
             default:
+                printf("Error: unknown phase_change_option: %d\n", param.mat.phase_change_option);
                 // std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
                 // std::exit(1);
             }            
