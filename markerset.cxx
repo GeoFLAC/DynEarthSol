@@ -300,8 +300,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
     double_vec &src_locs = *var.surfinfo.src_locs;
 
-    #pragma omp parallel for default(none) shared(param, var, mattype, \
-        edvacc, elemmarkers, markers_in_elem, src_locs)
+    #pragma omp parallel for default(none) shared(param, var, \
+        edvacc, elemmarkers, markers_in_elem, src_locs) firstprivate(mattype)
     for (int i=0; i<var.surfinfo.etop; i++) {
         int e = (*var.surfinfo.top_facet_elems)[i];
         (*var.etmp_int)[i] = -1;
