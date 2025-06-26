@@ -22,6 +22,7 @@ ifeq ($(ACC), 1)
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
 
 GITID = $(shell git rev-parse HEAD | cut -c1-7)
 
@@ -55,7 +56,6 @@ test:
 
 job:
 	# run jobs on server
-	JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
 	${RUN_TEST} > screen-${JOBNAME}.log &
 	cp ${CASE} ${JOBNAME}.cfg
 
