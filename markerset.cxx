@@ -1001,23 +1001,23 @@ namespace {
 
         int last_marker = ms.get_nmarkers();
 
-        array_t queries(last_marker);
+        array_t queries(last_marker, 0);
 
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
+            old_connectivity, last_marker)
+#endif
         #pragma acc parallel loop async
         for (int i = 0; i < last_marker; i++) {
-            bool found = false;
-
             // 1. Get physical coordinates, x, of an old marker.
-            int eold = ms.get_elem(i);
-            double x[NDIMS] = {0};
+            const int *conn = old_connectivity[ms.get_elem(i)];
+            const double *eta = ms.get_eta(i);
             for (int j = 0; j < NDIMS; j++) {
-                const double *eta = ms.get_eta(i);
-                for (int l = 0; l < NODES_PER_ELEM; l++)
-                    queries[i][j] += eta[l]*
-                        old_coord[ old_connectivity[eold][l] ][j];
+                for (int l = 0; l < NODES_PER_ELEM; l++) {
+                    queries[i][j] += eta[l] * old_coord[ conn[l] ][j];
+                }
             }
         }
-
 
         neighbor_vec neighbors(last_marker*k);
 
@@ -1036,12 +1036,6 @@ namespace {
         for (int i = 0; i < last_marker; i++) {
             bool found = false;
 
-            // 1. Get physical coordinates, x, of an old marker.
-            int eold = ms.get_elem(i);
-            double x[NDIMS] = {0};
-            for (int j = 0; j < NDIMS; j++)
-                x[j] = queries[i][j];
-
             // 2. look for nearby elements.
             neighbor* nn_idx = neighbors.data() + i*k;
 
@@ -1049,7 +1043,7 @@ namespace {
                 int e = nn_idx[j].idx;
                 double r[NDIMS];
 
-                bary.transform(x, e, r);
+                bary.transform(queries[i], e, r);
 
                 // change this if-condition to (i == N) to debug the N-th marker
                 if (bary.is_inside(r)) {
@@ -1579,7 +1573,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points,nano_kdtree);
+        KNN kdtree(param, points, nano_kdtree);
 
 #ifdef USE_NPROF
         nvtxRangePop();
