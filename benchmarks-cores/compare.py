@@ -135,14 +135,14 @@ def compare(old, new):
 olddir = sys.argv[1]
 curdir = os.getcwd()
 
-if len(sys.argv) > 3:
+if len(sys.argv) > 4:
     frame = int(sys.argv[3])
     newdir = sys.argv[2]
     modelname = 'result'
 else:
     frame = int(sys.argv[2])
     newdir = curdir
-    modelname = 'benchmark'
+    modelname = sys.argv[3]
 
 # name holder
 old = 0
