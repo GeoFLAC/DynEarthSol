@@ -73,7 +73,7 @@ namespace {
         const double spacing1 = 1.0 / neta1;
         const double spacing2 = 1.0 / neta2;
         const int max_el = std::min(32, old_nelem);
-        const double eps = 0;
+        const double eps = 1e-15;
 
         int nchanged = changed.size();
 
@@ -94,7 +94,7 @@ namespace {
                                     (j + 0.5) * spacing1,
                                     1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
 #endif
-                    if (eta[NODES_PER_ELEM-1] < 0) continue;
+                    if (eta[NODES_PER_ELEM-1] < eps) continue;
 
                     sample_eta.push_back(double_vec(eta, eta + NODES_PER_ELEM));
 #ifdef THREED
