@@ -61,6 +61,7 @@ namespace {
                               int old_nelem,
                               int_vec &elems_vec,
                               double_vec &ratios_vec,
+                              double_vec &empty_vec,
                               int_vec &changed)
     {
 #ifdef USE_NPROF
@@ -79,6 +80,7 @@ namespace {
 
         elems_vec.resize(nchanged*32,-1);
         ratios_vec.resize(nchanged*32);
+        empty_vec.resize(nchanged,0);
 
         double_vec2D sample_eta;
         for (int i=0; i<neta0; i++)
@@ -154,7 +156,7 @@ namespace {
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
-                elems_vec, ratios_vec, sample_eta, \
+                elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
             #pragma acc parallel loop async
@@ -265,6 +267,10 @@ namespace {
                     elems_vec[i*32+k] = elem_keys[k];
                     ratios_vec[i*32+k] = elem_count_buf[k] * inv;
                 }
+                empty_vec[i] = double(nsample - total_count) / nsample;
+                // if (empty_vec[i] > eps)
+                //     printf("      Element %7d has %3d old elements, total count = %3d, empty ratio = %6.2f\n",
+                //            e, elem_size, total_count, empty_vec[i]);
             }
         } // end of for (int b=0; b<nblocks; b++)
 
@@ -282,7 +288,8 @@ namespace {
                                int_vec &is_changed,
                                int_vec &idx_changed,
                                int_vec &elems_vec,
-                               double_vec &ratios_vec)
+                               double_vec &ratios_vec,
+                               double_vec &empty_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -315,11 +322,65 @@ namespace {
         find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed);
 
         printf("    Finding acm element ratios...\n");
-        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, changed);
+        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, empty_vec, changed);
 
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
+    }
+
+
+    void boundary_field(const int_vec &is_changed,
+                       const int_vec &idx_changed,
+                       const double_vec &empty_vec,
+                       double value, double_vec &target)
+    {
+        double eps = 1e-15;
+
+        #pragma acc serial async
+        int ntarget = target.size();
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(target, is_changed, \
+            idx_changed, empty_vec, value, ntarget, eps)
+#endif
+        #pragma acc parallel loop async
+        for (int i=0; i<ntarget; i++) {
+            if (is_changed[i]>0) {
+                int n = idx_changed[i];
+
+                if (empty_vec[n] > eps)
+                    target[i] = target[i] * (1.0 - empty_vec[n]) + value * empty_vec[n];
+            }
+        }
+    }
+
+
+    void boundary_field(const int_vec &is_changed,
+                       const int_vec &idx_changed,
+                       const double_vec &empty_vec,
+                       double value, tensor_t &target)
+    {
+        double eps = 1e-15;
+
+        #pragma acc serial async
+        int ntarget = target.size();
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(target, is_changed, \
+            idx_changed, empty_vec, value, ntarget, eps)
+#endif
+        #pragma acc parallel loop async
+        for (int i=0; i<ntarget; i++) {
+            if (is_changed[i]>0) {
+                int n = idx_changed[i];
+
+                if (empty_vec[n] > eps) {
+                    for (int d=0; d<NSTR; d++)
+                        target[i][d] = target[i][d] * (1.0 - empty_vec[n]) + value * empty_vec[n];
+                }
+            }
+        }
     }
 
 
@@ -434,7 +495,8 @@ namespace {
                                     const int_vec &is_changed,
                                     const int_vec &idx_changed,
                                     const int_vec &elems_vec,
-                                    const double_vec &ratios_vec)
+                                    const double_vec &ratios_vec,
+                                    const double_vec &empty_vec)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -522,11 +584,12 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
 
     int_vec elems_vec;
     double_vec ratios_vec;
+    double_vec empty_vec; // radio between old element and boundary empty
     
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, idx, is_changed, idx_changed, elems_vec, ratios_vec);
+    prepare_interpolation(param, var, bary, old_coord, old_connectivity, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec);
 
     std::cout << "    Interpolating fields...\n";
-    nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec);
+    nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec);
 
 #ifdef USE_NPROF
     nvtxRangePop();
