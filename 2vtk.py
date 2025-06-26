@@ -346,9 +346,14 @@ def main(modelname, start, end, delta):
     ndigit = len(str(nout))
     ndone = 0
     
+    if nout == 0:
+        print(f'No frames to convert (Avail. frames: {des.frames[0]} to {des.frames[-1]}).', file=sys.stderr)
+        return
+    
     try:
         import multiprocessing as mp
         print(f'Using {mutiprocessing_threads} threads (-ncpu {mutiprocessing_threads}) for conversion (system max: {mp.cpu_count()}).', file=sys.stderr)
+        print(f'Converting {nout} frames from {start} to {end-1} with step {delta}.', file=sys.stderr)
 
         args_list = [(des, prefix, i) for i in indices]
 
