@@ -152,6 +152,7 @@ namespace {
 
             #pragma acc wait
 
+            // find the nearest point nn in old_center
             kdtree.search(queries, neighbors, max_el, 3.);
 
 #ifndef ACC
@@ -161,6 +162,7 @@ namespace {
 #endif
             #pragma acc parallel loop async
             for (int i=start; i<end; i++) {
+                int query_start = (i - start) * nsample;
                 int e = changed[i];
                 int elem_count_buf[32] = {0};
                 int elem_keys[32] = {0};
@@ -173,47 +175,14 @@ namespace {
                 */
                 const int* conn = (*var.connectivity)[e];
                 for (int j=0; j<nsample; j++) {
-
-                    double x[NDIMS] = {0}; // coordinate of temporary point
-
-                    // find the nearest point nn in old_center
-                    int query_start = i - start;
-                    for (int d=0; d<NDIMS; d++)
-                        x[d] = queries[query_start * nsample + j][d];
-
-                    neighbor *nn_idx = neighbors.data() + (query_start * nsample + j) * max_el;
-
-                    // bool is_consist = true;
-                    // for (int jj=0; jj<max_el; jj++) {
-                    //     // compare the nn_idx[jj] with neighbors[jj].idx
-                    //     if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                    //         is_consist = false;
-                    //         break;
-                    //     }
-                    // }
-                    // if (!is_consist) {
-                    //     printf("Inconsistent neighbors for element %d, query %d:\n", e, count);
-                    //     for (int jj=0; jj<max_el; jj++) {
-                    //         printf("  nn_idx[%4d] = %6d, dist2 = %10.1f | ", jj, nn_idx[jj], out_dists_sqr[jj]);
-                    //         printf("  neighbors[%4d] = %6d, dist2 = %10.1f", jj, nn_idx_ptr[jj].idx, nn_idx_ptr[jj].dist2);
-                    //         if (nn_idx[jj] != nn_idx_ptr[jj].idx) {
-                    //             printf(" *\n");
-                    //         } else {
-                    //             printf("  \n");
-                    //         }
-                    //     }
-                    //     printf("\n");
-                    // }
-
-                    // std::cout << "  ";
-                    // print(std::cout, eta, NODES_PER_ELEM);
-                    // print(std::cout, x, NDIMS);
+                    double *x = queries.data() + (query_start + j) * NDIMS;
+                    neighbor *nn = neighbors.data() + (query_start + j) * max_el;
 
                     // find the old element that is enclosing x
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        old_e = nn_idx[jj].idx;
+                        old_e = nn[jj].idx;
                         bary.transform(x, old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
