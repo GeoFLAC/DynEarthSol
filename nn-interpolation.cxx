@@ -245,6 +245,9 @@ namespace {
 
                 // std::cout << "  has " << total_count << " points\n";
 
+                // count ratio of new element volume outside the old boundary
+                empty_vec[i] = double(nsample - total_count) / nsample;
+
                 if (total_count == 0) {
                     // This happens when new material is added during remeshing,
                     // and this element is completely within the new material.
@@ -267,10 +270,6 @@ namespace {
                     elems_vec[i*32+k] = elem_keys[k];
                     ratios_vec[i*32+k] = elem_count_buf[k] * inv;
                 }
-                empty_vec[i] = double(nsample - total_count) / nsample;
-                // if (empty_vec[i] > eps)
-                //     printf("      Element %7d has %3d old elements, total count = %3d, empty ratio = %6.2f\n",
-                //            e, elem_size, total_count, empty_vec[i]);
             }
         } // end of for (int b=0; b<nblocks; b++)
 
@@ -346,7 +345,7 @@ namespace {
 #endif
         #pragma acc parallel loop async
         for (int i=0; i<ntarget; i++) {
-            if (is_changed[i]>0) {
+            if (is_changed[i] != 0) {
                 int n = idx_changed[i];
 
                 if (empty_vec[n] > eps)
@@ -372,7 +371,7 @@ namespace {
 #endif
         #pragma acc parallel loop async
         for (int i=0; i<ntarget; i++) {
-            if (is_changed[i]>0) {
+            if (is_changed[i] != 0) {
                 int n = idx_changed[i];
 
                 if (empty_vec[n] > eps) {
