@@ -9,6 +9,7 @@
 confdefs.h
 snapshot.diff
 dynearthsol[2,3]d
+dynearthsol[2,3]d.gpu
 libadaptivity/Makefile
 libadaptivity/*/Makefile
 libadaptivity/include

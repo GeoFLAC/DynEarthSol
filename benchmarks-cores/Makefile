@@ -19,6 +19,7 @@ HOST := $(shell hostname -s)
 KERNEL := CPU
 ifeq ($(ACC), 1)
 	KERNEL := GPU
+	EXE := ../dynearthsol$(NDIMS)d.gpu
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))

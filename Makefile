@@ -37,6 +37,7 @@ endif
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
 	CXX = nvc++
+	suffix = .gpu
 else
 	ifeq ($(nprof), 1)
 		CXX = nvc++
@@ -286,20 +287,20 @@ INCS =	\
 	output.hpp \
 	knn.hpp
 
-OBJS = $(SRCS:.cxx=.$(ndims)d.o)
+OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
-EXE = dynearthsol$(ndims)d
+EXE = dynearthsol$(ndims)d$(suffix)
 
 
 ## Libraries
 
 TET_SRCS = tetgen/predicates.cxx tetgen/tetgen.cxx
 TET_INCS = tetgen/tetgen.h
-TET_OBJS = $(TET_SRCS:.cxx=.o)
+TET_OBJS = $(TET_SRCS:.cxx=$(suffix).o)
 
 TRI_SRCS = triangle/triangle.c
 TRI_INCS = triangle/triangle.h
-TRI_OBJS = $(TRI_SRCS:.c=.o)
+TRI_OBJS = $(TRI_SRCS:.c=$(suffix).o)
 
 M_SRCS = $(TRI_SRCS)
 M_INCS = $(TRI_INCS)
@@ -330,7 +331,7 @@ ifeq ($(usemmg), 1)
 endif
 
 C3X3_DIR = 3x3-C
-C3X3_LIBNAME = 3x3
+C3X3_LIBNAME = 3x3$(suffix)
 
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
@@ -392,23 +393,23 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
-$(TRI_OBJS): %.o : %.c $(TRI_INCS)
+$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates.o: tetgen/predicates.cxx $(TET_INCS)
+tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen.o: tetgen/tetgen.cxx $(TET_INCS)
+tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
@@ -419,11 +420,11 @@ $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-	@+$(MAKE) -C $(C3X3_DIR) clean
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 	
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-	@+$(MAKE) -C $(C3X3_DIR) clean
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 
 clean:
 	@rm -f $(OBJS) $(EXE)
