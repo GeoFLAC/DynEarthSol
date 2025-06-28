@@ -48,7 +48,7 @@ CXX_BACKEND = ${CXX}
 
 
 ## path to cuda's base directory
-NVHPC_DIR = /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
+NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
 BOOST_ROOT_DIR =
