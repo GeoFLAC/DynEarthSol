@@ -41,8 +41,9 @@ typedef nanoflann::KNNResultSet<double> KNNResultSet;
 struct neighbor {
     int idx;
     double dist2;
+    neighbor() : idx(-1), dist2(0.0) {}
+    neighbor(int e, double a) : idx(e), dist2(a) {}
 };
-typedef std::vector<neighbor> neighbor_vec;
 
 // Update markers in surface elements
 struct MarkerUpdate {
@@ -50,19 +51,31 @@ struct MarkerUpdate {
     int src_elem;
     int dst_elem;
     int inc; // 1=move, 0=remove
+    MarkerUpdate() : m(-1), src_elem(-1), dst_elem(-1), inc(0) {}
+    MarkerUpdate(int marker, int src, int dst, int increment)
+        : m(marker), src_elem(src), dst_elem(dst), inc(increment) {}
 };
 
 // Define the struct to store marker data
 struct AppendMarkerData {
-    double_vec eta;
+    double eta[NODES_PER_ELEM];
     int elem;
     int mattype;
     double time;
     double depth;
     double distance;
     double slope;
+    AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = 0.0;
+    }
+    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s)
+        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
+    }
 };
 
+typedef std::vector<neighbor> neighbor_vec;
+typedef std::vector<MarkerUpdate> MU_vec;
 typedef std::vector<AppendMarkerData> AMD_vec;
 
 //

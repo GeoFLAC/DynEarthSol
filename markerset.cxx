@@ -180,7 +180,7 @@ void MarkerSet::append_marker_at_i(AppendMarkerData &md, int idx, int last_id)
 #endif
 
     int m = idx;
-    std::memcpy((*_eta)[m], md.eta.data(), NODES_PER_ELEM*sizeof(double));
+    std::memcpy((*_eta)[m], md.eta, NODES_PER_ELEM*sizeof(double));
     (*_elem)[m] = md.elem;
     (*_mattype)[m] = md.mattype;
     (*_id)[m] = last_id;
@@ -446,14 +446,12 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
         int elem = (*var.etmp_int)[i];
         double *data = (*var.tmp_result)[i];
-        double_vec eta_tmp(data, data + NODES_PER_ELEM);
         double depth = data[NODES_PER_ELEM];
         double distance = data[NODES_PER_ELEM + 1];
         double slope = data[NODES_PER_ELEM + 2];
 
-        marker_data_all.push_back(
-            AppendMarkerData{eta_tmp, elem, mattype, var.time / YEAR2SEC, depth, distance, slope}
-        );
+        marker_data_all.emplace_back(data, elem, mattype, 
+                var.time / YEAR2SEC, depth, distance, slope);
     }
 
     append_markers(marker_data_all);
@@ -1251,9 +1249,7 @@ namespace {
 
                     // ms.append_marker(eta, e, mt, 0., 0., 0., 0.);
                     // (*var.markers_in_elem)[e].push_back(ms.get_nmarkers()-1);
-
-                    double_vec eta_tmp(eta, eta + NODES_PER_ELEM);
-                    marker_data_local.push_back({eta_tmp, e, mt, 0., 0., 0., 0.});
+                    marker_data_local.emplace_back(eta, e, mt, 0., 0., 0., 0.);
 
                     ++(*var.elemmarkers)[e][mt];
                     ++num_marker_in_elem;
@@ -1414,12 +1410,12 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     if (nchange > 0) {
         delete_marker.reserve(nchange);
 
-        std::vector<MarkerUpdate> updates;
+        MU_vec updates;
 
         #pragma omp parallel default(none) \
                 shared(var,coord0s,markers_in_elem, updates, elemmarkers)
         {
-            std::vector<MarkerUpdate> local_updates;
+            MU_vec local_updates;
 
             #pragma omp for nowait
             for (int i=0; i<var.ntop_elems;i++) {
@@ -1442,12 +1438,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                     // find new element of the marker
                     remap_marker(var,m_coord,e,new_elem,new_eta,inc);
 
-                    MarkerUpdate u;
-                    u.m = m;
-                    u.src_elem = e;
-                    u.dst_elem = new_elem;
-                    u.inc = inc;
-                    local_updates.push_back(u);
+                    local_updates.emplace_back(m, e, new_elem, inc);
 
                     if (inc) {
                         set_eta(m, new_eta);
