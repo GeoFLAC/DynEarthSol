@@ -25,6 +25,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
+netcdf = 0
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -47,6 +48,9 @@ else
 endif
 CXX_BACKEND = ${CXX}
 
+## path to netCDF's base directory, if not in standard system location
+NETCDF_DIR = # /path/to/netcdf-c
+NETCDFCXX_DIR = # /path/to/netcdf-cxx4
 
 ## path to cuda's base directory
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
@@ -243,6 +247,11 @@ else
 all:
 	@echo "Unknown compiler, check the definition of 'CXX' in the Makefile."
 	@false
+endif
+
+ifeq ($(netcdf), 1)
+	CXXFLAGS += -DNETCDF  -I$(NETCDFCXX_DIR)/build/include
+	LDFLAGS += -L$(NETCDF_DIR)/lib -lnetcdf -L$(NETCDFCXX_DIR)/build/lib64 -lnetcdf-cxx4 
 endif
 
 ## Is git in the path?

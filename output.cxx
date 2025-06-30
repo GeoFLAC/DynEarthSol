@@ -84,8 +84,13 @@ void Output::_write(const Variables& var, bool disable_averaging)
     write_info(var, dt);
 
     char filename[256];
+#ifdef NETCDF
+    std::snprintf(filename, 255, "%s.save.%06d.nc", modelname.c_str(), frame);
+    NetCDFOutput bin(filename);
+#else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
+#endif
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
@@ -189,8 +194,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
             (*ms)->write_save_file(var, bin);
     }
-
+#ifndef NETCDF
     bin.close();
+#endif
     int64_t duration_ns = get_nanoseconds() - start_time;
 
     if(dt / YEAR2SEC > 0.001)
@@ -288,8 +294,13 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePushA(__FUNCTION__);
 #endif
     char filename[256];
+#ifdef NETCDF
+    std::snprintf(filename, 255, "%s.chkpt.%06d.nc", modelname.c_str(), frame);
+    NetCDFOutput bin(filename);
+#else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
+#endif
 
     double_vec tmp(2);
     tmp[0] = var.time;

@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 
 from __future__ import print_function, unicode_literals
-import sys
+import sys, os
 import numpy as np
-
-# 2D or 3D data?
-ndims = 2
 
 class Dynearthsol:
     '''Read output file of 2D/3D DynEarthSol'''
@@ -13,6 +10,7 @@ class Dynearthsol:
     def __init__(self, modelname):
         self.suffix = 'save'
         self.modelname = modelname
+        self.format = ''
         self.read_info()
         self.read_header(self.frames[0])
         return
@@ -30,44 +28,68 @@ class Dynearthsol:
 
 
     def get_fn(self, frame):
-        return '{0}.{1}.{2:0=6}'.format(self.modelname, self.suffix, frame)
-
+        filename = '{0}.{1}.{2:0=6}'.format(self.modelname, self.suffix, frame)
+        if self.format == '':
+            if os.path.isfile(filename):
+                self.format = 'binary'
+            else:
+                filename += '.nc'
+                self.format = 'netcdf'
+            return filename
+        elif self.format == 'binary':
+            return filename
+        elif self.format == 'netcdf':
+            return filename + '.nc'
 
     def read_header(self, frame):
         self._header_frame = frame
         headerlen = 4096
         fname = self.get_fn(frame)
-        with open(fname, 'rb') as f:
-            header = f.read(headerlen).splitlines()
-            #print(header)
-
-        # parsing 1st line
-        first = header[0].split(b' ')
-        if (first[0] != b'#' or
-            first[1] != b'DynEarthSol' or
-            first[2].split(b'=')[0] != b'ndims' or
-            first[3].split(b'=')[0] != b'revision'):
-            print('Error:', fname, 'is not a valid DynEarthSol output file!')
-            sys.exit(1)
-
-        self.ndims = int(first[2].split(b'=')[1])
-        self.revision = int(first[3].split(b'=')[1])
-        if self.ndims == 2:
-            self.nstr = 3
-            self.component_names = ('XX', 'ZZ', 'XZ')
-        else:
-            self.nstr = 6
-            self.component_names = ('XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ')
-
-        # parsing other lines
         self.field_pos = {}
-        for line in header[1:]:
-            # test for null in python3 bytes and python2 str
-            if line[0] in (0, '\x00'): break  # end of record
-            name, pos = line.split(b'\t')
-            self.field_pos[name.decode('ascii')] = int(pos)
 
-        #print(self.field_pos)
+        if self.format == 'netcdf':
+            import netCDF4
+            with netCDF4.Dataset(fname, 'r') as f:
+                self.ndims = f.getncattr('ndims')
+                self.revision = f.getncattr('revision')
+                
+                if self.ndims == 2:
+                    self.nstr = 3
+                    self.component_names = ('XX', 'ZZ', 'XZ')
+                else:
+                    self.nstr = 6
+                    self.component_names = ('XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ')
+        else:
+            with open(fname, 'rb') as f:
+                header = f.read(headerlen).splitlines()
+                #print(header)
+
+            # parsing 1st line
+            first = header[0].split(b' ')
+            if (first[0] != b'#' or
+                first[1] != b'DynEarthSol' or
+                first[2].split(b'=')[0] != b'ndims' or
+                first[3].split(b'=')[0] != b'revision'):
+                print('Error:', fname, 'is not a valid DynEarthSol output file!')
+                sys.exit(1)
+
+            self.ndims = int(first[2].split(b'=')[1])
+            self.revision = int(first[3].split(b'=')[1])
+            if self.ndims == 2:
+                self.nstr = 3
+                self.component_names = ('XX', 'ZZ', 'XZ')
+            else:
+                self.nstr = 6
+                self.component_names = ('XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ')
+
+            # parsing other lines
+            for line in header[1:]:
+                # test for null in python3 bytes and python2 str
+                if line[0] in (0, '\x00'): break  # end of record
+                name, pos = line.split(b'\t')
+                self.field_pos[name.decode('ascii')] = int(pos)
+
+            #print(self.field_pos)
         return
 
 
@@ -102,13 +124,19 @@ class Dynearthsol:
 
     def read_field(self, frame, name):
         if frame != self._header_frame: self.read_header(frame)
-        dtype, count, shape = self._get_dtype_count_shape(frame, name)
-
-        pos = self.field_pos[name]
         fname = self.get_fn(frame)
-        with open(fname,'r') as f:
-            f.seek(pos)
-            field = np.fromfile(f, dtype=dtype, count=count).reshape(shape)
+
+        if self.format == 'netcdf':
+            import netCDF4
+            with netCDF4.Dataset(fname, 'r') as f:
+                field = f.variables[name][:]
+        else:
+            dtype, count, shape = self._get_dtype_count_shape(frame, name)
+
+            pos = self.field_pos[name]
+            with open(fname,'r') as f:
+                f.seek(pos)
+                field = np.fromfile(f, dtype=dtype, count=count).reshape(shape)
         return field
     
     def load_calculation(self, frame, name):
@@ -187,46 +215,55 @@ class Dynearthsol:
         'Read and return marker data'
         if frame != self._header_frame: self.read_header(frame)
         fname = self.get_fn(frame)
-        with open(fname) as f:
+        if self.format == 'netcdf':
+            import netCDF4
+            with netCDF4.Dataset(fname, 'r') as f:
+                marker_data = {}
+                for var in f.variables:
+                    if var.startswith(markername):
+                        marker_data[var] = f.variables[var][:]
+                marker_data['size'] = marker_data[markername+'.elem'].shape[0]
+        else:
+            with open(fname) as f:
 
-            pos = self.field_pos[markername+' size']
-            f.seek(pos)
-            nmarkers = np.fromfile(f, dtype=np.int32, count=1)[0]
-
-            marker_data = {'size': nmarkers}
-
-            # floating point
-            for name in (markername+'.coord',):
-                pos = self.field_pos[name]
+                pos = self.field_pos[markername+' size']
                 f.seek(pos)
-                tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*self.ndims)
-                marker_data[name] = tmp.reshape(-1, self.ndims)
-                #print(marker_data[name].shape, marker_data[name])
+                nmarkers = np.fromfile(f, dtype=np.int32, count=1)[0]
 
-            try:
-                for name in (markername+'.eta',):
+                marker_data = {'size': nmarkers}
+
+                # floating point
+                for name in (markername+'.coord',):
                     pos = self.field_pos[name]
                     f.seek(pos)
-                    tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*(self.ndims+1))
-                    marker_data[name] = tmp.reshape(-1, (self.ndims+1))
-            except:
-                pass
+                    tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*self.ndims)
+                    marker_data[name] = tmp.reshape(-1, self.ndims)
+                    #print(marker_data[name].shape, marker_data[name])
 
-            # int
-            for name in (markername+'.elem', markername+'.mattype', markername+'.id'):
-                pos = self.field_pos[name]
-                f.seek(pos)
-                marker_data[name] = np.fromfile(f, dtype=np.int32, count=nmarkers)
-                #print(marker_data[name].shape, marker_data[name])
-
-            # float
-            for name in (markername+'.time',markername+'.z',markername+'.distance',markername+'.slope'):
                 try:
-                    pos = self.field_pos[name]
-                    f.seek(pos)
-                    marker_data[name] = np.fromfile(f, dtype=np.float64, count=nmarkers)
+                    for name in (markername+'.eta',):
+                        pos = self.field_pos[name]
+                        f.seek(pos)
+                        tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*(self.ndims+1))
+                        marker_data[name] = tmp.reshape(-1, (self.ndims+1))
                 except:
                     pass
+
+                # int
+                for name in (markername+'.elem', markername+'.mattype', markername+'.id'):
+                    pos = self.field_pos[name]
+                    f.seek(pos)
+                    marker_data[name] = np.fromfile(f, dtype=np.int32, count=nmarkers)
+                    #print(marker_data[name].shape, marker_data[name])
+
+                # float
+                for name in (markername+'.time',markername+'.z',markername+'.distance',markername+'.slope'):
+                    try:
+                        pos = self.field_pos[name]
+                        f.seek(pos)
+                        marker_data[name] = np.fromfile(f, dtype=np.float64, count=nmarkers)
+                    except:
+                        pass
 
         return marker_data
 

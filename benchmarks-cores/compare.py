@@ -156,13 +156,17 @@ try:
     os.chdir(olddir)
     des = Dynearthsol(modelname)
     old = read_data(des, frame)
+    format = des.format
 
     os.chdir(newdir)
     des = Dynearthsol(modelname)
     new = read_data(des, frame)
+    format_new = des.format
 
     # compare results
     print()
+    if (format != format_new):
+        print('Comparison between :', format, 'and', format_new, '(new)')
     print('Relative difference (max, stddev) of frame =', frame,
           ' step =', int(des.steps[frame]))
     print('  ---')

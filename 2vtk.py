@@ -461,7 +461,7 @@ def convert_field(des, frame, name, fvtu):
 
 
 def vtk_dataarray(f, data, data_name=None, data_comps=None):
-    if data.dtype in (np.int32,):
+    if data.dtype in (np.int32, np.uint32):
         dtype = 'Int32'
     elif data.dtype in (np.single, np.float32):
         dtype = 'Float32'

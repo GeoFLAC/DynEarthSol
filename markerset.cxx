@@ -856,8 +856,15 @@ void MarkerSet::resize( const int newsize )
     }
 }
 
+template
+void MarkerSet::write_chkpt_file(BinaryOutput &bin) const;
+#ifdef NETCDF
+template
+void MarkerSet::write_chkpt_file(NetCDFOutput &bin) const;
+#endif
 
-void MarkerSet::write_chkpt_file(BinaryOutput &bin) const
+template <class T>
+void MarkerSet::write_chkpt_file(T &bin) const
 {
     int_vec itmp(2);
     itmp[0] = _nmarkers;
@@ -911,8 +918,15 @@ void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin)
         }
 }
 
+template
+void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const;
+#ifdef NETCDF
+template
+void MarkerSet::write_save_file(const Variables &var, NetCDFOutput &bin) const;
+#endif
 
-void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const
+template <class T>
+void MarkerSet::write_save_file(const Variables &var, T &bin) const
 {
 #ifdef USE_NPROF
     nvtxRangePushA("write markersets");

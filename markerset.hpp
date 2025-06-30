@@ -6,7 +6,6 @@
 
 
 // forward declaration
-class BinaryOutput;
 class BinaryInput;
 
 class MarkerSet
@@ -49,9 +48,11 @@ public:
     void remove_marker_data(int is, int ie);
     void remove_markers(int_vec& markers, int_vec2D& markers_in_elem);
     void resize(const int);
-    void write_chkpt_file(BinaryOutput &bin) const;
+    template <class T>
+    void write_chkpt_file(T &bin) const;
     void read_chkpt_file(Variables &var, BinaryInput &bin);
-    void write_save_file(const Variables &var, BinaryOutput &bin) const;
+    template <class T>
+    void write_save_file(const Variables &var, T &bin) const;
     array_t* calculate_marker_coord(const Variables &var) const;
 
     inline int get_nmarkers() const { return _nmarkers; }

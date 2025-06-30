@@ -66,6 +66,16 @@ alike.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
     * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
+  * Outputing in netCDF4 format to reduce file size (50%) of model results.
+    * Instill netcdf-c from https://github.com/Unidata/netcdf-c
+      * `cmake && make && make test && make install`
+    * Instill netcdf-cxx from https://github.com/Unidata/netcdf-cxx4
+      * `mkdir build && cd build`
+      * `cmake .. -DCMAKE_INSTALL_PREFIX=./`
+      * `make -j4 && make install`
+    * set `netcdf = 1`.
+    * set `NETCDF_DIR` and `NETCDFCXX_DIR` path to include libraries
+    * Install python netcdf4 lib for vtk visulization by `pip install netCDF4`.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
