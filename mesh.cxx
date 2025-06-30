@@ -2637,6 +2637,53 @@ void create_support(Variables& var)
 #endif
 }
 
+void create_neighbor(Variables& var)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+
+    var.neighbor = new conn_t(var.nelem);
+
+    // create the inverse mapping of connectivity
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e) {
+        int nneigh = 0;
+        const int *conn = (*var.connectivity)[e];
+        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            const int_vec sup = (*var.support)[conn[i]];
+            for (int j=0; j<sup.size(); ++j) {
+                if (sup[j] != e) {
+                    // check if this element is already in the neighbor list
+                    bool found = false;
+                    for (int k=0; k<nneigh; ++k) {
+                        if ((*var.neighbor)[e][k] == sup[j]) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        (*var.neighbor)[e][nneigh] = sup[j];
+                        nneigh++;
+                    }
+                }
+                if (nneigh >= NODES_PER_ELEM) {
+                    break;
+                }
+            }
+            if (nneigh >= NODES_PER_ELEM) {
+                break;
+            }
+        }
+    }
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
 
 void create_elemmarkers(const Param& param, Variables& var)
 {

@@ -26,6 +26,7 @@ void create_top_elems(Variables& var);
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo);
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo);
 void create_support(Variables& var);
+void create_neighbor(Variables& var);
 int get_support(const Variables& var, const int inode, const int isup);
 int get_sup_size(const Variables& var, const int inode);
 void create_elemmarkers(const Param&, Variables&);

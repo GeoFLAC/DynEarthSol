@@ -3124,6 +3124,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.support_arr;
         delete var.support_idx;
         create_support(var);
+        delete var.neighbor;
+        create_neighbor(var);
 
         std::cout << "    Remapping markers.\n";
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
