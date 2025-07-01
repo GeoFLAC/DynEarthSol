@@ -2643,42 +2643,99 @@ void create_neighbor(Variables& var)
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    var.neighbor = new conn_t(var.nelem);
+    var.neighbor = new conn_t(var.nelem, -1);
+    var.contact = new int_pair_vec(var.nelem*2);
+    int ncontact = 0;
 
     // create the inverse mapping of connectivity
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET,ncontact) collapse(2)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
-        int nneigh = 0;
-        const int *conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            const int_vec sup = (*var.support)[conn[i]];
-            for (int j=0; j<sup.size(); ++j) {
-                if (sup[j] != e) {
-                    // check if this element is already in the neighbor list
-                    bool found = false;
-                    for (int k=0; k<nneigh; ++k) {
-                        if ((*var.neighbor)[e][k] == sup[j]) {
+            if ((*var.neighbor)[e][i] != -1) continue; // already set
+            int n[NDIMS], n2[NDIMS];
+            for (int j=0; j<NDIMS; ++j)
+                n[j] = (*var.connectivity)[e][NODE_OF_FACET[i][j]];
+
+            // sort the nodes in n
+            for (int j=0; j<NDIMS-1; ++j) {
+                for (int k=j+1; k<NDIMS; ++k) {
+                    if (n[j] > n[k])
+                        std::swap(n[j], n[k]);
+                }
+            }
+
+            const int_vec sup = (*var.support)[n[0]];
+            bool found = false;
+            for (int j=0; j<sup.size() && !found; ++j) {
+                int neigh = sup[j];
+                if (neigh > e) {
+                    const int *conn2 = (*var.connectivity)[neigh];
+                    for (int k=0; k<NODES_PER_ELEM; ++k) {
+                        bool match = true;
+                        for (int j=0; j<NDIMS; ++j)
+                            n2[j] = conn2[NODE_OF_FACET[k][j]];
+
+                        // sort the nodes in n2
+                        for (int l=0; l<NDIMS-1; ++l) {
+                            for (int m=l+1; m<NDIMS; ++m) {
+                                if (n2[l] > n2[m])
+                                    std::swap(n2[l], n2[m]);
+                            }
+                        }
+                        for (int l=0; l<NDIMS; ++l) {
+                            if (n[l] != n2[l]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            // found a neighbor element
+                            int pos;
+#ifndef ACC
+                            #pragma omp atomic capture
+#endif
+                            #pragma acc atomic capture
+                            pos = ncontact++;
+
+                            (*var.contact)[pos*2] = {e, i};
+                            (*var.contact)[pos*2+1] = {neigh, k};
+
+                            (*var.neighbor)[e][i] = pos*2+1;
+                            (*var.neighbor)[neigh][k] = pos*2;
                             found = true;
                             break;
                         }
                     }
-                    if (!found) {
-                        (*var.neighbor)[e][nneigh] = sup[j];
-                        nneigh++;
-                    }
                 }
-                if (nneigh >= NODES_PER_ELEM) {
-                    break;
-                }
-            }
-            if (nneigh >= NODES_PER_ELEM) {
-                break;
             }
         }
     }
+
+    #pragma acc wait
+
+    var.contact->resize(ncontact);
+    var.ncontact = ncontact;
+
+    printf("Total number of contacts: %d\n", ncontact);
+    printf("Total number of neighbors: %d\n", var.nelem*2);
+    // //print all neighbors
+    // for (int e=0; e<var.nelem; ++e) {
+    //     std::cout << "Element " << e << ": ";
+    //     for (int i=0; i<NODES_PER_ELEM; ++i) {
+    //         if ((*var.neighbor)[e][i] != -1) {
+    //             int n = (*var.neighbor)[e][i];
+    //             int neigh_e = (*var.contact)[n].first;
+    //             int nself = n + (n%2)*-1 + (n+1)%2;
+    //             int facet = (*var.contact)[nself].second;
+
+    //             printf("(%d,%d) ", neigh_e, (*var.contact)[nself].first);
+    //         }
+    //     }
+    //     std::cout << '\n';
+    // }
 
 #ifdef USE_NPROF
     nvtxRangePop();

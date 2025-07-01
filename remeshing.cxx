@@ -3125,6 +3125,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.support_idx;
         create_support(var);
         delete var.neighbor;
+        delete var.contact;
         create_neighbor(var);
 
         std::cout << "    Remapping markers.\n";
