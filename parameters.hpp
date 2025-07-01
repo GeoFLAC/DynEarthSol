@@ -542,6 +542,7 @@ struct Variables {
     int_vec *support_idx;
     conn_t *neighbor; // neighboring elements for each element
     int_pair_vec *contact; // contact elements for each element
+    double_vec *ctmp; // temporary array for contact elements
 
     double_vec *volume, *volume_old, *volume_n;
     double_vec *mass, *tmass;

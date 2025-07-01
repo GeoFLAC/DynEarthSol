@@ -2644,12 +2644,13 @@ void create_neighbor(Variables& var)
 #endif
 
     var.neighbor = new conn_t(var.nelem, -1);
-    var.contact = new int_pair_vec(var.nelem*2);
+    var.contact = new int_pair_vec(var.nelem*4);
     int ncontact = 0;
 
     // create the inverse mapping of connectivity
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET,ncontact) collapse(2)
+    #pragma omp parallel for default(none) \
+        shared(var, NODE_OF_FACET, ncontact) collapse(2)
 #endif
     #pragma acc parallel loop collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
@@ -2716,8 +2717,9 @@ void create_neighbor(Variables& var)
 
     #pragma acc wait
 
-    var.contact->resize(ncontact);
+    var.contact->resize(ncontact*2);
     var.ncontact = ncontact;
+    var.ctmp = new double_vec(ncontact);
 
     printf("Total number of contacts: %d\n", ncontact);
     printf("Total number of neighbors: %d\n", var.nelem*2);
