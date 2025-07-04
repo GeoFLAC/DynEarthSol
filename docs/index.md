@@ -9,6 +9,9 @@ header:
 
 {% include feature_row feature_row=site.data.features.feature_row %}
 
+![NSF Logo](assets/images/nsf-logo.png)
+Supported by the National Science Foundation Award 2104002.
+
 # Get Started
 
 For full instruction on how to install DynEarthSol, please visit the [online user manual](https://geoflac.github.io/des3d/docs/usage).
