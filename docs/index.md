@@ -8,9 +8,7 @@ header:
 ---
 
 {% include feature_row feature_row=site.data.features.feature_row %}
-
-![NSF Logo](assets/images/nsf-logo.png)
-Supported by the National Science Foundation Award 2104002.
+<img src="assets/images/nsf-logo.png" alt="NSF Logo" width="32"/>Supported by the National Science Foundation Award 2104002.
 
 # Get Started
 
