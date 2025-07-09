@@ -265,7 +265,7 @@ static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
     return 1;
 }
 
-static void check_nan(const Variables& var) {
+static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
@@ -335,7 +335,11 @@ static void check_nan(const Variables& var) {
     }
 
     if (is_nan > 0) {
-        std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
+        if (func_name) {
+            std::cerr << "Error: " << is_nan << " NaN values found in the variables in " << func_name << "." << std::endl;
+        } else {
+            std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
+        }
         std::exit(1);
     }
 #ifdef USE_NPROF
