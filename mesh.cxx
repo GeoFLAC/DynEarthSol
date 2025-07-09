@@ -2721,8 +2721,8 @@ void create_neighbor(Variables& var)
     var.ncontact = ncontact;
     var.ctmp = new double_vec(ncontact);
 
-    printf("Total number of contacts: %d\n", ncontact);
-    printf("Total number of neighbors: %d\n", var.nelem*2);
+    // printf("Total number of contacts: %d\n", ncontact);
+    // printf("Total number of neighbors: %d\n", var.nelem*2);
     // //print all neighbors
     // for (int e=0; e<var.nelem; ++e) {
     //     std::cout << "Element " << e << ": ";
