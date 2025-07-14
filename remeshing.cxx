@@ -3161,6 +3161,15 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
+    // convert value field back to portional field for nn interpolation
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e) {
+        (*var.melt_age)[e] /= (*var.eff_fmelt)[e];
+    }
+
     // TODO: using edvoldt and volume to get volume_old
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)

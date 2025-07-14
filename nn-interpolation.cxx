@@ -292,6 +292,15 @@ namespace {
         printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, empty_vec, changed);
 
+        // convert portional field to value field
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var,old_nelem)
+#endif
+        #pragma acc parallel loop async
+        for (int e=0; e<old_nelem; e++) {
+            (*var.melt_age)[e] *= (*var.eff_fmelt)[e];
+        }
+
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
