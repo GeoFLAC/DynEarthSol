@@ -1,9 +1,6 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"

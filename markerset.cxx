@@ -6,9 +6,6 @@
 #include <set>
 #include <numeric>
 #include <random>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"

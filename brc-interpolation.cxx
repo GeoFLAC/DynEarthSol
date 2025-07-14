@@ -1,6 +1,3 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include "algorithm"
 #include "iostream"
 

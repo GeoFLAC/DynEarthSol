@@ -1,8 +1,5 @@
 #ifndef DYNEARTHSOL3D_UTILS_HPP
 #define DYNEARTHSOL3D_UTILS_HPP
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "parameters.hpp"
 #include <cmath>

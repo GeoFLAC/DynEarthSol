@@ -3,9 +3,6 @@
 #include <cstdio>
 #include <iterator>  // For std::distance
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"

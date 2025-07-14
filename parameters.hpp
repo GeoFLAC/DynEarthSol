@@ -8,6 +8,10 @@
 #include <unordered_map>
 
 #include <nanoflann.hpp>
+#ifdef USE_NPROF
+#include <nvToolsExt.h> 
+// #include <nvtx3/nvToolsExt.h> 
+#endif
 
 #include "constants.hpp"
 #include "array2d.hpp"

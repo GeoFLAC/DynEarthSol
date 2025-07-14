@@ -1,7 +1,5 @@
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
+
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "bc.hpp"

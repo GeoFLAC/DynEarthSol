@@ -5,9 +5,6 @@
 #include <numeric>
 #include <limits>
 #include <unordered_map>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"

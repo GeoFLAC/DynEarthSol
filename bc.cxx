@@ -1,6 +1,3 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include <iostream>
 #include <unordered_map>
 #include <iomanip>

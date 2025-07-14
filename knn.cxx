@@ -1,7 +1,4 @@
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "parameters.hpp"
 #include "knn.hpp"

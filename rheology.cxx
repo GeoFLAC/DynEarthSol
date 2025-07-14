@@ -1,8 +1,5 @@
 #include <cmath>
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "3x3-C/dsyevh3.h"
 

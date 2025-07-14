@@ -1,7 +1,3 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
-
 #include "barycentric-fn.hpp"
 
 

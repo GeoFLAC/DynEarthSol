@@ -1,6 +1,3 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include <cmath>
 #include <limits>
 #include <iostream>
