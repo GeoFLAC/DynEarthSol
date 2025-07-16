@@ -3164,7 +3164,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
-        (*var.melt_age)[e] /= (*var.eff_fmelt)[e];
+        (*var.surfinfo.edvacc_surf)[e] *= (*var.volume)[e];
     }
 
     // TODO: using edvoldt and volume to get volume_old

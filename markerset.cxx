@@ -316,8 +316,9 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         } else {
             nmarkers = (*var.markers_in_elem)[e].size();
         }
+        // if (mattype == 6) nmarkers *= 2;
 
-        if ((nmarkers * edvacc[e]) < 1.) continue;
+        if ((nmarkers * edvacc[e]) < (*var.volume)[e]) continue;
 
         double eta[NDIMS], mcoord[NDIMS] = {}, sum = 0.;
 
@@ -341,7 +342,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         base = (base > 0.0) ? base : -base;
 
         // height of marker
-        double edh = (*var.volume)[e] / nmarkers / base;
+        double dv_apply = (*var.volume)[e] / nmarkers;
+        double edh = dv_apply / base;
         double dhr = 0.8;
         for (int j=0; j<NDIMS; j++)
             mcoord[NDIMS-1] += ( (*var.coord)[ n[j] ][NDIMS-1] - (edh * dhr) ) * eta[j];
@@ -357,7 +359,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         eta1[NODES_PER_ELEM-1] = 1;
         bary.transform(mcoord,0,eta0);
 
-        edvacc[e] -= 1. / (double)nmarkers;
+        edvacc[e] -= dv_apply;
 
         // the surface slope for marker
 #ifdef THREED

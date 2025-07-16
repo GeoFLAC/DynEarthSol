@@ -295,7 +295,8 @@ namespace {
 #endif
         #pragma acc parallel loop async
         for (int e=0; e<old_nelem; e++) {
-            (*var.melt_age)[e] *= (*var.eff_fmelt)[e];
+            double inv_volume = 1.0 / (*var.volume)[e];
+            (*var.surfinfo.edvacc_surf)[e] *= inv_volume;
         }
 
 #ifdef USE_NPROF
