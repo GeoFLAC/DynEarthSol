@@ -2070,7 +2070,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-            (*var.surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
+            double dv_sedi = dh_e * base / NDIMS;
+            (*var.surfinfo.edvacc_surf)[e] += dv_sedi / ((*var.volume)[e] + dv_sedi);
         }
     }
 
