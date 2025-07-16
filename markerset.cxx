@@ -1013,7 +1013,7 @@ namespace {
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
-            old_connectivity, last_marker)
+            old_connectivity, last_marker) firstprivate(k)
 #endif
         #pragma acc parallel loop async
         for (int i = 0; i < last_marker; i++) {
@@ -1038,7 +1038,7 @@ namespace {
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
-            last_marker, queries, neighbors)
+            last_marker, queries, neighbors) firstprivate(k)
 #endif
         #pragma acc parallel loop
         for (int i = 0; i < last_marker; i++) {
