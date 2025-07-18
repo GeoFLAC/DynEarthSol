@@ -313,7 +313,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
             int e = (*var.surfinfo.top_facet_elems)[i];
             if (edvacc[e] > max_edvacc - 1.) {
                 double ratio = (param.markers.markers_per_element * edvacc[e]) / (*var.volume)[e];
-                printf("elem[%6d] = %.1e, ratio = %5.1f% ", e, edvacc[e], ratio*100);
+                printf("elem[%6d] = %.1e, ratio = %5.1f%% ", e, edvacc[e], ratio*100.);
             }
         }
         printf("\n");
