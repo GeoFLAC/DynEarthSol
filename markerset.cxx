@@ -295,10 +295,11 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    double_vec &src_locs = *var.surfinfo.src_locs;
+    double marker_dh_applied_ratio = 0.8;
+    // double_vec &src_locs = *var.surfinfo.src_locs;
 
     #pragma omp parallel for default(none) shared(param, var, \
-        edvacc, elemmarkers, markers_in_elem, src_locs) firstprivate(mattype)
+        edvacc, elemmarkers, markers_in_elem,marker_dh_applied_ratio) firstprivate(mattype)
     for (int i=0; i<var.surfinfo.etop; i++) {
         int e = (*var.surfinfo.top_facet_elems)[i];
         (*var.etmp_int)[i] = -1;
@@ -316,37 +317,39 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         } else {
             nmarkers = (*var.markers_in_elem)[e].size();
         }
-        // if (mattype == 6) nmarkers *= 2;
 
         if ((nmarkers * edvacc[e]) < (*var.volume)[e]) continue;
 
-        double eta[NDIMS], mcoord[NDIMS] = {}, sum = 0.;
+        double eta[NDIMS], mcoord[NDIMS] = {0.};
 
         // random horizontal coordinate (2D:x or 3D:x-y) 
         random_eta_seed_surface(eta, e+var.steps);
 
-        int_vec n(NDIMS);
-        for (int j=0; j<NDIMS; j++)
-            n[j] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[i][j]];
+        const double *coord_surf[NDIMS];
+        for (int j=0; j<NDIMS; j++) {
+            int n = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[i][j]];
+            coord_surf[j] = (*var.coord)[n];
+        }
 
-        for (size_t j=0; j<NDIMS-1; j++)
+        for (int j=0; j<NDIMS; j++) {
             for (int k=0; k<NDIMS; k++)
-                mcoord[j] += (*var.coord)[ n[k] ][j] * eta[k];
+                mcoord[j] += coord_surf[k][j] * eta[k];
+        }
 
 #ifdef THREED
-        double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
-            - ((*var.coord)[n[2]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[1]][1] - (*var.coord)[n[0]][1]))/2.0;
+        double base = ((coord_surf[1][0] - coord_surf[0][0])*(coord_surf[2][1] - coord_surf[0][1]) \
+            - (coord_surf[2][0] - coord_surf[0][0])*(coord_surf[1][1] - coord_surf[0][1]))/2.0;
 #else
-        double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
+        double base = coord_surf[0][0] - coord_surf[1][0];
 #endif
         base = (base > 0.0) ? base : -base;
 
         // height of marker
         double dv_apply = (*var.volume)[e] / nmarkers;
+        edvacc[e] -= dv_apply;
+
         double edh = dv_apply / base;
-        double dhr = 0.8;
-        for (int j=0; j<NDIMS; j++)
-            mcoord[NDIMS-1] += ( (*var.coord)[ n[j] ][NDIMS-1] - (edh * dhr) ) * eta[j];
+        mcoord[NDIMS-1] -= edh * marker_dh_applied_ratio;
 
         const double *coord1[NODES_PER_ELEM];
 
@@ -355,18 +358,44 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
         Barycentric_transformation bary(coord1, (*var.volume)[e]);
 
-        double eta0[NDIMS], eta1[NODES_PER_ELEM];
-        eta1[NODES_PER_ELEM-1] = 1;
-        bary.transform(mcoord,0,eta0);
+        double eta0[NDIMS];
+        bary.transform(mcoord, 0, eta0);
 
-        edvacc[e] -= dv_apply;
+        int elem_dest = e;
+
+        if (!bary.is_inside(eta0)) {
+            int inc = 0;
+            printf("  A generated marker (mat=%d) in element %d is trying to remap in element ", mattype, e);
+            remap_marker(var, mcoord, e, elem_dest, eta0, inc);
+            if (inc) {
+                printf("... Success!\n");
+            } else {
+                printf("... Surface marker generated fail!\n Coordinate: ");
+                for (int j=0; j<NDIMS; j++) printf(" %f", mcoord[j]);
+                printf("\neta: ");
+                for (int j=0; j<NDIMS; j++) printf(" %d %f", j, eta0[j]); 
+                printf("\n");
+
+                std::exit(168);
+            }
+        }
+
+        double eta1[NODES_PER_ELEM];
+
+        eta1[NDIMS] = 1.;
+        for (int j=0; j<NDIMS; j++) {
+            eta1[j] = eta0[j];
+            eta1[NDIMS] -= eta0[j];
+        }
+        #pragma omp atomic update
+        ++elemmarkers[elem_dest][mattype];
 
         // the surface slope for marker
 #ifdef THREED
-        double slope, aspect_deg;
-        const double *p0 = (*var.coord)[n[0]];
-        const double *p1 = (*var.coord)[n[1]];
-        const double *p2 = (*var.coord)[n[2]];
+        double slope; //, aspect_deg;
+        const double *p0 = coord_surf[0];
+        const double *p1 = coord_surf[1];
+        const double *p2 = coord_surf[2];
         double v1x = p1[0] - p0[0], v1y = p1[1] - p0[1], v1z = p1[2] - p0[2];
         double v2x = p2[0] - p0[0], v2y = p2[1] - p0[1], v2z = p2[2] - p0[2];
 
@@ -378,63 +407,40 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         double norm = std::sqrt(nx * nx + ny * ny + nz * nz);
         if (norm == 0.0) {
             slope = 0.0;
-            aspect_deg = -1.0;
+            // aspect_deg = -1.0;
         } else {
             // slope: normal vector and z-axis angle
             slope = std::acos(nz / norm);
             // asmith: direction of maximum slope (relative to north, clockwise)
-            aspect_deg = std::atan2(ny, nx) * 180.0 / M_PI;
-            aspect_deg = 90.0 - aspect_deg;
-            if (aspect_deg < 0) aspect_deg += 360.0;
+            // aspect_deg = std::atan2(ny, nx) * 180.0 / M_PI;
+            // aspect_deg = 90.0 - aspect_deg;
+            // if (aspect_deg < 0) aspect_deg += 360.0;
         }
 #else
-        double slope = ( (*var.coord)[n[0]][NDIMS-1] - (*var.coord)[n[1]][NDIMS-1] ) / ( (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0] );
+        double slope = ( coord_surf[0][NDIMS-1] - coord_surf[1][NDIMS-1] ) / ( coord_surf[0][0] - coord_surf[1][0] );
 #endif
         double water_depth = var.surfinfo.base_level - mcoord[NDIMS-1];
 
-        double distance = 0.;
-        if (mcoord[0] >= src_locs[0] && mcoord[0] <= src_locs[1]) {
-            double dx0 = mcoord[0] - src_locs[0];
-            double dx1 = src_locs[1] - mcoord[0];
-            if (slope < 0)
-                distance = dx0;
-            else if (slope > 0)
-                distance = dx1;
-            else
-                distance =  std::min(dx0, dx1);
-        }
+        // double distance = 0.;
+        // if (mcoord[0] >= src_locs[0] && mcoord[0] <= src_locs[1]) {
+        //     double dx0 = mcoord[0] - src_locs[0];
+        //     double dx1 = src_locs[1] - mcoord[0];
+        //     if (slope < 0)
+        //         distance = dx0;
+        //     else if (slope > 0)
+        //         distance = dx1;
+        //     else
+        //         distance =  std::min(dx0, dx1);
+        // }
 
-        int elem = e, inc = 0;
+        double *marker_data = (*var.tmp_result)[i];
 
-        if (bary.is_inside(eta0)) {
-            inc = 1;
-        } else {
-            printf("  A generated marker (mat=%d) in element %d is trying to remap in element ", mattype, e);
-            remap_marker(var,mcoord,e,elem,eta0,inc);
-            if (inc) printf("... Success!\n");
-        }
-
-        if (inc) {
-            for (int j=0; j<NDIMS; j++) {
-                eta1[j] = eta0[j];
-                eta1[NDIMS] -= eta0[j];
-            }
-            ++elemmarkers[elem][mattype];
-            double *marker_data = (*var.tmp_result)[i];
-
-            (*var.etmp_int)[i] = elem;
-            for (int j=0; j<NODES_PER_ELEM; j++)
-                marker_data[j] = eta1[j];
-            marker_data[NODES_PER_ELEM] = water_depth;
-            marker_data[NODES_PER_ELEM + 1] = distance;
-            marker_data[NODES_PER_ELEM + 2] = slope;
-        } else {
-            printf("... Surface marker generated fail!\n Coordinate: ");
-            for (int j=0; j<NDIMS; j++) printf(" %f", mcoord[j]);
-            printf("\neta: ");
-            for (int j=0; j<NDIMS; j++) printf(" %d %f", j, eta0[j]); 
-            printf("\n");
-        }
+        (*var.etmp_int)[i] = elem_dest;
+        for (int j=0; j<NODES_PER_ELEM; j++)
+            marker_data[j] = eta1[j];
+        marker_data[NODES_PER_ELEM] = water_depth;
+        marker_data[NODES_PER_ELEM + 1] = 0.; // distance;
+        marker_data[NODES_PER_ELEM + 2] = slope;
     }
 
     AMD_vec marker_data_all;
