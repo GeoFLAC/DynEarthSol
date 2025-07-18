@@ -2074,6 +2074,21 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         }
     }
 
+    if (var.steps%1000 == 0) {
+        double sum = 0.;
+#ifndef ACC
+        #pragma omp parallel default(none) shared(var) reduction(+:sum)
+#endif
+        #pragma acc parallel loop async reduction(+:sum)
+        for (int i=0; i<var.surfinfo.etop; i++) {
+            int e = (*var.surfinfo.top_facet_elems)[i];
+            sum += (*var.surfinfo.edvacc_surf)[e];
+        }
+        #pragma acc wait
+        printf("Sum of accu. surface deposition volume: %.1e\n", sum);
+    }
+
+    // find max surface velocity
     double maxdh = 0.;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
