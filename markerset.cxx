@@ -812,7 +812,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
     }
     for (int i=0; i<param.mat.nmat; ++i) {
         if (ndelete[i] > 0) {
-            printf("mat #%d: %d", i, ndelete[i]);
+            printf("mat #%d: %d; ", i, ndelete[i]);
         }
     }
     printf(")\n");
