@@ -46,7 +46,7 @@ public:
     void append_markers(AMD_vec &md);
     void remove_marker(int i);
     void remove_marker_data(int is, int ie);
-    void remove_markers(int_vec& markers, int_vec2D& markers_in_elem);
+    void remove_markers(const Param& param, const Variables& var, int_vec& markers, int_vec2D& markers_in_elem);
     void resize(const int);
     template <class T>
     void write_chkpt_file(T &bin) const;

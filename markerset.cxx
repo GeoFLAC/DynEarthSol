@@ -723,7 +723,7 @@ int MarkerSet::layered_initial_mattype( const Param& param, const Variables &var
 }
 
 
-int MarkerSet::custom_initial_mattype( const Param& param, const Variables &var,
+int MarkerSet::custom_initial_mattype(const Param& param, const Variables &var,
                                        int elem, const double eta[NODES_PER_ELEM],
                                        const double *x )
 {
@@ -733,7 +733,7 @@ int MarkerSet::custom_initial_mattype( const Param& param, const Variables &var,
     return mt;
 }
 
-void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
+void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec& markers, int_vec2D& markers_in_elem)
 {
     if (markers.empty()) return;
 
@@ -780,7 +780,21 @@ void MarkerSet::remove_markers(int_vec& markers, int_vec2D& markers_in_elem)
         }
     }
 
-    printf("    Removed %d markers from markerset.\n", n);
+    printf("    Removed %d markers from markerset (", n);
+
+    int *ndelete = var.etmp_int->data();
+    for (int i=0; i<param.mat.nmat; ++i) {
+        ndelete[i]  = 0;
+    }
+    for (int i=0; i<markers.size();++i) {
+        ndelete[(*_mattype)[markers[i]]]++;
+    }
+    for (int i=0; i<param.mat.nmat; ++i) {
+        if (ndelete[i] > 0) {
+            printf("mat %d: %d", i, ndelete[i]);
+        }
+    }
+    printf(")\n");
 
     #pragma acc wait
 
@@ -1100,7 +1114,7 @@ namespace {
             }
         }
 
-        ms.remove_markers(removed_markers, markers_in_elem);
+        ms.remove_markers(param, var, removed_markers, markers_in_elem);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1487,8 +1501,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         }
 
         // delete recorded marker
-        if (!delete_marker.empty())
-            remove_markers(delete_marker, markers_in_elem);
+        remove_markers(param, var, delete_marker, markers_in_elem);
 
         #pragma acc wait
 
