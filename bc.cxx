@@ -2085,7 +2085,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
             sum += (*var.surfinfo.edvacc_surf)[e];
         }
         #pragma acc wait
-        printf("Sum of accu. surface deposition volume: %.1e\n", sum);
+        printf("Sum of accu. surface deposition volume: %.2e\n", sum);
     }
 
     // find max surface velocity
