@@ -78,7 +78,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         dt = (var.time - time0) / average_interval;
         inv_dt = 1.0 / (var.time - time0);
     }
-    write_info(var, dt);
 
     char filename[256];
 #ifdef NETCDF
@@ -194,6 +193,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
 #ifndef NETCDF
     bin.close();
 #endif
+
+    write_info(var, dt);
+
     int64_t duration_ns = get_nanoseconds() - start_time;
 
     if(dt / YEAR2SEC > 0.001)
