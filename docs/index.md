@@ -11,8 +11,8 @@ header:
 <img src="assets/images/nsf-logo.png" alt="NSF Logo" width="32"/>Supported by the National Science Foundation Award 2104002.
 
 <div class="video-grid">
-  <a class="video-thumb" href="https://youtu.be/jwDE1u7aFjY" data-video-id="jwDE1u7aFjY" target="_blank" rel="noopener">
-    <img src="https://img.youtube.com/vi/jwDE1u7aFjY/hqdefault.jpg" alt="Video jwDE1u7aFjY thumbnail">
+  <a class="video-thumb" href="https://youtu.be/0AuTI7MZ05M" data-video-id="0AuTI7MZ05M" target="_blank" rel="noopener">
+    <img src="https://img.youtube.com/vi/0AuTI7MZ05M/hqdefault.jpg" alt="Video 0AuTI7MZ05M thumbnail">
   </a>
   <a class="video-thumb" href="https://youtu.be/vfeiY5WuV9c" data-video-id="vfeiY5WuV9c" target="_blank" rel="noopener">
     <img src="https://img.youtube.com/vi/vfeiY5WuV9c/hqdefault.jpg" alt="Video vfeiY5WuV9c thumbnail">
