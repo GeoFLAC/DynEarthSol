@@ -152,16 +152,14 @@ void update_temperature(const Param &param, const Variables &var,
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    // Magma freezing
-#ifndef ACC
+// #ifndef ACC
     #pragma omp parallel default(none) shared(param,var,temperature,tmp_result)
-#endif
+// #endif
     {
-#ifndef ACC
+// #ifndef ACC
         #pragma omp for
-#else
-        #pragma acc parallel loop
-#endif
+// #endif
+        // #pragma acc parallel loop
         for (int e=0;e<var.nelem;e++) {
             // diffusion matrix
 
@@ -190,11 +188,10 @@ void update_temperature(const Param &param, const Variables &var,
             }
         }
 
-#ifndef ACC
+// #ifndef ACC
         #pragma omp for
-#else
-        #pragma acc parallel loop async
-#endif
+// #endif
+        // #pragma acc parallel loop
         for (int n=0;n<var.nnode;n++) {
             if ((*var.bcflag)[n] & BOUNDZ1)
                 temperature[n] = param.bc.surface_temperature;
