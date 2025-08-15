@@ -2336,7 +2336,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
         }
     }
 
-    std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
 }
 
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo)
@@ -2388,8 +2387,8 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.elem_and_nodes = new segment_t(etop);
 
     surfinfo.dh_oc = new double_vec(ntop,0.);
-    surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    surfinfo.edhacc_oc = new double_vec(var.nelem);
+    // surfinfo.dhacc_oc = new double_vec(var.nnode,0);
+    // surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 

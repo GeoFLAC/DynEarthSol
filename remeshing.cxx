@@ -3054,6 +3054,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     std::cout << "  Remeshing starts...\n";
 
+    { // convert portional field to average field
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var)
+#endif
+        #pragma acc parallel loop async
+        for (int e=0; e<var.nelem; e++) {
+            double inv_volume = 1.0 / (*var.volume)[e];
+            (*var.surfinfo.edvacc_surf)[e] *= inv_volume;
+        }
+    }
+
     {
         // creating a "copy" of mesh pointer so that they are not deleted
         array_t old_coord;

@@ -166,8 +166,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
   hydro_diff_max(1e-1),
-  rho_magma(p.mat.rho_magma),
-  has_magmatism(p.control.has_magmatism),
   coord(*var.coord),
   connectivity(*var.connectivity),
   temperature(*var.temperature),
@@ -177,9 +175,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
   dppressure(*var.dppressure),
-  eff_fmelt(*var.eff_fmelt),
-  magma_fraction(*var.magma_fraction),
-  hydro_diff(*var.hydro_diff),
   log_table(*var.log_table),
   tan_table(*var.tan_table),
   sin_table(*var.sin_table)
@@ -268,12 +263,6 @@ double MatProps::visc(int e) const
     // viscosity law from Chen and Morgan, JGR, 1990
     double result = 0;
     int n = 0;
-    
-        if (has_magmatism) {
-        double fmagma = magma_fraction[e];
-        double T_lava = 1473.; // 1200.+273.
-        T = (1. - fmagma) * T + fmagma * T_lava;
-    }
 
     for (int m=0; m<nmat; m++) {
         double pow = 1 / visc_exponent[m] - 1;
@@ -452,138 +441,10 @@ double MatProps::rho(int e) const
         n += elemmarkers[e][m];
     }
     double rho = result / n;
-    if (has_magmatism) {
-        double tt_melt = std::min(1., magma_fraction[e] + eff_fmelt[e]);
-        return (1 - tt_melt) * rho + tt_melt * rho_magma;
-    } else {
-        return rho;
-    }
+    return rho;
 }
 
 
-void  MatProps::update_hydro_diff(const Param &param, const Variables &var,
-                        double_vec &var_hydro_diff, double_vec &tdot, elem_cache &tmp_result) const
-{
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
-#endif
-    double separate_rate = 10;
-    double half_life = 1e6 * YEAR2SEC;
-    double decay_rate = std::pow(0.5, var.dt/half_life);
-    double_vec &etmp = *var.etmp;
-
-    double diff_multi,depth_max,pls_min,t_max,xh1t,yh1t;
-    pls_min = 1.;
-    diff_multi = 6.;
-    depth_max = -20.e3;
-    t_max = 600. + 273.;
-    xh1t = 30.e3;
-    yh1t = 0.e3;
-
-#ifndef ACC
-    #pragma omp parallel default(none) shared(param,var,tdot,var_hydro_diff, \
-        tmp_result,separate_rate,decay_rate,coord,connectivity,temperature, \
-        pls_min,diff_multi,depth_max,t_max,xh1t,yh1t,etmp)
-#endif
-    {
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop async
-        for (int e=0;e<var.nelem;e++) {
-            // diffusion matrix
-            const int *conn = (*var.connectivity)[e];
-            double *tr = tmp_result[e];
-            double kv = separate_rate * (*var.volume)[e];
-            const double *shpdx = (*var.shpdx)[e];
-#ifdef THREED
-            const double *shpdy = (*var.shpdy)[e];
-#endif
-            const double *shpdz = (*var.shpdz)[e];
-            for (int i=0; i<NODES_PER_ELEM; ++i) {
-                double diffusion = 0.;
-                for (int j=0; j<NODES_PER_ELEM; ++j) {
-#ifdef THREED
-                    diffusion += (shpdx[i] * shpdx[j] + \
-                                shpdy[i] * shpdy[j] + \
-                                shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
-#else
-                    diffusion += (shpdx[i] * shpdx[j] + \
-                                shpdz[i] * shpdz[j]) * var_hydro_diff[conn[j]];
-#endif
-                }
-                tr[i] = diffusion * kv;
-            }
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop async
-        for (int n=0;n<var.nnode;n++) {
-            tdot[n]=0;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const int *conn = (*var.connectivity)[*e];
-                const double *tr = tmp_result[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        tdot[n] += tr[i];
-                        break;
-                    }
-                }
-            }
-            var_hydro_diff[n] -= tdot[n] * var.dt / (*var.tmass)[n];
-            var_hydro_diff[n] *= decay_rate;
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop async
-        for (int e=0;e<var.nelem;e++) {
-            if ((*var.plstrain)[e] <= pls_min) continue;
-
-            const int *conn = connectivity[e];
-            double T = 0;
-            for (int i=0; i<NODES_PER_ELEM; ++i)
-                T += temperature[conn[i]];
-            T /= NODES_PER_ELEM;
-            if (T > t_max) continue;
-
-            double pe[NDIMS];
-            for (int i=0; i<NDIMS; ++i) {
-                for (int j=0; j<NODES_PER_ELEM; ++j)
-                    pe[i] += coord[conn[j]][i];
-                pe[i] /= NODES_PER_ELEM;
-            }
-            if (pe[0] > xh1t && pe[1] > yh1t && 
-                pe[0] < (param.mesh.xlength - xh1t) && pe[1] < (param.mesh.ylength - yh1t) &&
-                pe[2] >= depth_max) {
-                etmp[i] = diff_multi;
-            } else {
-                etmp[i] = 0;
-            }
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop async
-        for (int n=0;n<var.nnode;n++) {
-            int_vec &sup = (*var.supper)[n]
-            for (int i=0; i<sup.size();i++) {
-                if (etmp[sup[i]]>0.) {
-                    var_hydro_diff[n] = etmp[sup[i]]
-                    updated = true;
-                    break;
-                }
-            }
-        }
-    }
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
-}
 
 double MatProps::cp(int e) const
 {
@@ -595,16 +456,8 @@ double MatProps::k(int e) const
 {
     double ek = arithmetic_mean(therm_cond, elemmarkers[e]);
 
-    if (has_magmatism) {
-        const int* conn = connectivity[e];
-        double ehydro = 0;
-        for (int i = 0; i < NODES_PER_ELEM; ++i)
-            ehydro += hydro_diff[conn[i]];
-        ehydro /= NODES_PER_ELEM;
-        return ek * (1. + ehydro);
-    } else {
-        return ek;
-    }
+    return ek;
+
 }
 
 // hydraulic parameters

@@ -60,8 +60,6 @@ public:
     #pragma acc routine seq
     double c_v(int e) const;
 
-    void update_hydro_diff(const Param &param, const Variables &var, double_vec &hydro_diff,
-                       double_vec &tdot, elem_cache &tmp_result) const;
     #pragma acc routine seq
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
@@ -77,8 +75,6 @@ public:
     const double tension_max;
     const double therm_diff_max;
     double hydro_diff_max;
-    const bool has_magmatism;
-    const double rho_magma;
 
     const static int rh_elastic = 1 << 0; // Decimal value 1
     const static int rh_viscous = 1 << 1; // Decimal value 2
@@ -101,9 +97,6 @@ private:
     const tensor_t &stress;
     const tensor_t &strain_rate;
     const int_vec2D &elemmarkers;
-    const double_vec &eff_fmelt;
-    const double_vec &magma_fraction;
-    const double_vec &hydro_diff;
     const double_vec &log_table;
     const double_vec &tan_table;
     const double_vec &sin_table;

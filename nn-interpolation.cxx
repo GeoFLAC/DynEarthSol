@@ -289,16 +289,6 @@ namespace {
         printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, empty_vec, changed);
 
-        // convert portional field to value field
-#ifndef ACC
-        #pragma omp parallel for default(none) shared(var,old_nelem)
-#endif
-        #pragma acc parallel loop async
-        for (int e=0; e<old_nelem; e++) {
-            double inv_volume = 1.0 / (*var.volume)[e];
-            (*var.surfinfo.edvacc_surf)[e] *= inv_volume;
-        }
-
 #ifdef USE_NPROF
         nvtxRangePop();
 #endif
@@ -483,9 +473,6 @@ namespace {
 
         double_vec *new_delta_pls = new double_vec(e);
         inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *new_delta_pls);
-
-        double_vec *new_eff_pls = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.eff_pls, *new_eff_pls);
 
         tensor_t *new_strain = new tensor_t(e);
         inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain);
