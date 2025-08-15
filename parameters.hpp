@@ -301,6 +301,11 @@ struct IC {
     double radiogenic_folding_depth;
     double radiogenic_heating_of_crust;
     double lithospheric_thickness;
+    double rh_dome_center_x;
+    double rh_dome_center_y;
+    double surface_heat_flux;
+    double rh_dome_amplitude;
+    double rh_dome_width;
     int nhlayer;
     double_vec radiogenic_heat_boundry;
     int_vec radiogenic_heat_mat_in_layer;
@@ -321,6 +326,8 @@ struct Mat {
     int mattype_crust;
     int mattype_sed;
     int mattype_oceanic_crust;
+    int mattype_mor_extrusion;
+    int mattype_asthenosphere;
     double convert_rate_oceanic_crust;
 
     bool is_plane_strain;
@@ -452,6 +459,7 @@ struct SurfaceInfo {
     double_vec *drainage;
 
     double_vec *dhacc;
+    // variable allocate by remesh
     double_vec *edvacc_surf;
     int_vec2D *node_and_elems;
     segment_t *elem_and_nodes;

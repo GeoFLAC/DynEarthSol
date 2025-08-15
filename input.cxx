@@ -520,6 +520,7 @@ static void declare_parameters(po::options_description &cfg,
          "0: uniform half-space cooling.\n"
          "1: continental thermal gradient.\n"
          "2: equilibrium temperature for crustal radiogenic heating.\n"
+         "3: continental thermal gradient with adiabatic mantle.\n"
          "90: temperature read from an external grid\n")
 
         // for temperature_option = 0
@@ -545,6 +546,17 @@ static void declare_parameters(po::options_description &cfg,
          "Radiogenic crustal thickness (in meters), used for the temperature profile on the plate.\n")
         ("ic.lithospheric_thickness", po::value<double>(&p.ic.lithospheric_thickness)->default_value(100.e3),
          "Lithospheric thickness (in meters), used for the temperature profile on the plate.\n")
+         // for temperature_option = 3
+        ("ic.rh_dome_center_x", po::value<double>(&p.ic.rh_dome_center_x)->default_value(0.5),
+         "x of center of geothermal dome, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_center_y", po::value<double>(&p.ic.rh_dome_center_y)->default_value(0.5),
+         "y of center of geothermal dome, used for the temperature profile on the plate.\n")
+        ("ic.surface_heat_flux", po::value<double>(&p.ic.surface_heat_flux)->default_value(70e-3),
+         "surface heat flux, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_amplitude", po::value<double>(&p.ic.rh_dome_amplitude)->default_value(0),
+         "Dome amplitude, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_width", po::value<double>(&p.ic.rh_dome_width)->default_value(0),
+         "Dome half width, used for the temperature profile on the plate.\n")
 
         // for temperature_option = 90
         ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
@@ -598,6 +610,10 @@ static void declare_parameters(po::options_description &cfg,
          "Index of oceanic crust. For formation of middle ocean ridge in phasechanges.cxx")
         ("mat.mattype_sed", po::value<int>(&p.mat.mattype_sed)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
+        ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
+         "Index of mddle ocean ridge extrusion. For formation of middle ocean ridge in phasechanges.cxx")
+        ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
+         "Index of asthenosphere.")
         ("mat.max_viscosity", po::value<double>(&p.mat.visc_max)->default_value(1e24),
          "Max. value of viscosity (in Pa.s)")
         ("mat.min_viscosity", po::value<double>(&p.mat.visc_min)->default_value(1e18),

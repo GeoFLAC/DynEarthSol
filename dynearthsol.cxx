@@ -187,7 +187,7 @@ void init(const Param& param, Variables& var)
 
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
