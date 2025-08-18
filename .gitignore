@@ -28,3 +28,6 @@ tetgen/tetgen
 core.*
 test
 *.out
+*.nsys-rep
+*.log
+*.tsm
