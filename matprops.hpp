@@ -97,6 +97,9 @@ private:
     const tensor_t &stress;
     const tensor_t &strain_rate;
     const int_vec2D &elemmarkers;
+    const double_vec &log_table;
+    const double_vec &tan_table;
+    const double_vec &sin_table;
 
     VectorBase rho0, alpha;
     VectorBase bulk_modulus, shear_modulus;
@@ -124,7 +127,7 @@ private:
     #pragma acc routine seq
     void plastic_weakening(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double& slip_rate) const;
+                           double &dilation_angle, double &hardening) const;
 
     #pragma acc routine seq
     void plastic_weakening_rsf(int e, double pls,
@@ -215,6 +218,9 @@ private:
     // const tensor_t &stress_old;
     const tensor_t &strain_rate;
     const int_vec2D &elemmarkers;
+    const double_vec &log_table;
+    const double_vec &tan_table;
+    const double_vec &sin_table;
 
     const VectorBase *rho0, *alpha;
     const VectorBase *bulk_modulus, *shear_modulus;

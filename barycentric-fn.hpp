@@ -14,6 +14,7 @@ class Barycentric_transformation {
      */
     typedef Array2D<double,NODES_PER_ELEM*NDIMS> coeff_t;
     coeff_t coeff_;
+    int nelem_;
 
 public:
 
@@ -28,8 +29,10 @@ public:
                                const double volume);
     ~Barycentric_transformation();
 
+    #pragma acc routine seq
     void transform(const double *point, int e, double *result) const;
     bool is_inside_elem(const double *point, int elem) const;
+    #pragma acc routine seq
     bool is_inside(const double *result) const;
 
 private:

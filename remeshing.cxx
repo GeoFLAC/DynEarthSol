@@ -5,9 +5,6 @@
 #include <numeric>
 #include <limits>
 #include <unordered_map>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -1327,6 +1324,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         double_vec new_volume(new_nelem);
         compute_volume(new_coord, new_connectivity, new_volume);
 
+        #pragma acc wait
+
         const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
         bad_quality = 0;
         for (int e=0; e<new_nelem; e++) {
@@ -1546,7 +1545,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
     int nx_new, nz_new, nnode_new, nelem_new, nseg_new;
-    int ind;
 
     // find sides    
     int side_top[var.nx], side_bottom[var.nx+1-var.nz%2], side_left[var.nz], side_right[var.nz];
@@ -1579,7 +1577,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         inz[j][1] = p[1];
     }
     // give assign z value to the new mesh
-    ind = 0;
     double ddz = (old_coord[side_left[0]][1] - 0.)/(nz_new-1);
 
     for (int j=0; j<nz_new; ++j) {
@@ -1611,7 +1608,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     }
 
     // give assign z value to the new mesh
-    ind = 0;
     ddz = (old_coord[side_right[0]][1] - 0.)/(nz_new-1);
     for (int j=0; j<nz_new; ++j) {
         if (j == nz_new-1) {
@@ -2162,7 +2158,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 #endif
 }
 
-void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &tmp_result_sg)
+void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &etmp)
 {
     /* dvoldt is the volumetric strain rate, weighted by the element volume,
      * lumped onto the nodes.
@@ -2170,21 +2166,21 @@ void compute_metric_field(const Variables &var, const conn_t &connectivity, cons
     std::fill_n(metric.begin(), var.nnode, 0);
 
 #ifdef GPP1X
-    #pragma omp parallel for default(none) shared(var,connectivity,tmp_result_sg,resolution)
+    #pragma omp parallel for default(none) shared(var,connectivity,etmp,resolution)
 #else
-    #pragma omp parallel for default(none) shared(var,connectivity,tmp_result_sg)
+    #pragma omp parallel for default(none) shared(var,connectivity,etmp) firstprivate(resolution)
 #endif
     for (int e=0;e<var.nelem;e++) {
         const int *conn = connectivity[e];
         double plstrain = resolution/(1.0+5.0*(*var.plstrain)[e]);
         // resolution/(1.0+(*var.plstrain)[e]);
-        tmp_result_sg[e] = plstrain * (*var.volume)[e];
+        etmp[e] = plstrain * (*var.volume)[e];
     }
 
-    #pragma omp parallel for default(none) shared(var,metric,tmp_result_sg)
+    #pragma omp parallel for default(none) shared(var,metric,etmp)
     for (int n=0;n<var.nnode;n++) {
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            metric[n] += tmp_result_sg[*e];
+            metric[n] += etmp[*e];
         metric[n] /= (*var.volume_n)[n];
     }
 }
@@ -2319,7 +2315,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
         exit(EXIT_FAILURE);
     //   b) give solutions values and positions
-    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.tmp_result_sg);
+    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.etmp);
     //      i) If sol array is available:
     if( MMG3D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
         exit(EXIT_FAILURE);
@@ -2570,7 +2566,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
         exit(EXIT_FAILURE);
     //   b) give solutions values and positions
-    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.tmp_result_sg);
+    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.etmp);
     //      i) If sol array is available:
     if( MMG2D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
         exit(EXIT_FAILURE);
@@ -2797,7 +2793,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // These should be populated only once at the outset of a simulation
     // and be maintained thereafter.
-    std::vector<int> SENList, sids;
+    int_vec SENList, sids;
     {
         DiscreteGeometryConstraints constraints;
         constraints.verbose_off();
@@ -2816,7 +2812,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     constraints.verbose_off();
     constraints.set_surface_input(ug, SENList, sids);
 
-    std::vector<double> max_len;
+    double_vec max_len;
     constraints.get_constraints(max_len);
 
     // Prepare the field to be used for error analysis: e.g., plastic strain or strain rate.
@@ -3058,6 +3054,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     std::cout << "  Remeshing starts...\n";
 
+    { // convert portional field to average field
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var)
+#endif
+        #pragma acc parallel loop async
+        for (int e=0; e<var.nelem; e++) {
+            double inv_volume = 1.0 / (*var.volume)[e];
+            (*var.surfinfo.edvacc_surf)[e] *= inv_volume;
+        }
+    }
+
     {
         // creating a "copy" of mesh pointer so that they are not deleted
         array_t old_coord;
@@ -3111,21 +3118,26 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 
         {
-            std::cout << "    Interpolating fields.\n";
+            // std::cout << "    Interpolating fields.\n";
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
 
             // interpolating fields defined on elements
-            nearest_neighbor_interpolation(var, bary, old_coord, old_connectivity);
+            nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
 
             // interpolating fields defined on nodes
-            barycentric_node_interpolation(var, bary, old_coord, old_connectivity);
+            barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
         delete var.support;
+        delete var.support_arr;
+        delete var.support_idx;
         create_support(var);
+        delete var.neighbor;
+        delete var.contact;
+        create_neighbor(var);
 
         std::cout << "    Remapping markers.\n";
-        // remap markers. elemmarkers are updated here, too.
+        // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
 //        var.markersets[0]->update_marker_in_elem(var);
 //        var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
@@ -3156,8 +3168,23 @@ void remesh(const Param &param, Variables &var, int bad_quality)
      */
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+
+    // convert value field back to portional field for nn interpolation
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e) {
+        (*var.surfinfo.edvacc_surf)[e] *= (*var.volume)[e];
+    }
+
     // TODO: using edvoldt and volume to get volume_old
-    std::copy(var.volume->begin(), var.volume->end(), var.volume_old->begin());
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e)
+        (*var.volume_old)[e] = (*var.volume)[e];
 
     if(param.control.has_ATS)
         var.dt = compute_dt(param, var);
@@ -3165,18 +3192,30 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
+#ifdef USE_NPROF
+    nvtxRangePushA("reset bounrdary condition");
+#endif
+
     if (param.mesh.remeshing_option==1 ||
         param.mesh.remeshing_option==2 ||
         param.mesh.remeshing_option==11 ||
         param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
-        for (auto i=var.bnodes[iboundz0]->begin(); i<var.bnodes[iboundz0]->end(); ++i) {
-            int n = *i;
+        int nbot = static_cast<int>(var.bnodes[iboundz0]->size());
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, var, nbot)
+#endif
+        #pragma acc parallel loop async
+        for (int i=0; i<nbot; ++i) {
+            int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;
             // Reest temperature of the bottom nodes to mantle temperature
             (*var.temperature)[n] = var.bottom_temperature;
         }
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 
     if (param.sim.has_output_during_remeshing) {
         // the following variables need to be re-computed only when we are

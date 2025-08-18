@@ -538,7 +538,6 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
 
     int ind = 0;
     for (int j=0; j<var.nz; j+=2) {
-        int np = var.nx;
         int ind_tmp = ind;
         if (j == var.nz-1) {
             for (int i=0; i<var.nx; ++i) {
@@ -1835,7 +1834,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // For sideset node ordering,
     // refer Table 4.2 on p. 30, "Exodus: A finite element data model" by Sjaardema et al.
     // Retrieved on 2019/09/28 from gsjaardema.github.io/seacas/exodusII-new.pdf.
-    std::vector< std::vector<int> > local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
+    int_vec2D local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
     start = 0;
     const int *conn = var.connectivity->data();
     for (int i=0; i<num_side_sets; i++) {
@@ -2066,7 +2065,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.ylength,
 #endif
                           param.mesh.zlength};
-    std::vector<std::size_t> idx(NDIMS);
+    size_t_vec idx(NDIMS);
     sortindex(lengths, idx);
     int dmin, dmid, dmax;
 
@@ -2107,13 +2106,13 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
     }
 
     // arrays to store the result of sorting
-    std::vector<int> nd_idx(nnode);
-    std::vector<int> el_idx(nelem);
+    int_vec nd_idx(nnode);
+    int_vec el_idx(nelem);
     sortindex(wn, nd_idx);
     sortindex(we, el_idx);
 
     // inverse permutation
-    std::vector<int> nd_inv(nnode);
+    int_vec nd_inv(nnode);
     for(int i=0; i<nnode; i++)
       nd_inv[nd_idx[i]] = i;
 
@@ -2173,17 +2172,26 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 
 void create_boundary_flags(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     // allocate and init to 0
     if (var.bcflag) delete var.bcflag;
     var.bcflag = new uint_vec(var.nnode);
 
     create_boundary_flags2(*var.bcflag, var.segment->size(),
                            var.segment->data(), var.segflag->data());
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
 void create_boundary_nodes(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     /* var.bnodes[i] contains a list of nodes on the i-th boundary.
      * (See constants.hpp for the order of boundaries.)
      */
@@ -2202,10 +2210,16 @@ void create_boundary_nodes(Variables& var)
     //     print(std::cout, var.bnodes[j]);
     //     std::cout << '\n';
     // }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 void create_top_elems(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     const int top_bdry = iboundz1;
     const int_vec& top_tmp = *var.bnodes[top_bdry];
     const std::size_t ntop = top_tmp.size();
@@ -2241,7 +2255,15 @@ void create_top_elems(Variables& var)
     for (auto it = elem_set.begin(); it != elem_set.end();it++)
         telems.push_back(*it);
 
-    var.top_elems = new int_vec(telems.begin(),telems.end());
+    var.ntop_elems = telems.size();
+
+    var.top_elems = new int_vec(var.ntop_elems);
+    for (std::size_t i=0; i<var.ntop_elems; i++)
+        (*var.top_elems)[i] = telems[i];
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
@@ -2257,6 +2279,7 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     double_vec top_x(ntop,0.);
 
     surfinfo.ntop = ntop;
+    surfinfo.etop = etop;
     for (size_t i=0;i<ntop;i++)
         top_x[i] = (*var.coord)[top_tmp[i]][0];
 
@@ -2313,7 +2336,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
         }
     }
 
-    std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
 }
 
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo)
@@ -2344,6 +2366,7 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.top_nodes =  new int_vec(top_nodes.begin(),top_nodes.end());
 
     surfinfo.ntop = ntop;
+    surfinfo.etop = etop;
     surfinfo.max_surf_vel = 0;
     surfinfo.base_level = param.control.surf_base_level;
     surfinfo.surf_diff = param.control.surface_diffusivity;
@@ -2364,8 +2387,8 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.elem_and_nodes = new segment_t(etop);
 
     surfinfo.dh_oc = new double_vec(ntop,0.);
-    surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    surfinfo.edhacc_oc = new double_vec(var.nelem);
+    // surfinfo.dhacc_oc = new double_vec(var.nnode,0);
+    // surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 
@@ -2452,55 +2475,91 @@ namespace {
 
 void create_boundary_facets(Variables& var)
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     /* var.bfacets[i] contains a list of facets (or segments in 2D)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
      */
 
     // Looping through var.segment
-    for (int i=0; i<var.nseg; ++i) {
-        uint flag = static_cast<uint>((*var.segflag)[i][0]);
-        if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
-        // Nodes of this facet
-        OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
-#ifdef THREED
-                      , (*var.segment)[i][2]
-#endif
-                      );
+    #pragma omp parallel default(none) shared(var,NODE_OF_FACET, std::cerr) // TODO: fix no deterministic behavior
+    {
+        // local storage for each thread
+        int_pair_vec bfacet_local[nbdrytypes];
 
-        // Finding the corresponding element and facet #
-        for (int e=0; e<var.nelem; ++e) {
-            const int *conn = (*var.connectivity)[e];
-            for (int f=0; f<FACETS_PER_ELEM; ++f) {
-                if ((flag & (*var.bcflag)[conn[NODE_OF_FACET[f][0]]]
-                    & (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
+        #pragma omp for nowait
+        for (int i=0; i<var.nseg; ++i) {
+            uint flag = static_cast<uint>((*var.segflag)[i][0]);
+            if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
+            // Nodes of this facet
+            OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
 #ifdef THREED
-                    & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
+                          , (*var.segment)[i][2]
 #endif
-                     ) == 0U) continue; // skip
+                          );
 
-                OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
+            // Finding the corresponding element and facet #
+            bool found = false;
+            for (int e=0; e<var.nelem && !found; ++e) {
+                const int *conn = (*var.connectivity)[e];
+                for (int f=0; f<FACETS_PER_ELEM && !found; ++f) {
+                    uint facet_flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]] &
+                                      (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
 #ifdef THREED
-                              , conn[NODE_OF_FACET[f][2]]
+                                      & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
 #endif
-                              );
-                if (af == bf) {
-                    for (int k=0; k<nbdrytypes; ++k) {
-                        if (flag == (1U << k)) {
-                            var.bfacets[k]->push_back(std::make_pair(e,f));
-                            goto found_facet; // break out of nested loops
+                                      ;
+
+                    if ((flag & facet_flag) == 0U) continue; // skip
+
+                    OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
+#ifdef THREED
+                                  , conn[NODE_OF_FACET[f][2]]
+#endif
+                                  );
+                    if (af == bf) {
+                        for (int k=0; k<nbdrytypes; ++k) {
+                            if (flag == (1U << k)) {
+                                bfacet_local[k].emplace_back(e, f);
+                                found = true; // break out of nested loops
+                                break;
+                            }
                         }
                     }
                 }
             }
+            // not found
+            if (!found) {
+                #pragma omp critical
+                {
+                    std::cerr << "Error: " << i << "-th segment is not on any element\n";
+                    std::exit(12);
+                }
+            }
         }
-        // not found
-        std::cerr << "Error: " << i << "-th segment is not on any element\n";
-        std::exit(12);
 
-    found_facet:
-        continue;
+        // Merge local results into global results
+        #pragma omp critical
+        {
+            for (int k = 0; k < nbdrytypes; ++k) {
+                var.bfacets[k]->insert(
+                    var.bfacets[k]->end(),
+                    bfacet_local[k].begin(),
+                    bfacet_local[k].end());
+            }
+        }
+
+        #pragma omp barrier
+
+        #pragma omp for
+        for (int n=0; n<nbdrytypes; ++n) {
+            std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
+                    [](const int_pair &a, const int_pair &b) {
+                        return a.first < b.first;
+                    });
+        }
     }
-
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";
     //     print(std::cout, var.bfacets[n]);
@@ -2517,32 +2576,188 @@ void create_boundary_facets(Variables& var)
     //     }
     //     std::cout << '\n';
     // }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
+
+int get_support(const Variables& var, const int inode, const int isup)
+{
+    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
+    return (*var.support_arr)[start + isup];
+}
+
+int get_sup_size(const Variables& var, const int inode)
+{
+    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
+    const int end = (*var.support_idx)[inode];
+    return end - start;
 }
 
 
 void create_support(Variables& var)
 {
-    var.support = new std::vector<int_vec>(var.nnode);
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    var.support = new int_vec2D(var.nnode);
+    var.support_idx = new int_vec(var.nnode, 0);
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             (*var.support)[conn[i]].push_back(e);
+            (*var.support_idx)[conn[i]]++;
+        }
+    }
+    // create suppert 1D for ACC
+    for (int n=1; n<var.nnode; ++n)
+        (*var.support_idx)[n] = (*var.support_idx)[n-1] + (*var.support_idx)[n];
+
+    int nsup = (*var.support_idx)[var.nnode-1];
+
+    var.support_arr = new int_vec((*var.support_idx)[var.nnode-1]);
+
+    // fill support_arr
+    for (int n=0; n<var.nnode; ++n) {
+        int start = (n == 0) ? 0 : (*var.support_idx)[n-1];
+        int end = (*var.support_idx)[n];
+        for (int i=start; i<end; ++i) {
+            (*var.support_arr)[i] = (*var.support)[n][i-start];
         }
     }
     // std::cout << "support:\n";
     // print(std::cout, *var.support);
     // std::cout << "\n";
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
+void create_neighbor(Variables& var)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+
+    var.neighbor = new conn_t(var.nelem, -1);
+    var.contact = new int_pair_vec(var.nelem*4);
+    int ncontact = 0;
+
+    // create the inverse mapping of connectivity
+#ifndef ACC
+    #pragma omp parallel for default(none) \
+        shared(var, NODE_OF_FACET, ncontact) collapse(2)
+#endif
+    #pragma acc parallel loop collapse(2) copy(ncontact) async
+    for (int e=0; e<var.nelem; ++e) {
+        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            if ((*var.neighbor)[e][i] != -1) continue; // already set
+            int n[NDIMS], n2[NDIMS];
+            for (int j=0; j<NDIMS; ++j)
+                n[j] = (*var.connectivity)[e][NODE_OF_FACET[i][j]];
+
+            // sort the nodes in n
+            for (int j=0; j<NDIMS-1; ++j) {
+                for (int k=j+1; k<NDIMS; ++k) {
+                    if (n[j] > n[k])
+                        std::swap(n[j], n[k]);
+                }
+            }
+
+            const int_vec sup = (*var.support)[n[0]];
+            bool found = false;
+            for (int j=0; j<sup.size() && !found; ++j) {
+                int neigh = sup[j];
+                if (neigh > e) {
+                    const int *conn2 = (*var.connectivity)[neigh];
+                    for (int k=0; k<NODES_PER_ELEM; ++k) {
+                        bool match = true;
+                        for (int j=0; j<NDIMS; ++j)
+                            n2[j] = conn2[NODE_OF_FACET[k][j]];
+
+                        // sort the nodes in n2
+                        for (int l=0; l<NDIMS-1; ++l) {
+                            for (int m=l+1; m<NDIMS; ++m) {
+                                if (n2[l] > n2[m])
+                                    std::swap(n2[l], n2[m]);
+                            }
+                        }
+                        for (int l=0; l<NDIMS; ++l) {
+                            if (n[l] != n2[l]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            // found a neighbor element
+                            int pos;
+#ifndef ACC
+                            #pragma omp atomic capture
+#endif
+                            #pragma acc atomic capture
+                            pos = ncontact++;
+
+                            (*var.contact)[pos*2] = {e, i};
+                            (*var.contact)[pos*2+1] = {neigh, k};
+
+                            (*var.neighbor)[e][i] = pos*2+1;
+                            (*var.neighbor)[neigh][k] = pos*2;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #pragma acc wait
+
+    var.contact->resize(ncontact*2);
+    var.ncontact = ncontact;
+    var.ctmp = new double_vec(ncontact);
+
+    // printf("Total number of contacts: %d\n", ncontact);
+    // printf("Total number of neighbors: %d\n", var.nelem*2);
+    // //print all neighbors
+    // for (int e=0; e<var.nelem; ++e) {
+    //     std::cout << "Element " << e << ": ";
+    //     for (int i=0; i<NODES_PER_ELEM; ++i) {
+    //         if ((*var.neighbor)[e][i] != -1) {
+    //             int n = (*var.neighbor)[e][i];
+    //             int neigh_e = (*var.contact)[n].first;
+    //             int nself = n + (n%2)*-1 + (n+1)%2;
+    //             int facet = (*var.contact)[nself].second;
+
+    //             printf("(%d,%d) ", neigh_e, (*var.contact)[nself].first);
+    //         }
+    //     }
+    //     std::cout << '\n';
+    // }
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
 
 void create_elemmarkers(const Param& param, Variables& var)
 {
-    var.elemmarkers = new int_vec2D( var.nelem, std::vector<int>(param.mat.nmat, 0) );
-    if (param.control.has_hydration_processes)
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
+    var.markers_in_elem = new int_vec2D(var.nelem, int_vec(0));
+    if (param.control.has_hydration_processes) {
         var.hydrous_elemmarkers = new Array2D<int,1>( var.nelem, 0 );
+        var.hydrous_markers_in_elem = new int_vec2D(var.nelem, int_vec(0));   
+    }
 
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 
@@ -2605,20 +2820,20 @@ void create_new_mesh(const Param& param, Variables& var)
 }
 
 
-double** elem_center(const array_t &coord, const conn_t &connectivity)
+void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
-    /* Returns the centroid of the elements.
-     * Note: center[0] == tmp
-     * The caller is responsible to delete [] center[0] and center!
-     */
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     int nelem = connectivity.size();
-    double *tmp = new double[nelem*NDIMS];
-    double **center = new double*[nelem];
+
+#ifndef ACC
     #pragma omp parallel for default(none)          \
-        shared(nelem, tmp, coord, connectivity, center)
+        shared(nelem, coord, connectivity, center)
+#endif
+    #pragma acc parallel loop async
     for(int e=0; e<nelem; e++) {
         const int* conn = connectivity[e];
-        center[e] = tmp + e*NDIMS;
         for(int d=0; d<NDIMS; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_ELEM; k++) {
@@ -2627,7 +2842,10 @@ double** elem_center(const array_t &coord, const conn_t &connectivity)
             center[e][d] = sum / NODES_PER_ELEM;
         }
     }
-    return center;
+
+    #pragma acc wait
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
-
-

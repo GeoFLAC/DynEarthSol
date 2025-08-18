@@ -1,6 +1,3 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include <iostream>
 #include <unordered_map>
 #include <iomanip>
@@ -19,7 +16,7 @@
 
 namespace {
 
-//#pragma acc routine seq
+#pragma acc routine seq
 void normal_vector_of_facet(int f, const int *conn, const array_t &coord,
                             double *normal, double &zcenter)
 {
@@ -96,7 +93,7 @@ double find_max_vbc(const BC &bc)
 
 
 void create_boundary_normals(const Variables &var, array_t &bnormals,
-                             std::map<std::pair<int,int>, double*>  &edge_vectors)
+                             std::map<std::pair<int,int>, double*>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx)
 {
     /* This subroutine finds the outward normal unit vectors of boundaries.
      * There are two types of boundaries: ibound{x,y,z}? and iboundn?.
@@ -109,6 +106,8 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
      * If the normal component of the boundary velocity is fixed, the boundary
      * normal will not change with time.
      */
+
+    #pragma acc wait
 
     for (int i=0; i<nbdrytypes; i++) {
         double normal[NDIMS] = {0};
@@ -182,6 +181,12 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
             s[1] = 1;
 #endif
             edge_vectors[std::make_pair(i, j)] = s;
+            edge_vec_idx.push_back(i*nbdrytypes + j);
+            edge_vec.push_back(s[0]);
+            edge_vec.push_back(s[1]);
+#ifdef THREED
+            edge_vec.push_back(s[2]);
+#endif
         }
     }
 }
@@ -267,7 +272,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
 
     // diverging x-boundary
-    const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
+    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
 
 
     int bc_x0 = bc.vbc_x0;
@@ -294,7 +299,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -302,7 +307,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -516,7 +521,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -554,7 +565,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -720,7 +737,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 #endif
 
     // diverging x-boundary
-    const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
+    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
 
 
     int bc_x0 = bc.vbc_x0;
@@ -747,7 +764,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
 #ifdef THREED
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
 #else
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
@@ -755,7 +772,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -970,7 +987,14 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
+                                    // auto edge = edgevec->at(std::make_pair(ic, ib));
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -1008,7 +1032,13 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    auto edge = edgevec->at(std::make_pair(ic, ib));
+                                    const double *edge;
+                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
+                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
+                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
+                                        if (ei == ic && ej == ib)
+                                            edge = &var.edge_vec[j*NDIMS];
+                                    }
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -1097,6 +1127,14 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     //
     // Gravity-induced (hydrostatic and lithostatic) stress BCs
     //
+
+#ifndef ACC
+    #pragma omp parallel for
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<var.nelem; ++e)
+        (*var.etmp_int)[e] = -1;
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.vbc_types[i] != 0 &&
             var.vbc_types[i] != 2 &&
@@ -1105,72 +1143,121 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
-        const auto& bdry = *(var.bfacets[i]);
+        int bound, nbdry_nodes;
 
-        const int bound = static_cast<int>(bdry.size());
+        #pragma acc kernels async
+        {
+            bound = static_cast<int>(var.bfacets[i]->size());
+            nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
+        }
 
-        // loops over all bdry facets
-        #pragma acc parallel loop
-        for (int n=0; n<bound; ++n) {
-            // this facet belongs to element e
-            int e = bdry[n].first;
-            // this facet is the f-th facet of e
-            int f = bdry[n].second;
-            const int *conn = (*var.connectivity)[e];
+#ifndef ACC
+        #pragma omp parallel default(none) \
+            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes)
+#endif
+        {
+            // loops over all bdry facets
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop async
+            for (int n=0; n<bound; ++n) {
+                // this facet belongs to element e
+                int e = (*var.bfacets[i])[n].first;
+                // this facet is the f-th facet of e
+                int f = (*var.bfacets[i])[n].second;
+                const int *conn = (*var.connectivity)[e];
 
-            // the outward-normal vector
-            double normal[NDIMS];
-            // the z-coordinate of the facet center
-            double zcenter;
+                // the outward-normal vector
+                double normal[NDIMS];
+                // the z-coordinate of the facet center
+                double zcenter;
 
-            normal_vector_of_facet(f, conn, *var.coord, normal, zcenter);
+                normal_vector_of_facet(f, conn, *var.coord, normal, zcenter);
 
-            double p;
-            if (i==iboundz0 && param.bc.has_winkler_foundation) {
-                double rho_effective = var.mat->rho(e);  // Base density of the solid material
+                double p;
+                if (i==iboundz0 && param.bc.has_winkler_foundation) {
+                    double rho_effective = var.mat->rho(e);  // Base density of the solid material
 
-                // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
-                if (param.control.has_hydraulic_diffusion) {
-                    rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
-                    // 1000.0 is the fluid density (e.g., water, in kg/m³)
-                    // Winkler foundation for the bottom boundary with adjusted effective density
-                    p = var.compensation_pressure - 
-                        (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                        param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
+                    if (param.control.has_hydraulic_diffusion) {
+                        rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
+                        // 1000.0 is the fluid density (e.g., water, in kg/m³)
+                        // Winkler foundation for the bottom boundary with adjusted effective density
+                        p = var.compensation_pressure - 
+                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
+                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    }
+                    else
+                    {
+                        // Winkler foundation for the bottom boundary with adjusted effective density
+                        p = var.compensation_pressure - 
+                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
+                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                    }
                 }
-                else
-                {
-                    // Winkler foundation for the bottom boundary with adjusted effective density
-                    p = var.compensation_pressure - 
-                        (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                        param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                else if (i==iboundz1 && param.bc.has_water_loading) {
+                    // hydrostatic water loading for the surface boundary
+                    p = 0;
+                    if (zcenter < param.control.surf_base_level) {
+                        // below sea level
+                        const double sea_water_density = 1030;
+                        p = sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
+                    }
+                }
+                else {
+                    // sidewalls
+                    p = ref_pressure(param, zcenter);
+                }
+
+                (*var.etmp_int)[e] = n;
+                double *tmp = (*var.tmp_result)[n];
+                // lithostatc support - Archimed force (normal to the surface)
+                for (int j=0; j<NODES_PER_FACET; ++j) {
+                    int nn = conn[NODE_OF_FACET[f][j]];
+                    double *f = force[nn];
+                    for (int d=0; d<NDIMS; ++d) {
+                            tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
+                    }
                 }
             }
-            else if (i==iboundz1 && param.bc.has_water_loading) {
-                // hydrostatic water loading for the surface boundary
-                p = 0;
-                if (zcenter < param.control.surf_base_level) {
-                    // below sea level
-                    const double sea_water_density = 1030;
-                    p = sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
+
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop async
+            for (int j=0; j<nbdry_nodes; ++j) {
+                const int n = (*var.bnodes[i])[j];
+                const int_vec& sup = (*var.support)[n];
+                for (int k=0; k<sup.size(); ++k) {
+                    int e = sup[k];
+                    int ibound = (*var.etmp_int)[e];
+                    if (ibound < 0) continue;  // not a boundary element
+
+                    int f = (*var.bfacets[i])[ibound].second;  // facet index
+                    const int *conn = (*var.connectivity)[e];
+                    for (int l=0; l<NODES_PER_FACET; ++l) {
+                        if (n == conn[NODE_OF_FACET[f][l]]) {
+                            for (int d=0; d<NDIMS; ++d)
+                                force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];  // subtract the force from the facet
+                            break;  // found the node in the facet
+                        }
+                    }
                 }
-            }
-            else {
-                // sidewalls
-                p = ref_pressure(param, zcenter);
             }
 
-            // lithostatc support - Archimed force (normal to the surface)
-            for (int j=0; j<NODES_PER_FACET; ++j) {
-                int nn = conn[NODE_OF_FACET[f][j]];
-                double *f = force[nn];
-                for (int d=0; d<NDIMS; ++d) {
-                    #pragma acc atomic update
-                    f[d] -= p * normal[d] / NODES_PER_FACET;
-                }
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop async
+            for (int n=0; n<bound; ++n) {
+                const int e = (*var.bfacets[i])[n].first;
+                (*var.etmp_int)[e] = -1;
             }
         }
     }
+
+    #pragma acc wait
 
     if (param.bc.has_elastic_foundation) {
         /* A restoration force on the bottom nodes proportional to total vertical displacement */
@@ -1189,6 +1276,9 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma wait // here is not ACC parallelized
+
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
     // Check if there is a stress BC applied on this boundary
@@ -1198,7 +1288,6 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     const int bound = static_cast<int>(bdry.size());
 
     // Loop over all boundary facets
-    #pragma acc parallel loop 
     for (int n = 0; n < bound; ++n) {
         int e = bdry[n].first;      // This facet belongs to element e
         int f = bdry[n].second;     // This facet is the f-th facet of element e
@@ -1248,7 +1337,6 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
             // Distribute the traction (stress) to the nodes on the facet
             for (int d = 0; d < NDIMS; ++d) {
                 // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
-                #pragma acc atomic update
                 force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
             }
         }
@@ -1271,161 +1359,187 @@ namespace {
          * sedimentation.
          */
 
-        const array_t& coord = *var.coord;
-        const SurfaceInfo& surfinfo = var.surfinfo;
-        const int_vec& top_nodes = *surfinfo.top_nodes;
-
-        const int top_bdry = iboundz1;
-        const auto& top = *(var.bfacets[top_bdry]);
-
-        const int ntop = surfinfo.ntop;
-
-#ifdef USE_NPROF
-        nvtxRangePushA("prepare variable total_dx");
+#ifndef ACC
+        #pragma omp parallel default(none) shared(var,NODE_OF_FACET)
 #endif
-        double *total_dx = var.surfinfo.total_dx->data();
-#ifdef USE_NPROF
-        nvtxRangePop();
+        {
+            const array_t& coord = *var.coord;
+            const int_vec& top_nodes = *var.surfinfo.top_nodes;
+
+            const auto& top = *(var.bfacets[iboundz1]);
+
+            const int ntop = var.surfinfo.ntop;
+
+            double_vec& total_dx = *var.surfinfo.total_dx;
+            double_vec& total_slope = *var.surfinfo.total_slope;
+            double_vec& dh = *var.surfinfo.dh;
+
+            // loops over all top facets
+#ifndef ACC
+            #pragma omp for
 #endif
-        double *total_slope = var.surfinfo.total_slope->data();
-        double_vec& dh = *var.surfinfo.dh;
-
-        #pragma acc parallel loop
-        for (int i=0;i<var.nnode;i++) {
-            total_dx[i] = 0.;
-            total_slope[i] = 0.;
-        }
-
-        // loops over all top facets
-#ifdef THREED
-        const size_t tsize = top.size();
-        #pragma acc parallel loop
-        for (std::size_t i=0; i<tsize; ++i) {
-            // this facet belongs to element e
-            int e = top[i].first;
-            // this facet is the f-th facet of e
-            int f = top[i].second;
-
-            const int *conn = (*var.connectivity)[e];
-            int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
-            int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
-
-//#ifdef THREED
-            int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
-
-            double projected_area;
-            {
-                // normal vector of this facet
-                double normal[NDIMS];
-
-                // two vectors n0-n1 and n0-n2
-                // n is the cross product of these two vectors
-                // the length of n is 2 * triangle area
-                double x01, y01, z01, x02, y02, z02;
-                x01 = coord[n1][0] - coord[n0][0];
-                y01 = coord[n1][1] - coord[n0][1];
-                z01 = coord[n1][2] - coord[n0][2];
-                x02 = coord[n2][0] - coord[n0][0];
-                y02 = coord[n2][1] - coord[n0][1];
-                z02 = coord[n2][2] - coord[n0][2];
-
-                normal[0] = y01*z02 - z01*y02;
-                normal[1] = z01*x02 - x01*z02;
-                normal[2] = x01*y02 - y01*x02;
-
-                /* the area of this facet is:
-                 *   0.5 * std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
-                 *
-                 * theta is the angle between this facet and horizontal
-                 *   tan_theta = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1]) / normal[2]
-                 *   cos_theta = normal[2] / (2 * area)
-                 *
-                 * the area projected on the horizontal plane is:
-                 *   projected_area = area * cos_theta = 0.5 * normal[2]
-                 */
-                projected_area = 0.5 * normal[2];
+            #pragma acc parallel loop async
+            for (int i=0; i<var.nnode; i++) {
+                total_dx[i] = 0.;
+                total_slope[i] = 0.;
             }
 
-            #pragma acc atomic update
-            total_dx[n0] += projected_area;
-            #pragma acc atomic update
-            total_dx[n1] += projected_area;
-            #pragma acc atomic update
-            total_dx[n2] += projected_area;
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop async
+            for (int i=0; i<var.surfinfo.etop; ++i) {
+#ifdef THREED
+                // this facet belongs to element e
+                int e = top[i].first;
+                // this facet is the f-th facet of e
+                int f = top[i].second;
 
-            double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
-            double iv = 1 / (2 * projected_area);
-            shp2dx[0] = iv * (coord[n1][1] - coord[n2][1]);
-            shp2dx[1] = iv * (coord[n2][1] - coord[n0][1]);
-            shp2dx[2] = iv * (coord[n0][1] - coord[n1][1]);
-            shp2dy[0] = iv * (coord[n2][0] - coord[n1][0]);
-            shp2dy[1] = iv * (coord[n0][0] - coord[n2][0]);
-            shp2dy[2] = iv * (coord[n1][0] - coord[n0][0]);
+                const int *conn = (*var.connectivity)[e];
+                int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
+                int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
+                int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
 
-            double D[NODES_PER_FACET][NODES_PER_FACET];
-            for (int j=0; j<NODES_PER_FACET; j++) {
-                for (int k=0; k<NODES_PER_FACET; k++) {
-                    D[j][k] = (shp2dx[j] * shp2dx[k] +
-                               shp2dy[j] * shp2dy[k]);
+                double projected_area;
+                {
+                    // normal vector of this facet
+                    double normal[NDIMS];
+
+                    // two vectors n0-n1 and n0-n2
+                    // n is the cross product of these two vectors
+                    // the length of n is 2 * triangle area
+                    double x01, y01, z01, x02, y02, z02;
+                    x01 = coord[n1][0] - coord[n0][0];
+                    y01 = coord[n1][1] - coord[n0][1];
+                    z01 = coord[n1][2] - coord[n0][2];
+                    x02 = coord[n2][0] - coord[n0][0];
+                    y02 = coord[n2][1] - coord[n0][1];
+                    z02 = coord[n2][2] - coord[n0][2];
+
+                    normal[0] = y01*z02 - z01*y02;
+                    normal[1] = z01*x02 - x01*z02;
+                    normal[2] = x01*y02 - y01*x02;
+
+                    /* the area of this facet is:
+                    *   0.5 * std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])
+                    *
+                    * theta is the angle between this facet and horizontal
+                    *   tan_theta = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1]) / normal[2]
+                    *   cos_theta = normal[2] / (2 * area)
+                    *
+                    * the area projected on the horizontal plane is:
+                    *   projected_area = area * cos_theta = 0.5 * normal[2]
+                    */
+                    projected_area = 0.5 * normal[2];
                 }
+
+                (*var.etmp)[i] = projected_area;
+
+                double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
+                double iv = 1 / (2 * projected_area);
+                shp2dx[0] = iv * (coord[n1][1] - coord[n2][1]);
+                shp2dx[1] = iv * (coord[n2][1] - coord[n0][1]);
+                shp2dx[2] = iv * (coord[n0][1] - coord[n1][1]);
+                shp2dy[0] = iv * (coord[n2][0] - coord[n1][0]);
+                shp2dy[1] = iv * (coord[n0][0] - coord[n2][0]);
+                shp2dy[2] = iv * (coord[n1][0] - coord[n0][0]);
+
+                double D[NODES_PER_FACET][NODES_PER_FACET];
+                for (int j=0; j<NODES_PER_FACET; j++) {
+                    for (int k=0; k<NODES_PER_FACET; k++) {
+                        D[j][k] = (shp2dx[j] * shp2dx[k] +
+                                shp2dy[j] * shp2dy[k]);
+                    }
+                }
+
+                const int n[NODES_PER_FACET] = {n0, n1, n2};
+                for (int j=0; j<NODES_PER_FACET; j++) {
+                    double slope = 0;
+                    for (int k=0; k<NODES_PER_FACET; k++)
+                        slope += D[j][k] * coord[n[k]][2];
+                    (*var.tmp_result)[i][j] = slope * projected_area;
+                }
+#else
+                /* The 1D diffusion operation is implemented ad hoc, not using FEM
+                * formulation (e.g. computing shape function derivation on the edges).
+                */
+                int n0 = top_nodes[i];
+                int n1 = top_nodes[i+1];
+
+                double dx = std::fabs(coord[n1][0] - coord[n0][0]);
+                (*var.etmp)[i] = dx;
+
+                (*var.tmp_result)[i][0] = -(coord[n1][1] - coord[n0][1]) / dx;
+                (*var.tmp_result)[i][1] = (coord[n1][1] - coord[n0][1]) / dx;
+#endif
             }
 
-            const int n[NODES_PER_FACET] = {n0, n1, n2};
-            for (int j=0; j<NODES_PER_FACET; j++) {
-                double slope = 0;
-                for (int k=0; k<NODES_PER_FACET; k++)
-                    slope += D[j][k] * coord[n[k]][2];
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop async
+            for (int i=0; i<ntop; ++i) {
+                int n = top_nodes[i];
+#ifdef THREED
+                int_vec &surf_sup = (*var.surfinfo.node_and_elems)[i];
 
-                #pragma acc atomic update
-                total_slope[n[j]] += slope * projected_area;
+                for (int j=0; j<surf_sup.size(); ++j) {
+                    int k = surf_sup[j];
+                    total_dx[n] += (*var.etmp)[k];
+
+                    // this facet belongs to element e
+                    int e = top[k].first;
+                    // this facet is the f-th facet of e
+                    int f = top[k].second;
+
+                    const int *conn = (*var.connectivity)[e];
+                    int n0 = conn[NODE_OF_FACET[f][0]];
+                    int n1 = conn[NODE_OF_FACET[f][1]];
+                    int n2 = conn[NODE_OF_FACET[f][2]];
+
+                    const int nn[NODES_PER_FACET] = {n0, n1, n2};
+
+                    for (int m=0; m<NODES_PER_FACET; ++m) {
+                        if (nn[m] == n) {
+                            total_slope[n] += (*var.tmp_result)[k][m];
+                            break;
+                        }
+                    }
+                }
+#else
+                if (i == 0) {
+                    total_dx[n] = (*var.etmp)[i];
+                    total_slope[n] = (*var.tmp_result)[i][0];
+                } else if (i == ntop-1) {
+                    total_dx[n] = (*var.etmp)[i-1];
+                    total_slope[n] = (*var.tmp_result)[i-1][1];
+                } else {
+                    total_dx[n] = (*var.etmp)[i-1] + (*var.etmp)[i];
+                    total_slope[n] = (*var.tmp_result)[i-1][1] + (*var.tmp_result)[i][0];
+                }
+#endif
             }
 
-            // std::cout << i << ' ' << n0 << ' ' << n1 << ' ' << n2 << "  "
-            //           << projected_area << "  " << slope << '\n';
-#else
-            /* The 1D diffusion operation is implemented ad hoc, not using FEM
-             * formulation (e.g. computing shape function derivation on the edges).
-             */
-        const size_t tsize = ntop-1;
-        #pragma acc parallel loop
-        for (std::size_t i=0; i<tsize;i++) {
-            int n0 = top_nodes[i];
-            int n1 = top_nodes[i+1];
-
-            double dx = std::fabs(coord[n1][0] - coord[n0][0]);
-            #pragma acc atomic update
-            total_dx[n0] += dx;
-            #pragma acc atomic update
-            total_dx[n1] += dx;
-
-            double slope = (coord[n1][1] - coord[n0][1]) / dx;
-            #pragma acc atomic update
-            total_slope[n0] -= slope;
-            #pragma acc atomic update
-            total_slope[n1] += slope;
-
-            // std::cout << i << ' ' << n0 << ' ' << n1 << "  " << dx << "  " << slope << '\n';
+#ifndef ACC
+            #pragma omp for
 #endif
-        }
-
-#ifdef THREED
-        #pragma acc parallel loop
-#endif
-        for (int i=0; i<ntop; ++i) {
-            // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
-            int n = top_nodes[i];
-            double conv =  surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
-#ifdef THREED
-            dh[i] -= conv;
-#else
-            if ( coord[n][1] >  surfinfo.base_level && conv > 0.) {
-                dh[i] -= surfinfo.diff_ratio_terrig * conv;
-            } else if ( coord[n][1] <= surfinfo.base_level && conv < 0. ) {
-                dh[i] -= surfinfo.diff_ratio_marine * conv;
-            } else {
+            #pragma acc parallel loop async
+            for (int i=0; i<ntop; ++i) {
+                // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
+                int n = top_nodes[i];
+                double conv =  var.surfinfo.surf_diff * var.dt * total_slope[n] / total_dx[n];
+    #ifdef THREED
                 dh[i] -= conv;
+    #else
+                if ( coord[n][1] >  var.surfinfo.base_level && conv > 0.) {
+                    dh[i] -= var.surfinfo.diff_ratio_terrig * conv;
+                } else if ( coord[n][1] <= var.surfinfo.base_level && conv < 0. ) {
+                    dh[i] -= var.surfinfo.diff_ratio_marine * conv;
+                } else {
+                    dh[i] -= conv;
+                }
+    #endif
             }
-#endif
         }
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -1435,6 +1549,8 @@ namespace {
 
     void custom_surface_processes(const Variables& var, array_t& coord)
     {
+        #pragma acc wait // here is not ACC parallelized yet
+
         const int top_bdry = iboundz1;
         const int_vec& top_nodes = *var.bnodes[top_bdry];
         const std::size_t ntop = top_nodes.size();
@@ -1567,11 +1683,12 @@ namespace {
             dh_terrig[i] = coeff * exp(-C1*basin_depth[i+1]) * (basin_slope[i+1] - basin_slope[i]) / basin_dx[i];
 
         // set boundary condition if basin is larger than 1
-        if (nbasin > 1)
+        if (nbasin > 1) {
             if (option == 0)
                 dh_terrig[nbasin-1] = 0.;
             else
                 dh_terrig[0] = 0.;
+        }
 
         for (int i=0;i<nbasin;i++)
             // make sure the sedimentation is positive
@@ -1679,6 +1796,8 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
+        #pragma acc wait // here is not ACC parallelized yet
+
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
         const int_vec& top_nodes = *surfinfo.top_nodes;
@@ -1787,124 +1906,6 @@ namespace {
         nvtxRangePop();
 #endif
     }
-
-
-    void simple_igneous(const Param& param,const Variables& var, double_vec& dh_oc, bool& has_partial_melting) {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
-#endif
-#ifdef THREED
-        // not ready for 3D
-        std::cout << "3D deposition of igneous processes is not ready yet.";
-        exit(168);
-#endif
-        const array_t& coord = *var.coord;
-        const SurfaceInfo& surfinfo = var.surfinfo;
-        const int_vec& top_nodes = *surfinfo.top_nodes;
-        const std::size_t ntop = top_nodes.size();
-        int_vec melting_marker;
-
-        int nmarkers = var.markersets[0]->get_nmarkers();
-
-        has_partial_melting = var.markersets[0]->if_melt(param.mat.mattype_partial_melting_mantle);
-
-        if (!has_partial_melting) {
-#ifdef USE_NPROF
-            nvtxRangePop();
-#endif
-            return;
-        }
-        double_vec top_base(ntop,0.);
-        double_vec top_depth(ntop,0.);
-
-        get_surface_info(var,top_base,top_depth);
-
-        double_vec melting_depth_elem(ntop,-101.e3);
-        double_vec melting_depth(ntop, 0);
-
-        for (int i=0;i<nmarkers;i++) {
-            int m = var.markersets[0]->get_mattype(i);
-
-            if (m == param.mat.mattype_partial_melting_mantle) {
-                melting_marker.push_back(i); 
-
-                int e = var.markersets[0]->get_elem(i);
-                double vol = (*var.volume)[e];
-                int num_markers_in_elem = 0;
-
-                for( int k = 0; k < param.mat.nmat; k++ )
-                    num_markers_in_elem += (*var.elemmarkers)[e][k];
-
-                double x[NDIMS] = {0};
-                for (int j = 0; j < NDIMS; j++) {
-                    for (int k = 0; k < NODES_PER_ELEM; k++)
-                        x[j] += var.markersets[0]->get_eta(i)[k]*
-                            (*var.coord)[ (*var.connectivity)[e][k] ][j];
-                }
-
-                // search top element node for melting marker
-                for (size_t j=1; j<ntop;j++) {
-                    double dx0 = x[0] - coord[top_nodes[j-1]][0];
-                    double dx1 = x[0] - coord[top_nodes[j]][0];
-                    if (dx0*dx1 >= 0) continue;
-
-                    double ratio = dx0/(dx0-dx1);
-                    double dvol = param.mat.convert_rate_oceanic_crust * vol / num_markers_in_elem * var.dt;// * param.mesh.quality_check_step_interval;
-
-                    dh_oc[j-1] += ratio * dvol / top_base[j-1];
-                    dh_oc[j] += (1.-ratio) * dvol / top_base[j];
-                    // find the melting tops on each element facet
-                    if (melting_depth_elem[j-1] < x[NDIMS-1] ) {
-                        melting_depth_elem[j-1] = x[NDIMS-1];
-                    }
-                }
-            }
-        }
-        if (melting_marker.size() == 0) {
-            return;
-#ifdef USE_NPROF
-            nvtxRangePop();
-#endif
-        }
-        // find the depth of melting top of node
-        for (size_t i=1;i<ntop-1;i++) {
-            if (melting_depth_elem[i-1] < -100.e3 && melting_depth_elem[i] < -100.e3) continue;
-            if (melting_depth_elem[i-1] < -100.e3)
-                melting_depth[i] = melting_depth_elem[i];
-            else if (melting_depth_elem[i] < -100.e3)
-                melting_depth[i] = melting_depth_elem[i-1];
-            else
-                melting_depth[i] = 0.5 * ( melting_depth_elem[i-1] + melting_depth_elem[i] );
-        }
-        // find the max depth of melting top
-        double max_dp = 0.;
-        for (size_t i=0;i<ntop;i++)
-            max_dp = std::min(max_dp, melting_depth[i]);
-        // normalizing the depth of melting
-        for (size_t i=0;i<ntop;i++) {
-            if (melting_depth[i] == 0.)
-                melting_depth[i] = max_dp;
-            melting_depth_elem[i] = melting_depth[i] / max_dp;
-        }
-        // smoothing the depth of melting
-        for (size_t i=1;i<ntop-1;i++)
-            melting_depth[i] = (melting_depth_elem[i-1] + melting_depth_elem[i] + melting_depth_elem[i+1])/3.;
-        melting_depth[0] = melting_depth[1];
-        melting_depth[ntop-1] = melting_depth[ntop-2];
-        for (size_t i=0;i<ntop;i++)
-            dh_oc[i] = dh_oc[i] / melting_depth[i];
-        if (var.steps % param.mesh.quality_check_step_interval == 0)
-            if (melting_marker.size() > 0) {
-                for (size_t i=0;i<ntop;i++)
-                    if (dh_oc[i] > 0) {
-                        double coef = dh_oc[i]/ var.dt * 1000. * YEAR2SEC; // / param.mesh.quality_check_step_interval ;
-                        printf("%zu x: %f dh_oc: %f (mm/yr) depth: %f\n",i, coord[top_nodes[i]][0],coef, melting_depth[i]);
-                    }
-            }
-#ifdef USE_NPROF
-        nvtxRangePop();
-#endif
-    }
 }
 
 
@@ -1930,104 +1931,76 @@ void surface_plstrain_diffusion(const Param &param, \
 #endif
 }
 
-void correct_surface_element(const Variables& var, \
-    const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
-    tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
+void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, \
+    tensor_t& stress, tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-
-    const size_t ntop_elem = var.top_elems->size();
-    array_t coord0s(ntop_elem*NODES_PER_ELEM,0.);
-    double_vec new_volumes(ntop_elem,0.);
-
-    for (size_t i=0;i<ntop_elem;i++) {
-        const double *coord1[NODES_PER_ELEM];
-
-        auto e = (*var.top_elems)[i];
-        int* tnodes = (*var.connectivity)[e];
-        double *c00 = coord0s[i*NODES_PER_ELEM];
-        double *c01 = coord0s[i*NODES_PER_ELEM+1];
-        double *c02 = coord0s[i*NODES_PER_ELEM+2];
-#ifdef THREED
-        double *c03 = coord0s[i*NODES_PER_ELEM+3];
+#ifndef ACC
+    #pragma omp parallel default(none) \
+        shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
 #endif
-
-        for (int j=0; j<NODES_PER_ELEM;j++)
-            coord1[j] = (*var.coord)[tnodes[j]];
-        compute_volume(coord1, new_volumes[i]);
-
-        // restore the reference node locations before deposition/erosion 
-        c00[0] = (*var.coord)[tnodes[0]][0];
-        c01[0] = (*var.coord)[tnodes[1]][0];
-        c02[0] = (*var.coord)[tnodes[2]][0];
-
-        c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
-        c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
-        c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
-#ifdef THREED            
-        c00[1] = (*var.coord)[tnodes[0]][1];
-        c01[1] = (*var.coord)[tnodes[1]][1];
-        c02[1] = (*var.coord)[tnodes[2]][1];
-
-        c03[0] = (*var.coord)[tnodes[3]][0];
-        c03[1] = (*var.coord)[tnodes[3]][1];
-        c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
+    {
+#ifndef ACC
+        #pragma omp for
 #endif
+        #pragma acc parallel loop async
+        for (int i=0; i<var.ntop_elems; i++) {
+            const double *coord1[NODES_PER_ELEM];
 
-#ifdef THREED
-        // calculate the volume of the element
-        double dv0 = ((c01[0] - c00[0])*((c02[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c02[2] - c00[2])) \
-                       - (c02[0] - c00[0])*((c01[1] - c00[1])*(c03[2] - c00[2]) - (c03[1] - c00[1])*(c01[2] - c00[2])) \
-                       + (c03[0] - c00[0])*((c01[1] - c00[1])*(c02[2] - c00[2]) - (c02[1] - c00[1])*(c01[2] - c00[2])))/6.0;
-#else
-        double dv0 = ((c01[0] - c00[0])*(c02[1] - c00[1]) \
-                       - (c02[0] - c00[0])*(c01[1] - c00[1]))/2.0;
-#endif
-        // make sure the area is positive
-        dv0 = (dv0 > 0.0) ? dv0 : -dv0;
+            const int e = (*var.top_elems)[i];
 
-        double rdv = new_volumes[i] / dv0;
+            for (int j=0; j<NODES_PER_ELEM;j++)
+                coord1[j] = (*var.coord)[(*var.connectivity)[e][j]];
+            double new_volumes = compute_volume(coord1);
+            double rdv =  new_volumes / volume[e];
+            volume[e] = new_volumes;
+            if (rdv < 1.0) continue;
 
-        // correct stress and strain
-        if (rdv > 1.) {
-            // correct the plastic strain overestimation of surface element caused by sedimentation.
+            // correct stress and strain
             plstrain[e] /= rdv;
-            for (int i=0;i<NSTR;i++) {
-                stress[e][i] /= rdv;
-                strain[e][i] /= rdv;
-                strain_rate[e][i] /= rdv;
+            // correct the plastic strain overestimation of surface element caused by sedimentation.
+            for (int j=0;j<NSTR;j++) {
+                stress[e][j] /= rdv;
+                strain[e][j] /= rdv;
+                strain_rate[e][j] /= rdv;
             }
         }
+
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop async
+        for (int n=0;n<var.surfinfo.ntop;n++) {
+            int nt = (*var.surfinfo.top_nodes)[n];
+            int_vec &sup = (*var.support)[nt];
+            volume_n[nt] = 0.;
+            for (size_t i=0;i<sup.size();i++)
+                volume_n[nt] += volume[sup[i]];
+        }
     }
-    Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, new_volumes);
-    ms.correct_surface_marker(var, coord0s, bary);
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
-
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, SurfaceInfo& surfinfo, \
-                        std::vector<MarkerSet*> &markersets, int_vec2D& elemmarkers)
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
+                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
+                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    const int_vec &top_nodes = *surfinfo.top_nodes;
-    const int slow_updates_interval = 10;
-    bool has_partial_melting = false;
-    const int ntop = var.surfinfo.ntop;
-    double_vec &dh = *var.surfinfo.dh;
-    double_vec &dh_oc = *var.surfinfo.dh_oc;
-    double_vec &dhacc = *var.surfinfo.dhacc;
-
-    #pragma acc parallel loop
-    for (int i=0;i<ntop;i++)
-        dh[i] = 0.;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
+    for (int i=0;i<var.surfinfo.ntop;i++)
+        (*var.surfinfo.dh)[i] = 0.;
 
     switch (param.control.surface_process_option) {
     case 0:
@@ -2057,37 +2030,39 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         std::exit(1);
     }
 
-    // find max surface velocity
-    double maxdh = 0.;
-    // #pragma omp parallel for reduction(max:maxdh) \
-    //     default(none) shared(dh)
-    for (std::size_t i=0; i<ntop; ++i) {
-        double tmp = fabs(dh[i]);
-        if (maxdh < tmp)
-            maxdh = tmp;
-    }
-    surfinfo.max_surf_vel = maxdh / var.dt;
-
-    // go through all surface nodes and abject all surface node by dh
-    // #pragma acc parallel loop
-    // #pragma omp parallel for default(none) \
-    //     shared(top_nodes, coord, dh, dhacc)
-    for (int i=0; i<ntop; i++) {
-        // get global index of node
-        // update coordinate via dh
-        // update dhacc for marker correction
-        int nt = top_nodes[i];
-        coord[nt][NDIMS-1] += dh[i];
-        dhacc[nt] += dh[i];
+#ifndef ACC
+    #pragma omp parallel default(none) shared(param, var, coord)
+#endif
+    {
+        // go through all surface nodes and abject all surface node by dh
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop async
+        for (int i=0; i<var.surfinfo.ntop; i++) {
+            // get global index of node
+            // update coordinate via dh
+            // update dhacc for marker correction
+            int nt = (*var.surfinfo.top_nodes)[i];
+            coord[nt][NDIMS-1] += (*var.surfinfo.dh)[i];
+            (*var.surfinfo.dhacc)[nt] += (*var.surfinfo.dh)[i];
+        }
 
         // update edvacc_surf of connected elements
-        for (std::size_t j=0; j<(*surfinfo.node_and_elems)[i].size(); j++) {
-            int e = (*surfinfo.node_and_elems)[i][j]; // get local index of surface element
-            int eg = (*surfinfo.top_facet_elems)[e]; // get global index of element
-
+#ifndef ACC
+        #pragma omp for
+#endif
+        #pragma acc parallel loop async
+        for (int i=0;i<var.surfinfo.etop;i++) {
+            int e = (*var.surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
-            for (int k=0; k<NDIMS; k++)
-                n[k] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[e][k]];
+            double dh_e = 0.;
+
+            for (int j=0;j<NDIMS;j++) {
+                int k = (*var.surfinfo.elem_and_nodes)[i][j];
+                n[j] = (*var.surfinfo.top_nodes)[k];
+                dh_e += (*var.surfinfo.dh)[k];
+            }
 
 #ifdef THREED
             double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
@@ -2095,48 +2070,51 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-            double dv = dh[i] * base / NDIMS;
-            (*surfinfo.edvacc_surf)[eg] += dv; // update edvacc_surf of connected elements
-            volume[eg] += dv;
-            volume_n[nt] += dv;
+            (*var.surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
         }
     }
+
+//     if (var.steps%1000 == 0) {
+//         double sum = 0.;
+// #ifndef ACC
+//         #pragma omp parallel default(none) shared(var) reduction(+:sum)
+// #endif
+//         #pragma acc parallel loop async reduction(+:sum)
+//         for (int i=0; i<var.surfinfo.etop; i++) {
+//             int e = (*var.surfinfo.top_facet_elems)[i];
+//             sum += (*var.surfinfo.edvacc_surf)[e];
+//         }
+//         #pragma acc wait
+//         printf("Sum of accu. surface deposition volume: %.2e\n", sum);
+//     }
+
+    // find max surface velocity
+    double maxdh = 0.;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
+#endif
+    #pragma acc parallel loop reduction(max:maxdh) async
+    for (int i=0; i<var.surfinfo.ntop; ++i) {
+        double tmp = fabs((*var.surfinfo.dh)[i]);
+
+        if (maxdh < tmp)
+            maxdh = tmp;
+    }
+
+    #pragma acc wait
+
+    surfinfo.max_surf_vel = maxdh / var.dt;
+
+    correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
-            // correct surface marker.
-            correct_surface_element(var, *surfinfo.dhacc, *markersets[0], stress, strain, strain_rate, plstrain);
-            std::fill(surfinfo.dhacc->begin(), surfinfo.dhacc->end(), 0.);
+            markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
+            std::fill(var.surfinfo.dhacc->begin(), var.surfinfo.dhacc->end(), 0.);
+
             // set marker of sediment.
-            markersets[0]->set_surface_marker(var, param.mesh.smallest_size, param.mat.mattype_sed, *surfinfo.edvacc_surf, elemmarkers);
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
-    }
-
-    if ( param.mat.phase_change_option == 2) {
-#ifdef THREED
-        std::cout << "3D simple_igneous processes is not ready yet.";
-        exit(168);
-#else
-        simple_igneous(param,var, dh_oc, has_partial_melting);
-
-        if ( has_partial_melting ) {
-            // go through all surface nodes and abject all surface node by dh_oc
-            // as same as dh
-            for (int i=0; i<ntop; i++) {
-                int n = (*surfinfo.top_nodes)[i];
-                (coord)[n][NDIMS-1] += dh_oc[i];
-                (*surfinfo.dhacc_oc)[n] += dh_oc[i];
-            }
-
-            if (!(var.steps % param.mesh.quality_check_step_interval)) {
-                // correct surface marker.
-                correct_surface_element(var, *surfinfo.dhacc_oc, *markersets[0], stress, strain, strain_rate, plstrain);
-                std::fill(surfinfo.dhacc_oc->begin(), surfinfo.dhacc_oc->end(), 0.);
-                // set marker of sediment.
-                markersets[0]->set_surface_marker(var,param.mesh.smallest_size,param.mat.mattype_oceanic_crust,*surfinfo.edhacc_oc,elemmarkers);
-            }
-        }
-#endif
     }
 
 #ifdef THREED
@@ -2148,9 +2126,9 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
     if ( param.control.is_reporting_terrigenous_info && var.steps%10000 == 0 &&  var.steps != 0  ) {
         double max_dh = 0., min_dh = 0., max_dh_oc = 0.;
-        for (int i=0;i<ntop;i++) {
-            max_dh = std::max(max_dh, dh[i]);
-            min_dh = std::min(min_dh, dh[i]);
+        for (int i=0;i<var.surfinfo.ntop;i++) {
+            max_dh = std::max(max_dh, (*var.surfinfo.dh)[i]);
+            min_dh = std::min(min_dh, (*var.surfinfo.dh)[i]);
             // std::cout << n << "  dh:  " << dh << '\n';
         }
 
@@ -2158,12 +2136,6 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                     << std::fixed << std::setprecision(3) << min_dh / var.dt * 1000. * YEAR2SEC << " / "
                     << std::fixed << std::setprecision(3) << max_dh / var.dt * 1000. * YEAR2SEC << '\n';
 
-        if ( param.mat.phase_change_option == 2) {
-            for (int i=0;i<ntop;i++)
-                max_dh_oc = std::max(max_dh_oc, dh_oc[i]);
-            std::cout << "\tMax igneous eruption rate (mm/yr):  "
-                        << std::fixed << std::setprecision(3) << max_dh_oc / var.dt * 1000. * YEAR2SEC << '\n';
-        }
     }
 #endif
 

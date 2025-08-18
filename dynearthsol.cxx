@@ -1,7 +1,4 @@
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include <limits>
 
 
@@ -38,7 +35,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.start_time = get_nanoseconds();
 
     for (int i=0;i<nbdrytypes;++i)
-        var.bfacets[i] = new std::vector< std::pair<int,int> >;
+        var.bfacets[i] = new int_pair_vec;
     for (int i=0;i<nbdrytypes;++i)
         var.bnodes[i] = new int_vec;
     var.bnormals = new array_t(nbdrytypes);
@@ -130,6 +127,20 @@ void init_var(const Param& param, Variables& var)
                      (var.ny-1) * (var.nz-1) + \
                      (var.nz-1) * (var.nx-1) );
 #endif
+
+#ifdef USE_NPROF
+    var.log_table = new double_vec(LOG_TABLE_SIZE);
+    for (int i=0; i<LOG_TABLE_SIZE; ++i)
+        (*var.log_table)[i] = std::log(LOG_XDELTA * i + LOG_XMIN);
+
+    var.tan_table = new double_vec(TAN_TABLE_SIZE);
+    for (int i=0; i<TAN_TABLE_SIZE; ++i)
+        (*var.tan_table)[i] = std::tan(TAN_XDELTA * i + TAN_XMIN);
+
+    var.sin_table = new double_vec(SIN_TABLE_SIZE);
+    for (int i=0; i<SIN_TABLE_SIZE; ++i)
+        (*var.sin_table)[i] = std::sin(SIN_XDELTA * i + SIN_XMIN);
+#endif
 }
 
 
@@ -145,6 +156,7 @@ void init(const Param& param, Variables& var)
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
+    create_neighbor(var);
     create_elemmarkers(param, var);
     create_markers(param, var);
 
@@ -160,6 +172,9 @@ void init(const Param& param, Variables& var)
             (*var.coord0)[i][d] = (*var.coord)[i][d];
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+
+    #pragma acc wait
+
     *var.volume_old = *var.volume;
     apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
@@ -167,12 +182,12 @@ void init(const Param& param, Variables& var)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors);
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
     // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -180,7 +195,6 @@ void init(const Param& param, Variables& var)
 
     initial_weak_zone(param, var, *var.plstrain);
 
-    phase_changes_init(param, var);
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
@@ -252,6 +266,7 @@ void restart(const Param& param, Variables& var)
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
+    create_neighbor(var);
     create_elemmarkers(param, var);
 
     // Replacing create_markers()
@@ -274,7 +289,8 @@ void restart(const Param& param, Variables& var)
     bin_chkpt.read_array(*var.volume_old, "volume_old");
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors);
+
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
 
     // Initializing field variables
     {
@@ -286,8 +302,6 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
-
-        bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
 
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
@@ -326,7 +340,6 @@ void restart(const Param& param, Variables& var)
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
-    phase_changes_init(param, var);
 }
 
 
@@ -353,7 +366,7 @@ void update_mesh(const Param& param, Variables& var)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers);
+                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     }
     
 //    var.markersets[0]->update_marker_in_elem(var);
@@ -362,7 +375,7 @@ void update_mesh(const Param& param, Variables& var)
 #ifdef USE_NPROF
     nvtxRangePushA("swap vectors");
 #endif
-    #pragma serial
+    #pragma serial async
     {
         double_vec *tmp = var.volume;
         var.volume = var.volume_old;
@@ -400,7 +413,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
     for (int n=0; n<iso_steps; n++) {
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -456,7 +469,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             if (param.control.has_moving_mesh)
                 update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -550,11 +563,11 @@ int main(int argc, const char* argv[])
         var.time += var.dt;
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
-            update_temperature(param, var, *var.temperature, *var.ntmp, *var.tmp_result);
+            update_temperature(param, var, *var.temperature, *var.tmp_result);
 
         update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -563,7 +576,7 @@ int main(int argc, const char* argv[])
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
-            NMD_stress(param, var, *var.ntmp, *var.stress, *var.tmp_result_sg);
+            NMD_stress(param, var, *var.ntmp, *var.stress, *var.etmp);
             
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -586,7 +599,7 @@ int main(int argc, const char* argv[])
                 if (param.control.has_moving_mesh)
                     update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+                compute_dvoldt(var, *var.ntmp, *var.etmp);
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -638,8 +651,10 @@ int main(int argc, const char* argv[])
 
 
         // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) // ignoring poroelastic effect due to inital imbalance 
+        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
+            #pragma acc wait // following founction is not ACC parallelized
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
+        }
 
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
@@ -649,6 +664,7 @@ int main(int argc, const char* argv[])
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain);
 
+        #pragma acc wait
         const int slow_updates_interval = 10;
         if (var.steps % slow_updates_interval == 0) {
             // The functions inside this if-block are expensive in computation is expensive,
@@ -661,6 +677,8 @@ int main(int argc, const char* argv[])
                                        *var.hydrous_elemmarkers);
             var.dt = compute_dt(param, var);
         }
+
+        #pragma acc wait
 
         if (param.sim.is_outputting_averaged_fields)
             output.average_fields(var);

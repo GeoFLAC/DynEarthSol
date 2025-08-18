@@ -7,9 +7,16 @@
 #include <vector>
 #include <unordered_map>
 
+#include <nanoflann.hpp>
+#ifdef USE_NPROF
+#include <nvToolsExt.h> 
+// #include <nvtx3/nvToolsExt.h> 
+#endif
+
 #include "constants.hpp"
 #include "array2d.hpp"
 
+typedef std::pair<int,int> int_pair;
 typedef std::pair<double,double> double_pair;
 typedef std::unordered_map<int,int> int_map;
 typedef std::vector<int_map> int_map2D;
@@ -17,23 +24,63 @@ typedef std::vector<int_map> int_map2D;
 typedef std::vector<double> double_vec;
 typedef std::vector<int> int_vec;
 typedef std::vector<int_vec> int_vec2D;
+typedef std::vector<double_vec> double_vec2D;
 typedef std::vector<uint> uint_vec;
+typedef std::vector<bool> bool_vec;
+typedef std::vector<size_t> size_t_vec;
+typedef std::vector<int_pair> int_pair_vec;
 
 typedef Array2D<double,NDIMS> array_t;
 typedef Array2D<double,NSTR> tensor_t;
 typedef Array2D<double,NODES_PER_ELEM> shapefn;
 typedef Array2D<double,1> regattr_t;
 typedef Array2D<double,NODES_PER_ELEM*3> elem_cache;
-typedef Array2D<double,2> dh_t;
 
 typedef Array2D<int,NODES_PER_ELEM> conn_t;
 typedef Array2D<int,NDIMS> segment_t;
 typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
+typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
-// forward declaration
-class PhaseChange;
+struct neighbor {
+    int idx;
+    double dist2;
+    neighbor() : idx(-1), dist2(0.0) {}
+    neighbor(int e, double a) : idx(e), dist2(a) {}
+};
 
+// Update markers in surface elements
+struct MarkerUpdate {
+    int m;
+    int src_elem;
+    int dst_elem;
+    int inc; // 1=move, 0=remove
+    MarkerUpdate() : m(-1), src_elem(-1), dst_elem(-1), inc(0) {}
+    MarkerUpdate(int marker, int src, int dst, int increment)
+        : m(marker), src_elem(src), dst_elem(dst), inc(increment) {}
+};
+
+// Define the struct to store marker data
+struct AppendMarkerData {
+    double eta[NODES_PER_ELEM];
+    int elem;
+    int mattype;
+    double time;
+    double depth;
+    double distance;
+    double slope;
+    AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = 0.0;
+    }
+    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s)
+        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
+    }
+};
+
+typedef std::vector<neighbor> neighbor_vec;
+typedef std::vector<MarkerUpdate> MU_vec;
+typedef std::vector<AppendMarkerData> AMD_vec;
 
 //
 // Structures for input parameters
@@ -254,6 +301,11 @@ struct IC {
     double radiogenic_folding_depth;
     double radiogenic_heating_of_crust;
     double lithospheric_thickness;
+    double rh_dome_center_x;
+    double rh_dome_center_y;
+    double surface_heat_flux;
+    double rh_dome_amplitude;
+    double rh_dome_width;
     int nhlayer;
     double_vec radiogenic_heat_boundry;
     int_vec radiogenic_heat_mat_in_layer;
@@ -268,12 +320,15 @@ struct Mat {
     int rheol_type;
     int phase_change_option;
     int nmat;
+    int mattype_ref;
     int mattype_mantle;
     int mattype_depleted_mantle;
     int mattype_partial_melting_mantle;
     int mattype_crust;
     int mattype_sed;
     int mattype_oceanic_crust;
+    int mattype_mor_extrusion;
+    int mattype_asthenosphere;
     double convert_rate_oceanic_crust;
 
     bool is_plane_strain;
@@ -341,6 +396,24 @@ struct Debug {
 //    bool has_two_layers_for;
 };
 
+struct PointCloud {
+    const array_t &data;
+
+    PointCloud(const array_t &_data)
+        : data(_data) {}
+
+    inline size_t kdtree_get_point_count() const { return data.size(); }
+
+    inline double kdtree_get_pt(const size_t idx, const size_t d) const {
+        return data[idx][d];
+    }
+
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX&) const { return false; }
+};
+
+using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
+
 struct Param {
     Sim sim;
     Mesh mesh;
@@ -361,6 +434,7 @@ struct SurfaceInfo {
 
     int efacet_top;
     int ntop;
+    int etop;
 
     double base_level;
     double surf_diff;
@@ -386,16 +460,10 @@ struct SurfaceInfo {
     double_vec *drainage;
 
     double_vec *dhacc;
+    // variable allocate by remesh
     double_vec *edvacc_surf;
     int_vec2D *node_and_elems;
     segment_t *elem_and_nodes;
-
-    double_vec *dhacc_oc;
-    double_vec *edhacc_oc;
-
-    std::vector<double_vec> *fcenters;
-    std::vector<double_vec> *normals;
-    std::vector<double_vec> *dips;
 
     int_map arctop_facet_elems;
     int_map arctop_nodes;
@@ -428,6 +496,7 @@ struct Variables {
     int nnode;
     int nelem;
     int nseg;
+    int ncontact;
     int nx, ny, nz, ncell;
 
     double max_vbc_val;
@@ -469,15 +538,24 @@ struct Variables {
     double vbc_val_z1_loading_period;
 
     std::map<std::pair<int,int>, double*> edge_vectors;
+    double_vec edge_vec;
+    int_vec edge_vec_idx;
     double_vec vbc_vertical_div_x0;
     double_vec vbc_vertical_div_x1;
     double_vec vbc_vertical_ratio_x0;
     double_vec vbc_vertical_ratio_x1;
 
     int_vec *top_elems;
-//    int_vec2D *marker_in_elem;
+    int ntop_elems;
+    int_vec2D *markers_in_elem;
+    int_vec2D *hydrous_markers_in_elem;
 
     int_vec2D *support;
+    int_vec *support_arr;
+    int_vec *support_idx;
+    conn_t *neighbor; // neighboring elements for each element
+    int_pair_vec *contact; // contact elements for each element
+    double_vec *ctmp; // temporary array for contact elements
 
     double_vec *volume, *volume_old, *volume_n;
     double_vec *mass, *tmass;
@@ -506,7 +584,8 @@ struct Variables {
     tensor_t *strain_rate, *strain, *stress;
     shapefn *shpdx, *shpdy, *shpdz; // gradient of shape function
     elem_cache *tmp_result;
-    double_vec *tmp_result_sg;
+    double_vec *etmp;
+    int_vec *etmp_int;
 
     // tensor_t *stress_old;
 
@@ -518,8 +597,6 @@ struct Variables {
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
 
-    PhaseChange *phch;
-
     Variables()
     {
         vbc_vertical_div_x0.resize(4);
@@ -527,6 +604,10 @@ struct Variables {
         vbc_vertical_ratio_x0.resize(4);
         vbc_vertical_ratio_x1.resize(4);
     }
+
+    double_vec *log_table; // for log(x) lookup table
+    double_vec *tan_table; // for tan(x) lookup table
+    double_vec *sin_table; // for sin(x) lookup table
 
 };
 

@@ -1,8 +1,5 @@
 #ifndef DYNEARTHSOL3D_UTILS_HPP
 #define DYNEARTHSOL3D_UTILS_HPP
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "parameters.hpp"
 #include <cmath>
@@ -65,6 +62,106 @@ void print(std::ostream& os, const Array& A)
     os << ", ";
   }
   os << "]";
+}
+
+#ifdef USE_NPROF
+
+#pragma acc routine seq
+static inline double log_lookup(const double_vec& log_table, double x) {
+    if (x <= 0.0)
+        printf("Error: log_lookup called with x <= 0 (%g)\n", x);
+
+    int exponent = 0;
+    while (x < LOG_XMIN) {
+        x *= 10.0;
+        exponent -= 1;
+    }
+    while (x > LOG_XMAX) {
+        x *= 0.1;
+        exponent += 1;
+    }
+
+    int idx = static_cast<int>((x - LOG_XMIN) / LOG_XDELTA);
+    double dx = x - (LOG_XMIN + idx * LOG_XDELTA);
+    double slope = (log_table[idx + 1] - log_table[idx]) / LOG_XDELTA;
+    return log_table[idx] + slope * dx + exponent * 2.302585092994046; // LN_10
+}
+
+#pragma acc routine seq
+static inline double tan_lookup(const double_vec& tan_table, const double x) {
+    if (x < TAN_XMIN || x > TAN_XMAX) {
+        printf("Error: tan_lookup called with x out of range (%g)\n", x);
+    }
+
+    int idx = static_cast<int>((x - TAN_XMIN) / TAN_XDELTA);
+    double dx = x - (TAN_XMIN + idx * TAN_XDELTA);
+    double slope = (tan_table[idx + 1] - tan_table[idx]) / TAN_XDELTA;
+    return tan_table[idx] + slope * dx;
+}
+
+#pragma acc routine seq
+static inline double sin_lookup(const double_vec& sin_table, const double x) {
+    if (x < SIN_XMIN || x > SIN_XMAX) {
+        printf("Error: sin_lookup called with x out of range (%g)\n", x);
+    }
+
+    int idx = static_cast<int>((x - SIN_XMIN) / SIN_XDELTA);
+    double dx = x - (SIN_XMIN + idx * SIN_XDELTA);
+    double slope = (sin_table[idx + 1] - sin_table[idx]) / SIN_XDELTA;
+    return sin_table[idx] + slope * dx;
+}
+
+#endif
+
+#pragma acc routine seq
+static inline double tan_safe(const double_vec& tan_table, const double x) {
+#ifdef USE_NPROF
+    return tan_lookup(tan_table, x);
+#else
+    return std::tan(x);
+#endif
+}
+
+#pragma acc routine seq
+static inline double log_safe(const double_vec& log_table, const double x) {
+#ifdef USE_NPROF
+    return log_lookup(log_table, x);
+#else
+    return std::log(x);
+#endif
+}
+
+#pragma acc routine seq
+static inline double sin_safe(const double_vec& sin_table, const double x) {
+#ifdef USE_NPROF
+    return sin_lookup(sin_table, x);
+#else
+    return std::sin(x);
+#endif
+}
+
+#pragma acc routine seq
+static double pow_safe(const double_vec& log_table, const double x, const double y) {
+#ifdef USE_NPROF
+    if (x < 0.) {
+        printf("Error: pow_safe called with x < 0 (%g)\n", x);
+    } else if (x == 0.) {
+        return 0.0; // Avoid log(0) which is undefined
+    } else
+        return exp(y * log_lookup(log_table, x));
+#else
+    return std::pow(x, y);
+#endif
+}
+
+#pragma acc routine seq
+static double pow_1_5(const double x) {
+    return x * sqrt(x);
+}
+
+#pragma acc routine seq
+static double pow_2(const double x) {
+    return x * x;
 }
 
 #pragma acc routine seq
@@ -132,6 +229,8 @@ static double interp1(const double_vec& x, const double_vec& y, double x_new)
 }
 
 static int64_t get_nanoseconds() {
+    #pragma acc wait
+
     #if defined(_WIN32)
     LARGE_INTEGER frequency, counter;
     QueryPerformanceFrequency(&frequency);
@@ -153,60 +252,97 @@ static void print_time_ns(const int64_t duration) {
     << std::setw(9) << std::fixed << std::setprecision(6) << std::setfill('0') << seconds;
 }
 
-#endif
 
-static void out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
+#pragma acc routine seq
+static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
     if (idx1 >= 0)
-        std::cerr << "Error: " << msg <<"[" << idx0 << "][" << idx1 << "] becomes NaN" << std::endl;
+        printf("Error: %s[%d][%d] becomes NaN\n", msg, idx0, idx1);
     else
-        std::cerr << "Error: " << msg <<"[" << idx0 << "] becomes NaN" << std::endl;
-    std::exit(11);
+        printf("Error: %s[%d] becomes NaN\n", msg, idx0);
+    return 1;
 }
 
-static void check_nan(const Variables& var) {
+static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    #pragma omp parallel default(none) shared(var)
+
+    #pragma acc serial
+    int is_nan = 0;
+
+#ifndef ACC
+    #pragma omp parallel default(none) shared(var,is_nan)
+#endif
     {
-        #pragma omp for
+#ifndef ACC
+        #pragma omp for reduction(+:is_nan)
+#endif
+        #pragma acc parallel loop reduction(+:is_nan)
         for (int e=0; e<var.nelem;e++) {
             if (std::isnan((*var.volume)[e]))
-                out_nan_error("volume", e);
+                is_nan += out_nan_error("volume", e);
             
             if (std::isnan((*var.dpressure)[e]))
-                out_nan_error("dpressure", e);
+                is_nan += out_nan_error("dpressure", e);
 
             if (std::isnan((*var.viscosity)[e]))
-                out_nan_error("viscosity", e);
+               is_nan +=  out_nan_error("viscosity", e);
             
             for (int i=0; i<NODES_PER_ELEM;i++)
                 if(std::isnan((*var.connectivity)[e][i]))
-                    out_nan_error("connectivity", e, i);
+                    is_nan += out_nan_error("connectivity", e, i);
 
             for (int i=0; i<NSTR; i++)
                 if (std::isnan((*var.stress)[e][i]))
-                    out_nan_error("stress", e, i);
+                    is_nan += out_nan_error("stress", e, i);
+
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdx)[e][i]))
+                    is_nan += out_nan_error("shpdx", e, i);
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdy)[e][i]))
+                    is_nan += out_nan_error("shpdy", e, i);
+            for (int i=0; i<NODES_PER_ELEM; i++)
+                if(std::isnan((*var.shpdz)[e][i]))
+                    is_nan += out_nan_error("shpdz", e, i);
         }
 
-        #pragma omp for
+#ifndef ACC
+        #pragma omp for reduction(+:is_nan)
+#endif
+        #pragma acc parallel loop reduction(+:is_nan)
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
-                out_nan_error("temperature", n);
+                is_nan += out_nan_error("temperature", n);
+
+            if (std::isnan((*var.tmass)[n]))
+                is_nan += out_nan_error("tmass", n);
 
             for (int i=0; i<NDIMS; i++) {
                 if (std::isnan((*var.force)[n][i]))
-                    out_nan_error("force", n, i);
+                    is_nan += out_nan_error("force", n, i);
 
                 if (std::isnan((*var.vel)[n][i]))
-                    out_nan_error("vel", n, i);
+                    is_nan += out_nan_error("vel", n, i);
 
                 if (std::isnan((*var.coord)[n][i]))
-                    out_nan_error("coord", n, i);                
+                    is_nan += out_nan_error("coord", n, i);                
             }
         }
+    }
+
+    if (is_nan > 0) {
+        if (func_name) {
+            std::cerr << "Error: " << is_nan << " NaN values found in the variables in " << func_name << "." << std::endl;
+        } else {
+            std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
+        }
+        std::exit(1);
     }
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
 }
+
+
+#endif // DYNEARTHSOL3D_UTILS_HPP

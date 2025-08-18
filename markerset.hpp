@@ -6,7 +6,6 @@
 
 
 // forward declaration
-class BinaryOutput;
 class BinaryInput;
 
 class MarkerSet
@@ -26,22 +25,35 @@ public:
         delete _eta; 
         delete _elem;
         delete _mattype;
+        delete _tmp;
     }
 
     static void random_eta( double* ); // class method
+    static void random_eta_seed(double*, int);
+    static void random_eta_seed_surface(double*, int);
 //    void create_marker_in_elem(Variables& var);
 //    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
-    void correct_surface_marker(const Variables& var, array_t& coord0s, Barycentric_transformation &bary);
-    void set_surface_marker(const Variables& var, const double smallest_size, const int mattype_sed, double_vec& edvacc_surf, int_vec2D& elemmarkers);
+    void check_marker_elem_consistency(const Variables &var) const;
+    void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
+    void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
+                        const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt);
-    void append_marker( const double *eta, int el, int mt, double time, double z, double distance, double slope);
+    void append_random_marker_in_elem( int el, int mt, double time);
+    void append_marker(const double *eta, int el, int mt, double time, double depth, double distance, double slope);
+    void append_marker_at_i(AppendMarkerData &md, int idx, int last_id);
+    void append_markers(AMD_vec &md);
     void remove_marker(int i);
+    void remove_marker_data(int is, int ie);
+    void remove_markers(const Param& param, const Variables& var, int_vec& markers, int_vec2D& markers_in_elem);
     void resize(const int);
-    void write_chkpt_file(BinaryOutput &bin) const;
+    template <class T>
+    void write_chkpt_file(T &bin) const;
     void read_chkpt_file(Variables &var, BinaryInput &bin);
-    void write_save_file(const Variables &var, BinaryOutput &bin) const;
+    template <class T>
+    void write_save_file(const Variables &var, T &bin) const;
+    array_t* calculate_marker_coord(const Variables &var) const;
 
     inline int get_nmarkers() const { return _nmarkers; }
     inline void set_nmarkers(int n) { _nmarkers = n; }
@@ -72,6 +84,12 @@ public:
     inline const double *get_eta(int m) const { return (*_eta)[m]; }
     inline void set_eta( const int i, const double r[NDIMS] );
 
+    inline double get_tmp(int m) const { return (*_tmp)[m]; }
+    inline void set_tmp(const int m, const double tmp) { (*_tmp)[m] = tmp; }
+
+    #pragma acc routine seq
+    void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
+
 private:
     const std::string _name;
 
@@ -98,6 +116,8 @@ private:
     double_vec *_distance;
     // Slope of surface
     double_vec *_slope;
+    // temporary storage
+    double_vec *_tmp;
 
     void random_markers( const Param&, Variables& );
     void regularly_spaced_markers( const Param&, Variables& );

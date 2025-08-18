@@ -4,7 +4,7 @@
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);
 void update_temperature(const Param &param, const Variables &var,
-    double_vec &temperature, double_vec &tdot, elem_cache& tmp_result);
+    double_vec &temperature, elem_cache& tmp_result);
 void update_pore_pressure(const Param &param, const Variables &var,
     double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache& tmp_result, tensor_t &stress, double_vec& old_mean_stress);
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);

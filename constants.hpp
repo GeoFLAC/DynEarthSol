@@ -77,4 +77,19 @@ const int NODE_OF_FACET[FACETS_PER_ELEM][NODES_PER_FACET] =
 const double YEAR2SEC = 365.2422 * 86400;
 const double DEG2RAD = M_PI / 180;
 
+#ifdef USE_NPROF
+const int LOG_TABLE_SIZE = 90001;
+const double LOG_XMIN = 1.;
+const double LOG_XMAX = 10.;
+const double LOG_XDELTA = (LOG_XMAX - LOG_XMIN) / (LOG_TABLE_SIZE - 1);
+const int TAN_TABLE_SIZE = 18001;
+const double TAN_XMIN = -M_PI / 2 + 0.0001; // -89.9999 degrees
+const double TAN_XMAX = M_PI / 2 - 0.0001; // 89.9999 degrees
+const double TAN_XDELTA = (TAN_XMAX - TAN_XMIN) / (TAN_TABLE_SIZE - 1);
+const int SIN_TABLE_SIZE = 36001;
+const double SIN_XMIN = -M_PI; // -180 degrees
+const double SIN_XMAX = M_PI; // 180 degrees
+const double SIN_XDELTA = (SIN_XMAX - SIN_XMIN) / (SIN_TABLE_SIZE - 1);
+#endif
+
 #endif

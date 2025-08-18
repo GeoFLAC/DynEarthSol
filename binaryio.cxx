@@ -1,9 +1,6 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -134,9 +131,9 @@ void BinaryOutput::write_array(const Array2D<T,N>& A, const char *name, std::siz
 
 // explicit instantiation
 template
-void BinaryOutput::write_array<int>(const std::vector<int>& A, const char *name, std::size_t);
+void BinaryOutput::write_array<int>(const int_vec& A, const char *name, std::size_t);
 template
-void BinaryOutput::write_array<double>(const std::vector<double>& A, const char *name, std::size_t);
+void BinaryOutput::write_array<double>(const double_vec& A, const char *name, std::size_t);
 
 template
 void BinaryOutput::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, std::size_t);
@@ -276,9 +273,9 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name)
 
 // explicit instantiation
 template
-void BinaryInput::read_array<double>(std::vector<double>& A, const char *name);
+void BinaryInput::read_array<double>(double_vec& A, const char *name);
 template
-void BinaryInput::read_array<int>(std::vector<int>& A, const char *name);
+void BinaryInput::read_array<int>(int_vec& A, const char *name);
 template
 void BinaryInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
 template
@@ -296,3 +293,99 @@ void BinaryInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A,
 template
 void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name);
 
+
+#ifdef NETCDF
+
+NetCDFOutput::NetCDFOutput(const char *filename)
+    : nc_file(filename, NcFile::replace)
+{
+    write_header();
+}
+
+NetCDFOutput::~NetCDFOutput()
+{
+    // nothing to do
+}
+
+void NetCDFOutput::write_header()
+{
+    nc_file.putAtt("ndims", ncInt, 1, &NDIMS);
+    int rev = 3;
+    nc_file.putAtt("revision", ncInt, 1, &rev);
+}
+
+template<typename T>
+NcType get_nc_type();
+
+template<>
+NcType get_nc_type<int>() {
+    return ncInt;
+}
+
+template<>
+NcType get_nc_type<uint>() {
+    return ncUint;
+}
+
+template<>
+NcType get_nc_type<double>() {
+    return ncDouble;
+}
+
+template<>
+NcType get_nc_type<float>() {
+    return ncFloat;
+}
+
+// 1D array
+template<typename T>
+void NetCDFOutput::write_array(const std::vector<T>& A, const char *name, std::size_t size)
+{
+    NcDim dim = nc_file.addDim(std::string("dim_") + name, size);
+
+    NcType type = get_nc_type<T>();
+
+    NcVar var = nc_file.addVar(name, type, dim);
+    var.setCompression(true, true, 4);
+    var.putVar(A.data());
+}
+
+// 2D array
+template<typename T, int N>
+void NetCDFOutput::write_array(const Array2D<T, N>& A, const char *name, std::size_t size)
+{
+    NcDim dimY = nc_file.addDim(std::string("dimY_") + name, size);
+    NcDim dimX = nc_file.addDim(std::string("dimX_") + name, N);
+
+    NcType type = get_nc_type<T>();
+
+    NcVar var = nc_file.addVar(name, type, {dimY, dimX});
+    var.setCompression(true, true, 4);
+    var.putVar(A.data());
+}
+
+// explicit instantiation
+template
+void NetCDFOutput::write_array<int>(const int_vec& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<double>(const double_vec& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<uint>(const std::vector<uint>& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, std::size_t);
+#ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
+template
+void NetCDFOutput::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t);
+#endif
+template
+void NetCDFOutput::write_array<double,1>(const Array2D<double,1>& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, std::size_t);
+template
+void NetCDFOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
+
+#endif
