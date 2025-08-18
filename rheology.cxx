@@ -638,14 +638,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    // Interpolate pore pressure from nodes to element level
-    // double_vec ppressure_element(var.nelem, 0.0);
-    // double_vec dppressure_element(var.nelem, 0.0);
-    // Define element velocity arrays
-    // double_vec velocity_x_element(var.nelem, 0.0);
-    // double_vec velocity_y_element(var.nelem, 0.0);
-    // double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
-
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
@@ -672,33 +664,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vx_element += vel[conn[j]][0] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vy_element += vel[conn[j]][1] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-
 #endif
         }
-        // ppressure_element[e] = pp_element;  // Store element-level pore pressure 
-        // dppressure_element[e] = dpp_element;  // Store element-level pore pressure rate
-        // velocity_x_element[e] = vx_element;  // Store element-level velocity in x direction
-        // velocity_y_element[e] = vy_element;  // Store element-level velocity in y direction
-        // #ifdef THREED
-        // velocity_z_element[e] = vz_element;  // Store element-level velocity in z direction
-        // #endif
 
-        double pp = pp_element;  // Store element-level pore pressure 
-        double dpp = dpp_element;  // Store element-level pore pressure rate
-        double vx = vx_element;  // Store element-level velocity in x direction
-        double vy = vy_element;  // Store element-level velocity in y direction
-#ifdef THREED
-        double vz = vz_element;  // Store element-level velocity in z direction
-#endif
-
-
-//         }
-
-// #ifndef ACC
-//         #pragma omp for
-// #endif
-//         // // 1 #pragma acc parallel loop
-//         for (int e=0; e<var.nelem; ++e) {
         // stress, strain and strain_rate of this element
         double* s = stress[e];
         double& syy = stressyy[e];
@@ -708,12 +676,14 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
         // Calculate effective pore pressure using Biot's coefficient
         double alpha_b = var.mat->alpha_biot(e); // Biot coefficient
-        // double pp = ppressure_element[e];        // Use element-level interpolated pore pressure
-        // double dpp = dppressure_element[e];        // Use element-level interpolated pore pressure rate
+        double pp = pp_element;        // Use element-level interpolated pore pressure
+        double dpp = dpp_element;        // Use element-level interpolated pore pressure rate
 
-        // double vx = velocity_x_element[e];        // Use element-level interpolated velocity in x direction
-        // double vy = velocity_y_element[e];        // Use element-level interpolated velocity in y direction
-        // double vz = velocity_z_element[e];        // Use element-level interpolated velocity in z direction
+        double vx = vx_element;        // Use element-level interpolated velocity in x direction
+        double vy = vy_element;        // Use element-level interpolated velocity in y direction
+#ifdef THREED
+        double vz = vz_element;        // Use element-level interpolated velocity in z direction
+#endif
 
         // // Calculate the center of the element
         // const int *conn = (*var.connectivity)[e];
@@ -794,17 +764,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double shearm = var.mat->shearm(e);
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props(e, plstrain[e],
-                                    amc, anphi, anpsi, hardn, ten_max);
+                                       amc, anphi, anpsi, hardn, ten_max);
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                    de, depls, s, syy, failure_mode, 
-                                    param.control.has_hydraulic_diffusion, dpp);
+                                     de, depls, s, syy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                de, depls, s, failure_mode, 
-                                param.control.has_hydraulic_diffusion, dpp);
+                                   de, depls, s, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -825,7 +795,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props(e, plstrain[e],
-                                    amc, anphi, anpsi, hardn, ten_max);
+                                       amc, anphi, anpsi, hardn, ten_max);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];
@@ -833,13 +803,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                    de, depls, sp, spyy, failure_mode, 
-                                    param.control.has_hydraulic_diffusion, dpp);
+                                     de, depls, sp, spyy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                de, depls, sp, failure_mode, 
-                                param.control.has_hydraulic_diffusion, dpp);
+                                   de, depls, sp, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
                 }
                 double spII = second_invariant2(sp);
 
@@ -862,26 +832,26 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 // calculate the shear direction in maximum shear stress
                 double slip_rate;
-            
+                
 #ifdef THREED
                 compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
 #else
                 compute_slip_rate2(s, vx, vy, slip_rate); // Calculate slip vector magnitude in 2D
 #endif
-    
+        
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                    amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                    de, depls, s, syy, failure_mode, 
-                                    param.control.has_hydraulic_diffusion, dpp);
+                                     de, depls, s, syy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                de, depls, s, failure_mode, 
-                                param.control.has_hydraulic_diffusion, dpp);
+                                   de, depls, s, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -900,9 +870,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
                 double svII = second_invariant2(sv);
 
-                // calculate the shear direction in maximum shear stress
+                 // calculate the shear direction in maximum shear stress
                 double slip_rate;
-            
+                
 #ifdef THREED
                 compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
 #else
@@ -911,7 +881,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                    amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];
@@ -919,13 +889,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                    de, depls, sp, spyy, failure_mode, 
-                                    param.control.has_hydraulic_diffusion, dpp);
+                                     de, depls, sp, spyy, failure_mode, 
+                                     param.control.has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                de, depls, sp, failure_mode, 
-                                param.control.has_hydraulic_diffusion, dpp);
+                                   de, depls, sp, failure_mode, 
+                                   param.control.has_hydraulic_diffusion, dpp);
                 }
                 double spII = second_invariant2(sp);
 
