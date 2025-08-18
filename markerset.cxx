@@ -298,26 +298,26 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
     double marker_dh_applied_ratio = 0.8;
     // double_vec &src_locs = *var.surfinfo.src_locs;
 
-    if (var.steps%1000==0) {
-        double max_edvacc = 0.0;
-        #pragma omp parallel for reduction(max:max_edvacc)
-        for (int i=0; i<var.surfinfo.etop; i++) {
-            int e = (*var.surfinfo.top_facet_elems)[i];
-            if (edvacc[e] > max_edvacc) {
-                max_edvacc = edvacc[e];
-            }
-        }
+    // if (var.steps%1000==0) {
+    //     double max_edvacc = 0.0;
+    //     #pragma omp parallel for reduction(max:max_edvacc)
+    //     for (int i=0; i<var.surfinfo.etop; i++) {
+    //         int e = (*var.surfinfo.top_facet_elems)[i];
+    //         if (edvacc[e] > max_edvacc) {
+    //             max_edvacc = edvacc[e];
+    //         }
+    //     }
 
-        printf("Surface accu mat #%d: ", mattype);
-        for (int i=0; i<var.surfinfo.etop; i++) {
-            int e = (*var.surfinfo.top_facet_elems)[i];
-            if (edvacc[e] > max_edvacc - 1.) {
-                double ratio = (param.markers.markers_per_element * edvacc[e]) / (*var.volume)[e];
-                printf("elem[%6d] = %.1e, ratio = %5.1f%% ", e, edvacc[e], ratio*100.);
-            }
-        }
-        printf("\n");
-    }
+    //     printf("Surface accu mat #%d: ", mattype);
+    //     for (int i=0; i<var.surfinfo.etop; i++) {
+    //         int e = (*var.surfinfo.top_facet_elems)[i];
+    //         if (edvacc[e] > max_edvacc - 1.) {
+    //             double ratio = (param.markers.markers_per_element * edvacc[e]) / (*var.volume)[e];
+    //             printf("elem[%6d] = %.1e, ratio = %5.1f%% ", e, edvacc[e], ratio*100.);
+    //         }
+    //     }
+    //     printf("\n");
+    // }
 
     #pragma omp parallel for default(none) shared(param, var, \
         edvacc, elemmarkers, markers_in_elem,marker_dh_applied_ratio) firstprivate(mattype)
@@ -485,8 +485,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
     for (int i=0; i<nnew; ++i)
         markers_in_elem[marker_data_all[i].elem].push_back(_nmarkers-nnew+i);
 
-    if (nnew > 0)
-        printf("Set surface markers: %d (mat: %d)\n", nnew, mattype);
+    // if (nnew > 0)
+    //     printf("Set surface markers: %d (mat: %d)\n", nnew, mattype);
 
 #ifdef USE_NPROF
     nvtxRangePop();
@@ -801,21 +801,21 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         }
     }
 
-    printf("    Removed %d markers from markerset (", n);
+    // printf("    Removed %d markers from markerset (", n);
 
-    int *ndelete = var.etmp_int->data();
-    for (int i=0; i<param.mat.nmat; ++i) {
-        ndelete[i]  = 0;
-    }
-    for (int i=0; i<markers.size();++i) {
-        ndelete[(*_mattype)[markers[i]]]++;
-    }
-    for (int i=0; i<param.mat.nmat; ++i) {
-        if (ndelete[i] > 0) {
-            printf("mat #%d: %d; ", i, ndelete[i]);
-        }
-    }
-    printf(")\n");
+    // int *ndelete = var.etmp_int->data();
+    // for (int i=0; i<param.mat.nmat; ++i) {
+    //     ndelete[i]  = 0;
+    // }
+    // for (int i=0; i<markers.size();++i) {
+    //     ndelete[(*_mattype)[markers[i]]]++;
+    // }
+    // for (int i=0; i<param.mat.nmat; ++i) {
+    //     if (ndelete[i] > 0) {
+    //         printf("mat #%d: %d; ", i, ndelete[i]);
+    //     }
+    // }
+    // printf(")\n");
 
     #pragma acc wait
 
