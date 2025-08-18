@@ -598,6 +598,8 @@ static void declare_parameters(po::options_description &cfg,
          "101: custom phase changes.")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
+        ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
+         "Index of reference material. For compute_dt(), ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),

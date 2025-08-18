@@ -364,7 +364,6 @@ double compute_dt(const Param& param, Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
-    int mattype_ref = param.mat.mattype_mantle;
 
     // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
@@ -516,7 +515,7 @@ double compute_dt(const Param& param, Variables& var)
         dt_advection = 0.5 * minl / max_vbc_val;
         dt_elastic = (param.control.is_quasi_static) ?
         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[mattype_ref] / param.mat.rho0[mattype_ref]);
+        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
     }
 
     // Combine dt calculations and incorporate dt_hydro_diffusion
@@ -551,7 +550,6 @@ double compute_dt_PT(const Param& param, const Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
-    int mattype_ref = param.mat.mattype_mantle;
 
     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
         default(none) shared(param,var)
@@ -617,7 +615,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
     double dt_advection = 0.5 * minl / max_vbc_val;
     double dt_elastic = (param.control.is_quasi_static) ?
         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[mattype_ref] / param.mat.rho0[mattype_ref]);
+        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
 
     double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
     if (param.debug.dt) {
@@ -654,14 +652,14 @@ void compute_mass(const Param &param, const Variables &var,
     #pragma acc serial async
     {
         // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(0);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(0);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(0);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(0);            // Fluid density
-        double phi_e = var.mat->phi(0);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(0);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(0);
-        double shearm = var.mat->shearm(0);
+        double perm_e = var.mat->perm(param.mat.mattype_ref);                // Intrinsic permeability 
+        double mu_e = var.mat->mu_fluid(param.mat.mattype_ref);              // Fluid dynamic viscosity
+        double alpha_b = var.mat->alpha_biot(param.mat.mattype_ref);         // Biot coefficient
+        double rho_f = var.mat->rho_fluid(param.mat.mattype_ref);            // Fluid density
+        double phi_e = var.mat->phi(param.mat.mattype_ref);        // Element porosity
+        double comp_fluid = var.mat->beta_fluid(param.mat.mattype_ref);        // fluid comporessibility
+        double bulkm = var.mat->bulkm(param.mat.mattype_ref);
+        double shearm = var.mat->shearm(param.mat.mattype_ref);
         double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
 
         rho_f = 1000.0; 

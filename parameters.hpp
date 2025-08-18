@@ -320,6 +320,7 @@ struct Mat {
     int rheol_type;
     int phase_change_option;
     int nmat;
+    int mattype_ref;
     int mattype_mantle;
     int mattype_depleted_mantle;
     int mattype_partial_melting_mantle;
