@@ -231,15 +231,27 @@ void restart(const Param& param, Variables& var)
     }
 
     char filename_save[256];
+#ifdef NETCDF
+    std::snprintf(filename_save, 255, "%s.save.%06d.nc",
+                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
+    NetCDFInput bin_save(filename_save);
+#else
     std::snprintf(filename_save, 255, "%s.save.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     BinaryInput bin_save(filename_save);
+#endif
     std::cout << "  Reading " << filename_save << "...\n";
 
     char filename_chkpt[256];
+#ifdef NETCDF
+    std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d.nc",
+                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
+    NetCDFInput bin_chkpt(filename_chkpt);
+#else
     std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     BinaryInput bin_chkpt(filename_chkpt);
+#endif
     std::cout << "  Reading " << filename_chkpt << "...\n";
 
     //
@@ -799,6 +811,6 @@ int main(int argc, const char* argv[])
     std::cout << "  Output : ";
     print_time_ns(var.func_time.output_time);
     std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
-        << 100./var.func_time.output_time/duration_ns << "%)\n";
+        << 100.*var.func_time.output_time/duration_ns << "%)\n";
     return 0;
 }

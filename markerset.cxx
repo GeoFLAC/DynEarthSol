@@ -66,8 +66,15 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
     }
 }
 
+template
+MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin, const std::string& name);
+#ifdef NETCDF
+template
+MarkerSet::MarkerSet(const Param& param, Variables& var, NetCDFInput& bin, const std::string& name);
+#endif
 
-MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin, const std::string& name) :
+template <class T>
+MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin, const std::string& name) :
     _name(name)
 {
     // init from checkpoint file
@@ -921,8 +928,15 @@ void MarkerSet::write_chkpt_file(T &bin) const
 
 }
 
+template
+void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin);
+#ifdef NETCDF
+template
+void MarkerSet::read_chkpt_file(Variables &var, NetCDFInput &bin);
+#endif
 
-void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin)
+template <class T>
+void MarkerSet::read_chkpt_file(Variables &var, T &bin)
 {
     int_vec itmp(2);
     bin.read_array(itmp, (_name + " size").c_str());

@@ -4,17 +4,14 @@
 #include <string>
 #include "barycentric-fn.hpp"
 
-
-// forward declaration
-class BinaryInput;
-
 class MarkerSet
 {
 
 public:
     MarkerSet( const std::string& name );
     MarkerSet( const Param& param, Variables& var, const std::string& name );
-    MarkerSet( const Param& param, Variables& var, BinaryInput& bin, const std::string& name );
+    template <class T>
+    MarkerSet( const Param& param, Variables& var, T& bin, const std::string& name );
     ~MarkerSet()
     {
         delete _slope;
@@ -31,8 +28,6 @@ public:
     static void random_eta( double* ); // class method
     static void random_eta_seed(double*, int);
     static void random_eta_seed_surface(double*, int);
-//    void create_marker_in_elem(Variables& var);
-//    void update_marker_in_elem(Variables& var);
     void create_melt_markers(const int mat, int_vec& melt_markers);
     void check_marker_elem_consistency(const Variables &var) const;
     void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
@@ -50,7 +45,8 @@ public:
     void resize(const int);
     template <class T>
     void write_chkpt_file(T &bin) const;
-    void read_chkpt_file(Variables &var, BinaryInput &bin);
+    template <class T>
+    void read_chkpt_file(Variables &var, T &bin);
     template <class T>
     void write_save_file(const Variables &var, T &bin) const;
     array_t* calculate_marker_coord(const Variables &var) const;

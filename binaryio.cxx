@@ -388,4 +388,116 @@ void NetCDFOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const cha
 template
 void NetCDFOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
 
+NetCDFInput::NetCDFInput(const char *filename)
+    : nc_file(filename, NcFile::read)
+{
+    read_header();
+}
+
+void NetCDFInput::read_header()
+{
+    NcGroupAtt ndims_att = nc_file.getAtt("ndims");
+    if (ndims_att.isNull()) {
+        std::cerr << "Error: mismatching ndims in header\n";
+        std::exit(1);
+    }
+    int ndims = -1;
+    ndims_att.getValues(&ndims);
+    // std::cout << "ndims = " << ndims << std::endl;
+
+    NcGroupAtt rev_att = nc_file.getAtt("revision");
+    if (rev_att.isNull()) {
+        std::cerr << "Error: mismatching revision in header\n";
+        std::exit(1);
+    }
+
+    int rev = -1;
+    rev_att.getValues(&rev);
+    // std::cout << "revision = " << rev << std::endl;
+}
+
+NetCDFInput::~NetCDFInput()
+{
+    // nothing to do
+}
+
+template <typename T>
+void NetCDFInput::read_array(std::vector<T>& A, const char *name)
+{
+    /* The caller must ensure A is of right size to hold the array */
+
+    int size = A.size();
+    if (A.size() == 0) {
+        std::cerr << "Error: array size is 0: " << name << '\n';
+        std::exit(1);
+    }
+
+    NcVar var = nc_file.getVar(name);
+    if (var.isNull()) {
+        std::cerr << "Error: cannot read array: " << name << '\n';
+        std::exit(1);
+    }
+
+    std::vector<NcDim> dims = var.getDims();
+    int n = dims[0].getSize();
+
+    if (n != size) {
+        std::cerr << "Error: array size is not matched: " << name << '\n';
+        std::exit(1);
+    }
+
+    var.getVar(A.data());
+}
+
+
+template <typename T, int N>
+void NetCDFInput::read_array(Array2D<T,N>& A, const char *name)
+{
+    /* The caller must ensure A is of right size to hold the array */
+
+    int size = A.size();
+    if (A.size() == 0) {
+        std::cerr << "Error: array size is 0: " << name << '\n';
+        std::exit(1);
+    }
+
+    NcVar var = nc_file.getVar(name);
+    if (var.isNull()) {
+        std::cerr << "Variable not found: " << name << '\n';
+        std::exit(1);
+    }
+
+    std::vector<NcDim> dims = var.getDims();
+    int n = dims[0].getSize();
+
+    if (n != size) {
+        std::cerr << "Error: array size is not matched: " << name << '\n';
+        std::exit(1);
+    }
+
+    var.getVar(A.data());
+}
+
+// explicit instantiation
+template
+void NetCDFInput::read_array<double>(double_vec& A, const char *name);
+template
+void NetCDFInput::read_array<int>(int_vec& A, const char *name);
+template
+void NetCDFInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
+template
+void NetCDFInput::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name);
+#ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
+template
+void NetCDFInput::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name);
+#endif
+template
+void NetCDFInput::read_array<double,1>(Array2D<double,1>& A, const char *name);
+template
+void NetCDFInput::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name);
+template
+void NetCDFInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name);
+template
+void NetCDFInput::read_array<int,1>(Array2D<int,1>& A, const char *name);
+
 #endif

@@ -76,6 +76,24 @@ private:
     NcFile nc_file;
 };
 
+class NetCDFInput
+{
+private:
+    NcFile nc_file;
+
+    void read_header();
+
+public:
+    NetCDFInput(const char *filename);
+    ~NetCDFInput();
+
+    template <typename T>
+    void read_array(std::vector<T>& A, const char *name);
+
+    template <typename T, int N>
+    void read_array(Array2D<T,N>& A, const char *name);
+};
+
 #endif // NETCDF
 
 #endif
