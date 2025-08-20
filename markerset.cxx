@@ -547,9 +547,6 @@ void MarkerSet::append_random_marker_in_elem( int el, int mt)
     double eta[NODES_PER_ELEM];
     random_eta(eta);
     append_marker(eta, el, mt, 0., 0., 0., 0.);
-#ifdef USE_NPROF
-    nvtxRangePop();
-#endif
 }
 
 void MarkerSet::append_random_marker_in_elem( int el, int mt, double time)
