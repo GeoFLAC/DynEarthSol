@@ -54,11 +54,17 @@ public:
 
     // rate-and-state friction parameters
     #pragma acc routine seq
+    double ini_static_fric(int e) const;
+    #pragma acc routine seq
+    double ini_state_variable(int e) const;
+    #pragma acc routine seq
     double d_a(int e) const;
     #pragma acc routine seq
     double e_b(int e) const;
     #pragma acc routine seq
     double c_v(int e) const;
+    #pragma acc routine seq
+    double d_c(int e) const;
 
     #pragma acc routine seq
     void plastic_props(int e, double pls,
@@ -67,7 +73,7 @@ public:
     #pragma acc routine seq
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max, double& slip_rate) const;
+                       double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff, double& state_variable) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -118,7 +124,7 @@ private:
     VectorBase biot_coeff, bulk_modulus_s;
 
     // rate-and-state friction
-    VectorBase direct_a, evolution_b, characteristic_velocity;
+    VectorBase direct_a, evolution_b, characteristic_velocity, characteristic_distance;
     // VectorBase static_friction_coefficient;
 
     #pragma acc routine seq
@@ -129,7 +135,7 @@ private:
     #pragma acc routine seq
     void plastic_weakening_rsf(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double &slip_rate) const;
+                           double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff, double& state_variable) const;
 };
 
 #else
@@ -175,16 +181,19 @@ public:
     double beta_mineral(int e) const;
 
     // rate-and-state friction parameters
+    double ini_static_fric(int e) const;
+    double ini_state_variable(int e) const;
     double d_a(int e) const;
     double e_b(int e) const;
     double c_v(int e) const;
+    double d_c(int e) const;
 
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max, double& slip_rate) const;
+                       double& hardn, double& ten_max, double& slip_rate, double& dyn_fric_coeff, double& state_variable) const;
 
     const bool is_plane_strain;
     const double visc_min;
@@ -234,7 +243,7 @@ private:
     const VectorBase *biot_coeff, *bulk_modulus_s;
 
     // rate-and-state friction
-    const VectorBase *direct_a, *evolution_b, *characteristic_velocity;
+    const VectorBase *direct_a, *evolution_b, *characteristic_velocity, *characteristic_distance;
     // const VectorBase *static_friction_coefficient;   
 
     void plastic_weakening(int e, double pls,
@@ -243,7 +252,7 @@ private:
 
     void plastic_weakening_rsf(int e, double pls,
                            double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening, double &slip_rate) const;
+                           double &dilation_angle, double &hardening, double &slip_rate, double& dyn_fric_coeff, double& state_variable) const;
 };
 
 

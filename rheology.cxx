@@ -635,7 +635,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& stressyy, double_vec& dpressure, double_vec& viscosity,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
-                   double_vec& ppressure, double_vec& dppressure, array_t& vel)
+                   double_vec& ppressure, double_vec& dppressure, array_t& vel, double_vec& dyn_fric_coeff, double_vec& state_variable)
 
 {
 #ifdef USE_NPROF
@@ -688,7 +688,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
                strain_rate, ppressure_element, dppressure_element, std::cerr, \
-               velocity_x_element, velocity_y_element, velocity_z_element)
+               velocity_x_element, velocity_y_element, velocity_z_element, dyn_fric_coeff, state_variable)
     #pragma acc parallel loop
     for (int e=0; e<var.nelem; ++e) {
         // stress, strain and strain_rate of this element
@@ -863,7 +863,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate, dyn_fric_coeff[e], state_variable[e]);
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -903,7 +903,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate, dyn_fric_coeff[e], state_variable[e]);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];

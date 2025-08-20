@@ -179,6 +179,8 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    initial_friction_coeff(param, var, *var.dyn_fric_coeff);
+    initial_state_variable(param, var, *var.state_variable);
 
     phase_changes_init(param, var);
 #ifdef USE_NPROF
@@ -405,7 +407,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel, *var.dyn_fric_coeff, *var.state_variable);
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -461,7 +463,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel);
+                *var.ppressure, *var.dppressure, *var.vel, *var.dyn_fric_coeff, *var.state_variable);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -559,7 +561,7 @@ int main(int argc, const char* argv[])
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel, *var.dyn_fric_coeff, *var.state_variable);
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -591,7 +593,7 @@ int main(int argc, const char* argv[])
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                     *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel);
+                    *var.ppressure, *var.dppressure, *var.vel, *var.dyn_fric_coeff, *var.state_variable);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);

@@ -347,6 +347,16 @@ namespace {
         delete var.surfinfo.edhacc_oc;
         var.surfinfo.edhacc_oc = a;
 
+        a = new double_vec(e);
+        inject_field(idx, is_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *a);
+        delete var.dyn_fric_coeff;
+        var.dyn_fric_coeff = a;
+
+        a = new double_vec(e);
+        inject_field(idx, is_changed, elems_vec, ratios_vec, *var.state_variable, *a);
+        delete var.state_variable;
+        var.state_variable = a;
+
 
 #ifdef USE_NPROF
         nvtxRangePop();
