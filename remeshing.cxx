@@ -3139,8 +3139,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         std::cout << "    Remapping markers.\n";
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
-//        var.markersets[0]->update_marker_in_elem(var);
-//        var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
   
         // old_coord et al. are destroyed before exiting this block
     }

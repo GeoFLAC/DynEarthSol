@@ -28,7 +28,6 @@ public:
     static void random_eta( double* ); // class method
     static void random_eta_seed(double*, int);
     static void random_eta_seed_surface(double*, int);
-    void create_melt_markers(const int mat, int_vec& melt_markers);
     void check_marker_elem_consistency(const Variables &var) const;
     void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
     void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
@@ -106,11 +105,11 @@ private:
     int_vec *_id;
     // Cearte time
     double_vec *_time;
-    // Cearte z
+    // Sedimentation: Depth
     double_vec *_z;
-    // Distance to coastline
+    // Sedimentation: Distance to coastline
     double_vec *_distance;
-    // Slope of surface
+    // Sedimentation: Slope of surface
     double_vec *_slope;
     // temporary storage
     double_vec *_tmp;

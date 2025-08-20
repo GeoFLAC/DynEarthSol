@@ -161,8 +161,6 @@ void init(const Param& param, Variables& var)
     create_markers(param, var);
 
     allocate_variables(param, var);
-//    var.markersets[0]->create_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
@@ -291,8 +289,6 @@ void restart(const Param& param, Variables& var)
     allocate_variables(param, var);
 
     create_top_elems(var);
-//    var.markersets[0]->create_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
     create_surface_info(param,var,var.surfinfo);
 
     bin_save.read_array(*var.coord0, "coord0");
@@ -382,9 +378,6 @@ void update_mesh(const Param& param, Variables& var)
                       *var.plstrain, *var.volume, *var.volume_n, \
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     }
-    
-//    var.markersets[0]->update_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
 
 #ifdef USE_NPROF
     nvtxRangePushA("swap vectors");
