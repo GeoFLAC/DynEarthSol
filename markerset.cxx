@@ -67,18 +67,32 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
 }
 
 template
-MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin, const std::string& name);
+MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin_save, BinaryInput& bin_chkpt, const std::string& name);
 #ifdef NETCDF
 template
-MarkerSet::MarkerSet(const Param& param, Variables& var, NetCDFInput& bin, const std::string& name);
+MarkerSet::MarkerSet(const Param& param, Variables& var, NetCDFInput& bin_save, NetCDFInput& bin_chkpt, const std::string& name);
 #endif
 
 template <class T>
-MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin, const std::string& name) :
+MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin_save, T& bin_chkpt, const std::string& name) :
     _name(name)
 {
     // init from checkpoint file
-    read_chkpt_file(var, bin);
+    read_chkpt_file(var, bin_save, bin_chkpt);
+
+    if (_name == "markerset")
+        for( int i = 0; i < _nmarkers; i++ ) {
+            int e = (*_elem)[i];
+            int mt = (*_mattype)[i];
+            ++(*var.elemmarkers)[e][mt];
+            (*var.markers_in_elem)[e].push_back(i);
+        }
+    else if (_name == "hydrous-markerset")
+        for( int i = 0; i < _nmarkers; i++ ) {
+            int e = (*_elem)[i];
+            ++(*var.hydrous_elemmarkers)[e][0];
+            (*var.hydrous_markers_in_elem)[e].push_back(i);
+        }
 }
 
 
@@ -93,6 +107,7 @@ void MarkerSet::allocate_markerdata( const int max_markers )
     _z = new double_vec( max_markers );
     _distance = new double_vec( max_markers );
     _slope = new double_vec( max_markers );
+    _genesis = new int_vec( max_markers );
     _tmp = new double_vec( max_markers );
 }
 
@@ -192,13 +207,14 @@ void MarkerSet::append_marker_at_i(AppendMarkerData &md, int idx, int last_id)
     (*_z)[m] = md.depth;
     (*_distance)[m] = md.distance;
     (*_slope)[m] = md.slope;
+    (*_genesis)[m] = md.genesis;
 
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
 }
 
-void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, double z, double distance, double slope)
+void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, double z, double distance, double slope, int genesis )
 {
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
@@ -216,6 +232,7 @@ void MarkerSet::append_marker( const double *eta, int el, int mt , double ti, do
     (*_z)[m] = z;
     (*_distance)[m] = distance;
     (*_slope)[m] = slope;
+    (*_genesis)[m] = genesis;
 
     if(DEBUG > 1) {
         std::cout << el << " " << m << " "
@@ -420,9 +437,10 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         double depth = data[NODES_PER_ELEM];
         double distance = data[NODES_PER_ELEM + 1];
         double slope = data[NODES_PER_ELEM + 2];
+        int genesis = 2; // deposition
 
         marker_data_all.emplace_back(data, elem, mattype, 
-                var.time / YEAR2SEC, depth, distance, slope);
+                var.time / YEAR2SEC, depth, distance, slope, genesis);
     }
 
     append_markers(marker_data_all);
@@ -481,21 +499,21 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
     inc = 0;
 }
 
-void MarkerSet::append_random_marker_in_elem( int el, int mt)
+void MarkerSet::append_random_marker_in_elem( int el, int mt, int genesis)
 {
     double eta[NODES_PER_ELEM];
     random_eta(eta);
-    append_marker(eta, el, mt, 0., 0., 0., 0.);
+    append_marker(eta, el, mt, 0., 0., 0., 0., genesis);
 }
 
-void MarkerSet::append_random_marker_in_elem( int el, int mt, double time)
+void MarkerSet::append_random_marker_in_elem( int el, int mt, double time, int genesis)
 {
     double eta[NODES_PER_ELEM];
     random_eta(eta);
-    append_marker(eta, el, mt, time, 0., 0., 0.);
+    append_marker(eta, el, mt, time, 0., 0., 0., genesis);
 }
 
-void MarkerSet::random_markers( const Param& param, Variables &var )
+void MarkerSet::random_markers( const Param& param, Variables &var, int genesis )
 {
     const int ne = var.nelem;
     const int mpe = param.markers.markers_per_element;
@@ -520,14 +538,14 @@ void MarkerSet::random_markers( const Param& param, Variables &var )
 
             // decide the mattype of markers
             int mt = initial_mattype(param, var, e, eta);
-            append_marker(eta, e, mt, 0., 0., 0., 0.);
+            append_marker(eta, e, mt, 0., 0., 0., 0., genesis);
             ++(*var.elemmarkers)[e][mt];
             (*var.markers_in_elem)[e].push_back(_nmarkers-1);
         }
 }
 
 
-void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
+void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, int genesis )
 {
     const int d = param.markers.init_marker_spacing * param.mesh.resolution;
 
@@ -617,7 +635,7 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var )
 
             if (bary.is_inside(eta)) {
                 int mt = initial_mattype(param, var, e, eta, x);
-                append_marker(eta, e, mt, 0., 0., 0., 0.);
+                append_marker(eta, e, mt, 0., 0., 0., 0., genesis);
                 ++(*var.elemmarkers)[e][mt];
                 (*var.markers_in_elem)[e].push_back(_nmarkers-1);
                 found = true;
@@ -795,6 +813,7 @@ void MarkerSet::remove_marker_data(int is, int ie)
     (*_z)[is] = (*_z)[ie];
     (*_distance)[is] = (*_distance)[ie];
     (*_slope)[is] = (*_slope)[ie];
+    (*_genesis)[is] = (*_genesis)[ie];
     (*_tmp)[is] = (*_tmp)[ie];
 }
 
@@ -827,6 +846,7 @@ void MarkerSet::resize( const int newsize )
         _z->resize( newsize );
         _distance->resize( newsize );
         _slope->resize( newsize );
+        _genesis->resize( newsize );
         _tmp->resize( newsize );
     }
     // else if( nmarkers_new < _reserved_space ) {
@@ -853,58 +873,39 @@ void MarkerSet::write_chkpt_file(T &bin) const
     itmp[1] = _last_id;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
 
-    bin.write_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
-    bin.write_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
-    bin.write_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
-    bin.write_array(*_id, (_name + ".id").c_str(), _nmarkers);
-    bin.write_array(*_time, (_name + ".time").c_str(), _nmarkers);
-    bin.write_array(*_z, (_name + ".z").c_str(), _nmarkers);
-    bin.write_array(*_distance, (_name + ".distance").c_str(), _nmarkers);
-    bin.write_array(*_slope, (_name + ".slope").c_str(), _nmarkers);
+    bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
 
 }
 
 template
-void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin);
+void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin_save, BinaryInput &bin_chkpt);
 #ifdef NETCDF
 template
-void MarkerSet::read_chkpt_file(Variables &var, NetCDFInput &bin);
+void MarkerSet::read_chkpt_file(Variables &var, NetCDFInput &bin_save, NetCDFInput &bin_chkpt);
 #endif
 
 template <class T>
-void MarkerSet::read_chkpt_file(Variables &var, T &bin)
+void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 {
     int_vec itmp(2);
-    bin.read_array(itmp, (_name + " size").c_str());
+    bin_chkpt.read_array(itmp, (_name + " size").c_str());
     _nmarkers = itmp[0];
     _last_id = itmp[1];
 
     allocate_markerdata(_nmarkers);
 
     if (_nmarkers != 0) {
-        bin.read_array(*_eta, (_name + ".eta").c_str());
-        bin.read_array(*_elem, (_name + ".elem").c_str());
-        bin.read_array(*_mattype, (_name + ".mattype").c_str());
-        bin.read_array(*_id, (_name + ".id").c_str());
-        bin.read_array(*_time, (_name + ".time").c_str());
-        bin.read_array(*_z, (_name + ".z").c_str());
-        bin.read_array(*_distance, (_name + ".distance").c_str());
-        bin.read_array(*_slope, (_name + ".slope").c_str());
-    }
+        bin_save.read_array(*_eta, (_name + ".eta").c_str());
+        bin_save.read_array(*_elem, (_name + ".elem").c_str());
+        bin_save.read_array(*_mattype, (_name + ".mattype").c_str());
+        bin_save.read_array(*_id, (_name + ".id").c_str());
+        bin_save.read_array(*_time, (_name + ".time").c_str());
+        bin_save.read_array(*_z, (_name + ".z").c_str());
+        bin_save.read_array(*_distance, (_name + ".distance").c_str());
+        bin_save.read_array(*_slope, (_name + ".slope").c_str());
 
-    if (_name == "markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            int mt = (*_mattype)[i];
-            ++(*var.elemmarkers)[e][mt];
-            (*var.markers_in_elem)[e].push_back(i);
-        }
-    else if (_name == "hydrous-markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            ++(*var.hydrous_elemmarkers)[e][0];
-            (*var.hydrous_markers_in_elem)[e].push_back(i);
-        }
+        bin_chkpt.read_array(*_slope, (_name + ".genesis").c_str());
+    }
 }
 
 template
@@ -935,6 +936,9 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
     bin.write_array(*_z, (_name + ".z").c_str(), _nmarkers);
     bin.write_array(*_distance, (_name + ".distance").c_str(), _nmarkers);
     bin.write_array(*_slope, (_name + ".slope").c_str(), _nmarkers);
+
+    // temporary show results
+    bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
 
     delete mcoord;
 
@@ -1094,7 +1098,7 @@ namespace {
 
 
     void replenish_markers_with_mattype_0(const Param& param, const Variables &var,
-                                          int_pair_vec &unplenished_elems)
+                                          int_pair_vec &unplenished_elems, int genesis)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -1105,7 +1109,7 @@ namespace {
 
             while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
                 const int mt = 0;
-                var.markersets[0]->append_random_marker_in_elem(e, mt);
+                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis);
                 if (DEBUG) {
                     std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
                 }
@@ -1122,7 +1126,7 @@ namespace {
 
 
     void replenish_markers_with_mattype_from_cpdf(const Param& param, const Variables &var,
-                                                  int_pair_vec &unplenished_elems)
+                                                  int_pair_vec &unplenished_elems, int genesis)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -1177,7 +1181,7 @@ namespace {
                 // Determine new marker's matttype based on cpdf
                 auto upper = std::upper_bound(cpdf.begin(), cpdf.end(), rand()/(double)RAND_MAX);
                 const int mt = upper - cpdf.begin();
-                var.markersets[0]->append_random_marker_in_elem(e, mt);
+                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis);
                 if (DEBUG) {
                     std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
                 }
@@ -1192,9 +1196,27 @@ namespace {
 #endif
     }
 
+    double interpolate_nd(const double *p1, double v1, const double *p2, double v2, const double *pq)
+    {
+        double dir[NDIMS], rel[NDIMS];
+        double len2 = 0.0;
+
+        for (int i = 0; i < 3; ++i) {
+            dir[i] = p2[i] - p1[i];
+            rel[i] = pq[i] - p1[i];
+            len2 += dir[i] * dir[i];
+        }
+
+        if (len2 == 0.0) {
+            return (v1 + v2) / 2.;
+        }
+
+        double t = (dir[0]*rel[0] + dir[1]*rel[1] + dir[2]*rel[2]) / len2;
+        return v1 + t * (v2 - v1);
+    }
 
     void replenish_markers_with_mattype_from_nn(const Param& param, const Variables &var,
-                                                int_pair_vec &unplenished_elems)
+            int_pair_vec &unplenished_elems, int genesis, bool is_surface = false, const EMI_vec& emi = EMI_vec())
     {
         if (unplenished_elems.empty()) return;
 
@@ -1216,7 +1238,8 @@ namespace {
         AMD_vec marker_data_all;
         int ne = unplenished_elems.size();
 
-        #pragma omp parallel default(none) shared(param, var, unplenished_elems, kdtree, ms, marker_data_all,ne)
+        #pragma omp parallel default(none) shared(param, var, unplenished_elems, kdtree, \
+                ms, marker_data_all, ne, is_surface, emi, genesis)
         {
             AMD_vec marker_data_local;
 
@@ -1248,11 +1271,51 @@ namespace {
 
                     int m = nn_idx[0]; // nearest marker
                     const int mt = ms.get_mattype(m);
-    //            const double ti = ms.get_time(m);
+                    double ti = ms.get_time(m);
+                    int ge = genesis;
 
-                    // ms.append_marker(eta, e, mt, 0., 0., 0., 0.);
-                    // (*var.markers_in_elem)[e].push_back(ms.get_nmarkers()-1);
-                    marker_data_local.emplace_back(eta, e, mt, 0., 0., 0., 0.);
+                    if (is_surface && mt == param.mat.mattype_sed) {
+                        int e_local = var.arctop_elems.at(e);
+                        if (emi[e_local].nmarker > 0) {
+                            int_vec& emarker = (*var.markers_in_elem)[e];
+                            EMI_vec emi_base(2);
+                            for (const auto& m : emarker) {
+                                if (ms.get_mattype(m) == param.mat.mattype_sed) {
+                                    int ind = 1;
+                                    if (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) {
+                                        ind = 0;
+                                    }
+                                    emi_base[ind].value += ms.get_time(m);
+                                    const double* eta = ms.get_eta(m);
+                                    int *conn = (*var.connectivity)[e];
+                                    for (int d=0; d<NDIMS; ++d) {
+                                        for (int k=0; k<NODES_PER_ELEM; ++k) {
+                                            emi_base[ind].coord[d] += (*var.coord)[conn[k]][d] * eta[k];
+                                        }
+                                    }
+                                    emi_base[ind].nmarker++;
+                                }
+                            }
+                            for (int j=0; j<2; ++j) {
+                                if (emi_base[j].nmarker > 0) {
+                                    if (emi_base[j].nmarker > 1) {
+                                        emi_base[j].value /= emi_base[j].nmarker;
+                                        for (int d=0; d<NDIMS; ++d) {
+                                            emi_base[j].coord[d] /= emi_base[j].nmarker;
+                                        }
+                                    }
+                                    ti = interpolate_nd(emi_base[j].coord, emi_base[j].value,
+                                        emi[e_local].coord, emi[e_local].value, x);
+                                    ti = std::max(ti, 0.0);
+                                    ge = 4; // sediment with interpolation
+                                    // printf("replenishing with %d\n",j);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    marker_data_local.emplace_back(eta, e, mt, ti, 0., 0., 0.,ge);
 
                     ++(*var.elemmarkers)[e][mt];
                     ++num_marker_in_elem;
@@ -1413,10 +1476,11 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     if (nchange > 0) {
         delete_marker.reserve(nchange);
 
+        EMI_vec markers_in_elem_info(var.ntop_elems);
         MU_vec updates;
 
-        #pragma omp parallel default(none) \
-                shared(var,coord0s,markers_in_elem, updates, elemmarkers)
+        #pragma omp parallel default(none) shared(param, var, coord0s, markers_in_elem, \
+                updates, elemmarkers, markers_in_elem_info)
         {
             MU_vec local_updates;
 
@@ -1448,8 +1512,24 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                         set_elem(m, new_elem);
                         #pragma omp atomic update
                         ++elemmarkers[new_elem][mat];
+                    } else {
+                        // record time information on deleted sediment marker
+                        if (mat == param.mat.mattype_sed) {
+                            for (int d=0; d<NDIMS; ++d) {
+                                markers_in_elem_info[i].coord[d] += m_coord[d];
+                            }
+                            markers_in_elem_info[i].value += (*_time)[m];
+                            markers_in_elem_info[i].nmarker++;
+                        }
                     }
                     --elemmarkers[e][mat];
+                }
+                int n = markers_in_elem_info[i].nmarker;
+                if (n > 1) {
+                    markers_in_elem_info[i].value /= n;
+                    for (int d=0; d<NDIMS; ++d) {
+                        markers_in_elem_info[i].coord[d] /= n;
+                    }
                 }
             }
 
@@ -1496,13 +1576,13 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
         switch (param.markers.replenishment_option) {
         case 0:
-            replenish_markers_with_mattype_0(param, var, unplenished_elems);
+            replenish_markers_with_mattype_0(param, var, unplenished_elems, 3);
             break;
         case 1:
-            replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems);
+            replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems, 3);
             break;
         case 2:
-            replenish_markers_with_mattype_from_nn(param, var, unplenished_elems);
+            replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 3, true, markers_in_elem_info);
             break;
         default:
             std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
@@ -1633,13 +1713,13 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
     switch (param.markers.replenishment_option) {
     case 0:
-        replenish_markers_with_mattype_0(param, var, unplenished_elems);
+        replenish_markers_with_mattype_0(param, var, unplenished_elems, 1);
         break;
     case 1:
-        replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems);
+        replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems, 1);
         break;
     case 2:
-        replenish_markers_with_mattype_from_nn(param, var, unplenished_elems);
+        replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 1);
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';

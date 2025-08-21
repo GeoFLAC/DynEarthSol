@@ -280,10 +280,10 @@ void restart(const Param& param, Variables& var)
     create_elemmarkers(param, var);
 
     // Replacing create_markers()
-    var.markersets.push_back(new MarkerSet(param, var, bin_chkpt, std::string("markerset")));
+    var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("markerset")));
     if (param.control.has_hydration_processes) {
         var.hydrous_marker_index = var.markersets.size();
-        var.markersets.push_back(new MarkerSet(param, var, bin_chkpt, std::string("hydrous-markerset")));
+        var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("hydrous-markerset")));
     }
 
     allocate_variables(param, var);

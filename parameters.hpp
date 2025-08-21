@@ -69,18 +69,34 @@ struct AppendMarkerData {
     double depth;
     double distance;
     double slope;
-    AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0) {
+    int genesis;
+    AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0), genesis(0) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = 0.0;
     }
-    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s)
-        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s) {
+    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s, int g)
+        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s), genesis(g) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
     }
+};
+
+// Update markers in surface elements
+struct ElemMarkerInfo {
+    int nmarker;
+    double coord[NDIMS];
+    double value;
+    ElemMarkerInfo() : nmarker(0), value(0.0) {
+        for (int i = 0; i < NDIMS; i++) coord[i] = 0.0;
+    }
+    ElemMarkerInfo(const double c[NDIMS], int n, double v, int dst)
+        : nmarker(n), value(v) {
+        for (int i = 0; i < NDIMS; i++) coord[i] = c[i];
+        }
 };
 
 typedef std::vector<neighbor> neighbor_vec;
 typedef std::vector<MarkerUpdate> MU_vec;
 typedef std::vector<AppendMarkerData> AMD_vec;
+typedef std::vector<ElemMarkerInfo> EMI_vec;
 
 //
 // Structures for input parameters
@@ -546,6 +562,7 @@ struct Variables {
     double_vec vbc_vertical_ratio_x1;
 
     int_vec *top_elems;
+    int_map arctop_elems;
     int ntop_elems;
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;

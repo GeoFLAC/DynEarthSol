@@ -2261,6 +2261,10 @@ void create_top_elems(Variables& var)
     for (std::size_t i=0; i<var.ntop_elems; i++)
         (*var.top_elems)[i] = telems[i];
 
+    var.arctop_elems.clear();
+    for (int i=0; i<var.ntop_elems; i++)
+        var.arctop_elems[(*var.top_elems)[i]] = i;
+
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif

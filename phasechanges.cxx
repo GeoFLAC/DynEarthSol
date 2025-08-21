@@ -171,7 +171,7 @@ void phase_changes(const Param& param, Variables& var)
                 // #pragma omp critical(phase_change_simple_subduction)
                 {
                     // Add new marker, which has the same coordinate as the dehydrated marker
-                    hydms.append_marker(eta, el, 0, 0., 0., 0., 0.);
+                    hydms.append_marker(eta, el, 0, 0., 0., 0., 0., 0.);
                     ++hydem[el][0];
                 }
 

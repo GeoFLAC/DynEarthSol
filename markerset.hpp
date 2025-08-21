@@ -11,7 +11,7 @@ public:
     MarkerSet( const std::string& name );
     MarkerSet( const Param& param, Variables& var, const std::string& name );
     template <class T>
-    MarkerSet( const Param& param, Variables& var, T& bin, const std::string& name );
+    MarkerSet( const Param& param, Variables& var, T& bin_save, T& bin_chkpt, const std::string& name );
     ~MarkerSet()
     {
         delete _slope;
@@ -22,6 +22,7 @@ public:
         delete _eta; 
         delete _elem;
         delete _mattype;
+        delete _genesis;
         delete _tmp;
     }
 
@@ -33,9 +34,9 @@ public:
     void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
                         const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
-    void append_random_marker_in_elem( int el, int mt);
-    void append_random_marker_in_elem( int el, int mt, double time);
-    void append_marker(const double *eta, int el, int mt, double time, double depth, double distance, double slope);
+    void append_random_marker_in_elem( int el, int mt, int genesis);
+    void append_random_marker_in_elem( int el, int mt, double time, int genesis);
+    void append_marker(const double *eta, int el, int mt, double time, double depth, double distance, double slope, int genesis);
     void append_marker_at_i(AppendMarkerData &md, int idx, int last_id);
     void append_markers(AMD_vec &md);
     void remove_marker(int i);
@@ -45,7 +46,7 @@ public:
     template <class T>
     void write_chkpt_file(T &bin) const;
     template <class T>
-    void read_chkpt_file(Variables &var, T &bin);
+    void read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt);
     template <class T>
     void write_save_file(const Variables &var, T &bin) const;
     array_t* calculate_marker_coord(const Variables &var) const;
@@ -79,6 +80,8 @@ public:
     inline const double *get_eta(int m) const { return (*_eta)[m]; }
     inline void set_eta( const int i, const double r[NDIMS] );
 
+    inline double get_genesis(int m) const { return (*_genesis)[m]; }
+
     inline double get_tmp(int m) const { return (*_tmp)[m]; }
     inline void set_tmp(const int m, const double tmp) { (*_tmp)[m] = tmp; }
 
@@ -111,11 +114,18 @@ private:
     double_vec *_distance;
     // Sedimentation: Slope of surface
     double_vec *_slope;
+    // origin of markers:
+    // 0: IC,
+    // 1: remeshing replenishment,
+    // 2: depositon,
+    // 3: erosional replenishment with nn,
+    // 4: erosional replenishment with interpolation
+    int_vec *_genesis;
     // temporary storage
     double_vec *_tmp;
 
-    void random_markers( const Param&, Variables& );
-    void regularly_spaced_markers( const Param&, Variables& );
+    void random_markers( const Param&, Variables&, int = 0 );
+    void regularly_spaced_markers( const Param&, Variables&, int = 0 );
     void allocate_markerdata( const int );
 
     int initial_mattype( const Param&, const Variables&,
