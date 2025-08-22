@@ -482,24 +482,6 @@ double compute_dt(const Param& param, Variables& var)
     global_max_vem = std::max(global_max_vem, var.max_vbc_val);
     var.max_global_vel_mag = global_max_vem;
     var.global_dt_min = global_dt_min;
-    
-    {
-        double max_vel = 0;
-#ifndef ACC
-        #pragma omp parallel for reduction(max:max_vel) default(none) shared(var)
-#endif
-        #pragma acc parallel loop reduction(max:max_vel) async
-        for (auto n=var.surfinfo.top_nodes->begin(); n<var.surfinfo.top_nodes->end(); ++n) {
-            double vel = 0;
-            for (int i=0; i<NDIMS; ++i)
-                vel += (*var.vel)[*n][i] * (*var.vel)[*n][i];
-            max_vel = std::max(max_vel, vel);
-        }
-
-        #pragma acc wait
-
-        max_vbc_val = std::max(max_vbc_val, std::sqrt(max_vel));
-    }
 
     // Calculate dt_advection and dt_elastic 
     if(param.control.has_ATS)
