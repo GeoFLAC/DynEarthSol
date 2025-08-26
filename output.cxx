@@ -301,10 +301,11 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     BinaryOutput bin(filename);
 #endif
 
-    double_vec tmp(2);
+    double_vec tmp(3);
     tmp[0] = var.time;
     tmp[1] = var.compensation_pressure;
-    bin.write_array(tmp, "time compensation_pressure", tmp.size());
+    tmp[2] = var.bottom_temperature;
+    bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());

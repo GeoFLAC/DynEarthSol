@@ -317,20 +317,14 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Set bottom temperature
-    {
-        double max_temp = 0.0;
-        for (int i=0; i<var.nnode; ++i)
-            if ((*var.temperature)[i] > max_temp) max_temp = (*var.temperature)[i];
-        var.bottom_temperature = max_temp;
-    }
-
     // Misc. items
     {
-        double_vec tmp(2);
-        bin_chkpt.read_array(tmp, "time compensation_pressure");
+        double_vec tmp(3);
+        bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
         var.time = tmp[0];
         var.compensation_pressure = tmp[1];
+        // Set bottom temperature
+        var.bottom_temperature = tmp[2];
 
         // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
