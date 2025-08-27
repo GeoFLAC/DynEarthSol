@@ -1947,8 +1947,8 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         }
 
                         int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
-                        double p0 = old_coord[ind][n0];
-                        double p1 = old_coord[ind][n1];
+                        double p0 = (*var.coord)[ind][n0];
+                        double p1 = (*var.coord)[ind][n1];
 
                         for (int iii=0; iii<nxyz[n0]; iii++) {
                             idx[n0] = iii;
