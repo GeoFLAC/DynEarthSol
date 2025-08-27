@@ -115,8 +115,9 @@ void phase_changes(const Param& param, Variables& var)
 #endif
 
     MarkerSet& ms = *(var.markersets[0]);
+    int is_error = 0;
 
-    #pragma acc parallel loop async
+    #pragma acc parallel loop reduction(+:is_error) async
     for (int e=0; e<var.nelem; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();
         #pragma acc loop seq
@@ -138,9 +139,7 @@ void phase_changes(const Param& param, Variables& var)
                 // marker_loop_wrapper(param, var, ms, *var.elemmarkers, custom_phase_change);
                 break;
             default:
-                printf("Error: unknown phase_change_option: %d\n", param.mat.phase_change_option);
-                // std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
-                // std::exit(1);
+                is_error++;
             }            
 
             if (new_mt != current_mt) {
@@ -152,6 +151,11 @@ void phase_changes(const Param& param, Variables& var)
     }
 
     #pragma acc wait
+
+    if (is_error) {
+        std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
+        std::exit(1);
+    }
 
     if (param.control.has_hydration_processes) {
         MarkerSet& hydms = *var.markersets[var.hydrous_marker_index];

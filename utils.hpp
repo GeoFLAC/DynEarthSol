@@ -68,8 +68,9 @@ void print(std::ostream& os, const Array& A)
 
 #pragma acc routine seq
 static inline double log_lookup(const double_vec& log_table, double x) {
+    // Error: log_lookup called with x <= 0;
     if (x <= 0.0)
-        printf("Error: log_lookup called with x <= 0 (%g)\n", x);
+       return NAN;
 
     int exponent = 0;
     while (x < LOG_XMIN) {
@@ -89,8 +90,9 @@ static inline double log_lookup(const double_vec& log_table, double x) {
 
 #pragma acc routine seq
 static inline double tan_lookup(const double_vec& tan_table, const double x) {
+    // Error: tan_lookup called with x out of range;
     if (x < TAN_XMIN || x > TAN_XMAX) {
-        printf("Error: tan_lookup called with x out of range (%g)\n", x);
+       return NAN;
     }
 
     int idx = static_cast<int>((x - TAN_XMIN) / TAN_XDELTA);
@@ -101,8 +103,9 @@ static inline double tan_lookup(const double_vec& tan_table, const double x) {
 
 #pragma acc routine seq
 static inline double sin_lookup(const double_vec& sin_table, const double x) {
+    // Error: sin_lookup called with x out of range;
     if (x < SIN_XMIN || x > SIN_XMAX) {
-        printf("Error: sin_lookup called with x out of range (%g)\n", x);
+       return NAN;
     }
 
     int idx = static_cast<int>((x - SIN_XMIN) / SIN_XDELTA);
@@ -143,8 +146,9 @@ static inline double sin_safe(const double_vec& sin_table, const double x) {
 #pragma acc routine seq
 static double pow_safe(const double_vec& log_table, const double x, const double y) {
 #ifdef USE_NPROF
+    // Error: pow_safe called with x < 0;
     if (x < 0.) {
-        printf("Error: pow_safe called with x < 0 (%g)\n", x);
+       return NAN;
     } else if (x == 0.) {
         return 0.0; // Avoid log(0) which is undefined
     } else
