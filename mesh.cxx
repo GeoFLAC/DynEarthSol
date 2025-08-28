@@ -2386,7 +2386,7 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
         surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
     surfinfo.dh = new double_vec(ntop,0.);
     surfinfo.dhacc = new double_vec(var.nnode,0);
-    surfinfo.edvacc_surf = new double_vec(var.nelem,0);
+    surfinfo.edvacc_surf = new double_vec(etop,0);
     surfinfo.top_facet_elems = new int_vec(etop,0);
     surfinfo.elem_and_nodes = new segment_t(etop);
 
@@ -2844,6 +2844,36 @@ void elem_center(const array_t &coord, const conn_t &connectivity, array_t& cent
                 sum += coord[conn[k]][d];
             }
             center[e][d] = sum / NODES_PER_ELEM;
+        }
+    }
+
+    #pragma acc wait
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
+void facet_center(const array_t &coord, const segment_t &connectivity, array_t& center)
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+    int nelem = connectivity.size();
+
+#ifndef ACC
+    #pragma omp parallel for default(none)          \
+        shared(nelem, coord, connectivity, center)
+#endif
+    #pragma acc parallel loop async
+    for(int e=0; e<nelem; e++) {
+        const int* conn = connectivity[e];
+        for(int d=0; d<NDIMS; d++) {
+            double sum = 0;
+            for(int k=0; k<NODES_PER_FACET; k++) {
+                sum += coord[conn[k]][d];
+            }
+            center[e][d] = sum / NODES_PER_FACET;
         }
     }
 
