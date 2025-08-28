@@ -349,11 +349,18 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
         if (!bary.is_inside(eta0)) {
             int inc = 0;
-            printf("  A generated marker (mat=%d) in element %d is trying to remap in element ", mattype, e);
             remap_marker(var, mcoord, e, elem_dest, eta0, inc);
+
+            char buffer[200];
+            sprintf(buffer, "  A generated marker (mat=%d) in element %7d is trying to remap in elements ",
+                    mattype, e);
+            std::string msg(buffer);
+
             if (inc) {
-                printf("... Success!\n");
+                msg += "... Success!\n";
+                printf("%s", msg.c_str());
             } else {
+                printf("%s", msg.c_str());
                 printf("... Surface marker generated fail!\n Coordinate: ");
                 for (int j=0; j<NDIMS; j++) printf(" %f", mcoord[j]);
                 printf("\neta: ");
