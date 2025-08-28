@@ -265,18 +265,17 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
     //     double max_edvacc = 0.0;
     //     #pragma omp parallel for reduction(max:max_edvacc)
     //     for (int i=0; i<var.surfinfo.etop; i++) {
-    //         int e = (*var.surfinfo.top_facet_elems)[i];
-    //         if (edvacc[e] > max_edvacc) {
-    //             max_edvacc = edvacc[e];
+    //         if (edvacc[i] > max_edvacc) {
+    //             max_edvacc = edvacc[i];
     //         }
     //     }
 
     //     printf("Surface accu mat #%d: ", mattype);
     //     for (int i=0; i<var.surfinfo.etop; i++) {
     //         int e = (*var.surfinfo.top_facet_elems)[i];
-    //         if (edvacc[e] > max_edvacc - 1.) {
-    //             double ratio = (param.markers.markers_per_element * edvacc[e]) / (*var.volume)[e];
-    //             printf("elem[%6d] = %.1e, ratio = %5.1f%% ", e, edvacc[e], ratio*100.);
+    //         if (edvacc[i] > max_edvacc - 1.) {
+    //             double ratio = (param.markers.markers_per_element * edvacc[i]) / (*var.volume)[e];
+    //             printf("elem[%6d] = %.1e, ratio = %5.1f%% ", e, edvacc[i], ratio*100.);
     //         }
     //     }
     //     printf("\n");
@@ -288,8 +287,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         int e = (*var.surfinfo.top_facet_elems)[i];
         (*var.etmp_int)[i] = -1;
 
-        if (edvacc[e] < 0.) {
-            edvacc[e] = 0.;
+        if (edvacc[i] < 0.) {
+            edvacc[i] = 0.;
             continue;
         }
 
@@ -302,7 +301,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
             nmarkers = (*var.markers_in_elem)[e].size();
         }
 
-        if ((nmarkers * edvacc[e]) < (*var.volume)[e]) continue;
+        if ((nmarkers * edvacc[i]) < (*var.volume)[e]) continue;
 
         double eta[NDIMS], mcoord[NDIMS] = {0.};
 
@@ -330,7 +329,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
         // height of marker
         double dv_apply = (*var.volume)[e] / nmarkers;
-        edvacc[e] -= dv_apply;
+        edvacc[i] -= dv_apply;
 
         double edh = dv_apply / base;
         mcoord[NDIMS-1] -= edh * marker_dh_applied_ratio;
