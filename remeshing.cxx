@@ -3054,14 +3054,26 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     std::cout << "  Remeshing starts...\n";
 
+    double sum_edvacc_surf_before = 0;
     { // convert portional field to average field
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var)
+        #pragma omp parallel for default(none) shared(var, NODE_OF_FACET) \
+                reduction(+:sum_edvacc_surf_before)
 #endif
-        #pragma acc parallel loop async
-        for (int e=0; e<var.nelem; e++) {
-            double inv_volume = 1.0 / (*var.volume)[e];
-            (*var.surfinfo.edvacc_surf)[e] *= inv_volume;
+        #pragma acc parallel loop reduction(+:sum_edvacc_surf_before)
+        for (int i=0; i<var.surfinfo.etop; i++) {
+            sum_edvacc_surf_before += (*var.surfinfo.edvacc_surf)[i];
+
+            int e = (*var.bfacets[iboundz1])[i].first;
+            int f = (*var.bfacets[iboundz1])[i].second;
+
+            const double *coord[NDIMS];
+
+            for (int j=0; j<NDIMS; j++)
+                coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
+
+            double inv_volume = 1.0 / compute_area(coord);
+            (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
         }
     }
 
@@ -3117,12 +3129,22 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
         }
 
+        int_pair_vec old_bfacets_surface(var.surfinfo.etop);
+        old_bfacets_surface = (*var.bfacets[iboundz1]);
+
+        for (int i=0; i<nbdrytypes; ++i)
+            var.bfacets[i]->clear();
+        create_boundary_facets(var);
+
         {
             // std::cout << "    Interpolating fields.\n";
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
 
             // interpolating fields defined on elements
             nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
+
+            // interpolating fields defined on surface elements
+            nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity, true, old_bfacets_surface);
 
             // interpolating fields defined on nodes
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
@@ -3148,12 +3170,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     // updating other arrays
     create_boundary_flags(var);
-    for (int i=0; i<nbdrytypes; ++i) {
+    for (int i=0; i<nbdrytypes; ++i)
         var.bnodes[i]->clear();
-        var.bfacets[i]->clear();
-    }
     create_boundary_nodes(var);
-    create_boundary_facets(var);
 
     delete var.top_elems;
     create_top_elems(var);
@@ -3168,13 +3187,28 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
     // convert value field back to portional field for nn interpolation
+    double sum = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET) reduction(+:sum)
 #endif
-    #pragma acc parallel loop async
-    for (int e=0; e<var.nelem; ++e) {
-        (*var.surfinfo.edvacc_surf)[e] *= (*var.volume)[e];
+    #pragma acc parallel loop reduction(+:sum) async
+    for (int i=0; i<var.surfinfo.etop; i++) {
+        int e = (*var.bfacets[iboundz1])[i].first;
+        int f = (*var.bfacets[iboundz1])[i].second;
+
+        const double *coord[NDIMS];
+
+        for (int j=0; j<NDIMS; j++)
+            coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
+
+        (*var.surfinfo.edvacc_surf)[i] *= compute_area(coord);
+        sum += (*var.surfinfo.edvacc_surf)[i];
     }
+
+    #pragma acc wait
+
+    printf("  Change of edvacc_surf after remeshing = %e\n", \
+            (sum-sum_edvacc_surf_before)/sum_edvacc_surf_before);
 
     // TODO: using edvoldt and volume to get volume_old
 #ifndef ACC

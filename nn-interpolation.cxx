@@ -15,33 +15,48 @@ namespace {
 
     void find_nearest_neighbor(const Variables &var, KNN &kdtree,
                                int_vec &idx, int_vec &is_changed,
-                               int_vec &idx_changed, int_vec &changed)
+                               int_vec &idx_changed, int_vec &changed,
+                               bool is_surface,
+                               const segment_t &conn_surface)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
 
         double eps = 1e-15;
+        int nqueries;
 
-        array_t queries(var.nelem);
+        if (is_surface)
+            nqueries = var.bfacets[iboundz1]->size();
+        else
+            nqueries = var.nelem;
 
-        elem_center(*var.coord, *var.connectivity, queries);
+        array_t queries(nqueries);
 
-        neighbor_vec neighbors(var.nelem);
+        if (is_surface) {
+            facet_center(*var.coord, conn_surface, queries);
+        } else {
+            elem_center(*var.coord, *var.connectivity, queries);
+        }
+
+        neighbor_vec neighbors(nqueries);
 
         kdtree.search(queries, neighbors, 1, 3.);
 
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
+#endif
         #pragma acc parallel loop
-        for (int e=0; e<var.nelem; e++) {
-            idx[e] = int(neighbors[e].idx);
-            is_changed[e] = (neighbors[e].dist2 < eps) ? 0 : 1;
+        for (int i=0; i<nqueries; i++) {
+            idx[i] = int(neighbors[i].idx);
+            is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
         }
 
         int nchanged = 0;
-        for (int e=0; e<var.nelem; e++) {
-            if (is_changed[e] > 0) {
-                changed.push_back(e);
-                idx_changed[e] = nchanged;
+        for (int i=0; i<nqueries; i++) {
+            if (is_changed[i] > 0) {
+                changed.push_back(i);
+                idx_changed[i] = nchanged;
                 nchanged++;
             }
         }
@@ -59,7 +74,9 @@ namespace {
                               int_vec &elems_vec,
                               double_vec &ratios_vec,
                               double_vec &empty_vec,
-                              int_vec &changed)
+                              int_vec &changed,
+                              bool is_surface,
+                              const segment_t &conn_surface)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -80,26 +97,47 @@ namespace {
         empty_vec.resize(nchanged,0);
 
         double_vec2D sample_eta;
-        for (int i=0; i<neta0; i++)
-            for (int j=0; j<neta1; j++) {
+        if (is_surface) {
+            for (int i=0; i<neta0; i++) {
 #ifdef THREED
-                for (int k=0; k<neta2; k++) {
-                    double eta[4] = {(i + 0.5) * spacing0,
-                                    (j + 0.5) * spacing1,
-                                    (k + 0.5) * spacing2,
-                                    1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
-#else
+                for (int j=0; j<neta1; j++) {
                     double eta[3] = {(i + 0.5) * spacing0,
                                     (j + 0.5) * spacing1,
                                     1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
+#else
+                    double eta[2] = {(i + 0.5) * spacing0,
+                                    1 - (i + 0.5) * spacing0};
 #endif
-                    if (eta[NODES_PER_ELEM-1] < eps) continue;
+                    if (eta[NODES_PER_FACET-1] < eps) continue;
 
-                    sample_eta.push_back(double_vec(eta, eta + NODES_PER_ELEM));
+                    sample_eta.push_back(double_vec(eta, eta + NODES_PER_FACET));
 #ifdef THREED
                 }
 #endif
             }
+        } else {
+            for (int i=0; i<neta0; i++) {
+                for (int j=0; j<neta1; j++) {
+#ifdef THREED
+                    for (int k=0; k<neta2; k++) {
+                        double eta[4] = {(i + 0.5) * spacing0,
+                                        (j + 0.5) * spacing1,
+                                        (k + 0.5) * spacing2,
+                                        1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1 - (k + 0.5) * spacing2};
+#else
+                        double eta[3] = {(i + 0.5) * spacing0,
+                                        (j + 0.5) * spacing1,
+                                        1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
+#endif
+                        if (eta[NODES_PER_ELEM-1] < eps) continue;
+
+                        sample_eta.push_back(double_vec(eta, eta + NODES_PER_ELEM));
+#ifdef THREED
+                    }
+#endif
+                }
+            }
+        }
         int nsample = sample_eta.size();
         int nqueries = nchanged * nsample;
 
@@ -125,26 +163,47 @@ namespace {
 
             queries.resize((end-start) * nsample);
 
+            if (is_surface) {
 #ifndef ACC
-            #pragma omp parallel for default(none) shared(var,start, end, \
-                sample_eta, nsample, queries, changed)
+                #pragma omp parallel for default(none) shared(var,start, end, \
+                    sample_eta, nsample, queries, changed, conn_surface)
 #endif
-            #pragma acc parallel loop async
-            for (int i=start; i<end; i++) {
-                int e = changed[i];
-                int query_start = i - start;
-                const int* conn = (*var.connectivity)[e];
+                #pragma acc parallel loop async
+                for (int i=start; i<end; i++) {
+                    int e = changed[i];
+                    int query_start = i - start;
+                    const int* conn = conn_surface[e];
 
-                for (int j=0; j<nsample; j++) {
-                    double *x = queries[query_start*nsample + j];
-                    for (int d=0; d<NDIMS; d++) {
-                        x[d] = 0;
-                        for (int n=0; n<NODES_PER_ELEM; n++)
-                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                    for (int j=0; j<nsample; j++) {
+                        double *x = queries[query_start*nsample + j];
+                        for (int d=0; d<NDIMS; d++) {
+                            x[d] = 0;
+                            for (int n=0; n<NODES_PER_FACET; n++)
+                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                        }
+                    }
+                }
+            } else {
+#ifndef ACC
+                #pragma omp parallel for default(none) shared(var,start, end, \
+                    sample_eta, nsample, queries, changed)
+#endif
+                #pragma acc parallel loop async
+                for (int i=start; i<end; i++) {
+                    int e = changed[i];
+                    int query_start = i - start;
+                    const int* conn = (*var.connectivity)[e];
+
+                    for (int j=0; j<nsample; j++) {
+                        double *x = queries[query_start*nsample + j];
+                        for (int d=0; d<NDIMS; d++) {
+                            x[d] = 0;
+                            for (int n=0; n<NODES_PER_ELEM; n++)
+                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                        }
                     }
                 }
             }
-
             neighbors.resize((end-start) * nsample * max_el);
 
             #pragma acc wait
@@ -154,7 +213,7 @@ namespace {
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
-                elems_vec, ratios_vec, empty_vec, sample_eta, \
+                elems_vec, ratios_vec, empty_vec, sample_eta, is_surface, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
             #pragma acc parallel loop async
@@ -170,7 +229,6 @@ namespace {
                 *   3. The percentage of points in each old elements is used as (approximate)
                 *      volume weighting for the mapping.
                 */
-                const int* conn = (*var.connectivity)[e];
                 for (int j=0; j<nsample; j++) {
                     double *x = queries.data() + (query_start + j) * NDIMS;
                     neighbor *nn = neighbors.data() + (query_start + j) * max_el;
@@ -179,19 +237,24 @@ namespace {
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        old_e = nn[jj].idx;
+                        int nn_e = nn[jj].idx;
+                        if (is_surface) {
+                            old_e = (*var.surfinfo.top_facet_elems)[nn_e];
+                        } else {
+                            old_e = nn_e;
+                        }
                         bary.transform(x, old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
                             for (int ei = 0; ei < elem_size; ++ei) {
-                                if (elem_keys[ei] == old_e) {
+                                if (elem_keys[ei] == nn_e) {
                                     elem_count_buf[ei]++;
                                     found = true;
                                     break;
                                 }
                             }
                             if (!found && elem_size < 32) {
-                                elem_keys[elem_size] = old_e;
+                                elem_keys[elem_size] = nn_e;
                                 elem_count_buf[elem_size] = 1;
                                 elem_size++;
                             }
@@ -249,26 +312,67 @@ namespace {
                                const Barycentric_transformation &bary,
                                const array_t &old_coord,
                                const conn_t &old_connectivity,
+                               const int_pair_vec &old_bfacets_surface,
                                int_vec &idx,
                                int_vec &is_changed,
                                int_vec &idx_changed,
                                int_vec &elems_vec,
                                double_vec &ratios_vec,
-                               double_vec &empty_vec)
+                               double_vec &empty_vec,
+                               bool is_surface)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
 
         int_vec changed;
-        int old_nelem = old_connectivity.size();
+        int old_npoint;
+
+        if (is_surface) {
+            old_npoint = old_bfacets_surface.size();
+        } else {
+            old_npoint = old_connectivity.size();
+        }
+
+        segment_t conn_surface(idx.size());
+        segment_t old_conn_surface(old_npoint);
 
 #ifdef USE_NPROF
         nvtxRangePushA("create kdtree for old elements");
 #endif
 
-        array_t points(old_nelem);
-        elem_center(old_coord, old_connectivity, points);
+        array_t points(old_npoint);
+        if (is_surface) {
+            int npoint = idx.size();
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(old_bfacets_surface, \
+                old_conn_surface,old_connectivity,NODE_OF_FACET,old_npoint)
+#endif
+            #pragma acc parallel loop async
+            for (int i=0; i<old_npoint; ++i) {
+                int e = old_bfacets_surface[i].first;
+                int f = old_bfacets_surface[i].second;
+                for (int j=0; j<NODES_PER_FACET; ++j) {
+                    old_conn_surface[i][j] = old_connectivity[e][ NODE_OF_FACET[f][j] ];
+                }
+            }
+
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(var,conn_surface, \
+                    NODE_OF_FACET,npoint)
+#endif
+            #pragma acc parallel loop async
+            for (int i=0; i<npoint; ++i) {
+                int e = (*var.bfacets[iboundz1])[i].first;
+                int f = (*var.bfacets[iboundz1])[i].second;
+                for (int j=0; j<NODES_PER_FACET; ++j) {
+                    conn_surface[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
+                }
+            }
+            facet_center(old_coord, old_conn_surface, points);
+        } else {
+            elem_center(old_coord, old_connectivity, points);
+        }
 
 #ifdef ACC
         array_t point_tmp(1);
@@ -284,10 +388,10 @@ namespace {
         nvtxRangePop();
 #endif
         printf("    Finding nearest neighbor...\n");
-        find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed);
+        find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed, is_surface, conn_surface);
 
         printf("    Finding acm element ratios...\n");
-        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_nelem, elems_vec, ratios_vec, empty_vec, changed);
+        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface, conn_surface);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -298,12 +402,10 @@ namespace {
     void boundary_field(const int_vec &is_changed,
                        const int_vec &idx_changed,
                        const double_vec &empty_vec,
-                       double value, double_vec &target)
+                       double value, double_vec &target,
+                       int ntarget)
     {
         double eps = 1e-15;
-
-        #pragma acc serial async
-        int ntarget = target.size();
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(target, is_changed, \
@@ -324,12 +426,10 @@ namespace {
     void boundary_field(const int_vec &is_changed,
                        const int_vec &idx_changed,
                        const double_vec &empty_vec,
-                       double value, tensor_t &target)
+                       double value, tensor_t &target,
+                       int ntarget)
     {
         double eps = 1e-15;
-
-        #pragma acc serial async
-        int ntarget = target.size();
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(target, is_changed, \
@@ -355,14 +455,12 @@ namespace {
                       const int_vec &elems_vec,
                       const double_vec &ratios_vec,
                       const double_vec &source,
-                      double_vec &target)
+                      double_vec &target,
+                      int ntarget)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-
-        #pragma acc serial async
-        int ntarget = target.size();
 
 #ifndef ACC
         #pragma omp parallel default(none) shared(idx, source, \
@@ -406,14 +504,12 @@ namespace {
                       const int_vec &elems_vec,
                       const double_vec &ratios_vec,
                       const tensor_t &source,
-                      tensor_t &target)
+                      tensor_t &target,
+                      int ntarget)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-
-        #pragma acc serial async
-        int ntarget = target.size();
 
 #ifndef ACC
         #pragma omp parallel default(none) shared(idx, source, \
@@ -461,68 +557,74 @@ namespace {
                                     const int_vec &idx_changed,
                                     const int_vec &elems_vec,
                                     const double_vec &ratios_vec,
-                                    const double_vec &empty_vec)
+                                    const double_vec &empty_vec,
+                                    bool is_surface = false)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        const int e = var.nelem;
+        if (is_surface) {
+            const int nfacet = idx.size();
 
-        double_vec *new_plstrain = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.plstrain, *new_plstrain);
+            double_vec *new_edvacc_surf = new double_vec(nfacet);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.surfinfo.edvacc_surf, *new_edvacc_surf, nfacet);
 
-        double_vec *new_delta_pls = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *new_delta_pls);
+            #pragma acc wait
 
-        tensor_t *new_strain = new tensor_t(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain);
+            delete var.surfinfo.edvacc_surf;
+            var.surfinfo.edvacc_surf = new_edvacc_surf;
+        } else {
+            const int e = var.nelem;
 
-        tensor_t *new_stress = new tensor_t(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress);
+            double_vec *new_plstrain = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.plstrain, *new_plstrain, e);
 
-        double_vec *new_stressyy = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy);
+            double_vec *new_delta_pls = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *new_delta_pls, e);
 
-        double_vec *new_old_mean_stress = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress);
+            tensor_t *new_strain = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
-        double_vec *new_radiogenic_source = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source);
+            tensor_t *new_stress = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
-        double_vec *new_edvacc_surf = new double_vec(e);
-        inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.surfinfo.edvacc_surf, *new_edvacc_surf);
+            double_vec *new_stressyy = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
 
-        #pragma acc wait
+            double_vec *new_old_mean_stress = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
 
-        delete var.plstrain;
-        var.plstrain = new_plstrain;
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
 
-        delete var.delta_plstrain;
-        var.delta_plstrain = new_delta_pls;
+            #pragma acc wait
 
-        delete var.strain;
-        var.strain = new_strain;
+            delete var.plstrain;
+            var.plstrain = new_plstrain;
 
-        delete var.stress;
-        var.stress = new_stress;
+            delete var.delta_plstrain;
+            var.delta_plstrain = new_delta_pls;
 
-        delete var.stressyy;
-        var.stressyy = new_stressyy;
+            delete var.strain;
+            var.strain = new_strain;
 
-        delete var.old_mean_stress;
-        var.old_mean_stress = new_old_mean_stress;
+            delete var.stress;
+            var.stress = new_stress;
 
-        delete var.radiogenic_source;
-        var.radiogenic_source = new_radiogenic_source;
+            delete var.stressyy;
+            var.stressyy = new_stressyy;
 
-        delete var.surfinfo.edvacc_surf;
-        var.surfinfo.edvacc_surf = new_edvacc_surf;
+            delete var.old_mean_stress;
+            var.old_mean_stress = new_old_mean_stress;
 
-        // b = new tensor_t(e);
-        // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
-        // delete var.stress_old;
-        // var.stress_old = b;
+            delete var.radiogenic_source;
+            var.radiogenic_source = new_radiogenic_source;
 
+            // b = new tensor_t(e);
+            // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
+            // delete var.stress_old;
+            // var.stress_old = b;
+        }
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -535,23 +637,40 @@ namespace {
 void nearest_neighbor_interpolation(const Param& param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
-                                    const conn_t &old_connectivity)
+                                    const conn_t &old_connectivity,
+                                    const bool is_surface,
+                                    const int_pair_vec &old_bfacets_surface)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
-    int_vec idx(var.nelem); // nearest element
-    int_vec is_changed(var.nelem); // is the element changed during remeshing?
-    int_vec idx_changed(var.nelem); 
+    {
+        int nqueries;
 
-    int_vec elems_vec;
-    double_vec ratios_vec;
-    double_vec empty_vec; // radio between old element and boundary empty
-    
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec);
+        if (is_surface) {
+            nqueries = var.bfacets[iboundz1]->size();
+        } else {
+            nqueries = var.nelem;
+        }
 
-    std::cout << "    Interpolating fields...\n";
-    nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec);
+        int_vec idx(nqueries); // nearest element
+        int_vec is_changed(nqueries); // is the element changed during remeshing?
+        int_vec idx_changed(nqueries); 
+
+        int_vec elems_vec;
+        double_vec ratios_vec;
+        double_vec empty_vec; // radio between old element and boundary empty
+        
+        prepare_interpolation(param, var, bary, old_coord, old_connectivity, old_bfacets_surface, \
+                idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
+
+        if (is_surface) {
+            printf("  Interpolating surface fields...\n");
+        } else {
+            printf("  Interpolating element fields...\n");
+        }
+        nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
+    }
 
 #ifdef USE_NPROF
     nvtxRangePop();
