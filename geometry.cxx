@@ -83,6 +83,19 @@ static double triangle_area(const double *a,
 #endif
 }
 
+double compute_area(const double **coord)
+{
+    const double *a = coord[0];
+    const double *b = coord[1];
+#ifdef THREED
+    const double *c = coord[2];
+
+    return triangle_area(a, b, c);
+#else
+    return std::sqrt(dist2(a, b));
+#endif
+}
+
 double compute_volume(const double **coord)
 {
     const double *a = coord[0];
