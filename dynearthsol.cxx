@@ -21,6 +21,7 @@
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
+#include "gospl_driver/gospl-driver.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -499,6 +500,26 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Initialize GoSPL driver if surface process option is 11
+    if (param.control.surface_process_option == 11) {
+        std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
+        var.gospl_driver = new GoSPLDriver();
+        
+        // Initialize with the config file path from parameters
+        if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
+            std::cout << "GoSPL driver successfully initialized with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+        } else {
+            std::cerr << "Failed to initialize GoSPL driver with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+            return -1;
+        }
+    }
+#endif
+
     Output output(param, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
@@ -782,5 +803,15 @@ int main(int argc, const char* argv[])
     print_time_ns(var.func_time.output_time);
     std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
         << 100./var.func_time.output_time/duration_ns << "%)\n";
+
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Clean up GoSPL driver if it was created
+    if (var.gospl_driver != nullptr) {
+        std::cout << "Cleaning up GoSPL driver..." << std::endl;
+        delete var.gospl_driver;
+        var.gospl_driver = nullptr;
+    }
+#endif
+
     return 0;
 }

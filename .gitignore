@@ -25,4 +25,4 @@ valgrind*
 triangle/triangle
 tetgen/tetgen
 core.*
-test
+testgospl_extensions/

@@ -233,8 +233,9 @@ static void declare_parameters(po::options_description &cfg,
         ("control.surface_process_option", po::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
-         "101: custom function."
-         "2: using simple deposition."
+         "2: using simple deposition. "
+         "11: using GoSPL landscape evolution model. "
+         "101: custom function. "
          "102: using simple deposition and diffusion.")
         ("control.surface_diffusivity", po::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
          "Standard diffusition coefficient of surface topography (m^2/s)")
@@ -246,6 +247,8 @@ static void declare_parameters(po::options_description &cfg,
          "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",po::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
+        ("control.surface_process_gospl_config_file", po::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
+         "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),

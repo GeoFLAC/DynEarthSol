@@ -12,6 +12,9 @@
 #include "barycentric-fn.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
+#ifdef HAS_GOSPL_CPP_INTERFACE
+#include "gospl_driver/gospl-driver.hpp"
+#endif
 
 
 #include "bc.hpp"
@@ -1458,6 +1461,94 @@ namespace {
         }
     }
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    void use_gospl(const Param& param, const Variables& var)
+    {
+        if (!var.gospl_driver || !var.gospl_driver->is_initialized()) {
+            std::cerr << "Error: GoSPL driver is not initialized" << std::endl;
+            return;
+        }
+
+        const int top_bdry = iboundz1;
+        const int_vec& top_nodes = *var.bnodes[top_bdry];
+        const std::size_t ntop = top_nodes.size();
+
+        std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes..." << std::endl;
+
+        // Prepare coordinate and velocity data for GoSPL
+        std::vector<double> coords(ntop * 3);
+        std::vector<double> velocities(ntop * 3);
+        std::vector<double> elevations_before(ntop);
+        std::vector<double> elevations_after(ntop);
+
+        // Extract surface node coordinates and velocities
+        for (std::size_t i = 0; i < ntop; ++i) {
+            int n = top_nodes[i];
+            
+            // Coordinates (x, y, z)
+            coords[i * 3 + 0] = (*var.coord)[n][0];                    // x
+#ifdef THREED
+            coords[i * 3 + 1] = (*var.coord)[n][1];                    // y  
+#else
+            coords[i * 3 + 1] = 0.0;                            // y = 0 for 2D
+#endif
+            coords[i * 3 + 2] = (*var.coord)[n][NDIMS-1];              // z (elevation)
+            
+            // Store initial elevations
+            elevations_before[i] = (*var.coord)[n][NDIMS-1];
+            
+            // Velocities (vx, vy, vz) - convert from DynEarthSol velocity field
+            velocities[i * 3 + 0] = (*var.vel)[n][0];          // vx
+#ifdef THREED
+            velocities[i * 3 + 1] = (*var.vel)[n][1];          // vy
+#else
+            velocities[i * 3 + 1] = 0.0;                        // vy = 0 for 2D
+#endif
+            velocities[i * 3 + 2] = (*var.vel)[n][NDIMS-1];    // vz
+        }
+
+        // Apply velocity data to GoSPL model
+        int apply_result = var.gospl_driver->apply_velocity_data(
+            coords.data(), velocities.data(), ntop, 
+            var.time, 3, 1.0  // k=3, power=1.0 for interpolation
+        );
+        
+        if (apply_result != 0) {
+            std::cerr << "Warning: Failed to apply velocity data to GoSPL" << std::endl;
+        }
+
+        // Run GoSPL processes for the current time step
+        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt, false);
+        if (elapsed < 0) {
+            std::cerr << "Error: GoSPL process run failed" << std::endl;
+            return;
+        }
+
+        // Get updated elevations from GoSPL
+        int interp_result = var.gospl_driver->interpolate_elevation_to_points(
+            coords.data(), ntop, elevations_after.data(), 3, 1.0
+        );
+
+        if (interp_result == 0) {
+            // Apply elevation changes to DynEarthSol coordinates
+            double max_elevation_change = 0.0;
+            for (std::size_t i = 0; i < ntop; ++i) {
+                int n = top_nodes[i];
+                double elevation_change = elevations_after[i] - elevations_before[i];
+                (*var.coord)[n][NDIMS-1] = elevations_after[i];
+                
+                // Track maximum elevation change for diagnostics
+                max_elevation_change = std::max(max_elevation_change, std::abs(elevation_change));
+            }
+
+            std::cout << "GoSPL completed: max elevation change = " << max_elevation_change 
+                      << " in " << elapsed << " time units" << std::endl;
+        } else {
+            std::cerr << "Warning: Failed to interpolate elevations from GoSPL" << std::endl;
+        }
+    }
+#endif
+
     void get_surface_info(const Variables& var, \
         double_vec& top_base, double_vec& top_depth) {
 #ifdef USE_NPROF
@@ -2036,6 +2127,15 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     case 1:
         simple_diffusion(var);
         break;
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    case 11:
+        if (var.gospl_driver != nullptr) {
+            use_gospl(param, var);
+        } else {
+            std::cerr << "Error: GoSPL driver not initialized for surface process option 11" << std::endl;
+        }
+        break;
+#endif
     case 101:
         custom_surface_processes(var, coord);
         break;

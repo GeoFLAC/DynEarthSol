@@ -1,0 +1,41 @@
+# GoSPL Configuration Example
+# This is an example configuration file for GoSPL landscape evolution modeling
+# when integrated with DynEarthSol
+
+# Domain and mesh settings
+domain:
+  npx: 1                   # Number of processors in x-direction
+  npy: 1                   # Number of processors in y-direction
+  minX: 0.0                # Minimum x coordinate (km)
+  maxX: 100.0              # Maximum x coordinate (km)  
+  minY: 0.0                # Minimum y coordinate (km)
+  maxY: 10.0              # Maximum y coordinate (km)
+  dx: 0.1                  # Grid spacing in x-direction (km)
+  dy: 0.1                  # Grid spacing in y-direction (km)
+
+# Time settings
+time:
+  start: 0.0               # Start time (years)
+  end: 1000000.0           # End time (years)
+  dt: 1000.0               # Time step size (years)
+
+# Surface processes
+sp:
+  # Hillslope diffusion
+  hillslopeKa: 1.0e-3      # Hillslope diffusion coefficient (m²/yr)
+  
+  # River incision
+  streamPowerLaw: 1        # Enable stream power law erosion
+  Kf: 1.0e-5               # Fluvial erosion coefficient
+  m: 0.5                   # Area exponent
+  n: 1.0                   # Slope exponent
+  
+  # Marine processes
+  seaLevel: 0.0            # Sea level (m)
+  marineKa: 5.0e-4         # Marine diffusion coefficient (m²/yr)
+
+# Output settings  
+output:
+  makedir: True            # Create output directory (handled by DynEarthSol)
+  dir: 'output-gospl'      # Output directory name
+  interval: 10000.0        # Output interval (years)

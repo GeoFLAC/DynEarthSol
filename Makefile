@@ -14,6 +14,10 @@
 ## adaptive_time_step = 1: use adaptive time stepping technique
 ## use_R_S = 1: use Rate - State friction law
 ## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
+## use_gospl = 1: enable GoSPL surface processes
+##   Note: Requires gospl_extensions to be cloned and built locally:
+##   git clone https://github.com/GeoFLAC/gospl_extensions.git
+##   cd gospl_extensions && make && cd ..
 
 ndims = 3
 opt = 2
@@ -25,6 +29,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
+use_gospl = 1
 ANNFLAGS = linux-g++
 
 ifeq ($(ndims), 2)
@@ -52,7 +57,12 @@ CXX_BACKEND = ${CXX}
 CUDA_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2/cuda
 
 ## path to Boost's base directory, if not in standard system location
-BOOST_ROOT_DIR =
+## Use conda environment if gospl is activated, otherwise system boost
+ifdef CONDA_PREFIX
+	BOOST_ROOT_DIR = $(CONDA_PREFIX)
+else
+	BOOST_ROOT_DIR = /usr
+endif
 
 ########################################################################
 ## Select compiler and linker flags
@@ -109,6 +119,31 @@ ifeq ($(usemmg), 1)
 	endif
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+	endif
+endif
+
+ifeq ($(use_gospl), 1)
+	# GoSPL extensions library configuration
+	# Path to locally built gospl_extensions (clone from GitHub)
+	GOSPL_EXT_DIR = ./gospl_extensions
+	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
+	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
+	
+	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
+	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
+	endif
+	
+	# Use conda libraries even when not in conda environment (for GoSPL compatibility)
+	CONDA_ENV_PATH = /home/eunseo/miniconda3/envs/gospl
+	BOOST_ROOT_DIR = $(CONDA_ENV_PATH)
+	
+	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include
+	GOSPL_LDFLAGS += -lboost_program_options -L$(BOOST_ROOT_DIR)/lib
+	GOSPL_LDFLAGS += -lpython3.11 -L$(BOOST_ROOT_DIR)/lib
+	ifneq ($(OSNAME), Darwin)
+		GOSPL_LDFLAGS += -Wl,-rpath=$(BOOST_ROOT_DIR)/lib
 	endif
 endif
 
@@ -269,6 +304,10 @@ SRCS =	\
 	rheology.cxx \
 	markerset.cxx
 
+ifeq ($(use_gospl), 1)
+	SRCS += gospl_driver/gospl-driver.cxx
+endif
+
 INCS =	\
 	array2d.hpp \
 	barycentric-fn.hpp \
@@ -325,12 +364,20 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(use_gospl), 1)
+	CXXFLAGS += $(GOSPL_CXXFLAGS)
+	LDFLAGS += $(GOSPL_LDFLAGS)
+endif
+
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3
 
 ANN_DIR = ann
 ANN_LIBNAME = ANN
 CXXFLAGS += -I$(ANN_DIR)/include
+
+GOSPL_DIR = gospl_driver
+CXXFLAGS += -I$(GOSPL_DIR)
 
 ## Action
 

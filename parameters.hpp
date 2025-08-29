@@ -10,6 +10,11 @@
 #include "constants.hpp"
 #include "array2d.hpp"
 
+// Forward declarations
+#ifdef HAS_GOSPL_CPP_INTERFACE
+class GoSPLDriver;
+#endif
+
 typedef std::pair<double,double> double_pair;
 typedef std::unordered_map<int,int> int_map;
 typedef std::vector<int_map> int_map2D;
@@ -107,6 +112,7 @@ struct Control {
     double surf_diff_ratio_marine;
     double surf_depo_universal;
     double surf_base_level;
+    std::string surface_process_gospl_config_file;
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;
@@ -501,6 +507,11 @@ struct Variables {
     SurfaceInfo surfinfo;
     int_vec melt_markers;
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // GoSPL driver for landscape evolution modeling
+    GoSPLDriver* gospl_driver;
+#endif
+
     array_t *vel, *force, *coord0;
     array_t *force_residual;
     tensor_t *strain_rate, *strain, *stress;
@@ -526,6 +537,9 @@ struct Variables {
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);
         vbc_vertical_ratio_x1.resize(4);
+#ifdef HAS_GOSPL_CPP_INTERFACE
+        gospl_driver = nullptr;
+#endif
     }
 
 };
