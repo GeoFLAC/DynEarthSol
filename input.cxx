@@ -520,6 +520,7 @@ static void declare_parameters(po::options_description &cfg,
          "0: uniform half-space cooling.\n"
          "1: continental thermal gradient.\n"
          "2: equilibrium temperature for crustal radiogenic heating.\n"
+         "3: continental thermal gradient with adiabatic mantle.\n"
          "90: temperature read from an external grid\n")
 
         // for temperature_option = 0
@@ -545,6 +546,17 @@ static void declare_parameters(po::options_description &cfg,
          "Radiogenic crustal thickness (in meters), used for the temperature profile on the plate.\n")
         ("ic.lithospheric_thickness", po::value<double>(&p.ic.lithospheric_thickness)->default_value(100.e3),
          "Lithospheric thickness (in meters), used for the temperature profile on the plate.\n")
+         // for temperature_option = 3
+        ("ic.rh_dome_center_x", po::value<double>(&p.ic.rh_dome_center_x)->default_value(0.5),
+         "x of center of geothermal dome, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_center_y", po::value<double>(&p.ic.rh_dome_center_y)->default_value(0.5),
+         "y of center of geothermal dome, used for the temperature profile on the plate.\n")
+        ("ic.surface_heat_flux", po::value<double>(&p.ic.surface_heat_flux)->default_value(70e-3),
+         "surface heat flux, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_amplitude", po::value<double>(&p.ic.rh_dome_amplitude)->default_value(0),
+         "Dome amplitude, used for the temperature profile on the plate.\n")
+        ("ic.rh_dome_width", po::value<double>(&p.ic.rh_dome_width)->default_value(0),
+         "Dome half width, used for the temperature profile on the plate.\n")
 
         // for temperature_option = 90
         ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
@@ -586,6 +598,8 @@ static void declare_parameters(po::options_description &cfg,
          "101: custom phase changes.")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
+        ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
+         "Index of reference material. For compute_dt(), ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
@@ -598,6 +612,10 @@ static void declare_parameters(po::options_description &cfg,
          "Index of oceanic crust. For formation of middle ocean ridge in phasechanges.cxx")
         ("mat.mattype_sed", po::value<int>(&p.mat.mattype_sed)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
+        ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
+         "Index of mddle ocean ridge extrusion. For formation of middle ocean ridge in phasechanges.cxx")
+        ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
+         "Index of asthenosphere.")
         ("mat.max_viscosity", po::value<double>(&p.mat.visc_max)->default_value(1e24),
          "Max. value of viscosity (in Pa.s)")
         ("mat.min_viscosity", po::value<double>(&p.mat.visc_min)->default_value(1e18),
@@ -771,8 +789,14 @@ static void get_numbers(const po::variables_map &vm, const char *name,
 
     std::string str = vm[name].as<std::string>();
     int err = read_numbers(str, values, len);
-    if (err && optional_size) {
+    if (err && optional_size > 0) {
         err = read_numbers(str, values, optional_size);
+    } else if (err && optional_size == -1) {
+        err = read_numbers(str, values, 1);
+        if (!err) {
+            values.resize(len);
+            std::fill(values.begin(), values.end(), values[0]);
+        }
     }
 
     if (err) {
@@ -1058,43 +1082,43 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
         get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, 1);
 
-        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, 1);
+        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, -1);
 
-        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, 1);
-        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, 1);
+        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, -1);
+        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, -1);
 
-        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, 1);
-        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, 1);
-        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, 1);
-        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, 1);
+        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, -1);
 
-        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, 1);
-        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, 1);
-        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, 1);
+        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, -1);
+        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, -1);
+        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, -1);
 
-        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, 1);
-        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, 1);
-        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, 1);
-        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, 1);
+        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
 
         // Hydraulic parameters
-        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, 1);
-        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, 1);
-        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, 1);
-        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, 1);
-        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, 1);
-        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, 1);
-        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, 1);
-        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, 1);
+        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);
+        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, -1);
+        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, -1);
+        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, -1);
+        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, -1);
+        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, -1);
+        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, -1);
+        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, -1);
         // Rate-and-state friction parameters
-        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, 1);
-        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, 1);
-        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, 1);
+        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
+        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
+        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
     }
 
 }

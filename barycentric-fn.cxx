@@ -1,15 +1,20 @@
-
 #include "barycentric-fn.hpp"
 
 
 Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(connectivity.size())
+    : coeff_(connectivity.size()), nelem_(connectivity.size())
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+#ifndef ACC
     #pragma omp parallel for default(none) \
         shared(coord, connectivity, volume)
-    for (std::size_t e=0; e<connectivity.size(); ++e) {
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<nelem_; ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
@@ -27,17 +32,26 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff2d(a, b, c, volume[e], coeff_[e]);
 #endif
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
                                                        const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(elem.size())
+    : coeff_(elem.size()), nelem_(elem.size())
 {
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+#ifndef ACC
     #pragma omp parallel for default(none) \
         shared(elem, coord, connectivity, volume)
-    for (std::size_t i=0; i<elem.size(); ++i) {
+#endif
+    #pragma acc parallel loop async
+    for (int i=0; i<nelem_; ++i) {
         int e = elem[i];
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -51,16 +65,19 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
         int n3 = connectivity[e][3];
         const double *d = coord[n3];
 
-        compute_coeff3d(a, b, c, d, volume[i], coeff_[i]);
+        compute_coeff3d(a, b, c, d, volume[e], coeff_[i]);
 #else
-        compute_coeff2d(a, b, c, volume[i], coeff_[i]);
+        compute_coeff2d(a, b, c, volume[e], coeff_[i]);
 #endif
     }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 }
 
 Barycentric_transformation::Barycentric_transformation(const double** coord,
                                                        const double volume)
-    : coeff_(1)
+    : coeff_(1), nelem_(1)
 {
     const double *a = coord[0];
     const double *b = coord[1];
