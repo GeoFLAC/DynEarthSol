@@ -82,6 +82,36 @@ alike.
   necessary to debug the code under valgrind.
 * Or run `make opt=-1` to build a memory-specific debugging executable using `-fsanitize=address`, a compiler flag for detacting memory address issues. It can show where the issue occurs and where variables are allocated during execution, without needing additional tools such as GDB or Valgrind. However, valgrind cannot easily coexist with -fsanitize=address. as using both together may cause library-related errors.
 
+### Common make invocations
+
+Here are a few practical examples for common build configurations (run these from the project root):
+
+```bash
+# default optimized 3D build
+make
+
+# debugging build (no optimizations, no OpenMP)
+make opt=0 openmp=0
+
+# build 2D version
+make ndims=2
+
+# enable MMG mesh optimization (requires MMG headers/libs)
+make usemmg=1
+
+# enable Exodus input support (requires seacas/exodus libs)
+make useexo=1
+
+# enable NetCDF output support (requires netCDF & netcdf-cxx4)
+make netcdf=1
+
+# NVHPC/profiler build (uses nvc++ when set)
+make nprof=1
+
+# OpenACC build (NVHPC compiler)
+make openacc=1
+```
+
 # Running DES3D
 * Execute `dynearthsol2d [inputfile: examples/defaults.cfg by default]`.
 * Pay attention to any warnings. For instance, if a warning about potential 

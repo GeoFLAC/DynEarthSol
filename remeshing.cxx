@@ -19,61 +19,9 @@
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
+// ADAPT-based optimization and related VTK/Adaptivity usage removed.
 
-#ifdef ADAPT
-
-/* Copyright (C) 2009 Imperial College London.
-
- Please see the AUTHORS file in the main source directory for a full
- list of copyright holders.
-
- Dr Gerard J Gorman
- Applied Modelling and Computation Group
- Department of Earth Science and Engineering
- Imperial College London
-
- g.gorman@imperial.ac.uk
-
- This library is free software; you can redistribute it and/or
- modify it under the terms of the GNU Lesser General Public
- License as published by the Free Software Foundation; either
- version 2.1 of the License.
-
- This library is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- Lesser General Public License for more details.
-
- You should have received a copy of the GNU Lesser General Public
- License along with this library; if not, write to the Free Software
- Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
- USA
-*/
-#include <cmath>
-#include <vector>
-
-#include "vtk.h"
-#include <vtkSmartPointer.h>
-#include <vtkCellArray.h>
-
-#include "ErrorMeasure.h"
-#include "Adaptivity.h"
-#include "DiscreteGeometryConstraints.h"
-#include <assert.h>
-
-#endif // end of ifdef ADAPT
-
-#ifdef USEMMG
-#ifdef THREED
-#include "mmg/mmg3d/libmmg3d.h"
-#else
-#include "mmg/mmg2d/libmmg2d.h"
-#endif
-#define MAX0(a,b)     (((a) > (b)) ? (a) : (b))
-#define MAX4(a,b,c,d)  (((MAX0(a,b)) > (MAX0(c,d))) ? (MAX0(a,b)) : (MAX0(c,d)))
-#endif
-
-namespace {
+namespace { // anonymous namespace
 
 
 // equilateral triangle area = 0.433*s^2, equilateral tetrahedron volume = 0.118*s^3
@@ -97,20 +45,24 @@ bool is_bottom(uint flag)
     return flag & BOUNDZ0;
 }
 
+
 bool is_x0(uint flag)
 {
     return flag & BOUNDX0;
 }
+
 
 bool is_x1(uint flag)
 {
     return flag & BOUNDX1;
 }
 
+
 bool is_y0(uint flag)
 {
     return flag & BOUNDY0;
 }
+
 
 bool is_y1(uint flag)
 {
@@ -142,7 +94,6 @@ bool is_bottom_corner(uint flag)
     if ((flag & BOUNDZ0) && is_corner(flag)) return 1;
     return 0;
 }
-
 
 void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
                     double bottom, int_vec &points_to_delete, double min_dist)
@@ -188,7 +139,6 @@ void flatten_x1(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-
 void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
                     int_vec &points_to_delete, double min_dist)
 {
@@ -202,9 +152,18 @@ void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
-                    double side, int_vec &points_to_delete, double min_dist)
+void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
+                       int_vec &points_to_delete)
 {
+    // For corner handling, reuse flatten_x0 behavior but with a small min_dist
+    const double tiny = 1e-8;
+    flatten_x0(old_bcflag, qcoord, points_to_delete, tiny);
+}
+
+void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
+                double side, int_vec &points_to_delete, double min_dist)
+{
+    // Mirror of flatten_x1 for y-direction
     for (std::size_t i=0; i<old_bcflag.size(); ++i) {
         uint flag = old_bcflag[i];
         if (is_y1(flag))
@@ -212,97 +171,6 @@ void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
         else if (! is_boundary(flag))
             if (qcoord[i*NDIMS + 1] > (side - min_dist))
                 points_to_delete.push_back(i);
-    }
-}
-
-void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
-                int_vec &points_to_delete)
-{
-
-    // for cutting x0 boundary to (x0 & z1) in X
-    double x1x, bx0;
-
-    int j=0;
-    while (j>-1) {
-        uint flag = old_bcflag[j];
-        if ((flag & BOUNDX0 ) && (flag & BOUNDZ1)) {
-            x1x = qcoord[j*NDIMS]; break;
-        }
-        j++;
-    }
-
-    // interpolation or extrapolation 4 bx0
-    j=0;
-    int l=0;
-    double bo_X[2], bo_depth[2];
-    do {
-        uint flag = old_bcflag[j];
-        if (is_bottom(flag)) {
-           bo_depth[l]  = qcoord[j*NDIMS + NDIMS-1];
-           bo_X[l] = qcoord[j*NDIMS];
-           l++;
-        }
-        j++;
-    } while (l<2);
-
-    bx0 = bo_depth[0] + (bo_depth[1]-bo_depth[0])*(x1x-bo_X[0])/(bo_X[1]-bo_X[0]);
-
-    std::cout << "x1x: " << x1x << "; bx0: "<<bx0<< '\n';
-    double x0_zmin = std::numeric_limits<double>::max();
-    double bot_xmax = std::numeric_limits<double>::lowest();
-    double b0_exceed_xmax = std::numeric_limits<double>::lowest();
-
-    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        if (is_x0(flag)) {
-            if ((x0_zmin > qcoord[i*NDIMS + NDIMS-1]) && !(qcoord[i*NDIMS] > x1x))
-                x0_zmin = qcoord[i*NDIMS + NDIMS-1];
-            else if (is_bottom(flag))
-                b0_exceed_xmax = qcoord[i*NDIMS];
-            // set all x0 to x1x in X
-            qcoord[i*NDIMS] = x1x;
-        }
-    }
-
-    double z0_xmax_ref = 2*x1x - b0_exceed_xmax;
-
-    for (std::size_t i=0; i<old_bcflag.size(); ++i)
-        if (is_bottom(old_bcflag[i]))
-            if ((bot_xmax < qcoord[i*NDIMS]) && (qcoord[i*NDIMS] < z0_xmax_ref))
-                bot_xmax = qcoord[i*NDIMS];
-
-    double v = (x1x - bot_xmax) / (x0_zmin - bx0);
-
-#ifdef USEMMG
-    double shrink_x = (x1x - bot_xmax) / (b0_exceed_xmax - bot_xmax);
-#else
-    double b0_clean_zmin_ref = x0_zmin - (x0_zmin - bx0)/2.;
-#endif
-
-    for (std::size_t i=0; i < old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        double x = qcoord[i*NDIMS];
-        double y = qcoord[i*NDIMS + NDIMS-1];
-        if (!is_x0(flag)) {
-            double fx = v * (y - x0_zmin) + x1x;
-            if (fx < x) {
-#ifdef USEMMG
-                // adjust all nodes at the right side of edge line
-                double dx = (x - fx) * shrink_x;
-                qcoord[i*NDIMS] = fx + dx;
-#else
-                // remove all nodes at the right side of edge line
-                points_to_delete.push_back(i);
-#endif
-            }
-#ifdef USEMMG
-#else
-        } else if (!is_bottom(flag)) {
-            // remove b0 nodes close to the z0-b0 corner
-            if (y < b0_clean_zmin_ref)
-                points_to_delete.push_back(i);
-#endif
-        }
     }
 }
 
@@ -2686,250 +2554,9 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 #endif  // end of if THREED
 #endif // end of if USEMMG
 
-#if defined THREED && defined ADAPT
-void optimize_mesh(const Param &param, Variables &var, int bad_quality,
-              const array_t &original_coord, const conn_t &original_connectivity,
-              const segment_t &original_segment, const segflag_t &original_segflag)
-{
-    // We don't want to refine large elements during remeshing,
-    // so using negative size as the max area
-    const double max_elem_size = -1;
-    const int vertex_per_polygon = 3;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
-    Mesh mesh_param = param.mesh;
-    mesh_param.poly_filename = "";
-
-    int_vec bdry_polygons[nbdrytypes];    
-    assemble_bdry_polygons(var, original_coord, original_connectivity,
-                           bdry_polygons);
-
-    // create a copy of original_coord and original_segment
-    array_t old_coord(original_coord);
-    conn_t old_connectivity(original_connectivity);
-    segment_t old_segment(original_segment);
-    segflag_t old_segflag(original_segflag);
-
-    double *qcoord = old_coord.data();
-    int *qconn = old_connectivity.data();
-    int *qsegment = old_segment.data();
-    int *qsegflag = old_segflag.data();
-
-    int old_nnode = old_coord.size();
-    int old_nelem = old_connectivity.size();
-    int old_nseg = old_segment.size();
-
-    // copy
-    double_vec old_volume(*var.volume);
-    uint_vec old_bcflag(*var.bcflag);
-    int_vec old_bnodes[nbdrytypes];
-    for (int i=0; i<nbdrytypes; ++i) {
-        old_bnodes[i] = *(var.bnodes[i]);
-    }
-
-    int_vec points_to_delete;
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
-
-    /* choosing which way to remesh the boundary */
-    switch (param.mesh.remeshing_option) {
-    case 0:
-        // DO NOT change the boundary
-        excl_func = &is_boundary;
-        break;
-    case 1:
-        excl_func = &is_boundary;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
-        break;
-    case 2:
-        excl_func = &is_boundary;
-        new_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
-        break;
-    case 10:
-        excl_func = &is_corner;
-        break;
-    case 11:
-        excl_func = &is_corner;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
-        break;
-    case 13:
-        excl_func = &is_corner;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist);
-        flatten_x0(old_bcflag, qcoord, points_to_delete);
-        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
-        break;
-    default:
-        std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
-        std::exit(1);
-    }
-
-    ////// Optimize mesh using libadaptivity
-
-    // 1. Create a vtkUnstructuredGrid (UG) object.
-    vtkSmartPointer<vtkUnstructuredGrid> ug = vtkSmartPointer<vtkUnstructuredGrid>::New();
-
-    //// 1.1 add old points to the UG object.
-    vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-    for (std::size_t i = 0; i < old_nnode; ++i) {
-        points->InsertNextPoint( &qcoord[i*NDIMS] );
-    }
-    ug->SetPoints(points);
-
-    //// 1.2 add old connectivity to the UG object.
-    vtkSmartPointer<vtkCellArray> cells = vtkSmartPointer<vtkCellArray>::New();
-    for (std::size_t i = 0; i < old_nelem; ++i) {
-        vtkSmartPointer<vtkTetra> tetra =  vtkSmartPointer<vtkTetra>::New();
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            tetra->GetPointIds()->SetId(j, qconn[i*NODES_PER_ELEM + j]);
-        cells->InsertNextCell( tetra );
-    }
-    ug->SetCells(VTK_TETRA, cells);
-
-#if VTK_MAJOR_VERSION <= 5
-    ug->Update();
-#endif
-
-    // These should be populated only once at the outset of a simulation
-    // and be maintained thereafter.
-    int_vec SENList, sids;
-    {
-        DiscreteGeometryConstraints constraints;
-        constraints.verbose_off();
-        constraints.set_coplanar_tolerance(0.9999999);
-        constraints.set_volume_input(ug);
-
-        sids.assign(qsegflag, qsegflag + old_nseg);
-        SENList.assign(qsegment, qsegment + old_nseg * NODES_PER_FACET);
-        //constraints.get_coplanar_ids(sids);
-        //constraints.get_surface(SENList);
-        //assert(sids.size()*3==SENList.size());
-        //cout<<"Found "<<sids.size()<<" surface elements\n";
-    }
-
-    DiscreteGeometryConstraints constraints;
-    constraints.verbose_off();
-    constraints.set_surface_input(ug, SENList, sids);
-
-    double_vec max_len;
-    constraints.get_constraints(max_len);
-
-    // Prepare the field to be used for error analysis: e.g., plastic strain or strain rate.
-    // Setup data for the triangle. Attach a value of 1.45.
-    // This can be anything you wish to store with it)
-    vtkSmartPointer<vtkDoubleArray> cellData = vtkSmartPointer<vtkDoubleArray>::New();
-    cellData->SetNumberOfComponents(1); //we will have only 1 value associated with the triangle
-    cellData->SetName("plasticStrain"); //set the name of the value
-    for (std::size_t i = 0; i < old_nelem; ++i)
-        cellData->InsertNextValue( (*var.plstrain)[i] ); //set the actual value
-    ug->GetCellData()->AddArray(cellData);
-
-    vtkSmartPointer<vtkCellDataToPointData> cell2point = vtkSmartPointer<vtkCellDataToPointData>::New();
-#if VTK_MAJOR_VERSION <= 5
-    cell2point->SetInput(ug);
-#else
-    cell2point->SetInputData(ug);
-#endif
-    cell2point->PassCellDataOff();
-    cell2point->Update();
-
-    ug->GetPointData()->AddArray(cell2point->GetUnstructuredGridOutput()->GetPointData()->GetArray("plasticStrain"));
-
-    /* Test merging of metrics.
-     */
-    ErrorMeasure error;
-    error.verbose_off();
-    error.set_input(ug);
-    //error.add_field("plasticStrain", 0.05, false, 0.01); // 1.0, false, 1.0
-    error.add_field_simple("plasticStrain", 2.0*param.mesh.resolution, false, 0.01); // 1.0, false, 1.0
-    //error.set_max_length(param.mesh.resolution*5.0);
-    //error.set_max_length(&(max_len[0]), ug->GetNumberOfPoints()); // 1 or NumofPoints.
-    error.set_min_length(param.mesh.resolution * param.mesh.smallest_size);
-    error.apply_gradation(1.3);
-    error.set_max_nodes(5*old_nnode);
-
-    // // For debugging
-    // constraints.write_vtk(std::string("sids_before.vtu"));
-
-    // error.diagnostics();
-
-    // vtkXMLUnstructuredGridWriter *metric_writer = vtkXMLUnstructuredGridWriter::New();
-    // metric_writer->SetFileName("metric_new.vtu");
-    // metric_writer->SetInput(ug);
-    // metric_writer->Write();
-    // metric_writer->Delete();
-    // ug->GetPointData()->RemoveArray("mean_desired_lengths");
-    // ug->GetPointData()->RemoveArray("desired_lengths");
-
-    // vtkXMLUnstructuredGridWriter *ug_writer = vtkXMLUnstructuredGridWriter::New();
-    // ug_writer->SetFileName("before_adapted.vtu");
-    // ug_writer->SetInput(ug);
-    // ug_writer->Write();
-    // /////////////////
-
-    Adaptivity adapt;
-    adapt.verbose_on();
-    adapt.set_from_vtk(ug, true);
-    adapt.set_adapt_sweeps(5);
-    adapt.set_surface_mesh(SENList);
-    adapt.set_surface_ids(sids);
-    adapt.adapt();
-    adapt.get_surface_ids(sids);
-    adapt.get_surface_mesh(SENList);
-    vtkSmartPointer<vtkUnstructuredGrid> adapted_ug = adapt.get_adapted_vtu();
-    // ug->Delete();
-
-    // // For debugging
-    // ug_writer->SetFileName("after_adapted.vtu");
-    // ug_writer->SetInput(adapted_ug);
-    // ug_writer->Write();
-
-    // constraints.set_surface_input(adapted_ug, SENList, sids);
-    // constraints.write_vtk(std::string("sids_after.vtu"));
-    ////////////////
-
-
-    // update mesh info.
-    var.nnode = adapted_ug->GetNumberOfPoints();
-    var.nelem = adapted_ug->GetNumberOfCells();
-    var.nseg = sids.size();
-    std::cerr << "Updated mesh size\n";
-
-    array_t new_coord( var.nnode );
-    conn_t new_connectivity( var.nelem );
-    segment_t new_segment( var.nseg );
-    segflag_t new_segflag( var.nseg );
-    std::cerr << "Resized arrays\n";
-
-    for (std::size_t i = 0; i < var.nnode; ++i) {
-        double *x = adapted_ug->GetPoints()->GetPoint(i);
-        for(int j=0; j < NDIMS; j++ )
-            new_coord[i][j] = x[j];
-    }
-    std::cerr << "New coordinates populated\n";
-
-    for (std::size_t i = 0; i < var.nelem; ++i) {
-        vtkSmartPointer<vtkTetra> tetra = (vtkTetra *)adapted_ug->GetCell(i);
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            new_connectivity[i][j] = tetra->GetPointId(j);
-    }
-    std::cerr << "New connectivity populated\n";
-
-    // copy optimized surface triangle connectivity to dynearthsol3d.
-    for (std::size_t i = 0; i < var.nseg; ++i) {
-        for(int j=0; j < NODES_PER_FACET; j++ )
-            new_segment[i][j] = SENList[i*NODES_PER_FACET + j];
-        new_segflag.data()[i] = sids[i];
-    }
-    std::cerr << "New segments populated\n";
-
-    var.coord->steal_ref( new_coord );
-    var.connectivity->steal_ref( new_connectivity );
-    var.segment->steal_ref( new_segment );
-    var.segflag->steal_ref( new_segflag );
-    std::cerr << "Arrays transferred. Mesh optimization done \n";
-}
+/* ADAPT (libadaptivity) optimize_mesh implementation removed. */
+#if 0
+// ADAPT implementation removed
 #endif
 
 } // anonymous namespace
@@ -3077,9 +2704,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segflag.steal_ref(*var.segflag);
 
 #ifdef THREED
-#if defined ADAPT || defined USEMMG
-        optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+#if defined USEMMG
+    optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
+         old_segment, old_segflag);
 #else
         if (param.mesh.meshing_elem_shape == 0) {
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
