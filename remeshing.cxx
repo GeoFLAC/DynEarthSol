@@ -3054,27 +3054,22 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     std::cout << "  Remeshing starts...\n";
 
-    double sum_edvacc_surf_before = 0;
-    { // convert portional field to average field
+    // convert portional field to average field
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, NODE_OF_FACET) \
-                reduction(+:sum_edvacc_surf_before)
+    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET)
 #endif
-        #pragma acc parallel loop reduction(+:sum_edvacc_surf_before)
-        for (int i=0; i<var.surfinfo.etop; i++) {
-            sum_edvacc_surf_before += (*var.surfinfo.edvacc_surf)[i];
+    #pragma acc parallel loop
+    for (int i=0; i<var.surfinfo.etop; i++) {
+        int e = (*var.bfacets[iboundz1])[i].first;
+        int f = (*var.bfacets[iboundz1])[i].second;
 
-            int e = (*var.bfacets[iboundz1])[i].first;
-            int f = (*var.bfacets[iboundz1])[i].second;
+        const double *coord[NDIMS];
 
-            const double *coord[NDIMS];
+        for (int j=0; j<NDIMS; j++)
+            coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
 
-            for (int j=0; j<NDIMS; j++)
-                coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
-
-            double inv_volume = 1.0 / compute_area(coord);
-            (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
-        }
+        double inv_volume = 1.0 / compute_area(coord);
+        (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
     }
 
     {
@@ -3187,11 +3182,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
     // convert value field back to portional field for nn interpolation
-    double sum = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET) reduction(+:sum)
+    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET)
 #endif
-    #pragma acc parallel loop reduction(+:sum) async
+    #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; i++) {
         int e = (*var.bfacets[iboundz1])[i].first;
         int f = (*var.bfacets[iboundz1])[i].second;
@@ -3202,13 +3196,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
 
         (*var.surfinfo.edvacc_surf)[i] *= compute_area(coord);
-        sum += (*var.surfinfo.edvacc_surf)[i];
     }
-
-    #pragma acc wait
-
-    printf("  Change of edvacc_surf after remeshing = %e\n", \
-            (sum-sum_edvacc_surf_before)/sum_edvacc_surf_before);
 
     // TODO: using edvoldt and volume to get volume_old
 #ifndef ACC
