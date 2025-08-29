@@ -206,7 +206,7 @@ namespace {
 
                 // Count
                 int total_count = 0;
-                for (int k=0; k<=elem_size; ++k)
+                for (int k=0; k<elem_size; ++k)
                     total_count += elem_count_buf[k];
 
                 // std::cout << "  has " << total_count << " points\n";
