@@ -21,6 +21,14 @@
 #include "remeshing.hpp"
 // ADAPT-based optimization and related VTK/Adaptivity usage removed.
 
+#ifdef USEMMG
+#ifdef THREED
+#include "mmg/mmg3d/libmmg3d.h"
+#else
+#include "mmg/mmg2d/libmmg2d.h"
+#endif
+#endif
+
 namespace { // anonymous namespace
 
 
