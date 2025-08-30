@@ -5,15 +5,23 @@
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
 
-## Execute "make" if making production run. Or "make opt=0 openmp=0" for debugging run.
-##
-## ndims = 3: 3D code; 2: 2D code
-## opt = 1 ~ 3: optimized build; others: debugging build
-## openacc = 1: enable OpenACC
-## openmp = 1: enable OpenMP
-## adaptive_time_step = 1: use adaptive time stepping technique
-## use_R_S = 1: use Rate - State friction law
-## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
+## Build notes
+## - Run simply `make` to build the optimized production executable.
+## - For a debugging build, run for example: `make opt=0 openmp=0`.
+## Common configuration variables (set on the make command line or edit below):
+##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
+##  - opt = 0..3 : optimization level. 0 = debugging (no optimizations),
+##       1 = low optimization, 2 = default optimized build, 3 = aggressive
+##       optimizations (-march=native, -O3, etc.).
+##  - openacc = 1 : enable OpenACC compilation (NVHPC).
+##  - openmp = 1 : enable OpenMP parallelization.
+##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set).
+##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
+##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - netcdf = 1 : enable NetCDF output support (requires netCDF and netcdf-cxx4).
+##  - adaptive_time_step = 1 : enable adaptive time stepping.
+##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
+##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 
 ndims = 3
 opt = 2
