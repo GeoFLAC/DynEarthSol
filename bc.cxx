@@ -2054,7 +2054,6 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #endif
         #pragma acc parallel loop async
         for (int i=0;i<var.surfinfo.etop;i++) {
-            int e = (*var.surfinfo.top_facet_elems)[i];
             int_vec n(NDIMS);
             double dh_e = 0.;
 
@@ -2070,7 +2069,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
             double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
 #endif
-            (*var.surfinfo.edvacc_surf)[e] += dh_e * base / NDIMS;
+            (*var.surfinfo.edvacc_surf)[i] += dh_e * base / NDIMS;
         }
     }
 
@@ -2081,8 +2080,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 // #endif
 //         #pragma acc parallel loop async reduction(+:sum)
 //         for (int i=0; i<var.surfinfo.etop; i++) {
-//             int e = (*var.surfinfo.top_facet_elems)[i];
-//             sum += (*var.surfinfo.edvacc_surf)[e];
+//             sum += (*var.surfinfo.edvacc_surf)[i];
 //         }
 //         #pragma acc wait
 //         printf("Sum of accu. surface deposition volume: %.2e\n", sum);
