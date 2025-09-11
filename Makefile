@@ -20,7 +20,7 @@
 ##   cd gospl_extensions && make && cd ..
 
 ndims = 3
-opt = 2
+opt = 0
 openacc = 0
 openmp = 1
 nprof = 0
@@ -125,7 +125,7 @@ endif
 ifeq ($(use_gospl), 1)
 	# GoSPL extensions library configuration
 	# Path to locally built gospl_extensions (clone from GitHub)
-	GOSPL_EXT_DIR = ./gospl_extensions
+	GOSPL_EXT_DIR = $(HOME)/opt/gospl_extensions
 	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
 	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
 	
