@@ -1518,7 +1518,8 @@ namespace {
         }
 
         // Run GoSPL processes for the current time step
-        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt, false);
+        // dt converted to years; true/false: verbose output on/off.
+        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt / 3.1536e7, true);
         if (elapsed < 0) {
             std::cerr << "Error: GoSPL process run failed" << std::endl;
             return;

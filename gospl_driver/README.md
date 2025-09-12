@@ -78,6 +78,8 @@ The GoSPL integration uses a **build outside, run inside** workflow:
    - Note: The config format may differ from standard GoSPL configs
    - Use `examples/gospl_config_example.yml` as a starting template, but verify compatibility
 
+**Note**: The integration automatically uses the `EnhancedModel.run_one_step()` method internally to synchronize GoSPL time steps with DynEarthSol's geodynamic time stepping, ensuring precise coupling between surface and deep processes.
+
 ## Integration Details
 
 The GoSPL integration works by:
@@ -87,6 +89,53 @@ The GoSPL integration works by:
 4. Updating DynEarthSol surface elevations with changes from GoSPL
 
 This allows for two-way coupling between geodynamic processes (DynEarthSol) and surface processes (GoSPL).
+
+## Enhanced Model Features
+
+The integration uses an **EnhancedModel** class that extends the standard GoSPL Model with additional methods for granular control over simulation time steps:
+
+### run_one_step Method
+
+The `EnhancedModel` class includes a `run_one_step` method that allows executing exactly one simulation time step instead of running the full simulation loop. This provides fine-grained control needed for coupling with external models like DynEarthSol.
+
+**Key Features:**
+- **Single Time Step Execution**: Runs exactly one simulation time step
+- **Parameter Control**: Accepts optional `dt` parameter to override default time step
+- **State Management**: Properly saves/restores original time step values
+- **Full Process Coverage**: Includes all surface processes (flow accumulation, erosion, deposition, tectonics, etc.)
+
+**Usage Example (Python):**
+```python
+from gospl_model_ext.enhanced_model import EnhancedModel
+
+# Create enhanced model
+model = EnhancedModel('gospl_config.yml')
+
+# Run one step with default dt
+model.run_one_step()
+
+# Run one step with custom dt (1000 years)
+model.run_one_step(dt=1000)
+
+# Use the higher-level wrapper with timing info
+elapsed_time = model.runProcessesForDt(dt=500, verbose=True)
+```
+
+**What happens in one time step:**
+1. Output and visualization updates
+2. Stratigraphy management (new stratal layers when needed)
+3. Tectonics (advection and tectonic forces)
+4. Surface processes (if not in fast mode):
+   - Flow accumulation computation
+   - River incision (Stream Power Law)
+   - Sediment deposition (inland and marine)
+   - Hillslope diffusion
+5. Stratigraphic compaction (when needed)
+6. Flexural isostasy (if enabled)
+7. External force updates
+8. Time advancement by `dt`
+
+This granular control enables precise synchronization between DynEarthSol's geodynamic time steps and GoSPL's surface process evolution.
 
 ## Troubleshooting
 

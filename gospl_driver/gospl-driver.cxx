@@ -2,7 +2,7 @@
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
 
-#include "/home/eunseo/opt/gospl_extensions/cpp_interface/gospl_extensions.h"
+#include "gospl_extensions.h"
 #include <iostream>
 #include <iomanip>
 #include <cmath>

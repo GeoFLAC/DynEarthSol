@@ -128,7 +128,11 @@ ifeq ($(use_gospl), 1)
 	GOSPL_EXT_DIR = $(HOME)/opt/gospl_extensions
 	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
 	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
+	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
 	
+	# Export PYTHONPATH for GoSPL extensions
+    	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
+  
 	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
 	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
@@ -136,7 +140,7 @@ ifeq ($(use_gospl), 1)
 	endif
 	
 	# Use conda libraries even when not in conda environment (for GoSPL compatibility)
-	CONDA_ENV_PATH = /home/eunseo/miniconda3/envs/gospl
+	CONDA_ENV_PATH = $(HOME)/miniconda3/envs/gospl
 	BOOST_ROOT_DIR = $(CONDA_ENV_PATH)
 	
 	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include
@@ -385,10 +389,36 @@ CXXFLAGS += -I$(GOSPL_DIR)
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
+ifeq ($(use_gospl), 1)
+.PHONY: install-gospl-wrapper
+install-gospl-wrapper: 
+	@echo '#!/bin/bash' > dynearthsol-gospl
+	@echo '# Auto-generated wrapper for DynEarthSol with GoSPL support' >> dynearthsol-gospl
+	@echo 'export PYTHONPATH="$(GOSPL_PYTHONPATH):$$PYTHONPATH"' >> dynearthsol-gospl
+	@echo 'exec "$$(dirname "$$0")/$(EXE)" "$$@"' >> dynearthsol-gospl
+	@chmod +x dynearthsol-gospl
+endif
+
 $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) -L$(ANN_DIR)/lib -l$(ANN_LIBNAME) \
 			-o $@
+ifeq ($(use_gospl), 1)
+	@+$(MAKE) install-gospl-wrapper
+	@echo ""
+	@echo "=============================================="
+	@echo "✅ DynEarthSol built with GoSPL support!"
+	@echo "=============================================="
+	@echo "🚀 To run with GoSPL support:"
+	@echo ""
+	@echo "Use the wrapper script (PYTHONPATH is set automatically):"
+	@echo "  ./dynearthsol-gospl your_input.cfg"
+	@echo ""
+	@echo "Or set PYTHONPATH manually and use the regular executable:"
+	@echo "  PYTHONPATH=$(GOSPL_PYTHONPATH):\$$PYTHONPATH ./$(EXE) your_input.cfg"
+	@echo "=============================================="
+	@echo ""
+endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
@@ -466,12 +496,21 @@ $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a:
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+ifeq ($(use_gospl), 1)
+	@rm -f dynearthsol-gospl
+endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 	
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+ifeq ($(use_gospl), 1)
+	@rm -f dynearthsol-gospl
+endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 	@+$(MAKE) -C $(ANN_DIR) realclean
 
 clean:
 	@rm -f $(OBJS) $(EXE)
+ifeq ($(use_gospl), 1)
+	@rm -f dynearthsol-gospl
+endif
