@@ -37,12 +37,37 @@ This directory contains the integration code for GoSPL (Geomorphological Landsca
 
 ## Build and Runtime Workflow
 
-The GoSPL integration uses a **build outside, run inside** workflow:
+The GoSPL integration provides two ways to run DynEarthSol with GoSPL support:
 
-### Building DynEarthSol
-1. **Build outside gospl environment** (recommended):
+### Method 1: Use the Auto-Generated Wrapper (Recommended)
+
+The Makefile automatically creates a wrapper script that handles all environment setup:
+
+1. **Build DynEarthSol with GoSPL support**:
    ```bash
-   # Make sure gospl environment is NOT activated
+   # Make sure use_gospl = 1 in the Makefile (should already be set)
+   make clean
+   make -j4
+   ```
+   
+   This automatically creates a `dynearthsol-gospl` wrapper script.
+
+2. **Run using the wrapper** (environment automatically set):
+   ```bash
+   # Activate gospl environment
+   conda activate gospl
+   
+   # Run using the wrapper (PYTHONPATH is set automatically)
+   ./dynearthsol-gospl your_config.cfg
+   ```
+
+### Method 2: Manual Environment Setup
+
+If you prefer manual control or the wrapper doesn't work:
+
+1. **Build outside gospl environment** (optional but recommended):
+   ```bash
+   # Make sure gospl environment is NOT activated for building
    conda deactivate  # if any environment is active
    
    # Set use_gospl = 1 in the Makefile (should already be set)
@@ -50,16 +75,13 @@ The GoSPL integration uses a **build outside, run inside** workflow:
    make -j4
    ```
 
-   The Makefile automatically detects the gospl environment path and links to the necessary Python and Boost libraries from the gospl environment, even when building outside of it.
-
-### Running DynEarthSol with GoSPL
-2. **Run inside gospl environment** (required):
+2. **Run with manual environment setup**:
    ```bash
    # Activate gospl environment before running
    conda activate gospl
    
-   # Set PYTHONPATH to include gospl_extensions interface
-   export PYTHONPATH="/home/echoi2/opt/gospl_extensions/cpp_interface:${PYTHONPATH}"
+   # Set PYTHONPATH manually to include gospl_extensions interface
+   export PYTHONPATH="$HOME/opt/gospl_extensions/cpp_interface:${PYTHONPATH}"
    
    # Run DynEarthSol with GoSPL-enabled configuration
    ./dynearthsol3d your_config.cfg
@@ -140,29 +162,39 @@ This granular control enables precise synchronization between DynEarthSol's geod
 ## Troubleshooting
 
 ### Build Issues
-- **Error: "cannot find -lpython3.11"**: Make sure the gospl conda environment exists and contains Python 3.11. Check the CONDA_ENV_PATH in the Makefile points to the correct environment.
-- **Error: "gospl-driver.hpp: No such file"**: Ensure you're including `gospl_driver/gospl-driver.hpp` with the correct path.
+- **Error: "cannot find -lpython3.11"**: Make sure the gospl conda environment exists at `~/miniconda3/envs/gospl` and contains Python 3.11. If your conda is elsewhere, update `CONDA_ENV_PATH` in the Makefile.
+- **Error: "gospl-driver.hpp: No such file"**: Ensure the gospl_driver directory is in the DynEarthSol source directory.
+- **Error: "cannot find -lgospl_extensions"**: Make sure gospl_extensions is built at `~/opt/gospl_extensions`. If elsewhere, update `GOSPL_EXT_DIR` in the Makefile.
 
 ### Runtime Issues
+
+#### Using the Wrapper Script (Recommended)
+If using `./dynearthsol-gospl`:
 - **ImportError for gospl**: Make sure you activated the gospl environment before running (`conda activate gospl`).
-- **ModuleNotFoundError: No module named 'gospl_python_interface'**: This error occurs when the Python interface module from gospl_extensions cannot be found. **Solution**: Ensure both the gospl environment is activated AND the PYTHONPATH includes the gospl_extensions cpp_interface directory:
+- **Wrapper script not found**: Make sure you built with `use_gospl = 1` and the build completed successfully.
+
+#### Manual Environment Setup  
+If setting PYTHONPATH manually:
+- **ModuleNotFoundError: No module named 'gospl_python_interface'**: Ensure both the gospl environment is activated AND the PYTHONPATH includes the gospl_extensions cpp_interface directory:
   ```bash
   conda activate gospl
-  export PYTHONPATH="/home/echoi2/opt/gospl_extensions/cpp_interface:${PYTHONPATH}"
+  export PYTHONPATH="$HOME/opt/gospl_extensions/cpp_interface:${PYTHONPATH}"
   ./dynearthsol3d your_config.cfg
   ```
+
+#### General GoSPL Issues
 - **GoSPL initialization fails**: Check that your GoSPL configuration file path is correct and the file is valid YAML.
 - **"The input file is not found" / "Unable to open file" error**: This occurs in the gospl_extensions C++ code when creating the EnhancedModel. **Solutions** (try in order):
   
   1. **Run from the gospl_extensions directory**: The C++ code may expect specific working directory
      ```bash
-     cd /home/echoi2/opt/gospl_extensions/examples
-     /home/echoi2/opt/DynEarthSol/dynearthsol3d /path/to/your/dynearthsol_config.cfg
+     cd ~/opt/gospl_extensions/examples
+     /path/to/DynEarthSol/dynearthsol-gospl /path/to/your/dynearthsol_config.cfg
      ```
   
   2. **Use a working gospl_extensions config file**: Copy and modify an existing working config
      ```bash
-     cp /home/echoi2/opt/gospl_extensions/examples/input-escarpment.yml ./my_gospl_config.yml
+     cp ~/opt/gospl_extensions/examples/input-escarpment.yml ./my_gospl_config.yml
      # Edit my_gospl_config.yml for your simulation parameters
      # Update DynEarthSol config to point to this file
      ```
@@ -170,16 +202,16 @@ This granular control enables precise synchronization between DynEarthSol's geod
   3. **Check file format compatibility**: The EnhancedModel expects specific YAML structure
      - Standard GoSPL configs may not work with gospl_extensions
      - Required sections may include: `domain`, `time`, `spl`, `diffusion`, `output`
-     - See working examples in `/home/echoi2/opt/gospl_extensions/examples/`
+     - See working examples in `~/opt/gospl_extensions/examples/`
   
   4. **Verify file permissions and absolute paths**:
      ```bash
      ls -la /absolute/path/to/gospl_config.yml
      # Ensure file is readable and use absolute paths in DynEarthSol config
      ```
-- **Python path issues**: The gospl environment must be activated to ensure all Python modules are found.
 
 ### Verification
 - Check if GoSPL options appear in help: `./dynearthsol3d --help | grep gospl`
 - Test GoSPL import: `conda activate gospl && python -c "import gospl"`
 - Check library linking: `ldd dynearthsol3d | grep python`
+- Verify wrapper script: `cat dynearthsol-gospl` (should show PYTHONPATH setup)
