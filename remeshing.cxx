@@ -3069,7 +3069,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     // convert value field to average field
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
     #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; i++) {
@@ -3204,7 +3204,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     // convert value field back to portional field for nn interpolation
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
     #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; i++) {
