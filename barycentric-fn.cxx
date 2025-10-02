@@ -75,6 +75,42 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
 #endif
 }
 
+
+Barycentric_transformation::Barycentric_transformation(const array_t &coord,
+                                                       const conn_t &conn_surface,
+                                                       const double_vec &area,
+                                                       const bool is_surface)
+    : coeff_(conn_surface.size()), nelem_(conn_surface.size())
+{
+#ifdef USE_NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
+#ifndef ACC
+    #pragma omp parallel for default(none) \
+        shared(coord, conn_surface, area)
+#endif
+    #pragma acc parallel loop async
+    for (int e=0; e<nelem_; ++e) {
+        int n0 = conn_surface[e][0];
+        int n1 = conn_surface[e][1];
+
+        const double *a = coord[n0];
+        const double *b = coord[n1];
+
+#ifdef THREED
+        int n2 = conn_surface[e][2];
+        const double *c = coord[n2];
+
+        compute_coeff2d(a, b, c, area[e], coeff_[e]);
+#else
+        compute_coeff1d(a, b, area[e], coeff_[e]);
+#endif
+    }
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
+}
+
 Barycentric_transformation::Barycentric_transformation(const double** coord,
                                                        const double volume)
     : coeff_(1), nelem_(1)
@@ -146,6 +182,21 @@ inline int Barycentric_transformation::index(int node, int dim) const
     return node*NDIMS + dim;
 }
 
+void Barycentric_transformation::compute_coeff2d(const double *a,
+                                                 const double *b,
+                                                 const double *c,
+                                                 double area,
+                                                 double *coeff_e)
+{
+    double det = 2 * area;
+
+    coeff_e[index(0,0)] = (b[0]*c[1] - b[1]*c[0]) / det;
+    coeff_e[index(0,1)] = (c[0]*a[1] - c[1]*a[0]) / det;
+    coeff_e[index(1,0)] = (b[1] - c[1]) / det;
+    coeff_e[index(1,1)] = (c[1] - a[1]) / det;
+    coeff_e[index(2,0)] = (c[0] - b[0]) / det;
+    coeff_e[index(2,1)] = (a[0] - c[0]) / det;
+}
 
 #ifdef THREED
 
@@ -192,20 +243,14 @@ void Barycentric_transformation::compute_coeff3d(const double *a,
 
 #else
 
-void Barycentric_transformation::compute_coeff2d(const double *a,
+void Barycentric_transformation::compute_coeff1d(const double *a,
                                                  const double *b,
-                                                 const double *c,
-                                                 double area,
+                                                 double length,
                                                  double *coeff_e)
 {
-    double det = 2 * area;
-
-    coeff_e[index(0,0)] = (b[0]*c[1] - b[1]*c[0]) / det;
-    coeff_e[index(0,1)] = (c[0]*a[1] - c[1]*a[0]) / det;
-    coeff_e[index(1,0)] = (b[1] - c[1]) / det;
-    coeff_e[index(1,1)] = (c[1] - a[1]) / det;
-    coeff_e[index(2,0)] = (c[0] - b[0]) / det;
-    coeff_e[index(2,1)] = (a[0] - c[0]) / det;
+    const double det = length;
+    coeff_e[index(0,0)] = b[0] / det;
+    coeff_e[index(0,1)] = -1.0 / det;
 }
 
 #endif

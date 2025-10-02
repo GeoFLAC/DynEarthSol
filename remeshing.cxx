@@ -2772,32 +2772,41 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     std::cout << "  Remeshing starts...\n";
 
-    // convert portional field to average field
+    double_vec old_surface_area(var.surfinfo.etop);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET)
+    #pragma omp parallel for default(none) shared(var,NODES_PER_FACET,old_surface_area)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop async
+    for (int i=0; i<var.surfinfo.etop; ++i) {
+        const double *coord[NODES_PER_FACET];
+        for (int j=0; j<NODES_PER_FACET; ++j)
+            coord[j] = (*var.coord)[(*var.connectivity_surface)[i][j]];
+        old_surface_area[i] = compute_area_facet(coord);
+    }
+
+    // convert value field to average field
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; i++) {
-        int e = (*var.bfacets[iboundz1])[i].first;
-        int f = (*var.bfacets[iboundz1])[i].second;
-
-        const double *coord[NDIMS];
-
-        for (int j=0; j<NDIMS; j++)
-            coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
-
-        double inv_volume = 1.0 / compute_area(coord);
+        double inv_volume = 1.0 / old_surface_area[i];
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
     }
+
+    #pragma acc wait
 
     {
         // creating a "copy" of mesh pointer so that they are not deleted
         array_t old_coord;
         conn_t old_connectivity;
+        conn_t old_connectivity_surface;
         segment_t old_segment;
         segflag_t old_segflag;
         old_coord.steal_ref(*var.coord);
         old_connectivity.steal_ref(*var.connectivity);
+        old_connectivity_surface.steal_ref(*var.connectivity_surface);
         old_segment.steal_ref(*var.segment);
         old_segflag.steal_ref(*var.segflag);
 
@@ -2842,9 +2851,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
         }
 
-        int_pair_vec old_bfacets_surface(var.surfinfo.etop);
-        old_bfacets_surface = (*var.bfacets[iboundz1]);
-
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
         create_boundary_facets(var);
@@ -2856,8 +2862,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             // interpolating fields defined on elements
             nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
 
+            Barycentric_transformation bary_surface(old_coord, old_connectivity_surface, old_surface_area, true);
+
             // interpolating fields defined on surface elements
-            nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity, true, old_bfacets_surface);
+            nearest_neighbor_interpolation(param, var, bary_surface, old_coord, old_connectivity_surface, true);
 
             // interpolating fields defined on nodes
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
@@ -2899,21 +2907,26 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
+    double_vec surface_area(var.surfinfo.etop);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var,NODES_PER_FACET,surface_area)
+#endif
+    #pragma acc parallel loop async
+    for (int i=0; i<var.surfinfo.etop; ++i) {
+        const double *coord[NODES_PER_FACET];
+        for (int j=0; j<NODES_PER_FACET; ++j)
+            coord[j] = (*var.coord)[(*var.connectivity_surface)[i][j]];
+        surface_area[i] = compute_area_facet(coord);
+    }
+
     // convert value field back to portional field for nn interpolation
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, NODE_OF_FACET)
+    #pragma omp parallel for default(none) shared(var)
 #endif
     #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; i++) {
-        int e = (*var.bfacets[iboundz1])[i].first;
-        int f = (*var.bfacets[iboundz1])[i].second;
-
-        const double *coord[NDIMS];
-
-        for (int j=0; j<NDIMS; j++)
-            coord[j] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][j]]];        
-
-        (*var.surfinfo.edvacc_surf)[i] *= compute_area(coord);
+        (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
 
     // TODO: using edvoldt and volume to get volume_old

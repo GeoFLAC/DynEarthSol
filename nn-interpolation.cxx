@@ -16,8 +16,7 @@ namespace {
     void find_nearest_neighbor(const Variables &var, KNN &kdtree,
                                int_vec &idx, int_vec &is_changed,
                                int_vec &idx_changed, int_vec &changed,
-                               bool is_surface,
-                               const segment_t &conn_surface)
+                               bool is_surface)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -34,7 +33,7 @@ namespace {
         array_t queries(nqueries);
 
         if (is_surface) {
-            facet_center(*var.coord, conn_surface, queries);
+            facet_center(*var.coord, *var.connectivity_surface, queries);
         } else {
             elem_center(*var.coord, *var.connectivity, queries);
         }
@@ -75,8 +74,7 @@ namespace {
                               double_vec &ratios_vec,
                               double_vec &empty_vec,
                               int_vec &changed,
-                              bool is_surface,
-                              const segment_t &conn_surface)
+                              bool is_surface)
     {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
@@ -154,6 +152,13 @@ namespace {
 
         array_t queries(elems_per_block*nsample);
 
+        conn_t *ptr_conn;
+        if (is_surface) {
+            ptr_conn = var.connectivity_surface;
+        } else {
+            ptr_conn = var.connectivity;
+        }
+
         for (int b=0; b<nblocks; b++) {
             int start = b * elems_per_block;
             int end = std::min((b + 1) * elems_per_block, nchanged);
@@ -163,57 +168,34 @@ namespace {
 
             queries.resize((end-start) * nsample);
 
-            if (is_surface) {
 #ifndef ACC
-                #pragma omp parallel for default(none) shared(var,start, end, \
-                    sample_eta, nsample, queries, changed, conn_surface)
+            #pragma omp parallel for default(none) shared(var, ptr_conn, start, end, \
+                sample_eta, nsample, queries, changed)
 #endif
-                #pragma acc parallel loop async
-                for (int i=start; i<end; i++) {
-                    int e = changed[i];
-                    int query_start = i - start;
-                    const int* conn = conn_surface[e];
+            #pragma acc parallel loop
+            for (int i=start; i<end; i++) {
+                int e = changed[i];
+                int query_start = i - start;
+                const int* conn = (*ptr_conn)[e];
 
-                    for (int j=0; j<nsample; j++) {
-                        double *x = queries[query_start*nsample + j];
-                        for (int d=0; d<NDIMS; d++) {
-                            x[d] = 0;
-                            for (int n=0; n<NODES_PER_FACET; n++)
-                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
-                        }
-                    }
-                }
-            } else {
-#ifndef ACC
-                #pragma omp parallel for default(none) shared(var,start, end, \
-                    sample_eta, nsample, queries, changed)
-#endif
-                #pragma acc parallel loop async
-                for (int i=start; i<end; i++) {
-                    int e = changed[i];
-                    int query_start = i - start;
-                    const int* conn = (*var.connectivity)[e];
-
-                    for (int j=0; j<nsample; j++) {
-                        double *x = queries[query_start*nsample + j];
-                        for (int d=0; d<NDIMS; d++) {
-                            x[d] = 0;
-                            for (int n=0; n<NODES_PER_ELEM; n++)
-                                x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
-                        }
+                for (int j=0; j<nsample; j++) {
+                    double *x = queries[query_start*nsample + j];
+                    for (int d=0; d<NDIMS; d++) {
+                        x[d] = 0;
+                        for (int n=0; n<NODES_PER_FACET; n++)
+                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
                     }
                 }
             }
-            neighbors.resize((end-start) * nsample * max_el);
 
-            #pragma acc wait
+            neighbors.resize((end-start) * nsample * max_el);
 
             // find the nearest point nn in old_center
             kdtree.search(queries, neighbors, max_el, 3.);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
-                elems_vec, ratios_vec, empty_vec, sample_eta, is_surface, \
+                elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
             #pragma acc parallel loop async
@@ -237,24 +219,19 @@ namespace {
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        int nn_e = nn[jj].idx;
-                        if (is_surface) {
-                            old_e = (*var.surfinfo.top_facet_elems)[nn_e];
-                        } else {
-                            old_e = nn_e;
-                        }
+                        old_e = nn[jj].idx;
                         bary.transform(x, old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
                             for (int ei = 0; ei < elem_size; ++ei) {
-                                if (elem_keys[ei] == nn_e) {
+                                if (elem_keys[ei] == old_e) {
                                     elem_count_buf[ei]++;
                                     found = true;
                                     break;
                                 }
                             }
                             if (!found && elem_size < 32) {
-                                elem_keys[elem_size] = nn_e;
+                                elem_keys[elem_size] = old_e;
                                 elem_count_buf[elem_size] = 1;
                                 elem_size++;
                             }
@@ -312,7 +289,6 @@ namespace {
                                const Barycentric_transformation &bary,
                                const array_t &old_coord,
                                const conn_t &old_connectivity,
-                               const int_pair_vec &old_bfacets_surface,
                                int_vec &idx,
                                int_vec &is_changed,
                                int_vec &idx_changed,
@@ -326,16 +302,7 @@ namespace {
 #endif
 
         int_vec changed;
-        int old_npoint;
-
-        if (is_surface) {
-            old_npoint = old_bfacets_surface.size();
-        } else {
-            old_npoint = old_connectivity.size();
-        }
-
-        segment_t conn_surface(idx.size());
-        segment_t old_conn_surface(old_npoint);
+        int old_npoint = old_connectivity.size();
 
 #ifdef USE_NPROF
         nvtxRangePushA("create kdtree for old elements");
@@ -343,33 +310,7 @@ namespace {
 
         array_t points(old_npoint);
         if (is_surface) {
-            int npoint = idx.size();
-#ifndef ACC
-            #pragma omp parallel for default(none) shared(old_bfacets_surface, \
-                old_conn_surface,old_connectivity,NODE_OF_FACET,old_npoint)
-#endif
-            #pragma acc parallel loop async
-            for (int i=0; i<old_npoint; ++i) {
-                int e = old_bfacets_surface[i].first;
-                int f = old_bfacets_surface[i].second;
-                for (int j=0; j<NODES_PER_FACET; ++j) {
-                    old_conn_surface[i][j] = old_connectivity[e][ NODE_OF_FACET[f][j] ];
-                }
-            }
-
-#ifndef ACC
-            #pragma omp parallel for default(none) shared(var,conn_surface, \
-                    NODE_OF_FACET,npoint)
-#endif
-            #pragma acc parallel loop async
-            for (int i=0; i<npoint; ++i) {
-                int e = (*var.bfacets[iboundz1])[i].first;
-                int f = (*var.bfacets[iboundz1])[i].second;
-                for (int j=0; j<NODES_PER_FACET; ++j) {
-                    conn_surface[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
-                }
-            }
-            facet_center(old_coord, old_conn_surface, points);
+            facet_center(old_coord, old_connectivity, points);
         } else {
             elem_center(old_coord, old_connectivity, points);
         }
@@ -388,10 +329,10 @@ namespace {
         nvtxRangePop();
 #endif
         printf("    Finding nearest neighbor...\n");
-        find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed, is_surface, conn_surface);
+        find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed, is_surface);
 
         printf("    Finding acm element ratios...\n");
-        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface, conn_surface);
+        find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface);
 
 #ifdef USE_NPROF
         nvtxRangePop();
@@ -638,8 +579,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
-                                    const bool is_surface,
-                                    const int_pair_vec &old_bfacets_surface)
+                                    const bool is_surface)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -648,7 +588,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         int nqueries;
 
         if (is_surface) {
-            nqueries = var.bfacets[iboundz1]->size();
+            nqueries = var.connectivity_surface->size();
         } else {
             nqueries = var.nelem;
         }
@@ -661,7 +601,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         double_vec ratios_vec;
         double_vec empty_vec; // radio between old element and boundary empty
         
-        prepare_interpolation(param, var, bary, old_coord, old_connectivity, old_bfacets_surface, \
+        prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
         if (is_surface) {

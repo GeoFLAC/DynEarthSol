@@ -2564,6 +2564,22 @@ void create_boundary_facets(Variables& var)
                     });
         }
     }
+
+    int etop = var.bfacets[iboundz1]->size();
+    var.connectivity_surface = new conn_t(etop);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
+#endif
+    #pragma acc parallel loop
+    for (int i=0; i<etop; ++i) {
+        int e = (*var.bfacets[iboundz1])[i].first;
+        int f = (*var.bfacets[iboundz1])[i].second;
+        for (int j=0; j<NODES_PER_FACET; ++j) {
+            (*var.connectivity_surface)[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
+        }
+    }
+
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";
     //     print(std::cout, var.bfacets[n]);
@@ -2854,7 +2870,7 @@ void elem_center(const array_t &coord, const conn_t &connectivity, array_t& cent
 #endif
 }
 
-void facet_center(const array_t &coord, const segment_t &connectivity, array_t& center)
+void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
@@ -2868,13 +2884,14 @@ void facet_center(const array_t &coord, const segment_t &connectivity, array_t& 
     #pragma acc parallel loop async
     for(int e=0; e<nelem; e++) {
         const int* conn = connectivity[e];
-        for(int d=0; d<NDIMS; d++) {
+        for(int d=0; d<NDIMS-1; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_FACET; k++) {
                 sum += coord[conn[k]][d];
             }
             center[e][d] = sum / NODES_PER_FACET;
         }
+        center[e][NDIMS-1] = 0.;
     }
 
     #pragma acc wait

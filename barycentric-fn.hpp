@@ -25,6 +25,10 @@ public:
                                const array_t &coord,
                                const conn_t &connectivity,
                                const double_vec &volume);
+    Barycentric_transformation(const array_t &coord,
+                               const conn_t&conn_surface,
+                               const double_vec &volume,
+                               const bool is_surface);
     Barycentric_transformation(const double** coord,
                                const double volume);
     ~Barycentric_transformation();
@@ -39,6 +43,12 @@ private:
 
     inline int index(int node, int dim) const;
 
+    void compute_coeff2d(const double *a,
+                         const double *b,
+                         const double *c,
+                         double area,
+                         double *coeff_e);
+
 #ifdef THREED
     void compute_coeff3d(const double *a,
                          const double *b,
@@ -47,10 +57,9 @@ private:
                          double volume,
                          double *coeff_e);
 #else
-    void compute_coeff2d(const double *a,
+    void compute_coeff1d(const double *a,
                          const double *b,
-                         const double *c,
-                         double area,
+                         double length,
                          double *coeff_e);
 #endif
 
