@@ -5,7 +5,7 @@ double dist2(const double* a, const double* b);
 #pragma acc routine seq
 double compute_volume(const double **coord);
 #pragma acc routine seq
-double compute_area(const double **coord);
+double compute_area_facet(const double **coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);

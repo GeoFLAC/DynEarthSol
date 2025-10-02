@@ -48,6 +48,22 @@ static double tetrahedron_volume(const double *d0,
             x23*(y12*z01 - y01*z12)) / 6;
 }
 
+#pragma acc routine seq
+static double triangle_area2d(const double *a,
+                            const double *b,
+                            const double *c)
+{
+    double ab0, ab1, ac0, ac1;
+
+    // ab: vector from a to b
+    ab0 = b[0] - a[0];
+    ab1 = b[1] - a[1];
+    // ac: vector from a to c
+    ac0 = c[0] - a[0];
+    ac1 = c[1] - a[1];
+
+    return std::fabs(ab0*ac1 - ab1*ac0) / 2;
+}
 
 /* Given two points, returns the area of the enclosed triangle */
 #pragma acc routine seq
@@ -83,16 +99,17 @@ static double triangle_area(const double *a,
 #endif
 }
 
-double compute_area(const double **coord)
+double compute_area_facet(const double **coord)
 {
     const double *a = coord[0];
     const double *b = coord[1];
-#ifdef THREED
+
+#ifndef THREED
+    return std::fabs(a[0]-b[0]);
+#else
     const double *c = coord[2];
 
-    return triangle_area(a, b, c);
-#else
-    return std::sqrt(dist2(a, b));
+    return triangle_area2d(a, b, c);
 #endif
 }
 

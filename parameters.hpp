@@ -534,11 +534,10 @@ struct Variables {
     // These 5 arrays are allocated by external library
     array_t *coord;
     conn_t *connectivity;
+    conn_t *connectivity_surface;
     segment_t *segment;
     segflag_t *segflag;
     regattr_t *regattr;
-    array_t *old_coord;
-    conn_t *old_connectivity;
     regular_t *cell;
 
 
