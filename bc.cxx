@@ -1472,6 +1472,7 @@ namespace {
         const int top_bdry = iboundz1;
         const int_vec& top_nodes = *var.bnodes[top_bdry];
         const std::size_t ntop = top_nodes.size();
+        double_vec& dh = *var.surfinfo.dh;
 
         std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes..." << std::endl;
 
@@ -1486,25 +1487,17 @@ namespace {
             int n = top_nodes[i];
             
             // Coordinates (x, y, z)
-            coords[i * 3 + 0] = (*var.coord)[n][0];                    // x
-#ifdef THREED
-            coords[i * 3 + 1] = (*var.coord)[n][1];                    // y  
-#else
-            coords[i * 3 + 1] = 0.0;                            // y = 0 for 2D
-#endif
-            coords[i * 3 + 2] = (*var.coord)[n][NDIMS-1];              // z (elevation)
-            
+            // HAS_GOSPL_CPP_INTERFACE assumes NDIMS=3.
+            // This condition is ensured during the build process when GoSPL is enabled.
+            for(int d=0;d<NDIMS;d++)
+                coords[i * 3 + d] = (*var.coord)[n][d]; // x, y, z
+
             // Store initial elevations
-            elevations_before[i] = (*var.coord)[n][NDIMS-1];
-            
+            elevations_before[i] = (*var.coord)[n][2];
+
             // Velocities (vx, vy, vz) - convert from DynEarthSol velocity field
-            velocities[i * 3 + 0] = (*var.vel)[n][0];          // vx
-#ifdef THREED
-            velocities[i * 3 + 1] = (*var.vel)[n][1];          // vy
-#else
-            velocities[i * 3 + 1] = 0.0;                        // vy = 0 for 2D
-#endif
-            velocities[i * 3 + 2] = (*var.vel)[n][NDIMS-1];    // vz
+            for(int d=0;d<NDIMS;d++)
+                velocities[i * 3 + d] = (*var.vel)[n][d]; // vx, vy, vz
         }
 
         // Apply velocity data to GoSPL model
@@ -1534,9 +1527,10 @@ namespace {
             // Apply elevation changes to DynEarthSol coordinates
             double max_elevation_change = 0.0;
             for (std::size_t i = 0; i < ntop; ++i) {
-                int n = top_nodes[i];
+                // int n = top_nodes[i];
                 double elevation_change = elevations_after[i] - elevations_before[i];
-                (*var.coord)[n][NDIMS-1] = elevations_after[i];
+                dh[i] = elevation_change;
+                // (*var.coord)[n][NDIMS-1] = elevations_after[i];
                 
                 // Track maximum elevation change for diagnostics
                 max_elevation_change = std::max(max_elevation_change, std::abs(elevation_change));
