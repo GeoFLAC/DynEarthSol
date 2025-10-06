@@ -2775,7 +2775,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     double_vec old_surface_area(var.surfinfo.etop);
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,NODES_PER_FACET,old_surface_area)
+    #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
     #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; ++i) {
@@ -2910,7 +2910,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     double_vec surface_area(var.surfinfo.etop);
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,NODES_PER_FACET,surface_area)
+    #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
     #pragma acc parallel loop async
     for (int i=0; i<var.surfinfo.etop; ++i) {
