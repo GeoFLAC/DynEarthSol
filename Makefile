@@ -258,8 +258,9 @@ all:
 endif
 
 ifeq ($(netcdf), 1)
-	CXXFLAGS += -DNETCDF  -I$(NETCDFCXX_DIR)/build/include
-	LDFLAGS += -L$(NETCDF_DIR)/lib -lnetcdf -L$(NETCDFCXX_DIR)/build/lib64 -lnetcdf-cxx4 
+	CXXFLAGS += -DNETCDF -I$(NETCDF_DIR)/build/include  -I$(NETCDFCXX_DIR)/build/include
+	LDFLAGS += -Wl,-rpath,$(NETCDF_DIR)/build/lib -L$(NETCDF_DIR)/build/lib -lnetcdf \
+			   -Wl,-rpath,$(NETCDFCXX_DIR)/build/lib64 -L$(NETCDFCXX_DIR)/build/lib64 -lnetcdf-cxx4 
 endif
 
 ## Is git in the path?

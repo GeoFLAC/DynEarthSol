@@ -68,7 +68,9 @@ alike.
     * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
   * Outputing in netCDF4 format to reduce file size (50%) of model results.
     * Instill netcdf-c from https://github.com/Unidata/netcdf-c
-      * `cmake && make && make test && make install`
+      * `mkdir build && cmake . -DCMAKE_INSTALL_PREFIX=./build`
+      * `make -j4 && make install`
+      * `[ -d build/lib64 ] && ln -s lib64 build/lib`
     * Instill netcdf-cxx from https://github.com/Unidata/netcdf-cxx4
       * `mkdir build && cd build`
       * `cmake .. -DCMAKE_INSTALL_PREFIX=./`
