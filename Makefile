@@ -34,6 +34,7 @@ adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
 netcdf = 0
+nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -205,14 +206,18 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		CXXFLAGS += -O2
 	endif
 
+	ifeq ($(nofma), 1)
+		CXXFLAGS += -mno-fma
+	endif
+
 	ifeq ($(openacc), 1)
 		CXXFLAGS += -acc=gpu -cuda -DACC
 		LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
-		ifeq ($(nprof), 1)
-			CXXFLAGS += -gpu=mem:managed,nofma -mno-fma
-			# CXXFLAGS += -gpu=managed,nofma -mno-fma
+		ifeq ($(nofma), 1)
+			CXXFLAGS += -gpu=mem:managed,nofma
+			# CXXFLAGS += -gpu=managed,nofma
 		else
 			CXXFLAGS += -gpu=mem:managed
 			# CXXFLAGS += -gpu=managed
@@ -434,7 +439,7 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nprof=$(nprof) CUDA_DIR=$(NVHPC_DIR)/cuda
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)

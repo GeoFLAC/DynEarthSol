@@ -12,13 +12,20 @@ ifeq ($(openacc), 1)
 endif
 
 ifneq (, $(findstring nvc++, $(CC)))
-	CFLAGS = -Wall -O3 -mno-fma
+	CFLAGS = -Wall -O3
+	ifeq ($(nofma), 1)
+		CFLAGS += -mno-fma
+	endif
 
 	ifeq ($(nprof), 1)
 		CFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include
 	endif
 	ifeq ($(openacc), 1)
-		CFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda
+		ifeq ($(nofma), 1)
+			CFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda
+		else
+			CFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		endif
 	endif
 
 endif
