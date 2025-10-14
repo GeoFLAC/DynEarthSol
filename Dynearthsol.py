@@ -33,13 +33,13 @@ class Dynearthsol:
             if os.path.isfile(filename):
                 self.format = 'binary'
             else:
-                filename += '.nc'
-                self.format = 'netcdf'
+                filename += '.h5'
+                self.format = 'hdf5'
             return filename
         elif self.format == 'binary':
             return filename
-        elif self.format == 'netcdf':
-            return filename + '.nc'
+        elif self.format == 'hdf5':
+            return filename + '.h5'
 
     def read_header(self, frame):
         self._header_frame = frame
@@ -47,11 +47,11 @@ class Dynearthsol:
         fname = self.get_fn(frame)
         self.field_pos = {}
 
-        if self.format == 'netcdf':
-            import netCDF4
-            with netCDF4.Dataset(fname, 'r') as f:
-                self.ndims = f.getncattr('ndims')
-                self.revision = f.getncattr('revision')
+        if self.format == 'hdf5':
+            import h5py
+            with h5py.File(fname, 'r') as f:
+                self.ndims = f.attrs['ndims']
+                self.revision = f.attrs['revision']
                 
                 if self.ndims == 2:
                     self.nstr = 3
@@ -126,10 +126,10 @@ class Dynearthsol:
         if frame != self._header_frame: self.read_header(frame)
         fname = self.get_fn(frame)
 
-        if self.format == 'netcdf':
-            import netCDF4
-            with netCDF4.Dataset(fname, 'r') as f:
-                field = f.variables[name][:]
+        if self.format == 'hdf5':
+            import h5py
+            with h5py.File(fname, 'r') as f:
+                field = f[name][:]
         else:
             dtype, count, shape = self._get_dtype_count_shape(frame, name)
 
@@ -215,13 +215,13 @@ class Dynearthsol:
         'Read and return marker data'
         if frame != self._header_frame: self.read_header(frame)
         fname = self.get_fn(frame)
-        if self.format == 'netcdf':
-            import netCDF4
-            with netCDF4.Dataset(fname, 'r') as f:
+        if self.format == 'hdf5':
+            import h5py
+            with h5py.File(fname, 'r') as f:
                 marker_data = {}
-                for var in f.variables:
+                for var in f.keys():
                     if var.startswith(markername):
-                        marker_data[var] = f.variables[var][:]
+                        marker_data[var] = f[var][:]
                 marker_data['size'] = marker_data[markername+'.elem'].shape[0]
         else:
             with open(fname) as f:

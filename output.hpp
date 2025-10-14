@@ -11,6 +11,7 @@ private:
     const bool is_averaged;
     const int average_interval;
     const bool has_marker_output;
+    const int hdf5_compression_level;
     int frame;
 
     // stuffs for averging fields

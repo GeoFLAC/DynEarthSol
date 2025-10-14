@@ -66,11 +66,12 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
     }
 }
 
+#ifdef HDF5
+template
+MarkerSet::MarkerSet(const Param& param, Variables& var, HDF5Input& bin_save, HDF5Input& bin_chkpt, const std::string& name);
+#else
 template
 MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin_save, BinaryInput& bin_chkpt, const std::string& name);
-#ifdef NETCDF
-template
-MarkerSet::MarkerSet(const Param& param, Variables& var, NetCDFInput& bin_save, NetCDFInput& bin_chkpt, const std::string& name);
 #endif
 
 template <class T>
@@ -864,11 +865,12 @@ void MarkerSet::resize( const int newsize )
     }
 }
 
+#ifdef HDF5
+template
+void MarkerSet::write_chkpt_file(HDF5Output &bin) const;
+#else
 template
 void MarkerSet::write_chkpt_file(BinaryOutput &bin) const;
-#ifdef NETCDF
-template
-void MarkerSet::write_chkpt_file(NetCDFOutput &bin) const;
 #endif
 
 template <class T>
@@ -883,11 +885,12 @@ void MarkerSet::write_chkpt_file(T &bin) const
 
 }
 
+#ifdef HDF5
+template
+void MarkerSet::read_chkpt_file(Variables &var, HDF5Input &bin_save, HDF5Input &bin_chkpt);
+#else
 template
 void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin_save, BinaryInput &bin_chkpt);
-#ifdef NETCDF
-template
-void MarkerSet::read_chkpt_file(Variables &var, NetCDFInput &bin_save, NetCDFInput &bin_chkpt);
 #endif
 
 template <class T>
@@ -914,11 +917,12 @@ void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
     }
 }
 
+#ifdef HDF5
+template
+void MarkerSet::write_save_file(const Variables &var, HDF5Output &bin) const;
+#else
 template
 void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const;
-#ifdef NETCDF
-template
-void MarkerSet::write_save_file(const Variables &var, NetCDFOutput &bin) const;
 #endif
 
 template <class T>

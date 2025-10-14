@@ -26,6 +26,7 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
+    hdf5_compression_level(param.sim.hdf5_compression_level),
     frame(start_frame),
     time0(0)
 {}
@@ -80,9 +81,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
 
     char filename[256];
-#ifdef NETCDF
-    std::snprintf(filename, 255, "%s.save.%06d.nc", modelname.c_str(), frame);
-    NetCDFOutput bin(filename);
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.save.%06d.h5", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level);
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
@@ -190,7 +191,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
             (*ms)->write_save_file(var, bin);
     }
-#ifndef NETCDF
+#ifndef HDF5
     bin.close();
 #endif
 
@@ -293,9 +294,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePushA(__FUNCTION__);
 #endif
     char filename[256];
-#ifdef NETCDF
-    std::snprintf(filename, 255, "%s.chkpt.%06d.nc", modelname.c_str(), frame);
-    NetCDFOutput bin(filename);
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.chkpt.%06d.h5", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level);
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);

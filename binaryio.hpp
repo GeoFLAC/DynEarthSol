@@ -2,11 +2,12 @@
 #define DYNEARTHSOL3D_BINARYIO_HPP
 
 #include <map>
-#ifdef NETCDF
-#include <netcdf>
+#ifdef HDF5
+#include <H5Cpp.h>
 #endif
 #include "array2d.hpp"
 
+#ifndef HDF5
 
 class BinaryOutput
 {
@@ -54,38 +55,39 @@ public:
     void read_array(Array2D<T,N>& A, const char *name);
 };
 
-#ifdef NETCDF
+#else
 
-using namespace netCDF;
+using namespace H5;
 
-class NetCDFOutput
+class HDF5Output
 {
-public:
-    NetCDFOutput(const char *filename);
-    ~NetCDFOutput();
+private:
+    H5File h5_file;
+    const int compression_level;
 
     void write_header();
 
+public:
+    HDF5Output(const char *filename, const int hdf5_compression_level);
+    ~HDF5Output();
+
     template <typename T>
-    void write_array(const std::vector<T>& A, const char *name, std::size_t size);
+    void write_array(const std::vector<T>& A, const char *name, hsize_t len);
 
     template <typename T, int N>
-    void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
-
-private:
-    NcFile nc_file;
+    void write_array(const Array2D<T,N>& A, const char *name, hsize_t len);
 };
 
-class NetCDFInput
+class HDF5Input
 {
 private:
-    NcFile nc_file;
+    H5File h5_file;
 
     void read_header();
 
 public:
-    NetCDFInput(const char *filename);
-    ~NetCDFInput();
+    HDF5Input(const char *filename);
+    ~HDF5Input();
 
     template <typename T>
     void read_array(std::vector<T>& A, const char *name);
@@ -94,6 +96,6 @@ public:
     void read_array(Array2D<T,N>& A, const char *name);
 };
 
-#endif // NETCDF
+#endif // HDF5
 
 #endif

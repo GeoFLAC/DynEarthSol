@@ -108,6 +108,7 @@ struct Sim {
     int output_step_interval;
     int checkpoint_frame_interval;
     int restarting_from_frame;
+    int hdf5_compression_level;
     bool is_outputting_averaged_fields;
     bool is_restarting;
     bool has_initial_checkpoint;

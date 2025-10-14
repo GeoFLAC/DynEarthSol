@@ -39,6 +39,8 @@ namespace {
 
 /* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
 
+#ifndef HDF5
+
 BinaryOutput::BinaryOutput(const char *filename)
 {
     f = std::fopen(filename, "wb");
@@ -293,165 +295,223 @@ void BinaryInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A,
 template
 void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name);
 
+#else
 
-#ifdef NETCDF
-
-NetCDFOutput::NetCDFOutput(const char *filename)
-    : nc_file(filename, NcFile::replace)
+HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level)
+    : h5_file(filename, H5F_ACC_TRUNC), compression_level(hdf5_compression_level)
 {
     write_header();
 }
 
-NetCDFOutput::~NetCDFOutput()
+HDF5Output::~HDF5Output()
 {
     // nothing to do
 }
 
-void NetCDFOutput::write_header()
+void HDF5Output::write_header()
 {
-    nc_file.putAtt("ndims", ncInt, 1, &NDIMS);
+    hsize_t dims = 1;
+    DataSpace attr_space = DataSpace(H5S_SCALAR);
+    Attribute attr_nd = h5_file.createAttribute("ndims", PredType::NATIVE_INT, attr_space);
+    int nd = NDIMS;
+    attr_nd.write(PredType::NATIVE_INT, &nd);
+
+    Attribute attr_rev = h5_file.createAttribute("revision", PredType::NATIVE_INT, attr_space);
     int rev = 3;
-    nc_file.putAtt("revision", ncInt, 1, &rev);
+    attr_rev.write(PredType::NATIVE_INT, &rev);
 }
 
 template<typename T>
-NcType get_nc_type();
+struct H5TypeMap;
 
 template<>
-NcType get_nc_type<int>() {
-    return ncInt;
-}
+struct H5TypeMap<int> {
+    static PredType type() { return PredType::NATIVE_INT; }
+};
 
 template<>
-NcType get_nc_type<uint>() {
-    return ncUint;
-}
+struct H5TypeMap<unsigned int> {
+    static PredType type() { return PredType::NATIVE_UINT; }
+};
 
 template<>
-NcType get_nc_type<double>() {
-    return ncDouble;
-}
+struct H5TypeMap<long> {
+    static PredType type() { return PredType::NATIVE_LONG; }
+};
 
 template<>
-NcType get_nc_type<float>() {
-    return ncFloat;
-}
+struct H5TypeMap<float> {
+    static PredType type() { return PredType::NATIVE_FLOAT; }
+};
+
+template<>
+struct H5TypeMap<double> {
+    static PredType type() { return PredType::NATIVE_DOUBLE; }
+};
 
 // 1D array
 template<typename T>
-void NetCDFOutput::write_array(const std::vector<T>& A, const char *name, std::size_t size)
+void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t len)
 {
-    NcDim dim = nc_file.addDim(std::string("dim_") + name, size);
+    hsize_t dims[1] = { len };
+    DataSpace dataspace(1, dims);
 
-    NcType type = get_nc_type<T>();
+    PredType dtype = H5TypeMap<T>::type();
 
-    NcVar var = nc_file.addVar(name, type, dim);
-    var.setCompression(true, true, 4);
-    var.putVar(A.data());
+    DSetCreatPropList prop;
+    hsize_t chunk_dim = (len < 1024 ? len : 1024);
+    prop.setChunk(1, &chunk_dim);
+    prop.setDeflate(compression_level);
+    prop.setShuffle();
+
+    DataSet dataset = h5_file.createDataSet(name, dtype, dataspace, prop);
+    dataset.write(A.data(), dtype);
 }
 
 // 2D array
 template<typename T, int N>
-void NetCDFOutput::write_array(const Array2D<T, N>& A, const char *name, std::size_t size)
+void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len)
 {
-    NcDim dimY = nc_file.addDim(std::string("dimY_") + name, size);
-    NcDim dimX = nc_file.addDim(std::string("dimX_") + name, N);
+    hsize_t dims[2] = { len, (hsize_t)N };
+    DataSpace dataspace(2, dims);
 
-    NcType type = get_nc_type<T>();
+    PredType dtype = H5TypeMap<T>::type();
 
-    NcVar var = nc_file.addVar(name, type, {dimY, dimX});
-    var.setCompression(true, true, 4);
-    var.putVar(A.data());
+    DSetCreatPropList prop;
+    hsize_t chunk_dims[2];
+    chunk_dims[0] = (len < 128 ? len : 128);
+    chunk_dims[1] = N;
+    prop.setChunk(2, chunk_dims);
+    prop.setDeflate(compression_level);
+    prop.setShuffle();
+
+    DataSet dataset = h5_file.createDataSet(name, dtype, dataspace);
+    dataset.write(A.data(), dtype);
 }
 
 // explicit instantiation
 template
-void NetCDFOutput::write_array<int>(const int_vec& A, const char *name, std::size_t);
+void HDF5Output::write_array<int>(const int_vec& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<double>(const double_vec& A, const char *name, std::size_t);
+void HDF5Output::write_array<double>(const double_vec& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<uint>(const std::vector<uint>& A, const char *name, std::size_t);
+void HDF5Output::write_array<uint>(const std::vector<uint>& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, std::size_t);
+void HDF5Output::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, std::size_t);
+void HDF5Output::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, hsize_t);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void NetCDFOutput::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t);
+void HDF5Output::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, hsize_t);
 #endif
 template
-void NetCDFOutput::write_array<double,1>(const Array2D<double,1>& A, const char *name, std::size_t);
+void HDF5Output::write_array<double,1>(const Array2D<double,1>& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t);
+void HDF5Output::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, std::size_t);
+void HDF5Output::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, hsize_t);
 template
-void NetCDFOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
+void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t);
 
-NetCDFInput::NetCDFInput(const char *filename)
-    : nc_file(filename, NcFile::read)
+HDF5Input::HDF5Input(const char *filename)
+    : h5_file(filename, H5F_ACC_RDONLY)
 {
     read_header();
 }
 
-void NetCDFInput::read_header()
+void HDF5Input::read_header()
 {
-    NcGroupAtt ndims_att = nc_file.getAtt("ndims");
-    if (ndims_att.isNull()) {
-        std::cerr << "Error: mismatching ndims in header\n";
+    if (!h5_file.attrExists("ndims")) {
+        std::cerr << "Error: missing attribute ndims in HDF5 file\n";
         std::exit(1);
     }
+    
+    Attribute ndims_attr = h5_file.openAttribute("ndims");
+    DataType ndims_type = ndims_attr.getDataType();
+
     int ndims = -1;
-    ndims_att.getValues(&ndims);
+    ndims_attr.read(ndims_type, &ndims);
     // std::cout << "ndims = " << ndims << std::endl;
 
-    NcGroupAtt rev_att = nc_file.getAtt("revision");
-    if (rev_att.isNull()) {
-        std::cerr << "Error: mismatching revision in header\n";
+    if (!h5_file.attrExists("revision")) {
+        std::cerr << "Error: missing attribute revision in HDF5 file\n";
         std::exit(1);
     }
 
+    Attribute rev_attr = h5_file.openAttribute("revision");
+    DataType rev_type = rev_attr.getDataType();
+
     int rev = -1;
-    rev_att.getValues(&rev);
+    rev_attr.read(rev_type, &rev);
     // std::cout << "revision = " << rev << std::endl;
 }
 
-NetCDFInput::~NetCDFInput()
+HDF5Input::~HDF5Input()
 {
     // nothing to do
 }
 
 template <typename T>
-void NetCDFInput::read_array(std::vector<T>& A, const char *name)
+void HDF5Input::read_array(std::vector<T>& A, const char *name)
 {
-    /* The caller must ensure A is of right size to hold the array */
-
-    int size = A.size();
-    if (A.size() == 0) {
+    std::size_t size = A.size();
+    if (size == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
         std::exit(1);
     }
 
-    NcVar var = nc_file.getVar(name);
-    if (var.isNull()) {
-        std::cerr << "Error: cannot read array: " << name << '\n';
+    DataSet dataset;
+    try {
+        dataset = h5_file.openDataSet(name);
+    }
+    catch (FileIException &e) {
+        std::cerr << "Error: cannot open dataset (file error): " << name << '\n';
+        e.printErrorStack();
+        std::exit(1);
+    }
+    catch (DataSetIException &e) {
+        std::cerr << "Error: cannot open dataset (dataset error): " << name << '\n';
+        e.printErrorStack();
         std::exit(1);
     }
 
-    std::vector<NcDim> dims = var.getDims();
-    int n = dims[0].getSize();
-
-    if (n != size) {
-        std::cerr << "Error: array size is not matched: " << name << '\n';
+    DataSpace filespace = dataset.getSpace();
+    int rank = filespace.getSimpleExtentNdims();
+    if (rank != 1) {
+        std::cerr << "Error: dataset rank mismatch for " << name
+                  << ", expected 1 dim, got " << rank << "\n";
+        std::exit(1);
+    }
+    hsize_t dims[1];
+    filespace.getSimpleExtentDims(dims, nullptr);
+    if (dims[0] != size) {
+        std::cerr << "Error: array size is not matched: " << name
+                  << " (file dim = " << dims[0] << ", expected = " << size << ")\n";
         std::exit(1);
     }
 
-    var.getVar(A.data());
+    DataSpace memspace(1, dims);
+
+    PredType dtype = H5TypeMap<T>::type();
+
+    try {
+        dataset.read(A.data(), dtype, memspace, filespace);
+    }
+    catch (DataSetIException &e) {
+        std::cerr << "Error: failed to read dataset: " << name << "\n";
+        e.printErrorStack();
+        std::exit(1);
+    }
+    catch (DataSpaceIException &e) {
+        std::cerr << "Error: dataspace error reading dataset: " << name << "\n";
+        e.printErrorStack();
+        std::exit(1);
+    }
 }
 
 
 template <typename T, int N>
-void NetCDFInput::read_array(Array2D<T,N>& A, const char *name)
+void HDF5Input::read_array(Array2D<T,N>& A, const char *name)
 {
     /* The caller must ensure A is of right size to hold the array */
 
@@ -461,43 +521,73 @@ void NetCDFInput::read_array(Array2D<T,N>& A, const char *name)
         std::exit(1);
     }
 
-    NcVar var = nc_file.getVar(name);
-    if (var.isNull()) {
-        std::cerr << "Variable not found: " << name << '\n';
+    DataSet dataset;
+    try {
+        dataset = h5_file.openDataSet(name);
+    } catch (FileIException &e) {
+        std::cerr << "Error: dataset not found: " << name << "\n";
+        e.printErrorStack();
+        std::exit(1);
+    } catch (DataSetIException &e) {
+        std::cerr << "Error: cannot open dataset: " << name << "\n";
+        e.printErrorStack();
         std::exit(1);
     }
 
-    std::vector<NcDim> dims = var.getDims();
-    int n = dims[0].getSize();
-
-    if (n != size) {
-        std::cerr << "Error: array size is not matched: " << name << '\n';
+    DataSpace filespace = dataset.getSpace();
+    int rank = filespace.getSimpleExtentNdims();
+    if (rank != 2) {
+        std::cerr << "Error: dataset rank mismatch for " << name 
+                  << ", expected 2 dims, got " << rank << '\n';
+        std::exit(1);
+    }
+    
+    hsize_t dims[2];
+    filespace.getSimpleExtentDims(dims, nullptr);
+    if (dims[0] != size || dims[1] != static_cast<hsize_t>(N)) {
+        std::cerr << "Error: dataset dimensions mismatch for " << name
+                  << ": file dims = (" << dims[0] << ", " << dims[1]
+                  << "), expected (" << size << ", " << N << ")\n";
         std::exit(1);
     }
 
-    var.getVar(A.data());
+    DataSpace memspace(2, dims);
+
+    PredType dtype = H5TypeMap<T>::type();
+
+    try {
+        dataset.read(A.data(), dtype, memspace, filespace);
+    } catch (DataSetIException &e) {
+        std::cerr << "Error: failed to read dataset: " << name << "\n";
+        e.printErrorStack();
+        std::exit(1);
+    } catch (DataSpaceIException &e) {
+        std::cerr << "Error: dataspace error reading dataset: " << name << "\n";
+        e.printErrorStack();
+        std::exit(1);
+    }
 }
 
 // explicit instantiation
 template
-void NetCDFInput::read_array<double>(double_vec& A, const char *name);
+void HDF5Input::read_array<double>(double_vec& A, const char *name);
 template
-void NetCDFInput::read_array<int>(int_vec& A, const char *name);
+void HDF5Input::read_array<int>(int_vec& A, const char *name);
 template
-void NetCDFInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
+void HDF5Input::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
 template
-void NetCDFInput::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name);
+void HDF5Input::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void NetCDFInput::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name);
+void HDF5Input::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name);
 #endif
 template
-void NetCDFInput::read_array<double,1>(Array2D<double,1>& A, const char *name);
+void HDF5Input::read_array<double,1>(Array2D<double,1>& A, const char *name);
 template
-void NetCDFInput::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name);
+void HDF5Input::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name);
 template
-void NetCDFInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name);
+void HDF5Input::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name);
 template
-void NetCDFInput::read_array<int,1>(Array2D<int,1>& A, const char *name);
+void HDF5Input::read_array<int,1>(Array2D<int,1>& A, const char *name);
 
 #endif

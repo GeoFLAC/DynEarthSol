@@ -33,7 +33,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
-netcdf = 0
+hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
 ifeq ($(ndims), 2)
@@ -57,9 +57,9 @@ else
 endif
 CXX_BACKEND = ${CXX}
 
-## path to netCDF's base directory, if not in standard system location
-NETCDF_DIR = # /path/to/netcdf-c
-NETCDFCXX_DIR = # /path/to/netcdf-cxx4
+## path to HDF5's base directory, if not in standard system location
+HDF5_INCLUDE_DIR = #/path/to/include/hdf5/serial
+HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
 
 ## path to cuda's base directory
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
@@ -262,10 +262,9 @@ all:
 	@false
 endif
 
-ifeq ($(netcdf), 1)
-	CXXFLAGS += -DNETCDF -I$(NETCDF_DIR)/build/include  -I$(NETCDFCXX_DIR)/build/include
-	LDFLAGS += -Wl,-rpath,$(NETCDF_DIR)/build/lib -L$(NETCDF_DIR)/build/lib -lnetcdf \
-			   -Wl,-rpath,$(NETCDFCXX_DIR)/build/lib64 -L$(NETCDFCXX_DIR)/build/lib64 -lnetcdf-cxx4 
+ifeq ($(hdf5), 1)
+	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR) -L$(HDF5_LIB_DIR) -lhdf5 -lhdf5_cpp
 endif
 
 ## Is git in the path?
