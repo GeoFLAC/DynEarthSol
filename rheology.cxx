@@ -1,8 +1,5 @@
 #include <cmath>
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "3x3-C/dsyevh3.h"
 
@@ -636,23 +633,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel)
-
 {
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
-    // Interpolate pore pressure from nodes to element level
-    double_vec ppressure_element(var.nelem, 0.0);
-    double_vec dppressure_element(var.nelem, 0.0);
-    // Define element velocity arrays
-    double_vec velocity_x_element(var.nelem, 0.0);
-    double_vec velocity_y_element(var.nelem, 0.0);
-    double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
-
-    #pragma omp parallel for default(none) shared(var, ppressure, ppressure_element, dppressure, dppressure_element, \
-        vel, velocity_x_element, velocity_y_element, velocity_z_element)
-    #pragma acc parallel loop
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
+        vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
+        strain_rate)
+#endif
+    #pragma acc parallel loop async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         const int *conn = (*var.connectivity)[e];
         double pp_element = 0.0;
@@ -662,62 +653,49 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
 
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        #ifdef THREED
+#ifdef THREED
             pp_element += ppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
             dpp_element += dppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
             vx_element += vel[conn[j]][0] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
             vy_element += vel[conn[j]][1] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
             vz_element += vel[conn[j]][2] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-        #else
+#else
             pp_element += ppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vx_element += vel[conn[j]][0] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
             vy_element += vel[conn[j]][1] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-
-        #endif
+#endif
         }
-        ppressure_element[e] = pp_element;  // Store element-level pore pressure 
-        dppressure_element[e] = dpp_element;  // Store element-level pore pressure rate
-        velocity_x_element[e] = vx_element;  // Store element-level velocity in x direction
-        velocity_y_element[e] = vy_element;  // Store element-level velocity in y direction
-        #ifdef THREED
-        velocity_z_element[e] = vz_element;  // Store element-level velocity in z direction
-        #endif
-    }
 
-    #pragma omp parallel for default(none)                           \
-        shared(param, var, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
-               strain_rate, ppressure_element, dppressure_element, std::cerr, \
-               velocity_x_element, velocity_y_element, velocity_z_element)
-    #pragma acc parallel loop
-    for (int e=0; e<var.nelem; ++e) {
         // stress, strain and strain_rate of this element
         double* s = stress[e];
         double& syy = stressyy[e];
         double* es = strain[e];
         double* edot = strain_rate[e];
-    	double old_s = trace(s);
+        double old_s = trace(s);
 
         // Calculate effective pore pressure using Biot's coefficient
         double alpha_b = var.mat->alpha_biot(e); // Biot coefficient
-        double pp = ppressure_element[e];        // Use element-level interpolated pore pressure
-        double dpp = dppressure_element[e];        // Use element-level interpolated pore pressure rate
+        double pp = pp_element;        // Use element-level interpolated pore pressure
+        double dpp = dpp_element;        // Use element-level interpolated pore pressure rate
 
-        double vx = velocity_x_element[e];        // Use element-level interpolated velocity in x direction
-        double vy = velocity_y_element[e];        // Use element-level interpolated velocity in y direction
-        double vz = velocity_z_element[e];        // Use element-level interpolated velocity in z direction
+        double vx = vx_element;        // Use element-level interpolated velocity in x direction
+        double vy = vy_element;        // Use element-level interpolated velocity in y direction
+#ifdef THREED
+        double vz = vz_element;        // Use element-level interpolated velocity in z direction
+#endif
 
         // // Calculate the center of the element
         // const int *conn = (*var.connectivity)[e];
         // double center_x = 0., center_z = 0., T = 0.;
         // for (int i=0; i<NODES_PER_ELEM; ++i){
         //     center_x += (*var.coord)[conn[i]][0];
-	    // center_z += (*var.coord)[conn[i]][NDIMS-1];
+        // center_z += (*var.coord)[conn[i]][NDIMS-1];
         //     T += (*var.temperature)[conn[i]];
         // }
         // T /= NODES_PER_ELEM;
         // center_x /= NODES_PER_ELEM;
-	    // center_z /= NODES_PER_ELEM;
+        // center_z /= NODES_PER_ELEM;
         // // Find the most abundant marker mattype in this element
         // int_vec &a = (*var.elemmarkers)[e];
         // int material = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
@@ -955,9 +933,11 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
     nvtxRangePushA(__FUNCTION__);
 #endif
 
+#ifndef ACC
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, old_mean_stress)
-    #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop async
     for (int e=0; e<var.nelem; ++e) {
         double* s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;

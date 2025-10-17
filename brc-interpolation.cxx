@@ -1,16 +1,12 @@
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include "algorithm"
 #include "iostream"
-
-#include "ANN/ANN.h"
 
 #include "constants.hpp"
 #include "parameters.hpp"
 
 #include "barycentric-fn.hpp"
 #include "utils.hpp"
+#include "knn.hpp"
 #include "brc-interpolation.hpp"
 
 namespace { // anonymous namespace
@@ -24,9 +20,16 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma acc serial async
+    int ntarget = target.size();
+
+#ifndef ACC
     #pragma omp parallel for default(none)          \
-        shared(brc, el, connectivity, source, target)
-    for (std::size_t i=0; i<target.size(); i++) {
+        shared(brc, el, connectivity, source, target,ntarget)
+#endif
+    #pragma acc parallel loop async
+    for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
         double result = 0;
@@ -47,9 +50,16 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+
+    #pragma acc serial async
+    int ntarget = target.size();
+
+#ifndef ACC
     #pragma omp parallel for default(none)          \
-        shared(brc, el, connectivity, source, target)
-    for (std::size_t i=0; i<target.size(); i++) {
+        shared(brc, el, connectivity, source, target,ntarget)
+#endif
+    #pragma acc parallel loop async
+    for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
         for (int d=0; d<NDIMS; d++) {
@@ -66,11 +76,11 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 }
 
 
-void prepare_interpolation(const Variables &var,
+void prepare_interpolation(const Param& param, const Variables &var,
                            const Barycentric_transformation &bary,
                            const array_t &old_coord,
                            const conn_t &old_connectivity,
-                           const std::vector<int_vec> &old_support,
+                           const int_vec2D &old_support,
                            brc_t &brc, int_vec &el)
 {
 #ifdef USE_NPROF
@@ -78,25 +88,38 @@ void prepare_interpolation(const Variables &var,
 #endif
     // for each new coord point, find the enclosing old element
 
-    // ANN requires double** as input
-    double **points = new double*[old_coord.size()];
-    for (std::size_t i=0; i<old_coord.size(); i++) {
-        points[i] = const_cast<double*>(old_coord[i]);
-    }
-    ANNkd_tree kdtree(points, old_coord.size(), NDIMS);
+#ifdef USE_NPROF
+    nvtxRangePushA("create kdtree for coord");
+#endif
+
+#ifdef ACC
+    array_t point_tmp(1);
+    PointCloud cloud(point_tmp);
+#else
+    PointCloud cloud(old_coord);
+#endif
+
+    NANOKDTree nano_kdtree(NDIMS, cloud);
+    KNN kdtree(param, old_coord, nano_kdtree);
+    neighbor_vec neighbors(var.nnode);
+
+    printf("    Finding knn for barycentric node interpolation...\n");
+    kdtree.search(*var.coord, neighbors, 1, 3.0);
+
+#ifdef USE_NPROF
+    nvtxRangePop();
+#endif
 
     const int k = 1;
-    const double eps = 0;
-    int nn_idx[k];
-    double dd[k];
 
-    // Note: kdtree.annkSearch() is not thread-safe, cannot use openmp in this loop
+    #pragma omp parallel for default(none)          \
+        shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors) \
+        firstprivate(k)
     for (int i=0; i<var.nnode; i++) {
         double *q = (*var.coord)[i];
 
-        // find the nearest point nn in old_coord
-        kdtree.annkSearch(q, k, nn_idx, dd, eps);
-        int nn = nn_idx[0];
+        int nn = neighbors[i].idx;
+        double dd = neighbors[i].dist2;
 
         // elements surrounding nn
         const int_vec &nn_elem = old_support[nn];
@@ -109,7 +132,7 @@ void prepare_interpolation(const Variables &var,
         int e;
 
         // shortcut: q is exactly the same as nn
-        if (dd[0] == 0) {
+        if (dd == 0) {
             e = nn_elem[0];
             bary.transform(q, e, r);
             // r should be a permutation of [1, 0, 0]
@@ -184,7 +207,7 @@ void prepare_interpolation(const Variables &var,
             // Situation: q must be outside the old domain
             // using nearest old_coord instead
             e = nn_elem[0];
-            bary.transform(points[nn], e, r);
+            bary.transform(old_coord[nn], e, r);
         }
     found:
         el[i] = e;
@@ -195,8 +218,6 @@ void prepare_interpolation(const Variables &var,
         }
         brc[i][NODES_PER_ELEM-1] = 1 - sum;
     }
-
-    delete [] points;
 
     // print(std::cout, *var.coord);
     // std::cout << '\n';
@@ -211,7 +232,7 @@ void prepare_interpolation(const Variables &var,
 
 } // anonymous namespace
 
-void barycentric_node_interpolation(Variables &var,
+void barycentric_node_interpolation(const Param& param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity)
@@ -221,50 +242,58 @@ void barycentric_node_interpolation(Variables &var,
 #endif
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
-    prepare_interpolation(var, bary, old_coord, old_connectivity, *var.support, brc, el);
+    prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
 
-    double_vec *a;
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.temperature, *a);
+    std::cout << "    Interpolating fields...\n";
+
+    double_vec *new_temperature = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature);
+
+    double_vec *new_ppressure = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure);
+
+    double_vec *new_dppressure = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
+
+    array_t *new_vel = new array_t(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
+
+    array_t *new_coord0 = new array_t(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
+
+    #pragma acc wait
+
     delete var.temperature;
-    var.temperature = a;
+    var.temperature = new_temperature;
 
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.ppressure, *a);
     delete var.ppressure;
-    var.ppressure = a;
+    var.ppressure = new_ppressure;
 
-    a = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.dppressure, *a);
     delete var.dppressure;
-    var.dppressure = a;
+    var.dppressure = new_dppressure;
 
-    array_t *b = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.vel, *b);
     delete var.vel;
-    var.vel = b;
+    var.vel = new_vel;
 
-    b = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.coord0, *b);
     delete var.coord0;
-    var.coord0 = b;
+    var.coord0 = new_coord0;
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
 }
 
 
-void barycentric_node_interpolation_forT(const Variables &var,
+void barycentric_node_interpolation_forT(const Param& param, const Variables &var,
                                          const Barycentric_transformation &bary,
                                          const array_t &input_coord,
                                          const conn_t &input_connectivity,
-                                         const std::vector<int_vec> &input_support,
+                                         const int_vec2D &input_support,
 					 const double_vec &inputtemperature,
 					 double_vec &outputtemperature)
 {
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
-    prepare_interpolation(var, bary, input_coord, input_connectivity, input_support, brc, el);
+    prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature);
 }

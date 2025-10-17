@@ -5,15 +5,23 @@
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
 
-## Execute "make" if making production run. Or "make opt=0 openmp=0" for debugging run.
-##
-## ndims = 3: 3D code; 2: 2D code
-## opt = 1 ~ 3: optimized build; others: debugging build
-## openacc = 1: enable OpenACC
-## openmp = 1: enable OpenMP
-## adaptive_time_step = 1: use adaptive time stepping technique
-## use_R_S = 1: use Rate - State friction law
-## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
+## Build notes
+## - Run simply `make` to build the optimized production executable.
+## - For a debugging build, run for example: `make opt=0 openmp=0`.
+## Common configuration variables (set on the make command line or edit below):
+##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
+##  - opt = 0..3 : optimization level. 0 = debugging (no optimizations),
+##       1 = low optimization, 2 = default optimized build, 3 = aggressive
+##       optimizations (-march=native, -O3, etc.).
+##  - openacc = 1 : enable OpenACC compilation (NVHPC).
+##  - openmp = 1 : enable OpenMP parallelization.
+##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set).
+##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
+##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - netcdf = 1 : enable NetCDF output support (requires netCDF and netcdf-cxx4).
+##  - adaptive_time_step = 1 : enable adaptive time stepping.
+##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
+##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 
 ndims = 3
 opt = 2
@@ -25,7 +33,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
-ANNFLAGS = linux-g++
+netcdf = 0
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -38,6 +46,7 @@ endif
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
 	CXX = nvc++
+	suffix = .gpu
 else
 	ifeq ($(nprof), 1)
 		CXX = nvc++
@@ -47,9 +56,12 @@ else
 endif
 CXX_BACKEND = ${CXX}
 
+## path to netCDF's base directory, if not in standard system location
+NETCDF_DIR = # /path/to/netcdf-c
+NETCDFCXX_DIR = # /path/to/netcdf-cxx4
 
 ## path to cuda's base directory
-CUDA_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2/cuda
+NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
 BOOST_ROOT_DIR =
@@ -157,10 +169,6 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 		LDFLAGS += -pg
 	endif
 
-	ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
-		ANNFLAGS = macosx-g++-13
-	endif
-
 	GCCVERSION = $(shell $(CXX) --version | grep g++ | sed 's/^.* //g' | cut -d. -f1)
 
 	ifeq ($(shell expr $(GCCVERSION) \> 10), 1)
@@ -187,7 +195,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
-	CXXFLAGS = -mno-fma
+	CXXFLAGS = -g -Minfo=mp,accel
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -198,10 +206,17 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(openacc), 1)
-		CXXFLAGS += -acc=gpu -gpu=managed,nofma -Mcuda -DACC
-		LDFLAGS += -acc=gpu -gpu=managed -Mcuda
-		# CXXFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda -DACC
-		# LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		CXXFLAGS += -acc=gpu -cuda -DACC
+		LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		# CXXFLAGS += -acc=gpu -Mcuda -DACC
+		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
+		ifeq ($(nprof), 1)
+			CXXFLAGS += -gpu=mem:managed,nofma -mno-fma
+			# CXXFLAGS += -gpu=managed,nofma -mno-fma
+		else
+			CXXFLAGS += -gpu=mem:managed
+			# CXXFLAGS += -gpu=managed
+		endif
 	endif
 
 	ifeq ($(openmp), 1)
@@ -210,8 +225,8 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(nprof), 1)
-		CXXFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include -DUSE_NPROF
-		LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt -g
+		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
+		LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXXFLAGS = -march=core2
@@ -232,14 +247,19 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 	endif
 
 	ifeq ($(nprof), 1)
-			CXXFLAGS += -Minfo=mp -I$(CUDA_DIR)/include -DUSE_NPROF
-			LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt
+			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
+			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else
 # the only way to display the error message in Makefile ...
 all:
 	@echo "Unknown compiler, check the definition of 'CXX' in the Makefile."
 	@false
+endif
+
+ifeq ($(netcdf), 1)
+	CXXFLAGS += -DNETCDF  -I$(NETCDFCXX_DIR)/build/include
+	LDFLAGS += -L$(NETCDF_DIR)/lib -lnetcdf -L$(NETCDFCXX_DIR)/build/lib64 -lnetcdf-cxx4 
 endif
 
 ## Is git in the path?
@@ -267,7 +287,8 @@ SRCS =	\
 	phasechanges.cxx \
 	remeshing.cxx \
 	rheology.cxx \
-	markerset.cxx
+	markerset.cxx \
+	knn.cxx
 
 INCS =	\
 	array2d.hpp \
@@ -280,22 +301,23 @@ INCS =	\
 	utils.hpp \
 	mesh.hpp \
 	markerset.hpp \
-	output.hpp
+	output.hpp \
+	knn.hpp
 
-OBJS = $(SRCS:.cxx=.$(ndims)d.o)
+OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
-EXE = dynearthsol$(ndims)d
+EXE = dynearthsol$(ndims)d$(suffix)
 
 
 ## Libraries
 
 TET_SRCS = tetgen/predicates.cxx tetgen/tetgen.cxx
 TET_INCS = tetgen/tetgen.h
-TET_OBJS = $(TET_SRCS:.cxx=.o)
+TET_OBJS = $(TET_SRCS:.cxx=$(suffix).o)
 
 TRI_SRCS = triangle/triangle.c
 TRI_INCS = triangle/triangle.h
-TRI_OBJS = $(TRI_SRCS:.c=.o)
+TRI_OBJS = $(TRI_SRCS:.c=$(suffix).o)
 
 M_SRCS = $(TRI_SRCS)
 M_INCS = $(TRI_INCS)
@@ -326,10 +348,9 @@ ifeq ($(usemmg), 1)
 endif
 
 C3X3_DIR = 3x3-C
-C3X3_LIBNAME = 3x3
+C3X3_LIBNAME = 3x3$(suffix)
 
-ANN_DIR = ann
-ANN_LIBNAME = ANN
+ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
 ## Action
@@ -338,9 +359,9 @@ CXXFLAGS += -I$(ANN_DIR)/include
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
-			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) -L$(ANN_DIR)/lib -l$(ANN_LIBNAME) \
+			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
@@ -389,42 +410,38 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
-$(TRI_OBJS): %.o : %.c $(TRI_INCS)
+$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates.o: tetgen/predicates.cxx $(TET_INCS)
+tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen.o: tetgen/tetgen.cxx $(TET_INCS)
+tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) CUDA_DIR=$(CUDA_DIR)
-
-$(ANN_DIR)/lib/lib$(ANN_LIBNAME).a:
-	@+$(MAKE) -C $(ANN_DIR) $(ANNFLAGS)
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nprof=$(nprof) CUDA_DIR=$(NVHPC_DIR)/cuda
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-	@+$(MAKE) -C $(C3X3_DIR) clean
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 	
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-	@+$(MAKE) -C $(C3X3_DIR) clean
-	@+$(MAKE) -C $(ANN_DIR) realclean
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 
 clean:
 	@rm -f $(OBJS) $(EXE)

@@ -2,19 +2,22 @@
 #define DYNEARTHSOL3D_GEOMETRY_HPP
 
 double dist2(const double* a, const double* b);
-void compute_volume(const double **coord, double &volume);
+#pragma acc routine seq
+double compute_volume(const double **coord);
+#pragma acc routine seq
+double compute_area_facet(const double **coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt,
-                    double_vec &tmp_result_sg);
+                    double_vec &etmp);
 
 void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt);
 
 void NMD_stress(const Param& param, const Variables &var, double_vec &dp_nd,
-                tensor_t& stress, double_vec &tmp_result_sg);
+                tensor_t& stress, double_vec &etmp);
 
 double compute_dt(const Param& param, Variables& var);
 // double compute_dt(const Param& param, const Variables& var);

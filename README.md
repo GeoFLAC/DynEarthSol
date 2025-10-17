@@ -66,11 +66,51 @@ alike.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
     * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
+  * Outputing in netCDF4 format to reduce file size (50%) of model results.
+    * Instill netcdf-c from https://github.com/Unidata/netcdf-c
+      * `cmake && make && make test && make install`
+    * Instill netcdf-cxx from https://github.com/Unidata/netcdf-cxx4
+      * `mkdir build && cd build`
+      * `cmake .. -DCMAKE_INSTALL_PREFIX=./`
+      * `make -j4 && make install`
+    * set `netcdf = 1`.
+    * set `NETCDF_DIR` and `NETCDFCXX_DIR` path to include libraries
+    * Install python netcdf4 lib for vtk visulization by `pip install netCDF4`.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
   necessary to debug the code under valgrind.
 * Or run `make opt=-1` to build a memory-specific debugging executable using `-fsanitize=address`, a compiler flag for detacting memory address issues. It can show where the issue occurs and where variables are allocated during execution, without needing additional tools such as GDB or Valgrind. However, valgrind cannot easily coexist with -fsanitize=address. as using both together may cause library-related errors.
+
+### Common make invocations
+
+Here are a few practical examples for common build configurations (run these from the project root):
+
+```bash
+# default optimized 3D build
+make
+
+# debugging build (no optimizations, no OpenMP)
+make opt=0 openmp=0
+
+# build 2D version
+make ndims=2
+
+# enable MMG mesh optimization (requires MMG headers/libs)
+make usemmg=1
+
+# enable Exodus input support (requires seacas/exodus libs)
+make useexo=1
+
+# enable NetCDF output support (requires netCDF & netcdf-cxx4)
+make netcdf=1
+
+# NVHPC/profiler build (uses nvc++ when set)
+make nprof=1
+
+# OpenACC build (NVHPC compiler)
+make openacc=1
+```
 
 # Running DES3D
 * Execute `dynearthsol2d [inputfile: examples/defaults.cfg by default]`.
@@ -103,6 +143,6 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the MIT / X Windows System license. See
 [LICENSE](https://github.com/GeoFLAC/DynEarthSol/blob/master/LICENSE) for the full text.
 
-The files under the subdirectories `3x3-C/`, `ann/`, `tetgen/`
+The files under the subdirectories `3x3-C/`, `nanoflann/`, `tetgen/`
 and `triangles/` are distributed by their own license(s).
 

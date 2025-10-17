@@ -139,13 +139,15 @@ double ref_pressure(const Param& param, double z)
     // Get pressure at this depth
     double depth = -z;
     double p;
+
     if (param.control.ref_pressure_option == 0)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
-            p = (param.mat.rho0[0] * (1 - param.mat.porosity[0]) + 1000.0 * param.mat.porosity[0]) * param.control.gravity * depth;
+            p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
+                1000.0 * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
-            p = param.mat.rho0[0] * param.control.gravity * depth;
+            p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
         }
 
     else if (param.control.ref_pressure_option == 1)
@@ -173,7 +175,10 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
-  dppressure(*var.dppressure)
+  dppressure(*var.dppressure),
+  log_table(*var.log_table),
+  tan_table(*var.tan_table),
+  sin_table(*var.sin_table)
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
@@ -182,6 +187,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     visc_exponent = p.mat.visc_exponent;
     visc_coefficient = p.mat.visc_coefficient;
     visc_activation_energy = p.mat.visc_activation_energy;
+    visc_activation_volume = p.mat.visc_activation_volume;
     heat_capacity = p.mat.heat_capacity;
     therm_cond = p.mat.therm_cond;
     pls0 = p.mat.pls0;
@@ -214,7 +220,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 MatProps::~MatProps()
 {
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
-    #pragma acc exit data delete(visc_coefficient,visc_activation_energy,heat_capacity,therm_cond,pls0)
+    #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume,heat_capacity,therm_cond,pls0)
     #pragma acc exit data delete(pls1,cohesion0,friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
     #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity)
@@ -246,6 +252,10 @@ double MatProps::visc(int e) const
     }
     T /= NODES_PER_ELEM;
 
+    // stress
+    const double *s = stress[e];
+    double s0 = trace(s) / NDIMS;
+
     // strain-rate
     double edot = second_invariant(strain_rate[e]);
     // min strain rate to prevent viscosity -> inf
@@ -254,11 +264,13 @@ double MatProps::visc(int e) const
     // viscosity law from Chen and Morgan, JGR, 1990
     double result = 0;
     int n = 0;
+
     for (int m=0; m<nmat; m++) {
         double pow = 1 / visc_exponent[m] - 1;
         double pow1 = -1 / visc_exponent[m];
-        double visc0 = 0.25 * std::pow(edot, pow) * std::pow(0.75 * visc_coefficient[m], pow1)
-            * std::exp(visc_activation_energy[m] / (visc_exponent[m] * gas_constant * T)) * 1e6;
+        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table, 0.75 * visc_coefficient[m], pow1)
+            * std::exp((visc_activation_energy[m] + visc_activation_volume[m] * s0)
+            / (visc_exponent[m] * gas_constant * T)) * 1e6;
         result += elemmarkers[e][m] / visc0;
         n += elemmarkers[e][m];
     }
@@ -324,7 +336,6 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
 
     double static_friction_angle = 0;
 
-    double 
     int n = 0;
     for (int m=0; m<nmat; m++) {
         int k = elemmarkers[e][m];
@@ -380,14 +391,14 @@ void MatProps::plastic_props(int e, double pls,
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
 
     // derived variables
-    double sphi = std::sin(phi * DEG2RAD);
-    double spsi = std::sin(psi * DEG2RAD);
+    double sphi = sin_safe(sin_table,phi * DEG2RAD);
+    double spsi = sin_safe(sin_table,psi * DEG2RAD);
 
     anphi = (1 + sphi) / (1 - sphi);
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
 void MatProps::plastic_props_rsf(int e, double pls,
@@ -430,8 +441,10 @@ double MatProps::rho(int e) const
         result += rho0[m] * (1 - alpha[m] * TinCelsius) * elemmarkers[e][m];
         n += elemmarkers[e][m];
     }
-    return result / n;
+    double rho = result / n;
+    return rho;
 }
+
 
 
 double MatProps::cp(int e) const
@@ -442,7 +455,10 @@ double MatProps::cp(int e) const
 
 double MatProps::k(int e) const
 {
-    return arithmetic_mean(therm_cond, elemmarkers[e]);
+    double ek = arithmetic_mean(therm_cond, elemmarkers[e]);
+
+    return ek;
+
 }
 
 // hydraulic parameters
@@ -724,13 +740,15 @@ double ref_pressure(const Param& param, double z)
     // Get pressure at this depth
     double depth = -z;
     double p;
+
     if (param.control.ref_pressure_option == 0)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
-            p = (param.mat.rho0[0] * (1 - param.mat.porosity[0]) + 1000.0 * param.mat.porosity[0]) * param.control.gravity * depth;
+            p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
+            1000.0 * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
-            p = param.mat.rho0[0] * param.control.gravity * depth;
+            p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
         }
 
     else if (param.control.ref_pressure_option == 1)
@@ -758,7 +776,11 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
-  dppressure(*var.dppressure)
+  dppressure(*var.dppressure),
+  log_table(*var.log_table),
+  tan_table(*var.tan_table),
+  sin_table(*var.sin_table)
+
 {
     rho0 = VectorBase::create(p.mat.rho0, nmat);
     alpha = VectorBase::create(p.mat.alpha, nmat);
@@ -874,7 +896,7 @@ double MatProps::visc(int e) const
     for (int m=0; m<nmat; m++) {
         double pow = 1 / (*visc_exponent)[m] - 1;
         double pow1 = -1 / (*visc_exponent)[m];
-        double visc0 = 0.25 * std::pow(edot, pow) * std::pow(0.75 * (*visc_coefficient)[m], pow1)
+        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table,0.75 * (*visc_coefficient)[m], pow1)
             * std::exp(((*visc_activation_energy)[m] + (*visc_activation_volume)[m] * s0)
             / ((*visc_exponent)[m] * gas_constant * T)) * 1e6;
         result += elemmarkers[e][m] / visc0;
@@ -981,7 +1003,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     c_v /= n; // characteristic velocity
     static_friction_angle = f / n; // friction angle
     mu_0 = std::tan(DEG2RAD * static_friction_angle); // static friction coefficient
-    mu_d = mu_0 + (d_a - e_b) * log(slip_rate / c_v); // dynamic friction angle
+    mu_d = mu_0 + (d_a - e_b) * log_safe(log_table,slip_rate / c_v); // dynamic friction angle
     friction_angle = std::atan(mu_d) / DEG2RAD;
     cohesion = c / n;
     dilation_angle = d / n;
@@ -1006,14 +1028,14 @@ void MatProps::plastic_props(int e, double pls,
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
 
     // derived variables
-    double sphi = std::sin(phi * DEG2RAD);
-    double spsi = std::sin(psi * DEG2RAD);
+    double sphi = sin_safe(sin_table,phi * DEG2RAD);
+    double spsi = sin_safe(sin_table,psi * DEG2RAD);
 
     anphi = (1 + sphi) / (1 - sphi);
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
 void MatProps::plastic_props_rsf(int e, double pls,

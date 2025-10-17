@@ -1,0 +1,75 @@
+# Mesh layering
+#### node coordinates ####
+# npoints ndims 0 0
+16  3  0  0
+# i    xi       yi       zi
+0    0        0        0
+1    99000    0        0
+2    101000   0        0
+3    200000   0        0
+4    0        200000   0
+5    99000    200000   0
+6    101000   200000   0
+7    200000   200000   0
+8    0        0        -60000
+9    99000    0        -60000
+10   101000   0        -60000
+11   200000   0        -60000
+12   0        200000  -60000
+13   99000    200000  -60000
+14   101000   200000  -60000
+15   200000   200000  -60000
+
+#### facet section ####
+# nfacets boundary_marker_flag
+# Each rectangular face is now its own facet, defined with "1 0" (1 polygon, 0 holes)
+16 1
+# Facet 1: Left face
+1 0 1
+4 0 8 12 4
+# Facet 2: Right face
+1 0 2
+4 3 7 15 11
+# Facets 3, 4, 5: Front face segments
+1 0 4
+4 0 1 9 8
+1 0 4
+4 1 2 10 9
+1 0 4
+4 2 3 11 10
+# Facets 6, 7, 8: Back face segments
+1 0 8
+4 4 5 13 12
+1 0 8
+4 5 6 14 13
+1 0 8
+4 6 7 15 14
+# Facets 9, 10, 11: Base face segments
+1 0 16
+4 0 1 5 4
+1 0 16
+4 1 2 6 5
+1 0 16
+4 2 3 7 6
+# Facets 12, 13, 14: Top face segments
+1 0 32
+4 8 9 13 12
+1 0 32
+4 9 10 14 13
+1 0 32
+4 10 11 15 14
+# Facets 15, 16: Internal face segments
+1 0 0 
+4 1 5 13 9
+1 0 0
+4 2 6 14 10
+
+#### hole section ####
+0
+
+#### region section ####
+3
+0  49000   100000  -30000   0  1e3   # Left host block
+1  151000  100000  -30000   1  1e3   # Right host block
+2  100000  100000  -30000   2  1e2   # Central fault block
+

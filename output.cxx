@@ -3,9 +3,6 @@
 #include <cstdio>
 #include <iterator>  // For std::distance
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -81,11 +78,15 @@ void Output::_write(const Variables& var, bool disable_averaging)
         dt = (var.time - time0) / average_interval;
         inv_dt = 1.0 / (var.time - time0);
     }
-    write_info(var, dt);
 
     char filename[256];
+#ifdef NETCDF
+    std::snprintf(filename, 255, "%s.save.%06d.nc", modelname.c_str(), frame);
+    NetCDFOutput bin(filename);
+#else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
+#endif
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
@@ -114,6 +115,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         // average_strain_rate = delta_strain / delta_t
         delta_plstrain = &delta_plstrain_avg;
     }
+    #pragma omp parallel for default(none) shared(var, delta_plstrain_avg, inv_dt)
     for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
         delta_plstrain_avg[i] *= inv_dt;
     }
@@ -125,6 +127,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         strain_rate = &strain0;
         double *s0 = strain0.data();
         const double *s = var.strain->data();
+        #pragma omp parallel for default(none) shared(var, strain0, inv_dt, s, s0)
         for (int i=0; i<strain0.num_elements(); ++i) {
             s0[i] = (s[i] - s0[i]) * inv_dt;
         }
@@ -137,6 +140,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
         double tmp = 1.0 / (average_interval + 1);
+        #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
         }
@@ -186,8 +190,12 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
             (*ms)->write_save_file(var, bin);
     }
-
+#ifndef NETCDF
     bin.close();
+#endif
+
+    write_info(var, dt);
+
     int64_t duration_ns = get_nanoseconds() - start_time;
 
     if(dt / YEAR2SEC > 0.001)
@@ -232,6 +240,7 @@ void Output::write_exact(const Variables& var)
     _write(var, true);
     // check for NaN in var
     check_nan(var);
+    (var.markersets)[0]->check_marker_elem_consistency(var);
 }
 
 
@@ -284,13 +293,19 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePushA(__FUNCTION__);
 #endif
     char filename[256];
+#ifdef NETCDF
+    std::snprintf(filename, 255, "%s.chkpt.%06d.nc", modelname.c_str(), frame);
+    NetCDFOutput bin(filename);
+#else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
+#endif
 
-    double_vec tmp(2);
+    double_vec tmp(3);
     tmp[0] = var.time;
     tmp[1] = var.compensation_pressure;
-    bin.write_array(tmp, "time compensation_pressure", tmp.size());
+    tmp[2] = var.bottom_temperature;
+    bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
