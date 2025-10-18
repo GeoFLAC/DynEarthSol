@@ -876,13 +876,15 @@ void MarkerSet::write_chkpt_file(BinaryOutput &bin) const;
 template <class T>
 void MarkerSet::write_chkpt_file(T &bin) const
 {
+#ifdef HDF5
+    bin.write_scaler(_last_id, _name + ".last_id");
+#else
     int_vec itmp(2);
     itmp[0] = _nmarkers;
     itmp[1] = _last_id;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
-
+#endif
     bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
-
 }
 
 #ifdef HDF5
@@ -896,11 +898,15 @@ void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin_save, BinaryInp
 template <class T>
 void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 {
+#ifdef HDF5
+    bin_save.read_scaler(_nmarkers, _name + ".nmarkers");
+    bin_chkpt.read_scaler(_last_id, _name + ".last_id");
+#else
     int_vec itmp(2);
     bin_chkpt.read_array(itmp, (_name + " size").c_str());
     _nmarkers = itmp[0];
     _last_id = itmp[1];
-
+#endif
     allocate_markerdata(_nmarkers);
 
     if (_nmarkers != 0) {
@@ -931,6 +937,8 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
 #ifdef USE_NPROF
     nvtxRangePushA("write markersets");
 #endif
+
+#ifndef HDF5
     int_vec itmp(1);
     itmp[0] = _nmarkers;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
@@ -938,6 +946,8 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
     array_t *mcoord = calculate_marker_coord(var); // coordinate of markers
 
     bin.write_array(*mcoord, (_name + ".coord").c_str(), _nmarkers);
+    delete mcoord;
+#endif
     bin.write_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
     bin.write_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
     bin.write_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
@@ -949,8 +959,6 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
 
     // temporary show results
     bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
-
-    delete mcoord;
 
 #ifdef USE_NPROF
     nvtxRangePop();

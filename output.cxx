@@ -82,15 +82,17 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     char filename[256];
 #ifdef HDF5
-    std::snprintf(filename, 255, "%s.save.%06d.h5", modelname.c_str(), frame);
+    std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
     HDF5Output bin(filename, hdf5_compression_level);
+
+    bin.write_block_metadata(var, "grid");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
-#endif
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
+#endif
 
     bin.write_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {
@@ -188,8 +190,12 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.bcflag, "bcflag", var.bcflag->size());
 
     if (has_marker_output) {
-        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+            bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
             (*ms)->write_save_file(var, bin);
+        }
     }
 #ifndef HDF5
     bin.close();
@@ -295,18 +301,24 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #endif
     char filename[256];
 #ifdef HDF5
-    std::snprintf(filename, 255, "%s.chkpt.%06d.h5", modelname.c_str(), frame);
-    HDF5Output bin(filename, hdf5_compression_level);
+    std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level, true);
+
+    bin.write_block_metadata(var, "grid");
+
+    bin.write_scaler(var.time, "time");
+    bin.write_scaler(var.compensation_pressure, "compensation_pressure");
+    bin.write_scaler(var.bottom_temperature, "bottom_temperature");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
-#endif
 
     double_vec tmp(3);
     tmp[0] = var.time;
     tmp[1] = var.compensation_pressure;
     tmp[2] = var.bottom_temperature;
     bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
+#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
@@ -319,8 +331,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
 
-    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+        bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
         (*ms)->write_chkpt_file(bin);
+    }
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif

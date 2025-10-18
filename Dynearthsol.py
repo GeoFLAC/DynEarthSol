@@ -33,13 +33,13 @@ class Dynearthsol:
             if os.path.isfile(filename):
                 self.format = 'binary'
             else:
-                filename += '.h5'
+                filename += '.vtkhdf'
                 self.format = 'hdf5'
             return filename
         elif self.format == 'binary':
             return filename
         elif self.format == 'hdf5':
-            return filename + '.h5'
+            return filename + '.vtkhdf'
 
     def read_header(self, frame):
         self._header_frame = frame
