@@ -910,7 +910,7 @@ void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
         bin_save.read_array(*_distance, (_name + ".distance").c_str());
         bin_save.read_array(*_slope, (_name + ".slope").c_str());
 
-        bin_chkpt.read_array(*_slope, (_name + ".genesis").c_str());
+        bin_chkpt.read_array(*_genesis, (_name + ".genesis").c_str());
     }
 }
 
