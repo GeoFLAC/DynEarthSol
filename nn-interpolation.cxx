@@ -159,10 +159,13 @@ namespace {
         array_t queries(elems_per_block*nsample);
 
         conn_t *ptr_conn;
+        int nnode_cell;
         if (is_surface) {
             ptr_conn = var.connectivity_surface;
+            nnode_cell = NODES_PER_FACET;
         } else {
             ptr_conn = var.connectivity;
+            nnode_cell = NODES_PER_ELEM;
         }
 
         for (int b=0; b<nblocks; b++) {
@@ -175,7 +178,7 @@ namespace {
             queries.resize((end-start) * nsample);
 
 #ifndef ACC
-            #pragma omp parallel for default(none) shared(var, ptr_conn, start, end, \
+            #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
             #pragma acc parallel loop
@@ -188,7 +191,7 @@ namespace {
                     double *x = queries[query_start*nsample + j];
                     for (int d=0; d<NDIMS; d++) {
                         x[d] = 0;
-                        for (int n=0; n<NODES_PER_FACET; n++)
+                        for (int n=0; n<nnode_cell; n++)
                             x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
                     }
                 }
