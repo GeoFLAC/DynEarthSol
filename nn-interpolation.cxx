@@ -79,17 +79,12 @@ namespace {
 #ifdef USE_NPROF
         nvtxRangePushA(__FUNCTION__);
 #endif
-        const int neta0 = 10; // larger neta0, more accurate mapping
+        const int neta0 = is_surface ? 20 : 10; // larger neta0, more accurate mapping
         const int neta1 = neta0 + 1; // different from neta0 to prevent the temporary point falling the edge of elements
         const int neta2 = neta0;
         const double spacing0 = 1.0 / neta0;
         const double spacing1 = 1.0 / neta1;
         const double spacing2 = 1.0 / neta2;
-
-        const int neta0_surf = 20; // larger neta0, more accurate mapping
-        const int neta1_surf = neta0_surf + 1; // different from neta0 to prevent the temporary point falling the edge of elements
-        const double spacing0_surf = 1.0 / neta0_surf;
-        const double spacing1_surf = 1.0 / neta1_surf;
 
         const int max_el = std::min(32, old_nelem);
         const double eps = 1e-15;
@@ -102,15 +97,15 @@ namespace {
 
         double_vec2D sample_eta;
         if (is_surface) {
-            for (int i=0; i<neta0_surf; i++) {
+            for (int i=0; i<neta0; i++) {
 #ifdef THREED
-                for (int j=0; j<neta1_surf; j++) {
-                    double eta[3] = {(i + 0.5) * spacing0_surf,
-                                    (j + 0.5) * spacing1_surf,
-                                    1 - (i + 0.5) * spacing0_surf - (j + 0.5) * spacing1_surf};
+                for (int j=0; j<neta1; j++) {
+                    double eta[3] = {(i + 0.5) * spacing0,
+                                    (j + 0.5) * spacing1,
+                                    1 - (i + 0.5) * spacing0 - (j + 0.5) * spacing1};
 #else
-                    double eta[2] = {(i + 0.5) * spacing0_surf,
-                                    1 - (i + 0.5) * spacing0_surf};
+                    double eta[2] = {(i + 0.5) * spacing0,
+                                    1 - (i + 0.5) * spacing0};
 #endif
                     if (eta[NODES_PER_FACET-1] < eps) continue;
 
