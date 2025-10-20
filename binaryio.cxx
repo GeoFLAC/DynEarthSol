@@ -346,7 +346,7 @@ void HDF5Output::write_header()
     write_attribute(NDIMS, "ndims", h5_file);
     write_attribute(3, "revision", h5_file);
 
-    create_group_with_order(h5_file, "VTKHDF");
+    create_group_with_order(h5_file, "/VTKHDF");
     Group vtkgrp = h5_file.openGroup("/VTKHDF");
 
     std::string vtkhdf_type = "PartitionedDataSetCollection";
@@ -355,7 +355,7 @@ void HDF5Output::write_header()
     int_vec version = {2, 1};
     write_attribute(version, "Version", 2, vtkgrp);
 
-    create_group_with_order(h5_file, "VTKHDF/Assembly");
+    create_group_with_order(h5_file, "/VTKHDF/Assembly");
 }
 
 void HDF5Output::write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms)
@@ -381,6 +381,8 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
     add_soft_link(h5_file, "/VTKHDF/Assembly/"+base, base, block_path);
 
     if (base == "grid") {
+        create_group_with_order(h5_file, "/VTKHDF/"+base+"/FieldData");
+
         kind = "grid";
         link_idx = 0;
         cell_type = NDIMS == 3 ? 10 : 5; // VTK_TETRA=10, VTK_TRIANGLE=5
@@ -476,6 +478,26 @@ struct H5TypeMap<std::string> {
     static StrType type() { return StrType(PredType::C_S1, H5T_VARIABLE); }
 };
 
+template<typename T>
+void HDF5Output::write_fieldData(const T& A, const std::string& name)
+{
+    std::string full_name = "/VTKHDF/" + block_base + "/FieldData/" + name;
+    PredType dtype = H5TypeMap<T>::type();
+    hsize_t one = 1;
+    DataSpace ps = DataSpace(1, &one);
+    DataSet ds_np = h5_file.createDataSet(full_name, dtype, ps);
+    ds_np.write(&A, dtype);
+    create_virtual_dataset(full_name, name, ps, dtype);
+}
+
+template
+void HDF5Output::write_fieldData<int>(const int& A, const std::string& name);
+template
+void HDF5Output::write_fieldData<double>(const double& A, const std::string& name);
+template
+void HDF5Output::write_fieldData<long>(const long& A, const std::string& name);
+
+
 // scalear
 template<typename T>
 void HDF5Output::write_attribute(const T& A, const std::string& name, Group& vtkgrpBlock)
@@ -525,20 +547,28 @@ void HDF5Output::write_scaler(const T &A, const std::string& name)
     if (name == "NumberOfConnectivityIds") return;
 
     std::string vis_name = name;
+    bool is_field = false;
     if (kind == "marker") {
         if (name == "NumberOfPoints") {
             vis_name = block_base + ".nmarkers";
+            is_field = true;
         } else if (name == "NumberOfCells") {
             return;
         }
     } else if (kind == "grid") {
         if (name == "NumberOfPoints") {
             vis_name = "nnode";
+            is_field = true;
         } else if (name == "NumberOfCells") {
             vis_name = "nelem";
+            is_field = true;
         }
     }
     create_virtual_dataset(full_name, vis_name, ps, dtype);
+    if (is_field) {
+        vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
+        create_virtual_dataset(full_name, vis_name, ps, dtype);
+    }
 }
 
 template

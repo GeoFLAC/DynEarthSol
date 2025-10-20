@@ -78,6 +78,9 @@ public:
     HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt=false);
     ~HDF5Output();
 
+    template<typename T>
+    void write_fieldData(const T& A, const std::string& name);
+
     template <typename T>
     void write_scaler(const T& A, const std::string& name);
 

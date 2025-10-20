@@ -86,6 +86,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     HDF5Output bin(filename, hdf5_compression_level);
 
     bin.write_block_metadata(var, "grid");
+    bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
+    bin.write_fieldData(var.steps, "steps");
+    bin.write_fieldData(double(get_nanoseconds() - start_time) * 1e-9, "walltime_sec");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
