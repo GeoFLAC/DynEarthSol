@@ -38,11 +38,9 @@ Output::~Output()
 
 void Output::write_info(const Variables& var, double dt)
 {
-    double run_time = (get_nanoseconds() - start_time) * 1e-9;
-
     char buffer[256];
     std::snprintf(buffer, 255, "%6d\t%10d\t%12.6e\t%12.4e\t%12.6e\t%8d\t%8d\t%8d\n",
-                  frame, var.steps, var.time, dt, run_time,
+                  frame, var.steps, var.time, dt, run_time_ns*1e-9,
                   var.nnode, var.nelem, var.nseg);
 
     std::string filename(modelname + ".info");
@@ -73,6 +71,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    run_time_ns = get_nanoseconds() - start_time;
+
     double dt = var.dt;
     double inv_dt = 0; // only used when is_averaged
     if (!disable_averaging && is_averaged) {
@@ -88,7 +88,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_block_metadata(var, "grid");
     bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
     bin.write_fieldData(var.steps, "steps");
-    bin.write_fieldData(double(get_nanoseconds() - start_time) * 1e-9, "walltime_sec");
+    bin.write_fieldData(double(run_time_ns) * 1e-9, "walltime_sec");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
@@ -206,8 +206,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     write_info(var, dt);
 
-    int64_t duration_ns = get_nanoseconds() - start_time;
-
     if(dt / YEAR2SEC > 0.001)
     {
         std::cout << "  Output # " << frame
@@ -216,7 +214,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt / YEAR2SEC << " yr"
               << ", wt = ";
-        print_time_ns(duration_ns);
+        print_time_ns(run_time_ns);
         std::cout << "\n";
     }
     else
@@ -227,7 +225,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt<< " sec"
               << ", wt = ";
-        print_time_ns(duration_ns);
+        print_time_ns(run_time_ns);
         std::cout << "\n";
     }
 

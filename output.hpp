@@ -13,6 +13,7 @@ private:
     const bool has_marker_output;
     const int hdf5_compression_level;
     int frame;
+    int64_t run_time_ns;
 
     // stuffs for averging fields
     double time0;
