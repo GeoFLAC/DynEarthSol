@@ -631,19 +631,13 @@ int main(int argc, const char* argv[])
                         if (quality_is_bad) {
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
                                 output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
 
-                            int64_t time_tmp = get_nanoseconds();
                             remesh(param, var, quality_is_bad);
-                            var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
                                 output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
                             }
                         }
                     }
@@ -701,9 +695,7 @@ int main(int argc, const char* argv[])
             //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
             //     output.write_checkpoint(param, var);
 
-            // int64_t time_tmp = get_nanoseconds();
             // output.write(var);
-            // var.func_time.output_time += get_nanoseconds() - time_tmp;
 
             // next_regular_frame ++;
             // starting_step = var.steps; starting_time = var.time;
@@ -728,9 +720,7 @@ int main(int argc, const char* argv[])
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     output.write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
                 output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
                 next_regular_frame ++;
             }
@@ -752,9 +742,7 @@ int main(int argc, const char* argv[])
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     output.write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
                 output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
 
                 next_regular_frame ++;
             }
@@ -768,19 +756,13 @@ int main(int argc, const char* argv[])
                 if (quality_is_bad) {
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
                         output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
 
-                    int64_t time_tmp = get_nanoseconds();
                     remesh(param, var, quality_is_bad);
-                    var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
                         output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
                     }
                 }
             }

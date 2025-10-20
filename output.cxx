@@ -237,18 +237,26 @@ void Output::_write(const Variables& var, bool disable_averaging)
 }
 
 
-void Output::write(const Variables& var)
+void Output::write(Variables& var)
 {
+    int64_t time_tmp = get_nanoseconds();
+
     _write(var);
+
+    var.func_time.output_time += get_nanoseconds() - time_tmp;
 }
 
 
-void Output::write_exact(const Variables& var)
+void Output::write_exact(Variables& var)
 {
+    int64_t time_tmp = get_nanoseconds();
+
     _write(var, true);
     // check for NaN in var
     check_nan(var);
     (var.markersets)[0]->check_marker_elem_consistency(var);
+
+    var.func_time.output_time += get_nanoseconds() - time_tmp;
 }
 
 

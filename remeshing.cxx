@@ -2770,6 +2770,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
+    int64_t time_tmp = get_nanoseconds();
+
     std::cout << "  Remeshing starts...\n";
 
     double_vec old_surface_area(var.surfinfo.etop);
@@ -2978,6 +2980,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     }
 
     std::cout << "  Remeshing finished.\n";
+
+    var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif
