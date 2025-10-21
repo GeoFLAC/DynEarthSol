@@ -511,6 +511,8 @@ struct Variables {
     double dt_PT;
     double l2_residual;
     int steps;
+    int nremesh;
+    int noutput;
     Time func_time;
     Output *output;
 

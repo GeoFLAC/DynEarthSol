@@ -243,6 +243,7 @@ void Output::write(Variables& var)
 
     _write(var);
 
+    var.noutput += 1;
     var.func_time.output_time += get_nanoseconds() - time_tmp;
 }
 
@@ -256,6 +257,7 @@ void Output::write_exact(Variables& var)
     check_nan(var);
     (var.markersets)[0]->check_marker_elem_consistency(var);
 
+    var.noutput += 1;
     var.func_time.output_time += get_nanoseconds() - time_tmp;
 }
 
