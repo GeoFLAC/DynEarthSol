@@ -353,6 +353,8 @@ void restart(const Param& param, Variables& var)
 
 
 void end(Variables& var) {
+    delete var.output;
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.bfacets[i]->size() == 0) continue;
         for (int j=i+1; j<nbdrytypes; j++)
@@ -518,7 +520,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-    Output output(param, var.func_time.start_time,
+    var.output = new Output(param, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
@@ -529,7 +531,7 @@ int main(int argc, const char* argv[])
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
-            output.write_checkpoint(param, var);
+            var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
@@ -537,7 +539,7 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+    var.output->write_exact(var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -631,13 +633,13 @@ int main(int argc, const char* argv[])
                         if (quality_is_bad) {
 
                             if (param.sim.has_output_during_remeshing) {
-                                output.write_exact(var);
+                                var.output->write_exact(var);
                             }
 
                             remesh(param, var, quality_is_bad);
 
                             if (param.sim.has_output_during_remeshing) {
-                                output.write_exact(var);
+                                var.output->write_exact(var);
                             }
                         }
                     }
@@ -681,7 +683,7 @@ int main(int argc, const char* argv[])
         #pragma acc wait
 
         if (param.sim.is_outputting_averaged_fields)
-            output.average_fields(var);
+            var.output->average_fields(var);
         
         int r = 1;
         if (param.control.has_ATS) {
@@ -718,9 +720,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                output.write(var);
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -740,9 +742,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                output.write(var);
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -756,13 +758,13 @@ int main(int argc, const char* argv[])
                 if (quality_is_bad) {
 
                     if (param.sim.has_output_during_remeshing) {
-                        output.write_exact(var);
+                        var.output->write_exact(var);
                     }
 
                     remesh(param, var, quality_is_bad);
 
                     if (param.sim.has_output_during_remeshing) {
-                        output.write_exact(var);
+                        var.output->write_exact(var);
                     }
                 }
             }

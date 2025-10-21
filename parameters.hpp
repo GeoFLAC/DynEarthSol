@@ -43,6 +43,8 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
+class Output;
+
 struct neighbor {
     int idx;
     double dist2;
@@ -510,6 +512,7 @@ struct Variables {
     double l2_residual;
     int steps;
     Time func_time;
+    Output *output;
 
     int nnode;
     int nelem;

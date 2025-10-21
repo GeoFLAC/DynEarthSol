@@ -259,6 +259,14 @@ void Output::write_exact(Variables& var)
     var.func_time.output_time += get_nanoseconds() - time_tmp;
 }
 
+void Output::write_exact_error(const Variables& var)
+{
+    _write(var, true);
+    // check for NaN in var
+    check_nan(var);
+    (var.markersets)[0]->check_marker_elem_consistency(var);
+}
+
 
 void Output::average_fields(Variables& var)
 {

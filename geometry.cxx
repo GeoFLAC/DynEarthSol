@@ -9,7 +9,7 @@
 #include "geometry.hpp"
 #include "bc.hpp"
 #include "mesh.hpp"
-
+#include "output.hpp"
 
 /* Given two points, returns the distance^2 */
 double dist2(const double* a, const double* b)
@@ -540,6 +540,7 @@ double compute_dt(const Param& param, Variables& var)
     if (dt <= 0) {
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
+        var.output->write_exact_error(var);
         std::exit(11);
     }
     
@@ -635,6 +636,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
     }
     if (dt <= 0) {
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
+        var.output->write_exact_error(var);
         std::exit(11);
     }
 #ifdef USE_NPROF

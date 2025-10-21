@@ -30,6 +30,7 @@ public:
     ~Output();
     void write(Variables& var);
     void write_exact(Variables& var);
+    void write_exact_error(const Variables& var);
     void write_checkpoint(const Param& param, const Variables& var);
     void average_fields(Variables& var);
 
