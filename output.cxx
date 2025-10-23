@@ -244,7 +244,9 @@ void Output::write(Variables& var)
     _write(var);
 
     var.noutput += 1;
-    var.func_time.output_time += get_nanoseconds() - time_tmp;
+    int64_t now_ns = get_nanoseconds();
+    var.func_time.output_time += now_ns - time_tmp;
+    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 
@@ -258,7 +260,9 @@ void Output::write_exact(Variables& var)
     (var.markersets)[0]->check_marker_elem_consistency(var);
 
     var.noutput += 1;
-    var.func_time.output_time += get_nanoseconds() - time_tmp;
+    int64_t now_ns = get_nanoseconds();
+    var.func_time.output_time += now_ns - time_tmp;
+    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 void Output::write_exact_error(const Variables& var)

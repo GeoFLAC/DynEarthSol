@@ -42,6 +42,9 @@ static void declare_parameters(po::options_description &cfg,
          "Output step interval")
         ("sim.output_time_interval_in_yr", po::value<double>(&p.sim.output_time_interval_in_yr),
          "Output time interval (in years)")
+        ("sim.show_information_interval_in_sec", po::value<int>(&p.sim.show_information_interval_in_sec)->default_value(0),
+         "Output time interval for showing simulation information on screen (in seconds). \n"
+         "0: no time-based output on screen")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")
