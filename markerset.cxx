@@ -351,15 +351,14 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
             int inc = 0;
             remap_marker(var, mcoord, e, elem_dest, eta0, inc);
 
-            char buffer[200];
-            sprintf(buffer, "  A generated marker (mat=%d) in element %7d is trying to remap in elements ",
-                    mattype, e);
-            std::string msg(buffer);
-
-            if (inc) {
-                msg += "... Success!\n";
-                printf("%s", msg.c_str());
-            } else {
+            if (!inc) {
+                // msg += "... Success!\n";
+                // printf("%s", msg.c_str());
+            // } else {
+                char buffer[200];
+                sprintf(buffer, "  A generated marker (mat=%d) in element %7d is trying to remap in elements ",
+                        mattype, e);
+                std::string msg(buffer);
                 printf("%s", msg.c_str());
                 printf("... Surface marker generated fail!\n Coordinate: ");
                 for (int j=0; j<NDIMS; j++) printf(" %f", mcoord[j]);
@@ -1608,14 +1607,14 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                 unplenished_elems.emplace_back(e, nmarkers);
         }
 
-        if (unplenished_elems.size() > 0) {
-            printf("replenish markers in %d elements.\n", (int)unplenished_elems.size());
-            for (int i=0; i<(int)unplenished_elems.size(); i++) {
-                int e = unplenished_elems[i].first;
-                int nmarkers = unplenished_elems[i].second;
-                printf("  Element %d has %d markers.\n", e, nmarkers);
-            }
-        }
+        // if (unplenished_elems.size() > 0) {
+        //     printf("replenish markers in %d elements.\n", (int)unplenished_elems.size());
+        //     for (int i=0; i<(int)unplenished_elems.size(); i++) {
+        //         int e = unplenished_elems[i].first;
+        //         int nmarkers = unplenished_elems[i].second;
+        //         printf("  Element %d has %d markers.\n", e, nmarkers);
+        //     }
+        // }
 
         switch (param.markers.replenishment_option) {
         case 0:
