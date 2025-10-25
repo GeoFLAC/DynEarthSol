@@ -2846,6 +2846,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }        
 #endif
 #endif
+        reallocate_tmp(param, var);
+
         if (param.mesh.meshing_elem_shape == 0) {
             // renumbering mesh
             renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
