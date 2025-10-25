@@ -2,6 +2,7 @@
 #define DYNEARTHSOL3D_FIELDS_HPP
 
 void allocate_variables(const Param &param, Variables& var);
+void reallocate_tmp(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);
 void update_temperature(const Param &param, const Variables &var,
     double_vec &temperature, elem_cache& tmp_result);

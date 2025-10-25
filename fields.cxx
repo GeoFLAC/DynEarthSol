@@ -79,6 +79,23 @@ void allocate_variables(const Param &param, Variables& var)
 }
 
 
+void reallocate_tmp(const Param& param, Variables& var)
+{
+    const int n = var.nnode;
+    const int e = var.nelem;
+
+    delete var.ntmp;
+    var.ntmp = new double_vec(n);
+
+    delete var.tmp_result;
+    var.tmp_result = new elem_cache(e);
+    delete var.etmp;
+    var.etmp = new double_vec(e);
+    delete var.etmp_int;
+    var.etmp_int = new int_vec(e);
+}
+
+
 void reallocate_variables(const Param& param, Variables& var)
 {
     const int n = var.nnode;
@@ -104,11 +121,7 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.edvoldt;
     var.edvoldt = new double_vec(e);
 
-//    delete var.marker_in_elem;
-//    var.marker_in_elem = new int_vec2D(e);
 
-    delete var.ntmp;
-    var.ntmp = new double_vec(n);
     delete var.dpressure;
     var.dpressure = new double_vec(e, 0);
     delete var.viscosity;
@@ -133,13 +146,6 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.mat;
     var.mat = new MatProps(param, var);
-
-    delete var.tmp_result;
-    var.tmp_result = new elem_cache(e);
-    delete var.etmp;
-    var.etmp = new double_vec(e);
-    delete var.etmp_int;
-    var.etmp_int = new int_vec(e);
 
 }
 
