@@ -2851,6 +2851,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
         }
 
+        create_boundary_flags(var);
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
         create_boundary_facets(var);
@@ -2890,7 +2891,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     reallocate_variables(param, var);
 
     // updating other arrays
-    create_boundary_flags(var);
     for (int i=0; i<nbdrytypes; ++i)
         var.bnodes[i]->clear();
     create_boundary_nodes(var);
