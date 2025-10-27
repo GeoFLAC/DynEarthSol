@@ -70,7 +70,7 @@ alike.
     * set `hdf5 = 1`.
     * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory
     * set `HDF5_LIB_DIR` to the HDF5 library
-    * Install python HDF5 lib for vtk visulization by `pip install h5py`.
+    * Install python HDF5 lib for vtk visualization by `pip install h5py`.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is

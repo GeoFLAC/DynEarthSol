@@ -299,7 +299,7 @@ void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::si
 #else
 
 HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt)
-    : h5_file(filename, H5F_ACC_TRUNC), compression_level(hdf5_compression_level), is_chechkpoint(is_chkpt)
+    : h5_file(filename, H5F_ACC_TRUNC), compression_level(hdf5_compression_level), is_checkpoint(is_chkpt)
 {
     write_header();
 }
@@ -391,7 +391,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nnode = var.nnode;
         nelem = var.nelem;
 
-        if (!is_chechkpoint) {
+        if (!is_checkpoint) {
             write_array(*var.coord, "Points",  nnode);
 
             int* conn_ptr = var.connectivity->data();
@@ -410,7 +410,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nnode = ms->get_nmarkers();
         nelem = nnode;
 
-        if (!is_chechkpoint) {
+        if (!is_checkpoint) {
             array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
             write_array(*mcoord, "Points",  nnode);
             delete mcoord;
@@ -424,7 +424,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         }
     }
 
-    if (!is_chechkpoint) {
+    if (!is_checkpoint) {
         int_vec offset(nelem+1);
         for (int i=0; i<nelem+1; ++i) offset[i] = nnode_cell*i;
         write_array(offset, "Offsets",  nelem+1);

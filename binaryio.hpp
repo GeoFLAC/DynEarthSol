@@ -69,7 +69,7 @@ private:
     const int compression_level;
     long nnode = 0, nelem = 0, nseg = 0, etop = 0, nnode_cell = 0;
     bool has_metadata = false;
-    const bool is_chechkpoint;
+    const bool is_checkpoint;
     std::string kind, block_base;
 
     void write_header();
