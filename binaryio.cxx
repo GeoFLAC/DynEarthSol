@@ -233,11 +233,11 @@ void BinaryInput::seek_to_array(const char *name)
 
 
 template <typename T>
-void BinaryInput::read_array(std::vector<T>& A, const char *name)
+void BinaryInput::read_array(std::vector<T>& A, const char *name, std::size_t size)
 {
     /* The caller must ensure A is of right size to hold the array */
 
-    int size = A.size();
+    size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
         std::exit(1);
@@ -254,11 +254,11 @@ void BinaryInput::read_array(std::vector<T>& A, const char *name)
 
 
 template <typename T, int N>
-void BinaryInput::read_array(Array2D<T,N>& A, const char *name)
+void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
 {
     /* The caller must ensure A is of right size to hold the array */
 
-    int size = A.size();
+    size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
         std::exit(1);
@@ -276,25 +276,25 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name)
 
 // explicit instantiation
 template
-void BinaryInput::read_array<double>(double_vec& A, const char *name);
+void BinaryInput::read_array<double>(double_vec& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<int>(int_vec& A, const char *name);
+void BinaryInput::read_array<int>(int_vec& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
+void BinaryInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name);
+void BinaryInput::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name, std::size_t size);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void BinaryInput::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name);
+void BinaryInput::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t size);
 #endif
 template
-void BinaryInput::read_array<double,1>(Array2D<double,1>& A, const char *name);
+void BinaryInput::read_array<double,1>(Array2D<double,1>& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name);
+void BinaryInput::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name);
+void BinaryInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t size);
 template
-void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name);
+void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::size_t size);
 
 #else
 
@@ -845,9 +845,9 @@ template
 void HDF5Input::read_scaler<double>(double& A, const std::string& name);
 
 template <typename T>
-void HDF5Input::read_array(std::vector<T>& A, const char *name)
+void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size)
 {
-    std::size_t size = A.size();
+    size = size > 0 ? size : A.size();
     if (size == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
         std::exit(1);
@@ -903,11 +903,11 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name)
 
 
 template <typename T, int N>
-void HDF5Input::read_array(Array2D<T,N>& A, const char *name)
+void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
 {
     /* The caller must ensure A is of right size to hold the array */
 
-    int size = A.size();
+    size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
         std::exit(1);
@@ -961,24 +961,24 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name)
 
 // explicit instantiation
 template
-void HDF5Input::read_array<double>(double_vec& A, const char *name);
+void HDF5Input::read_array<double>(double_vec& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<int>(int_vec& A, const char *name);
+void HDF5Input::read_array<int>(int_vec& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name);
+void HDF5Input::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name);
+void HDF5Input::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name, std::size_t size);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void HDF5Input::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name);
+void HDF5Input::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t size);
 #endif
 template
-void HDF5Input::read_array<double,1>(Array2D<double,1>& A, const char *name);
+void HDF5Input::read_array<double,1>(Array2D<double,1>& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name);
+void HDF5Input::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name);
+void HDF5Input::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t size);
 template
-void HDF5Input::read_array<int,1>(Array2D<int,1>& A, const char *name);
+void HDF5Input::read_array<int,1>(Array2D<int,1>& A, const char *name, std::size_t size);
 
 #endif

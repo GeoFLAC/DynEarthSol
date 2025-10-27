@@ -52,10 +52,10 @@ public:
     ~BinaryInput();
 
     template <typename T>
-    void read_array(std::vector<T>& A, const char *name);
+    void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
     template <typename T, int N>
-    void read_array(Array2D<T,N>& A, const char *name);
+    void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
 };
 
 #else
@@ -117,10 +117,10 @@ public:
     void read_scaler(T& A, const std::string& name);
 
     template <typename T>
-    void read_array(std::vector<T>& A, const char *name);
+    void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
     template <typename T, int N>
-    void read_array(Array2D<T,N>& A, const char *name);
+    void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
 };
 
 #endif // HDF5

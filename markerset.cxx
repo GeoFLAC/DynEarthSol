@@ -878,10 +878,12 @@ void MarkerSet::write_chkpt_file(T &bin) const
 {
 #ifdef HDF5
     bin.write_scaler(_last_id, _name + ".last_id");
+    bin.write_scaler(_reserved_space, _name + ".reserved_space");
 #else
-    int_vec itmp(2);
+    int_vec itmp(3);
     itmp[0] = _nmarkers;
     itmp[1] = _last_id;
+    itmp[2] = _reserved_space;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
 #endif
     bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
@@ -901,25 +903,27 @@ void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 #ifdef HDF5
     bin_save.read_scaler(_nmarkers, _name + ".nmarkers");
     bin_chkpt.read_scaler(_last_id, _name + ".last_id");
+    bin_chkpt.read_scaler(_reserved_space, _name + ".reserved_space");
 #else
-    int_vec itmp(2);
+    int_vec itmp(3);
     bin_chkpt.read_array(itmp, (_name + " size").c_str());
     _nmarkers = itmp[0];
     _last_id = itmp[1];
+    _reserved_space = itmp[2];
 #endif
-    allocate_markerdata(_nmarkers);
+    allocate_markerdata(_reserved_space);
 
     if (_nmarkers != 0) {
-        bin_save.read_array(*_eta, (_name + ".eta").c_str());
-        bin_save.read_array(*_elem, (_name + ".elem").c_str());
-        bin_save.read_array(*_mattype, (_name + ".mattype").c_str());
-        bin_save.read_array(*_id, (_name + ".id").c_str());
-        bin_save.read_array(*_time, (_name + ".time").c_str());
-        bin_save.read_array(*_z, (_name + ".z").c_str());
-        bin_save.read_array(*_distance, (_name + ".distance").c_str());
-        bin_save.read_array(*_slope, (_name + ".slope").c_str());
+        bin_save.read_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
+        bin_save.read_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
+        bin_save.read_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
+        bin_save.read_array(*_id, (_name + ".id").c_str(), _nmarkers);
+        bin_save.read_array(*_time, (_name + ".time").c_str(), _nmarkers);
+        bin_save.read_array(*_z, (_name + ".z").c_str(), _nmarkers);
+        bin_save.read_array(*_distance, (_name + ".distance").c_str(), _nmarkers);
+        bin_save.read_array(*_slope, (_name + ".slope").c_str(), _nmarkers);
 
-        bin_chkpt.read_array(*_genesis, (_name + ".genesis").c_str());
+        bin_chkpt.read_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
     }
 }
 
