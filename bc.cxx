@@ -17,14 +17,14 @@
 namespace {
 
 #pragma acc routine seq
-void normal_vector_of_facet(const double **coord, double *normal, double &zcenter)
+void normal_vector_of_facet(const double **facet_coord, double *normal, double &zcenter)
 {
 #ifdef THREED
     // vectors: n0-n1 and n0-n2
     double v01[NDIMS], v02[NDIMS];
     for (int i=0; i<NDIMS; ++i) {
-        v01[i] = coord[1][i] - coord[0][i];
-        v02[i] = coord[2][i] - coord[0][i];
+        v01[i] = facet_coord[1][i] - facet_coord[0][i];
+        v02[i] = facet_coord[2][i] - facet_coord[0][i];
     }
 
     // the outward normal vector is parallel to the cross product
@@ -33,19 +33,19 @@ void normal_vector_of_facet(const double **coord, double *normal, double &zcente
     normal[1] = (v01[2] * v02[0] - v01[0] * v02[2]) / 2;
     normal[2] = (v01[0] * v02[1] - v01[1] * v02[0]) / 2;
 
-    zcenter = (coord[0][2] + coord[1][2] + coord[2][2]) / NODES_PER_FACET;
+    zcenter = (facet_coord[0][2] + facet_coord[1][2] + facet_coord[2][2]) / NODES_PER_FACET;
 #else
     // the edge vector
     double v01[NDIMS];
     for (int i=0; i<NDIMS; ++i) {
-        v01[i] = coord[1][i] - coord[0][i];
+        v01[i] = facet_coord[1][i] - facet_coord[0][i];
     }
 
     // the normal vector to the edge, pointing outward
     normal[0] = v01[1];
     normal[1] = -v01[0];
 
-    zcenter = (coord[0][1] + coord[1][1]) / NODES_PER_FACET;
+    zcenter = (facet_coord[0][1] + facet_coord[1][1]) / NODES_PER_FACET;
 #endif
 }
 
@@ -113,11 +113,11 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
             int f = j->second;
             double tmp;
 
-            const double *coord[NODES_PER_FACET];
+            const double *facet_coord[NODES_PER_FACET];
             for (int k=0; k<NODES_PER_FACET; ++k)
-                coord[k] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+                facet_coord[k] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
 
-            normal_vector_of_facet(coord, normal, tmp);
+            normal_vector_of_facet(facet_coord, normal, tmp);
 
             // make an unit vector
             double len = 0;
@@ -1173,11 +1173,11 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 // the z-coordinate of the facet center
                 double zcenter;
 
-                const double *coord[NODES_PER_FACET];
+                const double *facet_coord[NODES_PER_FACET];
                 for (int j=0; j<NODES_PER_FACET; ++j)
-                    coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
+                    facet_coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
 
-                normal_vector_of_facet(coord, normal, zcenter);
+                normal_vector_of_facet(facet_coord, normal, zcenter);
 
                 double p;
                 if (i==iboundz0 && param.bc.has_winkler_foundation) {
@@ -1301,11 +1301,11 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         double normal[NDIMS] = {0.0}; 
         double zcenter = 0.0;
 
-        const double *coord[NODES_PER_FACET];
+        const double *facet_coord[NODES_PER_FACET];
         for (int j=0; j<NODES_PER_FACET; ++j)
-            coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
+            facet_coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
 
-        normal_vector_of_facet(coord, normal, zcenter);
+        normal_vector_of_facet(facet_coord, normal, zcenter);
 
         double traction[NDIMS] = {0.0};
 
