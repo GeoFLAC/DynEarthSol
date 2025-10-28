@@ -309,9 +309,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 
     bin.write_block_metadata(var, "grid");
 
-    bin.write_scaler(var.time, "time");
-    bin.write_scaler(var.compensation_pressure, "compensation_pressure");
-    bin.write_scaler(var.bottom_temperature, "bottom_temperature");
+    bin.write_scalar(var.time, "time");
+    bin.write_scalar(var.compensation_pressure, "compensation_pressure");
+    bin.write_scalar(var.bottom_temperature, "bottom_temperature");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);

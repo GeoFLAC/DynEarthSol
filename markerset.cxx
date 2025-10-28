@@ -877,8 +877,8 @@ template <class T>
 void MarkerSet::write_chkpt_file(T &bin) const
 {
 #ifdef HDF5
-    bin.write_scaler(_last_id, _name + ".last_id");
-    bin.write_scaler(_reserved_space, _name + ".reserved_space");
+    bin.write_scalar(_last_id, _name + ".last_id");
+    bin.write_scalar(_reserved_space, _name + ".reserved_space");
 #else
     int_vec itmp(3);
     itmp[0] = _nmarkers;

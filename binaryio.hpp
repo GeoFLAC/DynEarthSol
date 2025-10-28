@@ -82,7 +82,7 @@ public:
     void write_fieldData(const T& A, const std::string& name);
 
     template <typename T>
-    void write_scaler(const T& A, const std::string& name);
+    void write_scalar(const T& A, const std::string& name);
 
     template <typename T>
     void write_array(const std::vector<T>& A, const char *name, hsize_t len);

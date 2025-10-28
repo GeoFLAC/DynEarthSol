@@ -432,9 +432,9 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         uchar_vec types(nelem, cell_type);
         write_array(types, "Types",  nelem);
 
-        write_scaler(nnode, "NumberOfPoints");
-        write_scaler(nelem, "NumberOfCells");
-        write_scaler(nelem * nnode_cell, "NumberOfConnectivityIds");
+        write_scalar(nnode, "NumberOfPoints");
+        write_scalar(nelem, "NumberOfCells");
+        write_scalar(nelem * nnode_cell, "NumberOfConnectivityIds");
     }
     write_attribute(link_idx, "Index", vtkgrpBlock);
     has_metadata = true;
@@ -533,7 +533,7 @@ void HDF5Output::write_attribute<int>(const int_vec& A, const std::string& name,
 
 // 1D array
 template<typename T>
-void HDF5Output::write_scaler(const T &A, const std::string& name)
+void HDF5Output::write_scalar(const T &A, const std::string& name)
 {
     std::string full_name = "/VTKHDF/" + block_base + "/" + name;
     PredType dtype = H5TypeMap<T>::type();
@@ -572,9 +572,9 @@ void HDF5Output::write_scaler(const T &A, const std::string& name)
 }
 
 template
-void HDF5Output::write_scaler<int>(const int& A, const std::string& name);
+void HDF5Output::write_scalar<int>(const int& A, const std::string& name);
 template
-void HDF5Output::write_scaler<double>(const double& A, const std::string& name);
+void HDF5Output::write_scalar<double>(const double& A, const std::string& name);
 
 // 1D array
 template<typename T>
