@@ -3,10 +3,13 @@
 
 #include <map>
 #ifdef HDF5
-#include <H5Cpp.h>
 #include "H5Lpublic.h"
 #include "H5Gpublic.h"
 #include "H5Ppublic.h"
+#include "H5Tpublic.h"
+#include "H5Fpublic.h"
+#include "H5Apublic.h"
+#include "H5Spublic.h"
 #endif
 #include "array2d.hpp"
 
@@ -60,12 +63,10 @@ public:
 
 #else
 
-using namespace H5;
-
 class HDF5Output
 {
 private:
-    H5File h5_file;
+    hid_t file_id = -1;
     const int compression_level;
     long nnode = 0, nelem = 0, nseg = 0, etop = 0, nnode_cell = 0;
     bool has_metadata = false;
@@ -91,21 +92,25 @@ public:
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len);
 
     template <typename T>
-    void write_attribute(const T& A, const std::string& name, Group& vtkgrpBlock);
+    void write_attribute(const T& A, const std::string& name, hid_t& vtkgrpBlock_id);
     template <typename T>
-    void write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, Group& vtkgrpBlock);
+    void write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id);
 
     void write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms = nullptr);
 
-    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype);
-    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype, hsize_t len);
-    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype, hsize_t len, int N);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N);
+
+    void add_soft_link(const std::string& assemblyNodePath, const std::string& linkName,
+                        const std::string& targetAbsPath);
+    hid_t create_group_with_order(const std::string& path);
 };
 
 class HDF5Input
 {
 private:
-    H5File h5_file;
+    hid_t file_id = -1;
 
     void read_header();
 

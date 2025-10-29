@@ -299,37 +299,45 @@ void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::si
 #else
 
 HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt)
-    : h5_file(filename, H5F_ACC_TRUNC), compression_level(hdf5_compression_level), is_checkpoint(is_chkpt)
+    : compression_level(hdf5_compression_level), is_checkpoint(is_chkpt)
 {
+    hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+    file_id = H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, fapl_id);
+    H5Pclose(fapl_id);
+
+    if (file_id < 0) {
+        throw std::runtime_error(std::string("H5Fcreate failed: ") + filename);
+    }
+
     write_header();
 }
 
 HDF5Output::~HDF5Output()
 {
-    // nothing to do
+    if (file_id >= 0) {
+        H5Fflush(file_id, H5F_SCOPE_GLOBAL);
+        H5Fclose(file_id);
+        file_id = -1;
+    }
 }
 
 // Create a group with link creation order tracking (required by VTKHDF Assembly trees)
-static Group create_group_with_order(H5File& file, const std::string& path) {
-    hid_t fid  = file.getId();
-    hid_t gcpl = H5Pcreate(H5P_GROUP_CREATE);
-    H5Pset_link_creation_order(gcpl, H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED);
+hid_t HDF5Output::create_group_with_order(const std::string& path) {
+    hid_t gcpl_id = H5Pcreate(H5P_GROUP_CREATE);
+    H5Pset_link_creation_order(gcpl_id, H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED);
 
-    hid_t gid  = H5Gcreate2(fid, path.c_str(), H5P_DEFAULT, gcpl, H5P_DEFAULT);
-    H5Pclose(gcpl);
+    hid_t gid  = H5Gcreate2(file_id, path.c_str(), H5P_DEFAULT, gcpl_id, H5P_DEFAULT);
+    H5Pclose(gcpl_id);
 
     if (gid < 0) throw std::runtime_error(std::string("H5Gcreate2 failed for ") + path);
-    H5::Group g(gid);
-    H5Gclose(gid);
-    return g;
+    return gid;
 }
 
 // Add a soft link named `linkName` under `assemblyNodePath` that points to `targetAbsPath`
-static void add_soft_link(H5File& file,
-                          const std::string& assemblyNodePath,
+void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
                           const std::string& linkName,
                           const std::string& targetAbsPath) {
-    hid_t gid = H5Gopen2(file.getId(), assemblyNodePath.c_str(), H5P_DEFAULT);
+    hid_t gid = H5Gopen2(file_id, assemblyNodePath.c_str(), H5P_DEFAULT);
     if (gid < 0) throw std::runtime_error(std::string("H5Gopen2 failed for ") + assemblyNodePath);
 
     herr_t status = H5Lcreate_soft(targetAbsPath.c_str(),
@@ -343,19 +351,20 @@ static void add_soft_link(H5File& file,
 
 void HDF5Output::write_header()
 {
-    write_attribute(NDIMS, "ndims", h5_file);
-    write_attribute(3, "revision", h5_file);
+    write_attribute(NDIMS, "ndims", file_id);
+    write_attribute(3, "revision", file_id);
 
-    create_group_with_order(h5_file, "/VTKHDF");
-    Group vtkgrp = h5_file.openGroup("/VTKHDF");
+    hid_t gid = create_group_with_order("/VTKHDF");
 
     std::string vtkhdf_type = "PartitionedDataSetCollection";
-    write_attribute(vtkhdf_type, "Type", vtkgrp);
+    write_attribute(vtkhdf_type, "Type", gid);
 
     int_vec version = {2, 1};
-    write_attribute(version, "Version", 2, vtkgrp);
+    write_attribute(version, "Version", 2, gid);
+    H5Gclose(gid);
 
-    create_group_with_order(h5_file, "/VTKHDF/Assembly");
+    gid = create_group_with_order("/VTKHDF/Assembly");
+    H5Gclose(gid);
 }
 
 void HDF5Output::write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms)
@@ -366,22 +375,25 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
     block_base = base;
     std::string block_path = "/VTKHDF/" + base;
 
-    create_group_with_order(h5_file, block_path);
-    Group vtkgrpBlock = h5_file.openGroup(block_path);
+    hid_t gid_block = create_group_with_order(block_path);
 
     std::string vtkhdf_type = "UnstructuredGrid";
-    write_attribute(vtkhdf_type, "Type", vtkgrpBlock);
+    write_attribute(vtkhdf_type, "Type", gid_block);
 
     int_vec version = {2, 1};
-    write_attribute(version, "Version", 2, vtkgrpBlock);
+    write_attribute(version, "Version", 2, gid_block);
     
-    create_group_with_order(h5_file, "/VTKHDF/"+base+"/PointData");
-    create_group_with_order(h5_file, "/VTKHDF/"+base+"/CellData");
-    create_group_with_order(h5_file, "/VTKHDF/Assembly/"+base);
-    add_soft_link(h5_file, "/VTKHDF/Assembly/"+base, base, block_path);
+    hid_t gid = create_group_with_order("/VTKHDF/"+base+"/PointData");
+    H5Gclose(gid);
+    gid = create_group_with_order("/VTKHDF/"+base+"/CellData");
+    H5Gclose(gid);
+    gid = create_group_with_order("/VTKHDF/Assembly/"+base);
+    H5Gclose(gid);
+    add_soft_link("/VTKHDF/Assembly/"+base, base, block_path);
 
     if (base == "grid") {
-        create_group_with_order(h5_file, "/VTKHDF/"+base+"/FieldData");
+        gid = create_group_with_order("/VTKHDF/"+base+"/FieldData");
+        H5Gclose(gid);
 
         kind = "grid";
         link_idx = 0;
@@ -436,58 +448,36 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         write_scalar(nelem, "NumberOfCells");
         write_scalar(nelem * nnode_cell, "NumberOfConnectivityIds");
     }
-    write_attribute(link_idx, "Index", vtkgrpBlock);
+    write_attribute(link_idx, "Index", gid_block);
+    H5Gclose(gid_block);
     has_metadata = true;
 }
 
-template<typename T>
-struct H5TypeMap;
-
-template<>
-struct H5TypeMap<int> {
-    static PredType type() { return PredType::NATIVE_INT; }
-};
-
-template<>
-struct H5TypeMap<unsigned int> {
-    static PredType type() { return PredType::NATIVE_UINT; }
-};
-
-template<>
-struct H5TypeMap<long> {
-    static PredType type() { return PredType::NATIVE_LONG; }
-};
-
-template<>
-struct H5TypeMap<float> {
-    static PredType type() { return PredType::NATIVE_FLOAT; }
-};
-
-template<>
-struct H5TypeMap<double> {
-    static PredType type() { return PredType::NATIVE_DOUBLE; }
-};
-
-template<>
-struct H5TypeMap<unsigned char> {
-    static PredType type() { return PredType::NATIVE_UCHAR; }
-};
-
-template<>
-struct H5TypeMap<std::string> {
-    static StrType type() { return StrType(PredType::C_S1, H5T_VARIABLE); }
-};
+template<typename T> struct H5Native;
+template<> struct H5Native<int>            { static hid_t id() { return H5T_NATIVE_INT; } };
+template<> struct H5Native<unsigned int>   { static hid_t id() { return H5T_NATIVE_UINT; } };
+template<> struct H5Native<long>           { static hid_t id() { return H5T_NATIVE_LONG; } };
+template<> struct H5Native<float>          { static hid_t id() { return H5T_NATIVE_FLOAT; } };
+template<> struct H5Native<double>         { static hid_t id() { return H5T_NATIVE_DOUBLE; } };
+template<> struct H5Native<unsigned char>  { static hid_t id() { return H5T_NATIVE_UCHAR; } };
+template<> struct H5Native<std::string>    { static hid_t id() { return H5T_C_S1; } };
 
 template<typename T>
 void HDF5Output::write_fieldData(const T& A, const std::string& name)
 {
     std::string full_name = "/VTKHDF/" + block_base + "/FieldData/" + name;
-    PredType dtype = H5TypeMap<T>::type();
+    hid_t dtype_id = H5Native<T>::id();
+
     hsize_t one = 1;
-    DataSpace ps = DataSpace(1, &one);
-    DataSet ds_np = h5_file.createDataSet(full_name, dtype, ps);
-    ds_np.write(&A, dtype);
-    create_virtual_dataset(full_name, name, ps, dtype);
+    hid_t space_id = H5Screate_simple(1, &one, nullptr);
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, &A);
+
+    create_virtual_dataset(full_name, name, space_id, dtype_id);
+
+    H5Dclose(dset_id);
+    H5Sclose(space_id);
 }
 
 template
@@ -500,49 +490,62 @@ void HDF5Output::write_fieldData<long>(const long& A, const std::string& name);
 
 // scalear
 template<typename T>
-void HDF5Output::write_attribute(const T& A, const std::string& name, Group& vtkgrpBlock)
+void HDF5Output::write_attribute(const T& A, const std::string& name, hid_t& vtkgrpBlock_id)
 {
-    auto dtype = H5TypeMap<T>::type();
-    DataSpace attrSpace = DataSpace(H5S_SCALAR);
-    Attribute attr = vtkgrpBlock.createAttribute(name, dtype, attrSpace);
-    attr.write(dtype, &A);
+    hid_t dtype = H5Native<T>::id();
+    hid_t dtype_id = dtype;
+    if (dtype == H5T_C_S1) {
+        // for string type, create a copy to avoid closing H5T_C_S1 later
+        hid_t str_t = H5Tcopy(H5T_C_S1);
+        H5Tset_size(str_t, H5T_VARIABLE);
+        dtype_id = str_t;
+    }
+
+
+    hid_t space_id = H5Screate(H5S_SCALAR);
+
+    hid_t attr_id = H5Acreate2(vtkgrpBlock_id, name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT);
+
+    H5Awrite(attr_id, dtype_id, &A);
+
+	H5Aclose(attr_id);
+	H5Sclose(space_id);
+    if (dtype == H5T_C_S1) H5Tclose(dtype_id);
 }
 
 // 1D array
 template<typename T>
-void HDF5Output::write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, Group& vtkgrpBlock)
+void HDF5Output::write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id)
 {
-    PredType dtype = H5TypeMap<T>::type();
-    hsize_t dims[1] = {len};
-    DataSpace attrSpace = DataSpace(1, dims);
-    Attribute attr = vtkgrpBlock.createAttribute(name, dtype, attrSpace);
-    attr.write(dtype, A.data());
+    hid_t dtype_id = H5Native<T>::id();
+
+    hid_t space_id = H5Screate_simple(1, &len, nullptr);
+    hid_t attr_id = H5Acreate2(vtkgrpBlock_id, name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT);
+    H5Awrite(attr_id, dtype_id, A.data());
+
+	H5Aclose(attr_id);
+	H5Sclose(space_id);
 }
 
 // explicit instantiation
-template
-void HDF5Output::write_attribute<int>(const int& A, const std::string& name, Group& vtkgrpBlock);
-template
-void HDF5Output::write_attribute<double>(const double& A, const std::string& name, Group& vtkgrpBlock);
-template
-void HDF5Output::write_attribute<uint>(const uint& A, const std::string& name, Group& vtkgrpBlock);
-template
-void HDF5Output::write_attribute<std::string>(const std::string& A, const std::string& name, Group& vtkgrpBlock);
-template
-void HDF5Output::write_attribute<int>(const int_vec& A, const std::string& name, hsize_t len, Group& vtkgrpBlock);
+template void HDF5Output::write_attribute<int>(const int& A, const std::string& name, hid_t& vtkgrpBlock_id);
+template void HDF5Output::write_attribute<double>(const double& A, const std::string& name, hid_t& vtkgrpBlock_id);
+template void HDF5Output::write_attribute<uint>(const uint& A, const std::string& name, hid_t& vtkgrpBlock_id);
+template void HDF5Output::write_attribute<std::string>(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id);
+template void HDF5Output::write_attribute<int>(const int_vec& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id);
 
 // 1D array
 template<typename T>
 void HDF5Output::write_scalar(const T &A, const std::string& name)
 {
     std::string full_name = "/VTKHDF/" + block_base + "/" + name;
-    PredType dtype = H5TypeMap<T>::type();
+    hid_t dtype_id = H5Native<T>::id();
 
     hsize_t one = 1;
-    DataSpace ps = DataSpace(1, &one);
-    DataSet ds_np = h5_file.createDataSet(full_name, dtype, ps);
+    hid_t space_id = H5Screate_simple(1, &one, nullptr);
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
-    ds_np.write(&A, dtype);
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, &A);
 
     if (name == "NumberOfConnectivityIds") return;
 
@@ -564,11 +567,13 @@ void HDF5Output::write_scalar(const T &A, const std::string& name)
             is_field = true;
         }
     }
-    create_virtual_dataset(full_name, vis_name, ps, dtype);
+    create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
     if (is_field) {
         vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
-        create_virtual_dataset(full_name, vis_name, ps, dtype);
+        create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
     }
+    H5Dclose(dset_id);
+    H5Sclose(space_id);
 }
 
 template
@@ -594,29 +599,32 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
     }
     std::string full_name = "/VTKHDF/" + block_base + "/" + mid + name;
 
-    hsize_t dims[1] = { len };
-    DataSpace dataspace(1, dims);
+    hid_t space_id = H5Screate_simple(1, &len, nullptr);
 
-    PredType dtype = H5TypeMap<T>::type();
+    hid_t dtype_id = H5Native<T>::id();
 
-    DSetCreatPropList prop;
+    hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
     hsize_t chunk_dim = (len < 1024 ? len : 1024);
-    prop.setChunk(1, &chunk_dim);
-    prop.setDeflate(compression_level);
-    prop.setShuffle();
+    H5Pset_chunk(dcpl_id, 1, &chunk_dim);
+    H5Pset_shuffle(dcpl_id);
+    H5Pset_deflate(dcpl_id, compression_level);
 
-    DataSet dataset = h5_file.createDataSet(full_name, dtype, dataspace, prop);
-    dataset.write(A.data(), dtype);
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
+                        H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
 
     if (std::string(name) == "Offsets" || std::string(name) == "Types") return;
     if (kind == "marker" && std::string(name) == "Connectivity") return;
 
     if (std::string(name) == "Connectivity") {
         int len2D = len / nnode_cell;
-        create_virtual_dataset(full_name, "connectivity", dataspace, dtype, len2D, nnode_cell);
+        create_virtual_dataset(full_name, "connectivity", space_id, dtype_id, len2D, nnode_cell);
     } else {
-        create_virtual_dataset(full_name, name, dataspace, dtype, len);
+        create_virtual_dataset(full_name, name, space_id, dtype_id, len);
     }
+    H5Dclose(dset_id);
+    H5Pclose(dcpl_id);
+    H5Sclose(space_id);
 }
 
 // 2D array
@@ -639,20 +647,21 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
     std::string full_name = "/VTKHDF/" + block_base + "/" + mid + name;
 
     hsize_t dims[2] = { len, (hsize_t)N };
-    DataSpace dataspace(2, dims);
+    hid_t space_id = H5Screate_simple(2, dims, nullptr);
 
-    PredType dtype = H5TypeMap<T>::type();
+    hid_t dtype_id = H5Native<T>::id();
 
-    DSetCreatPropList prop;
+    hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
     hsize_t chunk_dims[2];
     chunk_dims[0] = (len < 128 ? len : 128);
     chunk_dims[1] = N;
-    prop.setChunk(2, chunk_dims);
-    prop.setDeflate(compression_level);
-    prop.setShuffle();
+    H5Pset_chunk(dcpl_id, 2, chunk_dims);
+    H5Pset_shuffle(dcpl_id);
+    H5Pset_deflate(dcpl_id, compression_level);
 
-    DataSet dataset = h5_file.createDataSet(full_name, dtype, dataspace, prop);
-    dataset.write(A.data(), dtype);
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
+                        H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
 
     std::string vis_name = name;
     if (std::string(name) == "Points") {
@@ -662,7 +671,11 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
             vis_name = block_base + ".coord";
         }
     }
-    create_virtual_dataset(full_name, vis_name, dataspace, dtype, len, N);
+    create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N);
+
+    H5Dclose(dset_id);
+    H5Pclose(dcpl_id);
+    H5Sclose(space_id);
 }
 
 // explicit instantiation
@@ -692,15 +705,12 @@ template
 void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t);
 
 // scaler
-void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype)
+void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id)
 {
     hsize_t one = 1;
     hid_t vds_space_id = H5Screate_simple(1, &one, nullptr);
-
     hid_t vds_dcpl = H5Pcreate(H5P_DATASET_CREATE);
-    hid_t src_space_id = H5Scopy(dataspace.getId());
-    hid_t file_id = h5_file.getId();
-    hid_t dtype_id = dtype.getId();
+    // hid_t file_id = h5_file.getId();
 
     herr_t status = H5Pset_virtual(vds_dcpl, vds_space_id, ".", src_name.c_str(), src_space_id);
 
@@ -709,19 +719,16 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
     H5Dclose(vds_dset_id);
     H5Pclose(vds_dcpl);
     H5Sclose(vds_space_id);
-    H5Sclose(src_space_id);
 }
 
 // 1D array
-void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype, hsize_t len)
+void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len)
 {
     hsize_t vds_dims[1] = { len };
     hid_t vds_space_id = H5Screate_simple(1, vds_dims, nullptr);
 
     hid_t vds_dcpl = H5Pcreate(H5P_DATASET_CREATE);
-    hid_t src_space_id = H5Scopy(dataspace.getId());
-    hid_t file_id = h5_file.getId();
-    hid_t dtype_id = dtype.getId();
+    hid_t src_space_id = H5Scopy(space_id);
 
     herr_t status = H5Pset_virtual(vds_dcpl, vds_space_id, ".", src_name.c_str(), src_space_id);
 
@@ -734,15 +741,13 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 }
 
 // 2D array
-void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, DataSpace& dataspace, PredType& dtype, hsize_t len, int N)
+void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N)
 {
     hsize_t vds_dims[2] = { len, static_cast<hsize_t>(N) };
     hid_t vds_space_id = H5Screate_simple(2, vds_dims, nullptr);
 
     hid_t vds_dcpl = H5Pcreate(H5P_DATASET_CREATE);
-    hid_t src_space_id = H5Scopy(dataspace.getId());
-    hid_t file_id = h5_file.getId();
-    hid_t dtype_id = dtype.getId();
+    hid_t src_space_id = H5Scopy(space_id);
 
     herr_t status = H5Pset_virtual(vds_dcpl, vds_space_id, ".", src_name.c_str(), src_space_id);
 
@@ -755,88 +760,99 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 }
 
 HDF5Input::HDF5Input(const char *filename)
-    : h5_file(filename, H5F_ACC_RDONLY)
 {
+    file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
+    if (file_id < 0) {
+        std::cerr << "Error: cannot open HDF5 file for reading: " << filename << "\n";
+        std::exit(1);
+    }
+
     read_header();
 }
 
 void HDF5Input::read_header()
 {
-    if (!h5_file.attrExists("ndims")) {
+    if (H5Aexists(file_id, "ndims") <= 0) {
         std::cerr << "Error: missing attribute ndims in HDF5 file\n";
         std::exit(1);
     }
-    
-    Attribute ndims_attr = h5_file.openAttribute("ndims");
-    DataType ndims_type = ndims_attr.getDataType();
+
+    hid_t attr = H5Aopen(file_id, "ndims", H5P_DEFAULT);
+    hid_t atype = H5Aget_type(attr);
 
     int ndims = -1;
-    ndims_attr.read(ndims_type, &ndims);
-    // std::cout << "ndims = " << ndims << std::endl;
+    H5Aread(attr, atype, &ndims);
+    H5Aclose(attr);
+    H5Tclose(atype);
 
-    if (!h5_file.attrExists("revision")) {
+    if (H5Aexists(file_id, "revision") <= 0) {
         std::cerr << "Error: missing attribute revision in HDF5 file\n";
         std::exit(1);
     }
 
-    Attribute rev_attr = h5_file.openAttribute("revision");
-    DataType rev_type = rev_attr.getDataType();
+    attr = H5Aopen(file_id, "revision", H5P_DEFAULT);
+    atype = H5Aget_type(attr);
 
-    int rev = -1;
-    rev_attr.read(rev_type, &rev);
-    // std::cout << "revision = " << rev << std::endl;
+    int revision = -1;
+    H5Aread(attr, atype, &revision);
+    H5Aclose(attr);
+    H5Tclose(atype);
 }
 
 HDF5Input::~HDF5Input()
 {
-    // nothing to do
+    if (file_id >= 0) {
+        H5Fclose(file_id);
+        file_id = -1;
+    }
 }
 
 template <typename T>
 void HDF5Input::read_scaler(T& A, const std::string& name)
 {
-    DataSet dataset;
-    try {
-        dataset = h5_file.openDataSet(name);
-    }
-    catch (FileIException &e) {
-        std::cerr << "Error: cannot open dataset (file error): " << name << '\n';
-        e.printErrorStack();
+    hid_t dset_id = H5Dopen2(file_id, name.c_str(), H5P_DEFAULT);
+    if (dset_id < 0) {
+        std::cerr << "Error: cannot open dataset: " << name << "\n";
         std::exit(1);
     }
-    catch (DataSetIException &e) {
-        std::cerr << "Error: cannot open dataset (dataset error): " << name << '\n';
-        e.printErrorStack();
+    hid_t space_id = H5Dget_space(dset_id);
+    if (space_id < 0) {
+        H5Dclose(dset_id);
+        std::cerr << "Error: cannot get dataspace for " << name << "\n";
         std::exit(1);
     }
-
-    DataSpace filespace = dataset.getSpace();
-    int rank = filespace.getSimpleExtentNdims();
-    if (rank != 1) {
+    int rank = H5Sget_simple_extent_ndims(space_id);
+    if (rank < 0) {
+        H5Sclose(space_id); H5Dclose(dset_id);
+        std::cerr << "Error: cannot get rank for " << name << "\n";
+        std::exit(1);
+    }
+    if (rank == 0 || rank > 1) {
+        H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
-                  << ", expected 1 dim, got " << rank << "\n";
+                  << ", expected rank 1, got " << rank << "\n";
         std::exit(1);
     }
 
-    hsize_t one = 1;
-    filespace.getSimpleExtentDims(&one, nullptr);
+    hid_t mspace_id =  H5Screate(H5S_SCALAR);
 
-    DataSpace memspace(1, &one);
-    PredType dtype = H5TypeMap<T>::type();
-
-    try {
-        dataset.read(&A, dtype, memspace, filespace);
+    if (mspace_id < 0) {
+        H5Sclose(space_id); H5Dclose(dset_id);
+        std::cerr << "Error: cannot create memspace for " << name << "\n";
+        std::exit(1);
     }
-    catch (DataSetIException &e) {
+
+    hid_t dtype_id = H5Native<T>::id();
+
+    if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, &A) < 0) {
+        H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        e.printErrorStack();
         std::exit(1);
     }
-    catch (DataSpaceIException &e) {
-        std::cerr << "Error: dataspace error reading dataset: " << name << "\n";
-        e.printErrorStack();
-        std::exit(1);
-    }
+
+    H5Sclose(mspace_id);
+    H5Sclose(space_id);
+    H5Dclose(dset_id);
 }
 
 template
@@ -853,52 +869,44 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size
         std::exit(1);
     }
 
-    DataSet dataset;
-    try {
-        dataset = h5_file.openDataSet(name);
-    }
-    catch (FileIException &e) {
-        std::cerr << "Error: cannot open dataset (file error): " << name << '\n';
-        e.printErrorStack();
+    hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
+    if (dset_id < 0) {
+        std::cerr << "Error: cannot open dataset: " << name << "\n";
         std::exit(1);
     }
-    catch (DataSetIException &e) {
-        std::cerr << "Error: cannot open dataset (dataset error): " << name << '\n';
-        e.printErrorStack();
+    hid_t space_id = H5Dget_space(dset_id);
+    if (space_id < 0) {
+        H5Dclose(dset_id);
+        std::cerr << "Error: cannot get dataspace for " << name << "\n";
         std::exit(1);
     }
-
-    DataSpace filespace = dataset.getSpace();
-    int rank = filespace.getSimpleExtentNdims();
+    int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 1) {
+        H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
-                  << ", expected 1 dim, got " << rank << "\n";
+                  << ", expected rank 0 or 1, got " << rank << "\n";
         std::exit(1);
     }
     hsize_t dims[1];
-    filespace.getSimpleExtentDims(dims, nullptr);
+    H5Sget_simple_extent_dims(space_id, dims, nullptr);
     if (dims[0] != size) {
         std::cerr << "Error: array size is not matched: " << name
                   << " (file dim = " << dims[0] << ", expected = " << size << ")\n";
         std::exit(1);
     }
 
-    DataSpace memspace(1, dims);
-    PredType dtype = H5TypeMap<T>::type();
+    hid_t mspace_id = H5Screate_simple(1, dims, nullptr);
+    hid_t dtype_id = H5Native<T>::id();
 
-    try {
-        dataset.read(A.data(), dtype, memspace, filespace);
-    }
-    catch (DataSetIException &e) {
+    if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, A.data()) < 0) {
+        H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        e.printErrorStack();
         std::exit(1);
     }
-    catch (DataSpaceIException &e) {
-        std::cerr << "Error: dataspace error reading dataset: " << name << "\n";
-        e.printErrorStack();
-        std::exit(1);
-    }
+
+    H5Sclose(mspace_id);
+    H5Sclose(space_id);
+    H5Dclose(dset_id);
 }
 
 
@@ -913,50 +921,44 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
         std::exit(1);
     }
 
-    DataSet dataset;
-    try {
-        dataset = h5_file.openDataSet(name);
-    } catch (FileIException &e) {
-        std::cerr << "Error: dataset not found: " << name << "\n";
-        e.printErrorStack();
-        std::exit(1);
-    } catch (DataSetIException &e) {
+    hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
+    if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        e.printErrorStack();
         std::exit(1);
     }
-
-    DataSpace filespace = dataset.getSpace();
-    int rank = filespace.getSimpleExtentNdims();
+    hid_t space_id = H5Dget_space(dset_id);
+    if (space_id < 0) {
+        H5Dclose(dset_id);
+        std::cerr << "Error: cannot get dataspace for " << name << "\n";
+        std::exit(1);
+    }
+    int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 2) {
         std::cerr << "Error: dataset rank mismatch for " << name 
                   << ", expected 2 dims, got " << rank << '\n';
         std::exit(1);
     }
-    
+
     hsize_t dims[2];
-    filespace.getSimpleExtentDims(dims, nullptr);
+    H5Sget_simple_extent_dims(space_id, dims, nullptr);
     if (dims[0] != size || dims[1] != static_cast<hsize_t>(N)) {
         std::cerr << "Error: dataset dimensions mismatch for " << name
                   << ": file dims = (" << dims[0] << ", " << dims[1]
                   << "), expected (" << size << ", " << N << ")\n";
         std::exit(1);
     }
+    hid_t mspace_id = H5Screate_simple(2, dims, nullptr);
+    hid_t dtype_id = H5Native<T>::id();
 
-    DataSpace memspace(2, dims);
-    PredType dtype = H5TypeMap<T>::type();
-
-    try {
-        dataset.read(A.data(), dtype, memspace, filespace);
-    } catch (DataSetIException &e) {
+    if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, A.data()) < 0) {
+        H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        e.printErrorStack();
-        std::exit(1);
-    } catch (DataSpaceIException &e) {
-        std::cerr << "Error: dataspace error reading dataset: " << name << "\n";
-        e.printErrorStack();
         std::exit(1);
     }
+
+    H5Sclose(mspace_id);
+    H5Sclose(space_id);
+    H5Dclose(dset_id);
 }
 
 // explicit instantiation

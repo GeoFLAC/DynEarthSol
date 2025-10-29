@@ -264,7 +264,7 @@ endif
 
 ifeq ($(hdf5), 1)
 	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
-	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR) -L$(HDF5_LIB_DIR) -lhdf5 -lhdf5_cpp
+	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR) -L$(HDF5_LIB_DIR) -lhdf5
 endif
 
 ## Is git in the path?
