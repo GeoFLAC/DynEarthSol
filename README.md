@@ -45,7 +45,7 @@ alike.
       ```
     * The header files and built shared library will be in `mmg/build/include` and `mmg/build/lib`. 
 * [HDF5](https://www.hdfgroup.org/solutions/hdf5/) for outputting model results in HDF5-based vtkhdf format, which is compressed (reducing size by up to 50%) and can be visualized directly in Paraview.
-  * The HDF5 Library is generally pre-installed on moderm computer operating systems. User can use `which h5cc` to find the path to the HDF5 Library.
+  * The HDF5 Library is generally pre-installed on modern computer operating systems. User can use `which h5cc` to find the path to the HDF5 Library.
   * The HDF5-based vtkhdf format follows the data structure of VTK, which can be visualized directly in Paraview. Please refer to the official [VTKHDF File Format](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format) documentation for more information.
 ## Or, using docker
 * Build docker image
