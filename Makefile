@@ -18,7 +18,7 @@
 ##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set).
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
-##  - netcdf = 1 : enable NetCDF output support (requires netCDF and netcdf-cxx4).
+##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - adaptive_time_step = 1 : enable adaptive time stepping.
 ##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).

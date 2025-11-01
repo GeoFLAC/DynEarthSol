@@ -100,8 +100,8 @@ make usemmg=1
 # enable Exodus input support (requires seacas/exodus libs)
 make useexo=1
 
-# enable NetCDF output support (requires netCDF & netcdf-cxx4)
-make netcdf=1
+# enable HDF5-based vtkhdf output support (requires HDF5)
+make hdf5=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
