@@ -2668,8 +2668,13 @@ void create_neighbor(Variables& var)
 
     // create the inverse mapping of connectivity
 #ifndef ACC
+#ifdef GPP1X
+    #pragma omp parallel for default(none) \
+        shared(var, NODE_OF_FACET, ncontact, NODES_PER_ELEM) collapse(2)
+#else
     #pragma omp parallel for default(none) \
         shared(var, NODE_OF_FACET, ncontact) collapse(2)
+#endif
 #endif
     #pragma acc parallel loop collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
