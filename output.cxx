@@ -26,6 +26,7 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
+    hdf5_compression_level(param.sim.hdf5_compression_level),
     frame(start_frame),
     time0(0)
 {}
@@ -80,16 +81,21 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
 
     char filename[256];
-#ifdef NETCDF
-    std::snprintf(filename, 255, "%s.save.%06d.nc", modelname.c_str(), frame);
-    NetCDFOutput bin(filename);
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level);
+
+    bin.write_block_metadata(var, "grid");
+    bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
+    bin.write_fieldData(var.steps, "steps");
+    bin.write_fieldData(double(get_nanoseconds() - start_time) * 1e-9, "walltime_sec");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
-#endif
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
+#endif
 
     bin.write_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {
@@ -187,10 +193,14 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.bcflag, "bcflag", var.bcflag->size());
 
     if (has_marker_output) {
-        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+            bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
             (*ms)->write_save_file(var, bin);
+        }
     }
-#ifndef NETCDF
+#ifndef HDF5
     bin.close();
 #endif
 
@@ -293,19 +303,25 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePushA(__FUNCTION__);
 #endif
     char filename[256];
-#ifdef NETCDF
-    std::snprintf(filename, 255, "%s.chkpt.%06d.nc", modelname.c_str(), frame);
-    NetCDFOutput bin(filename);
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level, true);
+
+    bin.write_block_metadata(var, "grid");
+
+    bin.write_scalar(var.time, "time");
+    bin.write_scalar(var.compensation_pressure, "compensation_pressure");
+    bin.write_scalar(var.bottom_temperature, "bottom_temperature");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
-#endif
 
     double_vec tmp(3);
     tmp[0] = var.time;
     tmp[1] = var.compensation_pressure;
     tmp[2] = var.bottom_temperature;
     bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
+#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
@@ -318,8 +334,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
 
-    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+        bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
         (*ms)->write_chkpt_file(bin);
+    }
 #ifdef USE_NPROF
     nvtxRangePop();
 #endif

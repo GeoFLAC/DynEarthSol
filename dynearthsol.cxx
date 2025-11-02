@@ -229,10 +229,10 @@ void restart(const Param& param, Variables& var)
     }
 
     char filename_save[256];
-#ifdef NETCDF
-    std::snprintf(filename_save, 255, "%s.save.%06d.nc",
+#ifdef HDF5
+    std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
-    NetCDFInput bin_save(filename_save);
+    HDF5Input bin_save(filename_save);
 #else
     std::snprintf(filename_save, 255, "%s.save.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
@@ -241,10 +241,10 @@ void restart(const Param& param, Variables& var)
     std::cout << "  Reading " << filename_save << "...\n";
 
     char filename_chkpt[256];
-#ifdef NETCDF
-    std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d.nc",
+#ifdef HDF5
+    std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d.vtkhdf",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
-    NetCDFInput bin_chkpt(filename_chkpt);
+    HDF5Input bin_chkpt(filename_chkpt);
 #else
     std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
@@ -319,13 +319,18 @@ void restart(const Param& param, Variables& var)
 
     // Misc. items
     {
+#ifdef HDF5
+        bin_chkpt.read_scaler(var.time, "time");
+        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
+#else
         double_vec tmp(3);
         bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
         var.time = tmp[0];
         var.compensation_pressure = tmp[1];
         // Set bottom temperature
         var.bottom_temperature = tmp[2];
-
+#endif
         // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
     }

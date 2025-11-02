@@ -26,6 +26,7 @@ typedef std::vector<int> int_vec;
 typedef std::vector<int_vec> int_vec2D;
 typedef std::vector<double_vec> double_vec2D;
 typedef std::vector<uint> uint_vec;
+typedef std::vector<unsigned char> uchar_vec;
 typedef std::vector<bool> bool_vec;
 typedef std::vector<size_t> size_t_vec;
 typedef std::vector<int_pair> int_pair_vec;
@@ -108,6 +109,7 @@ struct Sim {
     int output_step_interval;
     int checkpoint_frame_interval;
     int restarting_from_frame;
+    int hdf5_compression_level;
     bool is_outputting_averaged_fields;
     bool is_restarting;
     bool has_initial_checkpoint;

@@ -2,11 +2,18 @@
 #define DYNEARTHSOL3D_BINARYIO_HPP
 
 #include <map>
-#ifdef NETCDF
-#include <netcdf>
+#ifdef HDF5
+#include "H5Lpublic.h"
+#include "H5Gpublic.h"
+#include "H5Ppublic.h"
+#include "H5Tpublic.h"
+#include "H5Fpublic.h"
+#include "H5Apublic.h"
+#include "H5Spublic.h"
 #endif
 #include "array2d.hpp"
 
+#ifndef HDF5
 
 class BinaryOutput
 {
@@ -48,52 +55,79 @@ public:
     ~BinaryInput();
 
     template <typename T>
-    void read_array(std::vector<T>& A, const char *name);
+    void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
     template <typename T, int N>
-    void read_array(Array2D<T,N>& A, const char *name);
+    void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
 };
 
-#ifdef NETCDF
+#else
 
-using namespace netCDF;
-
-class NetCDFOutput
+class HDF5Output
 {
-public:
-    NetCDFOutput(const char *filename);
-    ~NetCDFOutput();
+private:
+    hid_t file_id = -1;
+    const int compression_level;
+    long nnode = 0, nelem = 0, nseg = 0, etop = 0, nnode_cell = 0;
+    bool has_metadata = false;
+    const bool is_checkpoint;
+    std::string kind, block_base;
 
     void write_header();
 
+public:
+    HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt=false);
+    ~HDF5Output();
+
+    template<typename T>
+    void write_fieldData(const T& A, const std::string& name);
+
     template <typename T>
-    void write_array(const std::vector<T>& A, const char *name, std::size_t size);
+    void write_scalar(const T& A, const std::string& name);
+
+    template <typename T>
+    void write_array(const std::vector<T>& A, const char *name, hsize_t len);
 
     template <typename T, int N>
-    void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
+    void write_array(const Array2D<T,N>& A, const char *name, hsize_t len);
 
-private:
-    NcFile nc_file;
+    template <typename T>
+    void write_attribute(const T& A, const std::string& name, hid_t& vtkgrpBlock_id);
+    template <typename T>
+    void write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id);
+
+    void write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms = nullptr);
+
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N);
+
+    void add_soft_link(const std::string& assemblyNodePath, const std::string& linkName,
+                        const std::string& targetAbsPath);
+    hid_t create_group_with_order(const std::string& path);
 };
 
-class NetCDFInput
+class HDF5Input
 {
 private:
-    NcFile nc_file;
+    hid_t file_id = -1;
 
     void read_header();
 
 public:
-    NetCDFInput(const char *filename);
-    ~NetCDFInput();
+    HDF5Input(const char *filename);
+    ~HDF5Input();
 
     template <typename T>
-    void read_array(std::vector<T>& A, const char *name);
+    void read_scaler(T& A, const std::string& name);
+
+    template <typename T>
+    void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
     template <typename T, int N>
-    void read_array(Array2D<T,N>& A, const char *name);
+    void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
 };
 
-#endif // NETCDF
+#endif // HDF5
 
 #endif

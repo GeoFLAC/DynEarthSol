@@ -51,6 +51,8 @@ public:
     void write_save_file(const Variables &var, T &bin) const;
     array_t* calculate_marker_coord(const Variables &var) const;
 
+    inline std::string get_name() const { return _name; }
+
     inline int get_nmarkers() const { return _nmarkers; }
     inline void set_nmarkers(int n) { _nmarkers = n; }
 

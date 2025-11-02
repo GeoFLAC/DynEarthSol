@@ -62,6 +62,9 @@ static void declare_parameters(po::options_description &cfg,
          "Output time-averaged (smoothed) field variables or not. These fields are: velocity, strain rate, and stress.\n"
          "no: output instantaneous fields. The velocity and strain-rate might oscillate temporally.\n"
          "yes: output field variables averaged over mesh.quality_check_step_interval time steps.\n")
+        ("sim.hdf5_compression_level", po::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
+            "HDF5 compression level (0-9). 0: no compression; 9: max. compression. \n"
+            "A higher compression level could slow down the output speed.")
         ;
 
     cfg.add_options()

@@ -44,6 +44,9 @@ alike.
       make
       ```
     * The header files and built shared library will be in `mmg/build/include` and `mmg/build/lib`. 
+* [HDF5](https://www.hdfgroup.org/solutions/hdf5/) for outputting model results in HDF5-based vtkhdf format, which is compressed (reducing size by up to 50%) and can be visualized directly in Paraview.
+  * The HDF5 Library is generally pre-installed on modern computer operating systems. User can use `which h5cc` to find the path to the HDF5 Library.
+  * The HDF5-based vtkhdf format follows the data structure of VTK, which can be visualized directly in Paraview. Please refer to the official [VTKHDF File Format](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format) documentation for more information.
 ## Or, using docker
 * Build docker image
   ```bash
@@ -66,18 +69,11 @@ alike.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
     * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
-  * Outputing in netCDF4 format to reduce file size (50%) of model results.
-    * Instill netcdf-c from https://github.com/Unidata/netcdf-c
-      * `mkdir build && cmake . -DCMAKE_INSTALL_PREFIX=./build`
-      * `make -j4 && make install`
-      * `[ -d build/lib64 ] && ln -s lib64 build/lib`
-    * Instill netcdf-cxx from https://github.com/Unidata/netcdf-cxx4
-      * `mkdir build && cd build`
-      * `cmake .. -DCMAKE_INSTALL_PREFIX=./`
-      * `make -j4 && make install`
-    * set `netcdf = 1`.
-    * set `NETCDF_DIR` and `NETCDFCXX_DIR` path to include libraries
-    * Install python netcdf4 lib for vtk visulization by `pip install netCDF4`.
+  * If outputing in HDF5-based vtkhdf format:
+    * set `hdf5 = 1`.
+    * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory.
+    * set `HDF5_LIB_DIR` to the HDF5 library directory.
+    * Install python HDF5 lib by `pip install h5py` for further analyzed vtk visualization.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
@@ -104,8 +100,8 @@ make usemmg=1
 # enable Exodus input support (requires seacas/exodus libs)
 make useexo=1
 
-# enable NetCDF output support (requires netCDF & netcdf-cxx4)
-make netcdf=1
+# enable HDF5-based vtkhdf output support (requires HDF5)
+make hdf5=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1

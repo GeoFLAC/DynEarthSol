@@ -66,11 +66,12 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
     }
 }
 
+#ifdef HDF5
+template
+MarkerSet::MarkerSet(const Param& param, Variables& var, HDF5Input& bin_save, HDF5Input& bin_chkpt, const std::string& name);
+#else
 template
 MarkerSet::MarkerSet(const Param& param, Variables& var, BinaryInput& bin_save, BinaryInput& bin_chkpt, const std::string& name);
-#ifdef NETCDF
-template
-MarkerSet::MarkerSet(const Param& param, Variables& var, NetCDFInput& bin_save, NetCDFInput& bin_chkpt, const std::string& name);
 #endif
 
 template <class T>
@@ -864,61 +865,74 @@ void MarkerSet::resize( const int newsize )
     }
 }
 
+#ifdef HDF5
+template
+void MarkerSet::write_chkpt_file(HDF5Output &bin) const;
+#else
 template
 void MarkerSet::write_chkpt_file(BinaryOutput &bin) const;
-#ifdef NETCDF
-template
-void MarkerSet::write_chkpt_file(NetCDFOutput &bin) const;
 #endif
 
 template <class T>
 void MarkerSet::write_chkpt_file(T &bin) const
 {
-    int_vec itmp(2);
+#ifdef HDF5
+    bin.write_scalar(_last_id, _name + ".last_id");
+    bin.write_scalar(_reserved_space, _name + ".reserved_space");
+#else
+    int_vec itmp(3);
     itmp[0] = _nmarkers;
     itmp[1] = _last_id;
+    itmp[2] = _reserved_space;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
-
+#endif
     bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
-
 }
 
+#ifdef HDF5
+template
+void MarkerSet::read_chkpt_file(Variables &var, HDF5Input &bin_save, HDF5Input &bin_chkpt);
+#else
 template
 void MarkerSet::read_chkpt_file(Variables &var, BinaryInput &bin_save, BinaryInput &bin_chkpt);
-#ifdef NETCDF
-template
-void MarkerSet::read_chkpt_file(Variables &var, NetCDFInput &bin_save, NetCDFInput &bin_chkpt);
 #endif
 
 template <class T>
 void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 {
-    int_vec itmp(2);
+#ifdef HDF5
+    bin_save.read_scaler(_nmarkers, _name + ".nmarkers");
+    bin_chkpt.read_scaler(_last_id, _name + ".last_id");
+    bin_chkpt.read_scaler(_reserved_space, _name + ".reserved_space");
+#else
+    int_vec itmp(3);
     bin_chkpt.read_array(itmp, (_name + " size").c_str());
     _nmarkers = itmp[0];
     _last_id = itmp[1];
-
-    allocate_markerdata(_nmarkers);
+    _reserved_space = itmp[2];
+#endif
+    allocate_markerdata(_reserved_space);
 
     if (_nmarkers != 0) {
-        bin_save.read_array(*_eta, (_name + ".eta").c_str());
-        bin_save.read_array(*_elem, (_name + ".elem").c_str());
-        bin_save.read_array(*_mattype, (_name + ".mattype").c_str());
-        bin_save.read_array(*_id, (_name + ".id").c_str());
-        bin_save.read_array(*_time, (_name + ".time").c_str());
-        bin_save.read_array(*_z, (_name + ".z").c_str());
-        bin_save.read_array(*_distance, (_name + ".distance").c_str());
-        bin_save.read_array(*_slope, (_name + ".slope").c_str());
+        bin_save.read_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
+        bin_save.read_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
+        bin_save.read_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
+        bin_save.read_array(*_id, (_name + ".id").c_str(), _nmarkers);
+        bin_save.read_array(*_time, (_name + ".time").c_str(), _nmarkers);
+        bin_save.read_array(*_z, (_name + ".z").c_str(), _nmarkers);
+        bin_save.read_array(*_distance, (_name + ".distance").c_str(), _nmarkers);
+        bin_save.read_array(*_slope, (_name + ".slope").c_str(), _nmarkers);
 
-        bin_chkpt.read_array(*_genesis, (_name + ".genesis").c_str());
+        bin_chkpt.read_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
     }
 }
 
+#ifdef HDF5
+template
+void MarkerSet::write_save_file(const Variables &var, HDF5Output &bin) const;
+#else
 template
 void MarkerSet::write_save_file(const Variables &var, BinaryOutput &bin) const;
-#ifdef NETCDF
-template
-void MarkerSet::write_save_file(const Variables &var, NetCDFOutput &bin) const;
 #endif
 
 template <class T>
@@ -927,6 +941,8 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
 #ifdef USE_NPROF
     nvtxRangePushA("write markersets");
 #endif
+
+#ifndef HDF5
     int_vec itmp(1);
     itmp[0] = _nmarkers;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
@@ -934,6 +950,8 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
     array_t *mcoord = calculate_marker_coord(var); // coordinate of markers
 
     bin.write_array(*mcoord, (_name + ".coord").c_str(), _nmarkers);
+    delete mcoord;
+#endif
     bin.write_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
     bin.write_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
     bin.write_array(*_mattype, (_name + ".mattype").c_str(), _nmarkers);
@@ -945,8 +963,6 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
 
     // temporary show results
     bin.write_array(*_genesis, (_name + ".genesis").c_str(), _nmarkers);
-
-    delete mcoord;
 
 #ifdef USE_NPROF
     nvtxRangePop();
