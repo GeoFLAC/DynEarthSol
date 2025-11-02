@@ -91,6 +91,7 @@ public:
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len);
 
+    void write_attribute(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id);
     template <typename T>
     void write_attribute(const T& A, const std::string& name, hid_t& vtkgrpBlock_id);
     template <typename T>

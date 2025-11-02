@@ -492,25 +492,32 @@ void HDF5Output::write_fieldData<long>(const long& A, const std::string& name);
 template<typename T>
 void HDF5Output::write_attribute(const T& A, const std::string& name, hid_t& vtkgrpBlock_id)
 {
-    hid_t dtype = H5Native<T>::id();
-    hid_t dtype_id = dtype;
-    if (dtype == H5T_C_S1) {
-        // for string type, create a copy to avoid closing H5T_C_S1 later
-        hid_t str_t = H5Tcopy(H5T_C_S1);
-        H5Tset_size(str_t, H5T_VARIABLE);
-        dtype_id = str_t;
-    }
-
-
+    hid_t dtype_id = H5Native<T>::id();
     hid_t space_id = H5Screate(H5S_SCALAR);
-
     hid_t attr_id = H5Acreate2(vtkgrpBlock_id, name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT);
 
     H5Awrite(attr_id, dtype_id, &A);
 
 	H5Aclose(attr_id);
 	H5Sclose(space_id);
-    if (dtype == H5T_C_S1) H5Tclose(dtype_id);
+}
+
+void HDF5Output::write_attribute(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id)
+{
+    // for string type, create a copy to avoid closing H5T_C_S1 later
+    hid_t str_t = H5Tcopy(H5T_C_S1);
+    H5Tset_size(str_t, H5T_VARIABLE);
+
+    hid_t space_id = H5Screate(H5S_SCALAR);
+    hid_t attr_id = H5Acreate2(vtkgrpBlock_id, name.c_str(), str_t, space_id, H5P_DEFAULT, H5P_DEFAULT);
+    
+    // For variable-length strings, HDF5 expects a pointer to a C string (const char*)
+    const char* c_str = A.c_str();
+    H5Awrite(attr_id, str_t, &c_str);
+    
+    H5Aclose(attr_id);
+    H5Sclose(space_id);
+    H5Tclose(str_t);
 }
 
 // 1D array
@@ -518,9 +525,9 @@ template<typename T>
 void HDF5Output::write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id)
 {
     hid_t dtype_id = H5Native<T>::id();
-
     hid_t space_id = H5Screate_simple(1, &len, nullptr);
     hid_t attr_id = H5Acreate2(vtkgrpBlock_id, name.c_str(), dtype_id, space_id, H5P_DEFAULT, H5P_DEFAULT);
+
     H5Awrite(attr_id, dtype_id, A.data());
 
 	H5Aclose(attr_id);
@@ -531,7 +538,6 @@ void HDF5Output::write_attribute(const std::vector<T>& A, const std::string& nam
 template void HDF5Output::write_attribute<int>(const int& A, const std::string& name, hid_t& vtkgrpBlock_id);
 template void HDF5Output::write_attribute<double>(const double& A, const std::string& name, hid_t& vtkgrpBlock_id);
 template void HDF5Output::write_attribute<uint>(const uint& A, const std::string& name, hid_t& vtkgrpBlock_id);
-template void HDF5Output::write_attribute<std::string>(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id);
 template void HDF5Output::write_attribute<int>(const int_vec& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id);
 
 // 1D array
