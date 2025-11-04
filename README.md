@@ -95,17 +95,17 @@ alike.
   directory.
   * If importing an exodus mesh:
     * Set `useexo = 1` and `ndims = 3`. Only 3D exodus mesh can be imported.
-    * Set `EXO_INCLUDE` and `EXO_LIB_DIR` paths if different from the default values.
+    * Set `EXO_INCLUDE` and `EXO_LIB_DIR` paths if it differs from the default values.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
-    * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
+    * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if it differs from the default values.
   * If outputing in HDF5-based vtkhdf format:
     * set `hdf5 = 1`.
     * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory.
     * set `HDF5_LIB_DIR` to the HDF5 library directory.
     * Install python HDF5 lib by `pip install h5py` for further analyzed vtk visualization.
-  * if enabling openMP on macOS:
-    *  set `OPENMP_ROOT_DIR` path if different from the default values.
+  * If enabling openMP on macOS:
+    *  set `OPENMP_ROOT_DIR` path if it differs from the default value.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
