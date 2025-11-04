@@ -1034,7 +1034,7 @@ namespace {
         if (markers_per_block < 1) markers_per_block = 1;
         int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
         printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
-               nblocks, markers_per_block, (ulong)nmarkers*k);
+               nblocks, markers_per_block, (unsigned long)nmarkers*k);
 
         array_t queries(markers_per_block, 0);
         neighbor_vec neighbors(markers_per_block * k);

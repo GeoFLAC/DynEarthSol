@@ -148,7 +148,7 @@ namespace {
         if (elems_per_block < 1) elems_per_block = 1;
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
         printf("    Using %d blocks, elements per block: %d, total queries: %lu\n",
-               nblocks, elems_per_block, (ulong)nchanged * nsample);
+               nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
 
