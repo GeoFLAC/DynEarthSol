@@ -138,7 +138,6 @@ namespace {
             }
         }
         int nsample = sample_eta.size();
-        int nqueries = nchanged * nsample;
 
         // number of neighbors exceeding computational limit
         int queries_max = 1024 * 1024 * 16;
@@ -148,8 +147,8 @@ namespace {
         int elems_per_block = queries_max / nsample;
         if (elems_per_block < 1) elems_per_block = 1;
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
-        printf("  Using %d blocks, elements per block: %d, total queries: %d\n",
-               nblocks, elems_per_block, nqueries);
+        printf("    Using %d blocks, elements per block: %d, total queries: %lu\n",
+               nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
 
@@ -168,7 +167,7 @@ namespace {
             int end = std::min((b + 1) * elems_per_block, nchanged);
             if (start >= end) continue;
 
-            printf("    Block %3d: element from %7d to %7d", b, start, end);
+            printf("      Block %3d: element %7d to %7d", b, start, end-1);
 
             queries.resize((end-start) * nsample);
 

@@ -44,6 +44,8 @@ ifneq ($(adaptive_time_step), 1)
 	use_R_S = 0   # Rate - State friction law only works with adaptive time stepping technique
 endif
 
+OSNAME := $(shell uname -s)
+
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
 	CXX = nvc++
@@ -52,7 +54,13 @@ else
 	ifeq ($(nprof), 1)
 		CXX = nvc++
 	else
-		CXX = g++
+		# Select compiler based on platform
+		ifeq ($(OSNAME), Darwin)
+			# clang++ is the default optimized compiler for macOS
+			CXX = clang++
+		else
+			CXX = g++
+		endif
 	endif
 endif
 CXX_BACKEND = ${CXX}
@@ -71,8 +79,6 @@ BOOST_ROOT_DIR =
 ## Select compiler and linker flags
 ## (Usually you won't need to modify anything below)
 ########################################################################
-
-OSNAME := $(shell uname -s)
 
 BOOST_LDFLAGS = -lboost_program_options
 ifdef BOOST_ROOT_DIR
@@ -127,18 +133,34 @@ endif
 
 
 ifneq (, $(findstring clang++, $(CXX)))
-	CXXFLAGS = -v -DGPP1X
-	LDFLAGS = -v
+	CXXFLAGS = -g -std=c++0x -DGPP1X
+	LDFLAGS = -lm
+	TETGENFLAG = 
+	
+	# macOS needs extra headerpad for install_name_tool
+	ifeq ($(OSNAME), Darwin)
+		LDFLAGS += -Wl,-headerpad_max_install_names
+	endif 
 
 	ifeq ($(opt), 1)
 		CXXFLAGS += -O1
 	else ifeq ($(opt), 2)
 		CXXFLAGS += -O2
+	else ifeq ($(opt), 3)
+		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
+	else # debugging
+		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unknown-pragmas
+		ifeq ($(opt), -1)
+			CXXFLAGS += -fsanitize=address
+			LDFLAGS += -fsanitize=address
+		endif
 	endif
  
 	ifeq ($(openmp), 1)
-		CXXFLAGS += -fopenmp
-		LDFLAGS += -fopenmp
+		# path to OpenMP library directory (for clang++ on macOS)
+		OPENMP_ROOT_DIR = external/openmp-install
+		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
+		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
 	endif
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
@@ -264,7 +286,10 @@ endif
 
 ifeq ($(hdf5), 1)
 	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
-	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR) -L$(HDF5_LIB_DIR) -lhdf5
+	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
+	ifneq ($(OSNAME), Darwin)
+		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
+	endif
 endif
 
 ## Is git in the path?
@@ -370,6 +395,12 @@ $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
 			-o $@
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
+		install_name_tool -add_rpath @executable_path/$(BOOST_LIB_DIR) $@
+ifeq ($(openmp), 1)
+		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_ROOT_DIR)/lib" ]; then \
+			install_name_tool -add_rpath @executable_path/$(OPENMP_ROOT_DIR)/lib $@; \
+		fi
+endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif

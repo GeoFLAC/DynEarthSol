@@ -1026,69 +1026,90 @@ namespace {
 #endif
         const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
-        int last_marker = ms.get_nmarkers();
+        int nmarkers = ms.get_nmarkers();
 
-        array_t queries(last_marker, 0);
+        int nquery_max = 1024 * 1024 * 32;
+
+        int markers_per_block = nquery_max / k;
+        if (markers_per_block < 1) markers_per_block = 1;
+        int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
+        printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
+               nblocks, markers_per_block, (unsigned long)nmarkers*k);
+
+        array_t queries(markers_per_block, 0);
+        neighbor_vec neighbors(markers_per_block * k);
+
+        for (int b=0; b<nblocks; ++b) {
+            int start = b * markers_per_block;
+            int end = std::min(start + markers_per_block, nmarkers);
+            
+            printf("      Block %3d:  marker %7d to %7d", b, start, end-1);
+
+            queries.resize(end-start);
+            std::fill_n(queries.data(), NDIMS*(end-start),0.);
 
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
-            old_connectivity, last_marker) firstprivate(k)
+            #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
+                old_connectivity, start, end) firstprivate(k)
 #endif
-        #pragma acc parallel loop async
-        for (int i = 0; i < last_marker; i++) {
-            // 1. Get physical coordinates, x, of an old marker.
-            const int *conn = old_connectivity[ms.get_elem(i)];
-            const double *eta = ms.get_eta(i);
-            for (int j = 0; j < NDIMS; j++) {
-                for (int l = 0; l < NODES_PER_ELEM; l++) {
-                    queries[i][j] += eta[l] * old_coord[ conn[l] ][j];
+            #pragma acc parallel loop async
+            for (int i = start; i < end; i++) {
+                int idx_q = i - start;
+                // 1. Get physical coordinates, x, of an old marker.
+                const int *conn = old_connectivity[ms.get_elem(i)];
+                const double *eta = ms.get_eta(i);
+                for (int j = 0; j < NDIMS; j++) {
+                    for (int l = 0; l < NODES_PER_ELEM; l++) {
+                        queries[idx_q][j] += eta[l] * old_coord[ conn[l] ][j];
+                    }
                 }
+            }
+
+            neighbors.resize( (end - start) * k );
+
+            #pragma acc wait
+
+            kdtree.search(queries, neighbors, k, 3);
+
+            // Loop over all the old markers and identify a containing element in the new mesh.
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
+                nmarkers, queries, neighbors, start, end) firstprivate(k)
+#endif
+            #pragma acc parallel loop
+            for (int i = start; i < end; i++) {
+                int idx_q = i - start;
+                bool found = false;
+
+                // 2. look for nearby elements.
+                neighbor* nn_idx = neighbors.data() + idx_q*k;
+
+                for( int j = 0; j < k; j++ ) {
+                    int e = nn_idx[j].idx;
+                    double r[NDIMS];
+
+                    bary.transform(queries[idx_q], e, r);
+
+                    // change this if-condition to (i == N) to debug the N-th marker
+                    if (bary.is_inside(r)) {
+                        ms.set_eta(i, r);
+                        ms.set_elem(i, e);            
+                        found = true;
+                        break;
+                    }
+                }
+
+                if( found ) continue;
+
+                /* not found */
+                // Since no containing element has been found, delete this marker.
+                ms.set_elem(i, -1.); // mark this marker for removal
             }
         }
 
-        neighbor_vec neighbors(last_marker*k);
-
-        #pragma acc wait
-
-        kdtree.search(queries, neighbors, k, 3);
-
-        // Loop over all the old markers and identify a containing element in the new mesh.
         int_vec removed_markers;
 
-#ifndef ACC
-        #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
-            last_marker, queries, neighbors) firstprivate(k)
-#endif
-        #pragma acc parallel loop
-        for (int i = 0; i < last_marker; i++) {
-            bool found = false;
-
-            // 2. look for nearby elements.
-            neighbor* nn_idx = neighbors.data() + i*k;
-
-            for( int j = 0; j < k; j++ ) {
-                int e = nn_idx[j].idx;
-                double r[NDIMS];
-
-                bary.transform(queries[i], e, r);
-
-                // change this if-condition to (i == N) to debug the N-th marker
-                if (bary.is_inside(r)) {
-                    ms.set_eta(i, r);
-                    ms.set_elem(i, e);            
-                    found = true;
-                    break;
-                }
-            }
-
-            if( found ) continue;
-
-            /* not found */
-            // Since no containing element has been found, delete this marker.
-            ms.set_elem(i, -1.); // mark this marker for removal
-        }
-
-        for (int i = 0; i < last_marker; i++) {
+        for (int i = 0; i < nmarkers; i++) {
             int e = ms.get_elem(i);
             if (e >= 0)
                 markers_in_elem[e].push_back(i);

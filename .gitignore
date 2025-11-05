@@ -26,3 +26,4 @@ test
 *.nsys-rep
 *.log
 *.tsm
+external
