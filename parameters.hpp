@@ -9,8 +9,8 @@
 
 #include <nanoflann.hpp>
 #ifdef USE_NPROF
-#include <nvToolsExt.h> 
-// #include <nvtx3/nvToolsExt.h> 
+#include <nvtx3/nvToolsExt.h> 
+// #include <nvToolsExt.h> 
 #endif
 
 #include "constants.hpp"

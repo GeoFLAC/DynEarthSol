@@ -253,7 +253,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 
 	ifeq ($(nprof), 1)
 		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
-		LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt -g
+		LDFLAGS += -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXXFLAGS = -march=core2
