@@ -570,6 +570,10 @@ int main(int argc, const char* argv[])
     }
 
     std::cout << "Starting simulation...\n";
+    if (param.sim.show_information_interval_in_sec > 0)
+        std::cout << "  Showing model progress every ~"
+                << param.sim.show_information_interval_in_sec
+                << " seconds.\n";
     do {
 #ifdef USE_NPROF
         nvtxRangePush("dynearthsol");
