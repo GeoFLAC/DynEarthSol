@@ -194,7 +194,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     // meaning of vbc flags (odd: free; even: fixed) --
@@ -652,14 +652,14 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             }
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
 void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     // meaning of vbc flags (odd: free; even: fixed) --
@@ -1112,14 +1112,14 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
             }
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -1270,14 +1270,14 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
             force[n][NDIMS-1] -= param.bc.elastic_foundation_constant * ((*var.coord)[n][NDIMS-1] - (*var.coord0)[n][NDIMS-1]);
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -1352,7 +1352,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     }
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -1361,7 +1361,7 @@ namespace {
 
     void simple_diffusion(const Variables& var)
     {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePushA(__FUNCTION__);
 #endif
         /* Diffusing surface topography to simulate the effect of erosion and
@@ -1550,7 +1550,7 @@ namespace {
     #endif
             }
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -1585,7 +1585,7 @@ namespace {
 
     void get_surface_info(const Variables& var, \
         double_vec& top_base, double_vec& top_depth) {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -1607,7 +1607,7 @@ namespace {
             top_depth[i] = surfinfo.base_level - coord[top_nodes[i]][1];
             top_base[i] *= 0.5;
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -1668,7 +1668,7 @@ namespace {
 
     void terrigenous_diffusion(const Param& param,const Variables& var, const double_vec& basin_x, const double_vec& basin_dx, const double_vec& basin_depth, \
             const int nbasin,const int option, double_vec& dh_terrig, double dt_cycle) {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePushA(__FUNCTION__);
 #endif
         const double S0 = param.control.terrig_sediment_area;
@@ -1707,7 +1707,7 @@ namespace {
             else if (dh_terrig[i] > basin_depth[i+1])
                 dh_terrig[i] = basin_depth[i+1]+1e-2;
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
         return;
@@ -1762,7 +1762,7 @@ namespace {
     }
 
     void hemipelagic_deposition(const Param& param,const Variables& var) {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePushA(__FUNCTION__);
 #endif
         const array_t& coord = *var.coord;
@@ -1795,14 +1795,14 @@ namespace {
             std::cout << "\tMax hemi/pelagic sedimentation rate (km/Myr): " << std::fixed << std::setprecision(3) << \
                 max_dhi*YEAR2SEC*1e3/var.dt << std::endl;
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
 
 
     void terrigenous_deposition(const Param& param,const Variables& var) {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePushA(__FUNCTION__);
 #endif
         #pragma acc wait // here is not ACC parallelized yet
@@ -1836,7 +1836,7 @@ namespace {
         if (max_depth*min_depth >= 0.) {
             if (is_report)
                 std::cout << "\tNo basin exist.\n";
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
             nvtxRangePop();
 #endif
             return;
@@ -1911,7 +1911,7 @@ namespace {
         for (int i=0; i<ntop; i++)
             dh[i] += dh_tmp[i];
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -1921,7 +1921,7 @@ namespace {
 void surface_plstrain_diffusion(const Param &param, \
     const Variables& var, double_vec& plstrain)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     double half_life = 1.e2 * YEAR2SEC;
@@ -1935,7 +1935,7 @@ void surface_plstrain_diffusion(const Param &param, \
         if (mat != param.mat.mattype_oceanic_crust)
             plstrain[*e] -= plstrain[*e] * lambha * var.dt;
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -1943,7 +1943,7 @@ void surface_plstrain_diffusion(const Param &param, \
 void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, \
     tensor_t& stress, tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 #ifndef ACC
@@ -1990,7 +1990,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
         }
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2000,7 +2000,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
                        int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -2146,7 +2146,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     }
 #endif
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 

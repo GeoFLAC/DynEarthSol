@@ -6,7 +6,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const double_vec &volume)
     : coeff_(connectivity.size()), nelem_(connectivity.size())
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 #ifndef ACC
@@ -32,7 +32,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff2d(a, b, c, volume[e], coeff_[e]);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -43,7 +43,7 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
                                                        const double_vec &volume)
     : coeff_(elem.size()), nelem_(elem.size())
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 #ifndef ACC
@@ -70,7 +70,7 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
         compute_coeff2d(a, b, c, volume[e], coeff_[i]);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -82,7 +82,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const bool is_surface)
     : coeff_(conn_surface.size()), nelem_(conn_surface.size())
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 #ifndef ACC
@@ -106,7 +106,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff1d(a, b, area[e], coeff_[e]);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

@@ -132,7 +132,7 @@ void init_var(const Param& param, Variables& var)
                      (var.nz-1) * (var.nx-1) );
 #endif
 
-#ifdef USE_NPROF
+#ifdef NPROF
     var.log_table = new double_vec(LOG_TABLE_SIZE);
     for (int i=0; i<LOG_TABLE_SIZE; ++i)
         (*var.log_table)[i] = std::log(LOG_XDELTA * i + LOG_XMIN);
@@ -150,7 +150,7 @@ void init_var(const Param& param, Variables& var)
 
 void init(const Param& param, Variables& var)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     std::cout << "Initializing mesh and field data...\n";
@@ -197,7 +197,7 @@ void init(const Param& param, Variables& var)
 
     initial_weak_zone(param, var, *var.plstrain);
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -371,7 +371,7 @@ void end(Variables& var) {
 
 void update_mesh(const Param& param, Variables& var)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -384,7 +384,7 @@ void update_mesh(const Param& param, Variables& var)
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA("swap vectors");
 #endif
     #pragma serial async
@@ -394,7 +394,7 @@ void update_mesh(const Param& param, Variables& var)
         var.volume_old = tmp;
     }
 //    var.volume->swap(*var.volume_old);
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
@@ -407,7 +407,7 @@ void update_mesh(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -415,7 +415,7 @@ void update_mesh(const Param& param, Variables& var)
 
 void isostasy_adjustment(const Param &param, Variables &var)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     std::cout << "Adjusting isostasy for " << param.ic.isostasy_adjustment_time_in_yr << " yrs...\n";
@@ -455,14 +455,14 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
     }
     std::cout << "Adjusted isostasy for " << iso_steps << " steps.\n";
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void initial_body_force_adjustment(const Param &param, Variables &var)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     
@@ -499,7 +499,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         }
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -575,7 +575,7 @@ int main(int argc, const char* argv[])
                 << param.sim.info_display_interval
                 << " seconds.\n";
     do {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
 #endif
         var.steps ++;
@@ -793,7 +793,7 @@ int main(int argc, const char* argv[])
                 }
             }
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
 

@@ -68,7 +68,7 @@ void Output::write_info(const Variables& var, double dt)
 
 void Output::_write(const Variables& var, bool disable_averaging)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     run_time_ns = get_nanoseconds() - start_time;
@@ -228,7 +228,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     frame ++;
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -316,7 +316,7 @@ void Output::average_fields(Variables& var)
 
 void Output::write_checkpoint(const Param& param, const Variables& var)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     char filename[256];
@@ -357,7 +357,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #endif
         (*ms)->write_chkpt_file(bin);
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

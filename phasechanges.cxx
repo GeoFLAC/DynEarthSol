@@ -110,7 +110,7 @@ void phase_changes(const Param& param, Variables& var)
 {
     if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return; // no phase change        
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -204,7 +204,7 @@ void phase_changes(const Param& param, Variables& var)
     }
 
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

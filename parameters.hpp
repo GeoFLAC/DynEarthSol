@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 #include <nanoflann.hpp>
-#ifdef USE_NPROF
+#ifdef NPROF
 #include <nvtx3/nvToolsExt.h> 
 // #include <nvToolsExt.h> 
 #endif

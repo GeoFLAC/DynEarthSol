@@ -77,7 +77,7 @@ const int NODE_OF_FACET[FACETS_PER_ELEM][NODES_PER_FACET] =
 const double YEAR2SEC = 365.2422 * 86400;
 const double DEG2RAD = M_PI / 180;
 
-#ifdef USE_NPROF
+#ifdef NPROF
 const int LOG_TABLE_SIZE = 90001;
 const double LOG_XMIN = 1.;
 const double LOG_XMAX = 10.;

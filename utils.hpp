@@ -64,7 +64,7 @@ void print(std::ostream& os, const Array& A)
   os << "]";
 }
 
-#ifdef USE_NPROF
+#ifdef NPROF
 
 #pragma acc routine seq
 static inline double log_lookup(const double_vec& log_table, double x) {
@@ -118,7 +118,7 @@ static inline double sin_lookup(const double_vec& sin_table, const double x) {
 
 #pragma acc routine seq
 static inline double tan_safe(const double_vec& tan_table, const double x) {
-#ifdef USE_NPROF
+#ifdef NPROF
     return tan_lookup(tan_table, x);
 #else
     return std::tan(x);
@@ -127,7 +127,7 @@ static inline double tan_safe(const double_vec& tan_table, const double x) {
 
 #pragma acc routine seq
 static inline double log_safe(const double_vec& log_table, const double x) {
-#ifdef USE_NPROF
+#ifdef NPROF
     return log_lookup(log_table, x);
 #else
     return std::log(x);
@@ -136,7 +136,7 @@ static inline double log_safe(const double_vec& log_table, const double x) {
 
 #pragma acc routine seq
 static inline double sin_safe(const double_vec& sin_table, const double x) {
-#ifdef USE_NPROF
+#ifdef NPROF
     return sin_lookup(sin_table, x);
 #else
     return std::sin(x);
@@ -145,7 +145,7 @@ static inline double sin_safe(const double_vec& sin_table, const double x) {
 
 #pragma acc routine seq
 static double pow_safe(const double_vec& log_table, const double x, const double y) {
-#ifdef USE_NPROF
+#ifdef NPROF
     // Error: pow_safe called with x < 0;
     if (x < 0.) {
        return NAN;
@@ -267,7 +267,7 @@ static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
 }
 
 static void check_nan(const Variables& var, const char* func_name = nullptr) {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -345,7 +345,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
         }
         std::exit(1);
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

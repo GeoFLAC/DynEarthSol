@@ -153,7 +153,7 @@ void reallocate_variables(const Param& param, Variables& var)
 void update_temperature(const Param &param, const Variables &var,
                         double_vec &temperature, elem_cache &tmp_result)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 #ifndef ACC
@@ -231,7 +231,7 @@ void update_temperature(const Param &param, const Variables &var,
 //        else
 //            temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
 //    }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -251,7 +251,7 @@ inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
 void update_pore_pressure(const Param &param, const Variables &var,
                           double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache &tmp_result, tensor_t& stress, double_vec& old_mean_stress)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -353,14 +353,14 @@ void update_pore_pressure(const Param &param, const Variables &var,
             
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
 void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -430,7 +430,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
             s[n] += 0.5 * (v[i][1] * shpdz[i] + v[i][2] * shpdy[i]);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -438,7 +438,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 
 static void apply_damping(const Param& param, const Variables& var, array_t& force)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     // flatten 2d arrays to simplify indexing
@@ -529,7 +529,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         std::cerr << "Error: unknown damping_option: " << param.control.damping_option << '\n';
         std::exit(1);
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -564,7 +564,7 @@ static double rho(const conn_t &var_connectivity, \
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, elem_cache& tmp_result)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -647,14 +647,14 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
     apply_damping(param, var, force);
     
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
 double calculate_residual_force(const Variables& var, array_t& force_residual)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     double l2 = 0.0;
@@ -670,7 +670,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 
     #pragma acc wait
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
     return std::sqrt(l2);
@@ -679,7 +679,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 
 void update_velocity(const Variables& var, array_t& vel)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -691,14 +691,14 @@ void update_velocity(const Variables& var, array_t& vel)
         for (int j=0;j<NDIMS;j++)
             vel[i][j] += var.dt * (*var.force)[i][j] / (*var.mass)[i];
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
 void update_velocity_PT(const Variables& var, array_t& vel)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
 
@@ -708,14 +708,14 @@ void update_velocity_PT(const Variables& var, array_t& vel)
         for (int j=0;j<NDIMS;j++)
             vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void update_coordinate(const Variables& var, array_t& coord)
 {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePushA(__FUNCTION__);
 #endif
     // double* x = var.coord->data();
@@ -733,7 +733,7 @@ void update_coordinate(const Variables& var, array_t& coord)
         }
         
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -781,7 +781,7 @@ namespace {
 
 void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     // The spin rate tensor, W, and the Cauchy stress tensor, S, are
@@ -856,7 +856,7 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

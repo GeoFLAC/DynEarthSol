@@ -60,7 +60,7 @@ BinaryOutput::BinaryOutput(const char *filename)
 
 BinaryOutput::~BinaryOutput()
 {
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
     if (f) {
@@ -73,7 +73,7 @@ BinaryOutput::~BinaryOutput()
 
     delete [] header;
     header = NULL;
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -308,11 +308,17 @@ HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, c
 
 HDF5Output::~HDF5Output()
 {
+#ifdef NPROF
+    nvtxRangePushA(__FUNCTION__);
+#endif
     if (file_id >= 0) {
         H5Fflush(file_id, H5F_SCOPE_GLOBAL);
         H5Fclose(file_id);
         file_id = -1;
     }
+#ifdef NPROF
+    nvtxRangePop();
+#endif
 }
 
 // Create a group with link creation order tracking (required by VTKHDF Assembly trees)
