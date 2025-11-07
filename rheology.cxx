@@ -635,7 +635,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -930,7 +930,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
                    double_vec& old_mean_stress)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC

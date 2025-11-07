@@ -130,7 +130,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -164,7 +164,7 @@ void compute_volume(const Variables &var,
                     double_vec &volume)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -196,7 +196,7 @@ void compute_volume(const Variables &var,
 void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* dvoldt is the volumetric strain rate, weighted by the element volume,
      * lumped onto the nodes.
@@ -242,7 +242,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* edvoldt is the averaged (i.e. smoothed) dvoldt on the element.
      * It is used in update_stress() to prevent mesh locking.
@@ -275,7 +275,7 @@ void NMD_stress(const Param& param, const Variables &var,
     double_vec &dp_nd, tensor_t& stress, double_vec &etmp)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // dp_nd is the pressure change, weighted by the element volume,
     // lumped onto the nodes.
@@ -384,7 +384,7 @@ double compute_dt(const Param& param, Variables& var)
 
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // constant dt
     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
@@ -553,7 +553,7 @@ double compute_dt(const Param& param, Variables& var)
 double compute_dt_PT(const Param& param, const Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // constant dt
     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
@@ -651,7 +651,7 @@ void compute_mass(const Param &param, const Variables &var,
 
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // volume_n is (node-averaged volume * NODES_PER_ELEM)
     // volume_n.assign(volume_n.size(), 0);
@@ -784,7 +784,7 @@ void compute_mass(const Param &param, const Variables &var,
 void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shapefn &shpdz)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC

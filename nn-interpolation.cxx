@@ -19,7 +19,7 @@ namespace {
                                bool is_surface)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
 
         double eps = 1e-15;
@@ -77,7 +77,7 @@ namespace {
                               bool is_surface)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         const int neta0 = is_surface ? 20 : 10; // larger neta0, more accurate mapping
         const int neta1 = neta0 + 1; // different from neta0 to prevent the temporary point falling the edge of elements
@@ -301,14 +301,14 @@ namespace {
                                bool is_surface)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
 
         int_vec changed;
         int old_npoint = old_connectivity.size();
 
 #ifdef NPROF_DETAIL
-        nvtxRangePushA("create kdtree for old elements");
+        nvtxRangePush("create kdtree for old elements");
 #endif
 
         array_t points(old_npoint);
@@ -403,7 +403,7 @@ namespace {
                       int ntarget)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -452,7 +452,7 @@ namespace {
                       int ntarget)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -505,7 +505,7 @@ namespace {
                                     bool is_surface = false)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         if (is_surface) {
             const int nfacet = idx.size();
@@ -585,7 +585,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                                     const bool is_surface)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     {
         int nqueries;

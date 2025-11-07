@@ -195,7 +195,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // meaning of vbc flags (odd: free; even: fixed) --
     // 0: all components free
@@ -660,7 +660,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // meaning of vbc flags (odd: free; even: fixed) --
     // 0: all components free
@@ -1120,7 +1120,7 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     if (param.control.gravity == 0) return;
@@ -1278,7 +1278,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma wait // here is not ACC parallelized
@@ -1362,7 +1362,7 @@ namespace {
     void simple_diffusion(const Variables& var)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         /* Diffusing surface topography to simulate the effect of erosion and
          * sedimentation.
@@ -1586,7 +1586,7 @@ namespace {
     void get_surface_info(const Variables& var, \
         double_vec& top_base, double_vec& top_depth) {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
 
         const array_t& coord = *var.coord;
@@ -1669,7 +1669,7 @@ namespace {
     void terrigenous_diffusion(const Param& param,const Variables& var, const double_vec& basin_x, const double_vec& basin_dx, const double_vec& basin_depth, \
             const int nbasin,const int option, double_vec& dh_terrig, double dt_cycle) {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         const double S0 = param.control.terrig_sediment_area;
         const double C0 = param.control.terrig_sediment_diffusivity;
@@ -1763,7 +1763,7 @@ namespace {
 
     void hemipelagic_deposition(const Param& param,const Variables& var) {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
@@ -1803,7 +1803,7 @@ namespace {
 
     void terrigenous_deposition(const Param& param,const Variables& var) {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         #pragma acc wait // here is not ACC parallelized yet
 
@@ -1922,7 +1922,7 @@ void surface_plstrain_diffusion(const Param &param, \
     const Variables& var, double_vec& plstrain)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
@@ -1944,7 +1944,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
     tensor_t& stress, tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
     #pragma omp parallel default(none) \
@@ -2001,7 +2001,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                        int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC

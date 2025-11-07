@@ -18,7 +18,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
                        const double_vec &source, double_vec &target)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma acc serial async
@@ -48,7 +48,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
                        const array_t &source, array_t &target)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma acc serial async
@@ -84,12 +84,12 @@ void prepare_interpolation(const Param& param, const Variables &var,
                            brc_t &brc, int_vec &el)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // for each new coord point, find the enclosing old element
 
 #ifdef NPROF_DETAIL
-    nvtxRangePushA("create kdtree for coord");
+    nvtxRangePush("create kdtree for coord");
 #endif
 
 #ifdef ACC
@@ -238,7 +238,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
                                     const conn_t &old_connectivity)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int_vec el(var.nnode);
     brc_t brc(var.nnode);

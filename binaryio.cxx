@@ -61,7 +61,7 @@ BinaryOutput::BinaryOutput(const char *filename)
 BinaryOutput::~BinaryOutput()
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     if (f) {
         /* write header buffer to the beginning of file */
@@ -309,7 +309,7 @@ HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, c
 HDF5Output::~HDF5Output()
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     if (file_id >= 0) {
         H5Fflush(file_id, H5F_SCOPE_GLOBAL);

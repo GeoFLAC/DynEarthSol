@@ -154,7 +154,7 @@ void update_temperature(const Param &param, const Variables &var,
                         double_vec &temperature, elem_cache &tmp_result)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
     #pragma omp parallel default(none) shared(param,var,temperature,tmp_result)
@@ -252,7 +252,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
                           double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache &tmp_result, tensor_t& stress, double_vec& old_mean_stress)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     // Initialize diff_max_local for reduction
@@ -361,7 +361,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
 void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -439,7 +439,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 static void apply_damping(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // flatten 2d arrays to simplify indexing
     const double small_vel = 1e-13;
@@ -565,7 +565,7 @@ static double rho(const conn_t &var_connectivity, \
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, elem_cache& tmp_result)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -655,7 +655,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 double calculate_residual_force(const Variables& var, array_t& force_residual)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     double l2 = 0.0;
     double num = var.nnode * NDIMS;
@@ -680,7 +680,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 void update_velocity(const Variables& var, array_t& vel)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -699,7 +699,7 @@ void update_velocity(const Variables& var, array_t& vel)
 void update_velocity_PT(const Variables& var, array_t& vel)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma omp parallel for default(none) shared(var, vel)
@@ -716,7 +716,7 @@ void update_velocity_PT(const Variables& var, array_t& vel)
 void update_coordinate(const Variables& var, array_t& coord)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // double* x = var.coord->data();
     // const double* v = var.vel->data();
@@ -782,7 +782,7 @@ namespace {
 void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // The spin rate tensor, W, and the Cauchy stress tensor, S, are
     //     [  0  w3  w4]     [s0 s3 s4]

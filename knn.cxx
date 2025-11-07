@@ -246,7 +246,7 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
                       neighbor* results, int k, int nheap, 
                       double radius2, double cell_size) {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     // use managed memory
@@ -287,7 +287,7 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors,
         int k, double resoTimes)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     printf("      Running knn query on %d points ", numPoints);
 

@@ -165,7 +165,7 @@ void MarkerSet::random_eta_seed( double *eta, int seed )
 void MarkerSet::append_markers(AMD_vec &md)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int nmarker = md.size();
     // Ensure sufficient array size
@@ -196,7 +196,7 @@ void MarkerSet::append_markers(AMD_vec &md)
 void MarkerSet::append_marker_at_i(AppendMarkerData &md, int idx, int last_id)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     int m = idx;
@@ -256,7 +256,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
             const int mattype, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     double marker_dh_applied_ratio = 0.8;
@@ -726,7 +726,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
     if (markers.empty()) return;
 
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     std::sort(markers.begin(),markers.end());
 
@@ -797,7 +797,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
 void MarkerSet::remove_marker(int i)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // Replace marker i by the last marker.
     --_nmarkers;
@@ -938,7 +938,7 @@ template <class T>
 void MarkerSet::write_save_file(const Variables &var, T &bin) const
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA("write markersets");
+    nvtxRangePush("write markersets");
 #endif
 
 #ifndef HDF5
@@ -987,7 +987,7 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 
 array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // const MarkerSet &ms = *var.markersets[0];
     const int nmarkers = get_nmarkers();
@@ -1021,7 +1021,7 @@ namespace {
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
@@ -1143,7 +1143,7 @@ namespace {
                                           int_pair_vec &unplenished_elems, int genesis)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         for (const auto& pair : unplenished_elems) {
             int e = pair.first;
@@ -1171,7 +1171,7 @@ namespace {
                                                   int_pair_vec &unplenished_elems, int genesis)
     {
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         for (const auto& pair : unplenished_elems) {
             int e = pair.first;
@@ -1263,13 +1263,13 @@ namespace {
         if (unplenished_elems.empty()) return;
 
 #ifdef NPROF_DETAIL
-        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePush(__FUNCTION__);
 #endif
         array_t *points = var.markersets[0]->calculate_marker_coord(var); // coordinate of markers
         PointCloud cloud(*points);
 
 #ifdef NPROF_DETAIL
-        nvtxRangePushA("create kdtree for markers");
+        nvtxRangePush("create kdtree for markers");
 #endif
         NANOKDTree kdtree(NDIMS, cloud);
         kdtree.buildIndex();
@@ -1394,7 +1394,7 @@ namespace {
 void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     #pragma acc serial
     int ncount = 0, is_error = 0;
@@ -1443,7 +1443,7 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 void MarkerSet::correct_surface_marker(const Param &param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // correct surface marker.
     Barycentric_transformation bary(*var.top_elems, *var.coord, *var.connectivity, *var.volume);
@@ -1654,7 +1654,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
                    const conn_t &old_connectivity)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // Re-create elemmarkers
     delete var.elemmarkers;
@@ -1674,7 +1674,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
         // nearest-neighbor search structure
 #ifdef NPROF_DETAIL
-        nvtxRangePushA("create kdtree for new elements");
+        nvtxRangePush("create kdtree for new elements");
 #endif
 
         array_t points(var.nelem);
@@ -1705,7 +1705,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
     // If any new element has too few markers, generate markers in them.
 #ifdef NPROF_DETAIL
-    nvtxRangePushA("find unplenished elements");
+    nvtxRangePush("find unplenished elements");
 #endif
 
     int nunplenished = 0;

@@ -1036,7 +1036,7 @@ void refine_surface_elem(const Param &param, const Variables &var,
                          const double_vec &old_volume, int &old_nnode, double *qcoord)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     const double surface_vol = param.mesh.sediment_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
 
@@ -1101,7 +1101,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
               const segment_t &original_segment, const segflag_t &original_segflag)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int_vec bdry_polygons[nbdrytypes];
     assemble_bdry_polygons(var, original_coord, original_connectivity, bdry_polygons);
@@ -1721,7 +1721,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     double *qcoord = new double[var.nnode * NDIMS];
@@ -2656,7 +2656,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* Check the quality of the mesh, return 0 if the mesh quality (by several
      * measures) is good. Non-zero returned values indicate --
@@ -2768,7 +2768,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int64_t time_tmp = get_nanoseconds();
 
@@ -2950,7 +2950,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
 #ifdef NPROF_DETAIL
-    nvtxRangePushA("reset bounrdary condition");
+    nvtxRangePush("reset bounrdary condition");
 #endif
 
     if (param.mesh.remeshing_option==1 ||

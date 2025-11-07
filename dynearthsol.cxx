@@ -151,7 +151,7 @@ void init_var(const Param& param, Variables& var)
 void init(const Param& param, Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     std::cout << "Initializing mesh and field data...\n";
 
@@ -372,7 +372,7 @@ void end(Variables& var) {
 void update_mesh(const Param& param, Variables& var)
 {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     update_coordinate(var, *var.coord);
@@ -385,7 +385,7 @@ void update_mesh(const Param& param, Variables& var)
     }
 
 #ifdef NPROF_DETAIL
-    nvtxRangePushA("swap vectors");
+    nvtxRangePush("swap vectors");
 #endif
     #pragma serial async
     {
@@ -416,7 +416,7 @@ void update_mesh(const Param& param, Variables& var)
 void isostasy_adjustment(const Param &param, Variables &var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     std::cout << "Adjusting isostasy for " << param.ic.isostasy_adjustment_time_in_yr << " yrs...\n";
 
@@ -463,7 +463,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 void initial_body_force_adjustment(const Param &param, Variables &var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     
     double residual_old = std::numeric_limits<double>::max();

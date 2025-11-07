@@ -268,7 +268,7 @@ static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
 
 static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifdef NPROF
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma acc serial

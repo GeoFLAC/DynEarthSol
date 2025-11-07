@@ -2173,7 +2173,7 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 void create_boundary_flags(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     // allocate and init to 0
     if (var.bcflag) delete var.bcflag;
@@ -2190,7 +2190,7 @@ void create_boundary_flags(Variables& var)
 void create_boundary_nodes(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* var.bnodes[i] contains a list of nodes on the i-th boundary.
      * (See constants.hpp for the order of boundaries.)
@@ -2218,7 +2218,7 @@ void create_boundary_nodes(Variables& var)
 void create_top_elems(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     const int top_bdry = iboundz1;
     const int_vec& top_tmp = *var.bnodes[top_bdry];
@@ -2480,7 +2480,7 @@ namespace {
 void create_boundary_facets(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* var.bfacets[i] contains a list of facets (or segments in 2D)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
@@ -2619,7 +2619,7 @@ int get_sup_size(const Variables& var, const int inode)
 void create_support(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     var.support = new int_vec2D(var.nnode);
     var.support_idx = new int_vec(var.nnode, 0);
@@ -2659,7 +2659,7 @@ void create_support(Variables& var)
 void create_neighbor(Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     var.neighbor = new conn_t(var.nelem, -1);
@@ -2773,7 +2773,7 @@ void create_neighbor(Variables& var)
 void create_elemmarkers(const Param& param, Variables& var)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     var.markers_in_elem = new int_vec2D(var.nelem, int_vec(0));
@@ -2850,7 +2850,7 @@ void create_new_mesh(const Param& param, Variables& var)
 void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int nelem = connectivity.size();
 
@@ -2880,7 +2880,7 @@ void elem_center(const array_t &coord, const conn_t &connectivity, array_t& cent
 void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
     int nelem = connectivity.size();
 

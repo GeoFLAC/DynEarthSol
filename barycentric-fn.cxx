@@ -7,7 +7,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
     : coeff_(connectivity.size()), nelem_(connectivity.size())
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
     #pragma omp parallel for default(none) \
@@ -44,7 +44,7 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
     : coeff_(elem.size()), nelem_(elem.size())
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
     #pragma omp parallel for default(none) \
@@ -83,7 +83,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
     : coeff_(conn_surface.size()), nelem_(conn_surface.size())
 {
 #ifdef NPROF_DETAIL
-    nvtxRangePushA(__FUNCTION__);
+    nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
     #pragma omp parallel for default(none) \
