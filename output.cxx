@@ -200,9 +200,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
             (*ms)->write_save_file(var, bin);
         }
     }
-#ifndef HDF5
-    bin.close();
-#endif
 
     write_info(var, dt);
 

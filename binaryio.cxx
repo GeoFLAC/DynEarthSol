@@ -60,12 +60,6 @@ BinaryOutput::BinaryOutput(const char *filename)
 
 BinaryOutput::~BinaryOutput()
 {
-    close();
-}
-
-
-void BinaryOutput::close()
-{
 #ifdef USE_NPROF
     nvtxRangePushA(__FUNCTION__);
 #endif
