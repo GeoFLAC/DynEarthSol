@@ -42,7 +42,7 @@ static void declare_parameters(po::options_description &cfg,
          "Output step interval")
         ("sim.output_time_interval_in_yr", po::value<double>(&p.sim.output_time_interval_in_yr),
          "Output time interval (in years)")
-        ("sim.show_information_interval_in_sec", po::value<int>(&p.sim.show_information_interval_in_sec)->default_value(300),
+        ("sim.info_display_interval", po::value<int>(&p.sim.info_display_interval)->default_value(300),
          "Output walltime interval for showing model status on screen (in seconds).\n"
          " 0: no printing model status on screen based on walltime intervel.\n"
          ">0: specified second interval for showing model status on screen after the last result output.")

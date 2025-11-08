@@ -36,7 +36,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.func_time.show_information_interval_in_ns =
-        static_cast<int64_t>(param.sim.show_information_interval_in_sec) * 1e9;
+        static_cast<int64_t>(param.sim.info_display_interval) * 1e9;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -570,9 +570,9 @@ int main(int argc, const char* argv[])
     }
 
     std::cout << "Starting simulation...\n";
-    if (param.sim.show_information_interval_in_sec > 0)
+    if (param.sim.info_display_interval > 0)
         std::cout << "  Showing model progress every ~"
-                << param.sim.show_information_interval_in_sec
+                << param.sim.info_display_interval
                 << " seconds.\n";
     do {
 #ifdef USE_NPROF
@@ -780,7 +780,7 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            if (param.sim.show_information_interval_in_sec > 0 ) {
+            if (param.sim.info_display_interval > 0 ) {
                 int64_t now_ns = get_nanoseconds();
                 if (now_ns > var.func_time.show_information_next) {
                     std::cout << "              Step = " << var.steps
