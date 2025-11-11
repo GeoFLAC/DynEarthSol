@@ -30,9 +30,13 @@ void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
     var.steps = 0;
+    var.nremesh = 0;
+    var.noutput = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.func_time.show_information_interval_in_ns =
+        static_cast<int64_t>(param.sim.info_display_interval) * 1e9;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -353,6 +357,8 @@ void restart(const Param& param, Variables& var)
 
 
 void end(Variables& var) {
+    delete var.output;
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.bfacets[i]->size() == 0) continue;
         for (int j=i+1; j<nbdrytypes; j++)
@@ -518,7 +524,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-    Output output(param, var.func_time.start_time,
+    var.output = new Output(param, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
@@ -529,7 +535,7 @@ int main(int argc, const char* argv[])
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
-            output.write_checkpoint(param, var);
+            var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
@@ -537,7 +543,10 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+
+    int64_t init_time = get_nanoseconds() - var.func_time.start_time;
+
+    var.output->write_exact(var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -561,6 +570,10 @@ int main(int argc, const char* argv[])
     }
 
     std::cout << "Starting simulation...\n";
+    if (param.sim.info_display_interval > 0)
+        std::cout << "  Showing model progress every ~"
+                << param.sim.info_display_interval
+                << " seconds.\n";
     do {
 #ifdef USE_NPROF
         nvtxRangePush("dynearthsol");
@@ -631,19 +644,13 @@ int main(int argc, const char* argv[])
                         if (quality_is_bad) {
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                                var.output->write_exact(var);
                             }
 
-                            int64_t time_tmp = get_nanoseconds();
                             remesh(param, var, quality_is_bad);
-                            var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                                var.output->write_exact(var);
                             }
                         }
                     }
@@ -687,7 +694,7 @@ int main(int argc, const char* argv[])
         #pragma acc wait
 
         if (param.sim.is_outputting_averaged_fields)
-            output.average_fields(var);
+            var.output->average_fields(var);
         
         int r = 1;
         if (param.control.has_ATS) {
@@ -701,9 +708,7 @@ int main(int argc, const char* argv[])
             //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
             //     output.write_checkpoint(param, var);
 
-            // int64_t time_tmp = get_nanoseconds();
             // output.write(var);
-            // var.func_time.output_time += get_nanoseconds() - time_tmp;
 
             // next_regular_frame ++;
             // starting_step = var.steps; starting_time = var.time;
@@ -726,11 +731,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
-                output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -750,11 +753,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
-                output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -768,20 +769,27 @@ int main(int argc, const char* argv[])
                 if (quality_is_bad) {
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
+                        var.output->write_exact(var);
                     }
 
-                    int64_t time_tmp = get_nanoseconds();
                     remesh(param, var, quality_is_bad);
-                    var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
+                        var.output->write_exact(var);
                     }
+                }
+            }
+
+            if (param.sim.info_display_interval > 0 ) {
+                int64_t now_ns = get_nanoseconds();
+                if (now_ns > var.func_time.show_information_next) {
+                    std::cout << "              Step = " << var.steps
+                        << ", time = " << std::scientific << std::setprecision(5)
+                        << var.time / YEAR2SEC << " yr" << ", wt = ";
+                    print_time_ns(now_ns - var.func_time.start_time);
+                    std::cout << "\n";
+
+                    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
                 }
             }
         }
@@ -796,15 +804,35 @@ int main(int argc, const char* argv[])
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
-    std::cout << "Time summary...\n  Execute: ";
+    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time - init_time;
+    double computation_time_avg = computation_time * 1.e-9 / var.steps;
+
+    std::cout << "Time summary...\n  Execute : ";
     print_time_ns(duration_ns);
-    std::cout << "\n  Remesh : ";
-    print_time_ns(var.func_time.remesh_time);
+    std::cout << "\n  Initiate: ";
+    print_time_ns(init_time);
     std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
-        << 100.*var.func_time.remesh_time/duration_ns << "%)\n";
-    std::cout << "  Output : ";
-    print_time_ns(var.func_time.output_time);
-    std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
-        << 100.*var.func_time.output_time/duration_ns << "%)\n";
+        << 100.*init_time/duration_ns << "%)\n";
+    std::cout << "  Compute : ";
+    print_time_ns(computation_time);
+    std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+        << 100.*computation_time/duration_ns << "%)/ " << var.steps
+        << " = " << std::setprecision(6) << computation_time_avg << " s/step\n";
+    if (var.nremesh > 0) {
+        double remesh_time_avg = var.func_time.remesh_time * 1.e-9 / var.nremesh;
+        std::cout << "  Remesh  : ";
+        print_time_ns(var.func_time.remesh_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
+            << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
+    }
+    if (var.noutput > 0) {
+        double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;
+        std::cout << "  Output  : ";
+        print_time_ns(var.func_time.output_time);
+        std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.output_time/duration_ns << "%)/ " << var.noutput
+            << " = " << std::setprecision(2) << output_time_avg << " s/output\n";
+    }
     return 0;
 }
