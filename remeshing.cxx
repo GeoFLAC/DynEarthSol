@@ -2858,6 +2858,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         create_boundary_flags(var);
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
+        delete var.connectivity_surface;
         create_boundary_facets(var);
 
         {
@@ -2882,6 +2883,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         create_support(var);
         delete var.neighbor;
         delete var.contact;
+        delete var.ctmp;
         create_neighbor(var);
 
         std::cout << "    Remapping markers.\n";
