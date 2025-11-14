@@ -583,6 +583,7 @@ int main(int argc, const char* argv[])
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
+        nvtxRangePush("kernel");
 #endif
         var.steps ++;
         var.time += var.dt;
@@ -698,6 +699,10 @@ int main(int argc, const char* argv[])
         }
 
         #pragma acc wait
+
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
 
         if (param.sim.is_outputting_averaged_fields)
             var.output->average_fields(var);
