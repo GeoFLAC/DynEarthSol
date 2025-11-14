@@ -634,8 +634,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -921,7 +921,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // print(std::cerr, s, NSTR);
         // std::cerr << '\n';
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -929,8 +929,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -942,7 +942,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
         double* s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

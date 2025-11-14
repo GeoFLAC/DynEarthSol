@@ -2172,8 +2172,8 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 
 void create_boundary_flags(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     // allocate and init to 0
     if (var.bcflag) delete var.bcflag;
@@ -2181,7 +2181,7 @@ void create_boundary_flags(Variables& var)
 
     create_boundary_flags2(*var.bcflag, var.segment->size(),
                            var.segment->data(), var.segflag->data());
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2189,8 +2189,8 @@ void create_boundary_flags(Variables& var)
 
 void create_boundary_nodes(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* var.bnodes[i] contains a list of nodes on the i-th boundary.
      * (See constants.hpp for the order of boundaries.)
@@ -2210,15 +2210,15 @@ void create_boundary_nodes(Variables& var)
     //     print(std::cout, var.bnodes[j]);
     //     std::cout << '\n';
     // }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void create_top_elems(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     const int top_bdry = iboundz1;
     const int_vec& top_tmp = *var.bnodes[top_bdry];
@@ -2265,7 +2265,7 @@ void create_top_elems(Variables& var)
     for (int i=0; i<var.ntop_elems; i++)
         var.arctop_elems[(*var.top_elems)[i]] = i;
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2479,8 +2479,8 @@ namespace {
 
 void create_boundary_facets(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* var.bfacets[i] contains a list of facets (or segments in 2D)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
@@ -2596,7 +2596,7 @@ void create_boundary_facets(Variables& var)
     //     }
     //     std::cout << '\n';
     // }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2618,8 +2618,8 @@ int get_sup_size(const Variables& var, const int inode)
 
 void create_support(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     var.support = new int_vec2D(var.nnode);
     var.support_idx = new int_vec(var.nnode, 0);
@@ -2651,15 +2651,15 @@ void create_support(Variables& var)
     // std::cout << "support:\n";
     // print(std::cout, *var.support);
     // std::cout << "\n";
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void create_neighbor(Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     var.neighbor = new conn_t(var.nelem, -1);
@@ -2765,15 +2765,15 @@ void create_neighbor(Variables& var)
     //     std::cout << '\n';
     // }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void create_elemmarkers(const Param& param, Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     var.markers_in_elem = new int_vec2D(var.nelem, int_vec(0));
@@ -2782,7 +2782,7 @@ void create_elemmarkers(const Param& param, Variables& var)
         var.hydrous_markers_in_elem = new int_vec2D(var.nelem, int_vec(0));   
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2849,8 +2849,8 @@ void create_new_mesh(const Param& param, Variables& var)
 
 void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     int nelem = connectivity.size();
 
@@ -2872,15 +2872,15 @@ void elem_center(const array_t &coord, const conn_t &connectivity, array_t& cent
 
     #pragma acc wait
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     int nelem = connectivity.size();
 
@@ -2903,7 +2903,7 @@ void facet_center(const array_t &coord, const conn_t &connectivity, array_t& cen
 
     #pragma acc wait
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

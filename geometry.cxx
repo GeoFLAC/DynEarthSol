@@ -129,8 +129,8 @@ double compute_volume(const double **coord)
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -155,7 +155,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
         volume[e] = triangle_area(a, b, c);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -163,8 +163,8 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 void compute_volume(const Variables &var,
                     double_vec &volume)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -188,15 +188,15 @@ void compute_volume(const Variables &var,
         volume[e] = triangle_area(a, b, c);
 #endif
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* dvoldt is the volumetric strain rate, weighted by the element volume,
      * lumped onto the nodes.
@@ -232,7 +232,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     // std::cout << "dvoldt:\n";
     // print(std::cout, dvoldt);
     // std::cout << "\n";
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -241,8 +241,8 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* edvoldt is the averaged (i.e. smoothed) dvoldt on the element.
      * It is used in update_stress() to prevent mesh locking.
@@ -262,7 +262,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
         }
         edvoldt[e] = dj / NODES_PER_ELEM;
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
     // std::cout << "edvoldt:\n";
@@ -274,8 +274,8 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 void NMD_stress(const Param& param, const Variables &var,
     double_vec &dp_nd, tensor_t& stress, double_vec &etmp)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     // dp_nd is the pressure change, weighted by the element volume,
     // lumped onto the nodes.
@@ -375,7 +375,7 @@ void NMD_stress(const Param& param, const Variables &var,
 
 //    delete [] centroid[0];
 //    delete [] centroid;
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -383,8 +383,8 @@ void NMD_stress(const Param& param, const Variables &var,
 double compute_dt(const Param& param, Variables& var)
 
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     // constant dt
     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
@@ -544,7 +544,7 @@ double compute_dt(const Param& param, Variables& var)
         std::exit(11);
     }
     
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
     return dt;
@@ -552,8 +552,8 @@ double compute_dt(const Param& param, Variables& var)
 
 double compute_dt_PT(const Param& param, const Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     // constant dt
     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
@@ -639,7 +639,7 @@ double compute_dt_PT(const Param& param, const Variables& var)
         var.output->write_exact_error(var);
         std::exit(11);
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
     return dt;
@@ -650,8 +650,8 @@ void compute_mass(const Param &param, const Variables &var,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
 
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     // volume_n is (node-averaged volume * NODES_PER_ELEM)
     // volume_n.assign(volume_n.size(), 0);
@@ -776,15 +776,15 @@ void compute_mass(const Param &param, const Variables &var,
         }
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shapefn &shpdz)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -860,7 +860,7 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
 #endif
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

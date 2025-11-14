@@ -15,7 +15,8 @@
 ##       optimizations (-march=native, -O3, etc.).
 ##  - openacc = 1 : enable OpenACC compilation (NVHPC).
 ##  - openmp = 1 : enable OpenMP parallelization.
-##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set).
+##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
+##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
@@ -51,7 +52,7 @@ ifeq ($(openacc), 1)
 	CXX = nvc++
 	suffix = .gpu
 else
-	ifeq ($(nprof), 1)
+	ifneq ($(nprof), 0)
 		CXX = nvc++
 	else
 		# Select compiler based on platform
@@ -251,9 +252,12 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -fopenmp
 	endif
 
-	ifeq ($(nprof), 1)
-		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
-		LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt -g
+	ifneq ($(nprof), 0)
+		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DNPROF
+		ifeq ($(nprof), 2)
+			CXXFLAGS += -DNPROF_DETAIL
+		endif
+		LDFLAGS += -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXXFLAGS = -march=core2
@@ -273,8 +277,11 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 		LDFLAGS += -mp
 	endif
 
-	ifeq ($(nprof), 1)
-			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DUSE_NPROF
+	ifneq ($(nprof), 0)
+			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DNPROF
+			ifeq ($(nprof), 2)
+				CXXFLAGS += -DNPROF_DETAIL
+			endif
 			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else

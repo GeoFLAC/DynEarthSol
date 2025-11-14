@@ -18,8 +18,8 @@ namespace {
                                int_vec &idx_changed, int_vec &changed,
                                bool is_surface)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
 
         double eps = 1e-15;
@@ -60,7 +60,7 @@ namespace {
             }
         }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -76,8 +76,8 @@ namespace {
                               int_vec &changed,
                               bool is_surface)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
         const int neta0 = is_surface ? 20 : 10; // larger neta0, more accurate mapping
         const int neta1 = neta0 + 1; // different from neta0 to prevent the temporary point falling the edge of elements
@@ -282,7 +282,7 @@ namespace {
             }
         } // end of for (int b=0; b<nblocks; b++)
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -300,15 +300,15 @@ namespace {
                                double_vec &empty_vec,
                                bool is_surface)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
 
         int_vec changed;
         int old_npoint = old_connectivity.size();
 
-#ifdef USE_NPROF
-        nvtxRangePushA("create kdtree for old elements");
+#ifdef NPROF_DETAIL
+        nvtxRangePush("create kdtree for old elements");
 #endif
 
         array_t points(old_npoint);
@@ -328,7 +328,7 @@ namespace {
         NANOKDTree nano_kdtree(NDIMS, cloud);
         KNN kdtree(param, points, nano_kdtree);
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
         printf("    Finding nearest neighbor...\n");
@@ -337,7 +337,7 @@ namespace {
         printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface);
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -402,8 +402,8 @@ namespace {
                       double_vec &target,
                       int ntarget)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -436,7 +436,7 @@ namespace {
                 }
             }
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -451,8 +451,8 @@ namespace {
                       tensor_t &target,
                       int ntarget)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
@@ -489,7 +489,7 @@ namespace {
                 }
             }
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -504,8 +504,8 @@ namespace {
                                     const double_vec &empty_vec,
                                     bool is_surface = false)
     {
-#ifdef USE_NPROF
-        nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+        nvtxRangePush(__FUNCTION__);
 #endif
         if (is_surface) {
             const int nfacet = idx.size();
@@ -570,7 +570,7 @@ namespace {
             // var.stress_old = b;
         }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
     }
@@ -584,8 +584,8 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                                     const conn_t &old_connectivity,
                                     const bool is_surface)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     {
         int nqueries;
@@ -615,7 +615,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

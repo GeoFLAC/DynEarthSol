@@ -1035,8 +1035,8 @@ void refine_surface_elem(const Param &param, const Variables &var,
                          const array_t &old_coord, const conn_t &old_connectivity,
                          const double_vec &old_volume, int &old_nnode, double *qcoord)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     const double surface_vol = param.mesh.sediment_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
 
@@ -1090,7 +1090,7 @@ void refine_surface_elem(const Param &param, const Variables &var,
             }
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -1100,8 +1100,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
               const segment_t &original_segment, const segflag_t &original_segflag)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     int_vec bdry_polygons[nbdrytypes];
     assemble_bdry_polygons(var, original_coord, original_connectivity, bdry_polygons);
@@ -1331,7 +1331,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
     if (param.mesh.meshing_sediment)
         delete [] qcoord;
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
@@ -1720,8 +1720,8 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
               const array_t &old_coord, const conn_t &old_conn,
               const segment_t &old_segment, const segflag_t &old_segflag)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     double *qcoord = new double[var.nnode * NDIMS];
@@ -2112,7 +2112,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 #endif
 
         // create_uniform_interpolated_mesh(param, var, old_coord, var.coord);
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -2655,8 +2655,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
 int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     /* Check the quality of the mesh, return 0 if the mesh quality (by several
      * measures) is good. Non-zero returned values indicate --
@@ -2672,7 +2672,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
         if ((*var.volume)[e] < smallest_vol) {
             index = e;
             std::cout << "    The size of element #" << index << " is too small.\n";
-#ifdef USE_NPROF
+#ifdef NPROF
             nvtxRangePop();
 #endif
             return 3;
@@ -2692,7 +2692,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
                 if (std::fabs(z - bottom) > dist) {
                     index = i;
                     std::cout << "    Node #" << i << " is too far from the bottm: z = " << z << "\n";
-#ifdef USE_NPROF
+#ifdef NPROF
                     nvtxRangePop();
 #endif
                     return 2;
@@ -2735,7 +2735,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
             if (index >= 0) break;
         }
         if (index >= 0) {
-#ifdef USE_NPROF
+#ifdef NPROF
             nvtxRangePop();
 #endif
             return 2;
@@ -2753,12 +2753,12 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     if (q < param.mesh.min_quality) {
         index = worst_elem;
         std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << ".\n";
-#ifdef USE_NPROF
+#ifdef NPROF
         nvtxRangePop();
 #endif
         return 1;
     }
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
     return 0;
@@ -2767,8 +2767,8 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     int64_t time_tmp = get_nanoseconds();
 
@@ -2949,8 +2949,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
-#ifdef USE_NPROF
-    nvtxRangePushA("reset bounrdary condition");
+#ifdef NPROF_DETAIL
+    nvtxRangePush("reset bounrdary condition");
 #endif
 
     if (param.mesh.remeshing_option==1 ||
@@ -2970,7 +2970,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             (*var.temperature)[n] = var.bottom_temperature;
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
@@ -2985,7 +2985,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

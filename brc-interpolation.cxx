@@ -17,8 +17,8 @@ typedef Array2D<double,NODES_PER_ELEM> brc_t;
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
                        const double_vec &source, double_vec &target)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma acc serial async
@@ -38,7 +38,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
         }
         target[i] = result;
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -47,8 +47,8 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
                        const array_t &source, array_t &target)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     #pragma acc serial async
@@ -70,7 +70,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
             target[i][d] = result;
         }
     }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -83,13 +83,13 @@ void prepare_interpolation(const Param& param, const Variables &var,
                            const int_vec2D &old_support,
                            brc_t &brc, int_vec &el)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     // for each new coord point, find the enclosing old element
 
-#ifdef USE_NPROF
-    nvtxRangePushA("create kdtree for coord");
+#ifdef NPROF_DETAIL
+    nvtxRangePush("create kdtree for coord");
 #endif
 
 #ifdef ACC
@@ -106,7 +106,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     printf("    Finding knn for barycentric node interpolation...\n");
     kdtree.search(*var.coord, neighbors, 1, 3.0);
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
@@ -225,7 +225,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     // std::cout << '\n';
     // print(std::cout, bar);
     // std::cout << '\n';
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -237,8 +237,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
@@ -277,7 +277,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.coord0;
     var.coord0 = new_coord0;
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

@@ -8,9 +8,9 @@
 #include <unordered_map>
 
 #include <nanoflann.hpp>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-// #include <nvtx3/nvToolsExt.h> 
+#ifdef NPROF
+#include <nvtx3/nvToolsExt.h> 
+// #include <nvToolsExt.h> 
 #endif
 
 #include "constants.hpp"
