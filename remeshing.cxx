@@ -2818,7 +2818,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         const double *coord[NODES_PER_FACET];
         for (int j=0; j<NODES_PER_FACET; ++j)
@@ -2830,7 +2830,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         double inv_volume = 1.0 / old_surface_area[i];
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
@@ -2957,7 +2957,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         const double *coord[NODES_PER_FACET];
         for (int j=0; j<NODES_PER_FACET; ++j)
@@ -2969,7 +2969,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
@@ -2978,7 +2978,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e];
 
@@ -3003,7 +3003,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, nbot)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<nbot; ++i) {
             int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;

@@ -294,7 +294,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int e=0; e<var.nelem;e++) {
             if (std::isnan((*var.volume)[e]))
                 is_nan += out_nan_error("volume", e);
@@ -329,7 +329,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
                 is_nan += out_nan_error("temperature", n);
