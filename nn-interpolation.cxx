@@ -45,7 +45,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop gang vector
         for (int i=0; i<nqueries; i++) {
             idx[i] = int(neighbors[i].idx);
             is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
@@ -172,7 +172,7 @@ namespace {
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop gang vector
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
@@ -196,7 +196,7 @@ namespace {
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop gang vector
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];
@@ -352,7 +352,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -376,7 +376,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -411,7 +411,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 target[i] = source[n];
@@ -420,7 +420,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -460,7 +460,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 for (int d=0; d<NSTR; d++) {
@@ -471,7 +471,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];

@@ -137,7 +137,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<volume.size(); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -170,7 +170,7 @@ void compute_volume(const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, volume)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -207,7 +207,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var, etmp)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         const double *strain_rate= (*var.strain_rate)[e];
@@ -221,7 +221,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
         dvoldt[n] = 0.;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -252,7 +252,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         double dj = 0;
@@ -317,7 +317,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
         const int *conn = (*var.connectivity)[e];
         double dp = (*var.dpressure)[e];
@@ -327,7 +327,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
         dp_nd[n] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
@@ -341,7 +341,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
 
         double factor;
@@ -411,7 +411,7 @@ double compute_dt(const Param& param, Variables& var)
         default(none) shared(param, var) //, velocity_x_element, velocity_y_element, velocity_z_element) \
         private(vx_element, vy_element, vz_element)
 #endif
-    #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) async
     for (int e=0; e<var.nelem; ++e) {
 
@@ -705,7 +705,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
             double *tr = tmp_result[e];
             double rho;
@@ -756,7 +756,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int n=0;n<var.nnode;n++) {
             volume_n[n]=0;
             mass[n]=0;
@@ -791,7 +791,7 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
     #pragma omp parallel for default(none)      \
         shared(var, shpdx, shpdy, shpdz)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
 
         int n0 = (*var.connectivity)[e][0];
