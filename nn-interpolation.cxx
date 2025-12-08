@@ -212,15 +212,12 @@ namespace {
                 *      volume weighting for the mapping.
                 */
                 for (int j=0; j<nsample; j++) {
-                    double *x = queries.data() + (query_start + j) * NDIMS;
-                    neighbor *nn = neighbors.data() + (query_start + j) * max_el;
-
                     // find the old element that is enclosing x
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        old_e = nn[jj].idx;
-                        bary.transform(x, old_e, r);
+                        old_e = neighbors[(query_start + j) * max_el + jj].idx;
+                        bary.transform(queries[query_start + j], old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
                             for (int ei = 0; ei < elem_size; ++ei) {
