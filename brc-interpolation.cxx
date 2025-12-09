@@ -104,7 +104,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     neighbor_vec neighbors(var.nnode);
 
     printf("    Finding knn for barycentric node interpolation...\n");
-    kdtree.search(*var.coord, neighbors, 1, 3.0);
+    kdtree.search(*var.coord, neighbors, var.nnode, 1, 3.0);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
