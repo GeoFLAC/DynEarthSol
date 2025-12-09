@@ -242,7 +242,7 @@ void KNN::build_hash_grid(double cell_size) {
 
 }
 
-void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
+void KNN::knnSearchCuda_hashgrid(const double *queries, const int numQueries,
                       neighbor* results, int k, int nheap, 
                       double radius2, double cell_size) {
 #ifdef NPROF_DETAIL
@@ -283,7 +283,7 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
 
 #endif // ACC
 
-void KNN::search(const array_t& queries, neighbor_vec& neighbors, 
+void KNN::search(const array_t& queries, neighbor_vec& neighbors, const int nquery,
         int k, double resoTimes)
 {
 #ifdef NPROF_DETAIL
@@ -298,7 +298,7 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors,
     double maxDist = resoTimes * resolution;
     double cell_size = maxDist;
 
-    knnSearchCuda_hashgrid(queries.data(), queries.size(),
+    knnSearchCuda_hashgrid(queries.data(), nquery,
         neighbors.data(), k, heapSize, maxDist * maxDist, cell_size);
 
     // long max_size = 1024 * 1024 * 256;
@@ -329,8 +329,8 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors,
     printf("(nano-kdtree)\n");
 
     #pragma omp parallel for default(none) \
-        shared(queries, neighbors, k, nano_kdtree)
-    for (int i = 0; i < queries.size(); ++i) {
+        shared(queries, neighbors, k, nano_kdtree, nquery)
+    for (int i = 0; i < nquery; ++i) {
         neighbor *result = neighbors.data() + i * k;
 
         size_t_vec nn_idx(k);
