@@ -11,7 +11,9 @@ private:
     const bool is_averaged;
     const int average_interval;
     const bool has_marker_output;
+    const int hdf5_compression_level;
     int frame;
+    int64_t run_time_ns;
 
     // stuffs for averging fields
     double time0;
@@ -26,8 +28,9 @@ private:
 public:
     Output(const Param& param, int64_t start_time, int start_frame);
     ~Output();
-    void write(const Variables& var);
-    void write_exact(const Variables& var);
+    void write(Variables& var);
+    void write_exact(Variables& var);
+    void write_exact_error(const Variables& var);
     void write_checkpoint(const Param& param, const Variables& var);
     void average_fields(Variables& var);
 

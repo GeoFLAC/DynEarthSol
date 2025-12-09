@@ -17,18 +17,29 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: get boost
+    - name: get boost and hdf5
       run: |
-        echo Install boost-program-options ====================
-        sudo apt install libboost-program-options-dev
+        echo Install boost-program-options and hdf5 ====================
+        sudo apt-get update
+        sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+    - name: set path for hdf5
+      run: |
+        HDF5_INCLUDE_DIR=$(pkg-config --cflags hdf5-serial | sed 's/-I//g')
+        HDF5_LIB_DIR=$(pkg-config --libs hdf5-serial | tr ' ' '\n' | grep '^-L' | sed 's/^-L//')
+        echo "HDF5_INCLUDE_DIR=${HDF5_INCLUDE_DIR}" >> $GITHUB_ENV
+        echo "HDF5_LIB_DIR=${HDF5_LIB_DIR}" >> $GITHUB_ENV
+  
     - name: make debug 2d
-      run: make clean; make ndims=2 opt=0 openmp=0
+      run: make clean; make ndims=2 opt=0 openmp=0 hdf5=0
     - name: make debug 3d
-      run: make clean; make ndims=3 opt=0 openmp=0  
+      run: make clean; make ndims=3 opt=0 openmp=0 hdf5=0
     - name: make 2d
-      run: make clean; make ndims=2 opt=2 openmp=1
+      run: make clean; make ndims=2 opt=2 openmp=1 hdf5=0
     - name: make 3d
-      run: make clean; make ndims=3 opt=2 openmp=1  
+      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=0
+    - name: make 3d hdf5
+      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=1 \
+            HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR
     # - name: make check
     #   run: make check
     # - name: make distcheck

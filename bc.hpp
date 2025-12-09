@@ -4,16 +4,17 @@
 bool is_on_boundary(const Variables &var, int node);
 double find_max_vbc(const BC &bc);
 void create_boundary_normals(const Variables &var, array_t &bnormals,
-                             std::map<std::pair<int,int>, double*>  &edge_vectors);
+                             std::map<std::pair<int,int>, double*>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx);
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel);
 void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel);
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Param &param, const Variables& var, double_vec& plstrain);
-void correct_surface_element(const Variables& var, const double_vec& dhacc, MarkerSet& ms, tensor_t& stress, \
+void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, tensor_t& stress, \
                               tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain);
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
                        tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
-                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, int_vec2D& elemmarkers);
+                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
+                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
 
 #endif

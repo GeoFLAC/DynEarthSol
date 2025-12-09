@@ -3,6 +3,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "matprops.hpp"
+#include "markerset.hpp"
 
 #include "ic-read-temp.hpp"
 #include "ic.hpp"
@@ -416,8 +417,99 @@ void initial_weak_zone(const Param &param, const Variables &var,
 }
 
 
+void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, double_vec &temperature,
+                                 double_vec &radiogenic_source, MarkerSet &ms, int_vec2D &elemmarkers, int_vec2D& markers_in_elem)
+{
+    // Continental geotherm
+    // After HasterokChapman 2011
+    const double F = 0.74; // Partition coefficient
+
+    const int nlayer = param.ic.nhlayer;
+    const double_vec& layer_bdy = param.ic.radiogenic_heat_boundry;
+
+    int_vec in_asth(var.nnode, 0);
+    double dT_layer_init[nlayer], thickness[nlayer];
+    double rho[nlayer], cond[nlayer], hp[nlayer];
+
+    for (int i=0;i<nlayer;i++) {
+        int mat = param.ic.radiogenic_heat_mat_in_layer[i];
+
+        cond[i] = param.mat.therm_cond[mat];
+        rho[i] = param.mat.rho0[mat];
+        hp[i] = param.mat.radiogenic_heat_prod[mat];
+
+        thickness[i] = layer_bdy[i+1] - layer_bdy[i];
+    }
+
+    for (int n=0;n<var.nnode;n++) {
+        const double *p = (*var.coord)[n];
+        const double z = -p[NDIMS-1];
+        const double zPotT = param.bc.mantle_temperature * exp(param.control.gravity * z * 4e-8);
+
+        const double radius = std::sqrt(
+            std::pow(p[0]-param.ic.rh_dome_center_x*param.mesh.xlength, 2)
+#ifdef THREED
+            + std::pow(p[1]-param.ic.rh_dome_center_y*param.mesh.ylength, 2)
+#endif
+            );
+
+        const double xsfh = param.ic.surface_heat_flux + param.ic.rh_dome_amplitude / 1e6 * exp(-pow(radius/param.ic.rh_dome_width, 2));
+        hp[0] = (1. - F)*xsfh/rho[0]/layer_bdy[1];
+
+        double t = param.bc.surface_temperature;
+        double q = xsfh;
+
+        for (int i=0;i<nlayer;i++) {
+            if ( z >= layer_bdy[i]) {
+                double dd = std::min(z - layer_bdy[i], thickness[i]);
+                t += q * dd / cond[i] - (rho[i] * hp[i]) / (2. * cond[i]) * dd * dd;
+                q -= rho[i] * hp[i] * dd;
+            }
+
+            if (t > zPotT) {
+                in_asth[n] = 1;
+                break;
+            }
+        }
+
+        if (in_asth[n])
+            t = zPotT;
+        else {
+            double rs = 0.;
+            for (int i=0;i<nlayer;i++)
+                if ( z >= layer_bdy[i])
+                    rs = hp[i];
+
+            int_vec &sup = (*var.support)[n];
+            for (int i=0;i<sup.size();i++)
+                radiogenic_source[sup[i]] += rs/NODES_PER_ELEM;
+        }
+
+        temperature[n] = t;
+    }
+
+    for (int m=0; m<ms.get_nmarkers(); ++m) {
+        int e = ms.get_elem(m);
+        const double* eta = ms.get_eta(m);
+        int current_mt = ms.get_mattype(m);
+        const int *conn = (*var.connectivity)[e];
+        double t = 0;
+        for (int i=0; i<NODES_PER_ELEM; ++i)
+            t += in_asth[conn[i]]*eta[i];
+
+        if (t >= 0.5 && current_mt != param.mat.mattype_asthenosphere) {
+            ms.set_mattype(m, param.mat.mattype_asthenosphere);
+            --elemmarkers[e][current_mt];
+            ++elemmarkers[e][param.mat.mattype_asthenosphere];
+        }
+    }
+}
+
+
+
 void initial_temperature(const Param &param, const Variables &var,
-                         double_vec &temperature, double_vec &radiogenic_source, double &bottom_temperature)
+                         double_vec &temperature, double_vec &radiogenic_source,
+                         double &bottom_temperature, MarkerSet &ms, int_vec2D &elemmarkers, int_vec2D& markers_in_elem)
 {
     switch(param.ic.temperature_option) {
     case 0:
@@ -589,6 +681,9 @@ void initial_temperature(const Param &param, const Variables &var,
             }
             break;
         }
+    case 3:
+        radiogenic_heat_and_adiabat(param, var, temperature, radiogenic_source, ms, elemmarkers, markers_in_elem);
+        break;
     case 90:
         read_external_temperature_from_comsol(param, var, *var.temperature);
         break;

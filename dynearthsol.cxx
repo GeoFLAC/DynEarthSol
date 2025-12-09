@@ -1,7 +1,4 @@
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h> 
-#endif
 #include <limits>
 
 
@@ -34,12 +31,16 @@ void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
     var.steps = 0;
+    var.nremesh = 0;
+    var.noutput = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.func_time.show_information_interval_in_ns =
+        static_cast<int64_t>(param.sim.info_display_interval) * 1e9;
 
     for (int i=0;i<nbdrytypes;++i)
-        var.bfacets[i] = new std::vector< std::pair<int,int> >;
+        var.bfacets[i] = new int_pair_vec;
     for (int i=0;i<nbdrytypes;++i)
         var.bnodes[i] = new int_vec;
     var.bnormals = new array_t(nbdrytypes);
@@ -131,13 +132,27 @@ void init_var(const Param& param, Variables& var)
                      (var.ny-1) * (var.nz-1) + \
                      (var.nz-1) * (var.nx-1) );
 #endif
+
+#ifdef NPROF
+    var.log_table = new double_vec(LOG_TABLE_SIZE);
+    for (int i=0; i<LOG_TABLE_SIZE; ++i)
+        (*var.log_table)[i] = std::log(LOG_XDELTA * i + LOG_XMIN);
+
+    var.tan_table = new double_vec(TAN_TABLE_SIZE);
+    for (int i=0; i<TAN_TABLE_SIZE; ++i)
+        (*var.tan_table)[i] = std::tan(TAN_XDELTA * i + TAN_XMIN);
+
+    var.sin_table = new double_vec(SIN_TABLE_SIZE);
+    for (int i=0; i<SIN_TABLE_SIZE; ++i)
+        (*var.sin_table)[i] = std::sin(SIN_XDELTA * i + SIN_XMIN);
+#endif
 }
 
 
 void init(const Param& param, Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     std::cout << "Initializing mesh and field data...\n";
 
@@ -146,12 +161,11 @@ void init(const Param& param, Variables& var)
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
+    create_neighbor(var);
     create_elemmarkers(param, var);
     create_markers(param, var);
 
     allocate_variables(param, var);
-//    var.markersets[0]->create_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
@@ -161,6 +175,9 @@ void init(const Param& param, Variables& var)
             (*var.coord0)[i][d] = (*var.coord)[i][d];
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+
+    #pragma acc wait
+
     *var.volume_old = *var.volume;
     apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
@@ -168,12 +185,12 @@ void init(const Param& param, Variables& var)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors);
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
     // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
 
     // temperature should be init'd before stress and strain
-    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature);
+    initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -181,8 +198,7 @@ void init(const Param& param, Variables& var)
 
     initial_weak_zone(param, var, *var.plstrain);
 
-    phase_changes_init(param, var);
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -218,15 +234,27 @@ void restart(const Param& param, Variables& var)
     }
 
     char filename_save[256];
+#ifdef HDF5
+    std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
+                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
+    HDF5Input bin_save(filename_save);
+#else
     std::snprintf(filename_save, 255, "%s.save.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     BinaryInput bin_save(filename_save);
+#endif
     std::cout << "  Reading " << filename_save << "...\n";
 
     char filename_chkpt[256];
+#ifdef HDF5
+    std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d.vtkhdf",
+                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
+    HDF5Input bin_chkpt(filename_chkpt);
+#else
     std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     BinaryInput bin_chkpt(filename_chkpt);
+#endif
     std::cout << "  Reading " << filename_chkpt << "...\n";
 
     //
@@ -253,20 +281,19 @@ void restart(const Param& param, Variables& var)
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
+    create_neighbor(var);
     create_elemmarkers(param, var);
 
     // Replacing create_markers()
-    var.markersets.push_back(new MarkerSet(param, var, bin_chkpt, std::string("markerset")));
+    var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("markerset")));
     if (param.control.has_hydration_processes) {
         var.hydrous_marker_index = var.markersets.size();
-        var.markersets.push_back(new MarkerSet(param, var, bin_chkpt, std::string("hydrous-markerset")));
+        var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("hydrous-markerset")));
     }
 
     allocate_variables(param, var);
 
     create_top_elems(var);
-//    var.markersets[0]->create_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
     create_surface_info(param,var,var.surfinfo);
 
     bin_save.read_array(*var.coord0, "coord0");
@@ -275,7 +302,8 @@ void restart(const Param& param, Variables& var)
     bin_chkpt.read_array(*var.volume_old, "volume_old");
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors);
+
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
 
     // Initializing field variables
     {
@@ -294,21 +322,20 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Set bottom temperature
-    {
-        double max_temp = 0.0;
-        for (int i=0; i<var.nnode; ++i)
-            if ((*var.temperature)[i] > max_temp) max_temp = (*var.temperature)[i];
-        var.bottom_temperature = max_temp;
-    }
-
     // Misc. items
     {
-        double_vec tmp(2);
-        bin_chkpt.read_array(tmp, "time compensation_pressure");
+#ifdef HDF5
+        bin_chkpt.read_scaler(var.time, "time");
+        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
+#else
+        double_vec tmp(3);
+        bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
         var.time = tmp[0];
         var.compensation_pressure = tmp[1];
-
+        // Set bottom temperature
+        var.bottom_temperature = tmp[2];
+#endif
         // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
     }
@@ -327,11 +354,12 @@ void restart(const Param& param, Variables& var)
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
-    phase_changes_init(param, var);
 }
 
 
 void end(Variables& var) {
+    delete var.output;
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.bfacets[i]->size() == 0) continue;
         for (int j=i+1; j<nbdrytypes; j++)
@@ -344,8 +372,8 @@ void end(Variables& var) {
 
 void update_mesh(const Param& param, Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
 
     update_coordinate(var, *var.coord);
@@ -354,23 +382,20 @@ void update_mesh(const Param& param, Variables& var)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers);
+                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     }
-    
-//    var.markersets[0]->update_marker_in_elem(var);
-//    var.markersets[0]->create_melt_markers(param.mat.mattype_partial_melting_mantle,var.melt_markers);
 
-#ifdef USE_NPROF
-    nvtxRangePushA("swap vectors");
+#ifdef NPROF_DETAIL
+    nvtxRangePush("swap vectors");
 #endif
-    #pragma serial
+    #pragma serial async
     {
         double_vec *tmp = var.volume;
         var.volume = var.volume_old;
         var.volume_old = tmp;
     }
 //    var.volume->swap(*var.volume_old);
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
@@ -383,7 +408,7 @@ void update_mesh(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
@@ -391,8 +416,8 @@ void update_mesh(const Param& param, Variables& var)
 
 void isostasy_adjustment(const Param &param, Variables &var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     std::cout << "Adjusting isostasy for " << param.ic.isostasy_adjustment_time_in_yr << " yrs...\n";
 
@@ -401,7 +426,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
     for (int n=0; n<iso_steps; n++) {
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -431,15 +456,15 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
     }
     std::cout << "Adjusted isostasy for " << iso_steps << " steps.\n";
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
 void initial_body_force_adjustment(const Param &param, Variables &var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
 #endif
     
     double residual_old = std::numeric_limits<double>::max();
@@ -457,7 +482,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             if (param.control.has_moving_mesh)
                 update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -475,7 +500,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         }
     }
 
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
@@ -500,6 +525,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
+<<<<<<< HEAD
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
     if (param.control.surface_process_option == 11) {
@@ -521,6 +547,9 @@ int main(int argc, const char* argv[])
 #endif
 
     Output output(param, var.func_time.start_time,
+=======
+    var.output = new Output(param, var.func_time.start_time,
+>>>>>>> origin/master
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
@@ -531,7 +560,7 @@ int main(int argc, const char* argv[])
             isostasy_adjustment(param, var);
         }
         if (param.sim.has_initial_checkpoint)
-            output.write_checkpoint(param, var);
+            var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
@@ -539,7 +568,10 @@ int main(int argc, const char* argv[])
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
-    output.write_exact(var);
+
+    int64_t init_time = get_nanoseconds() - var.func_time.start_time;
+
+    var.output->write_exact(var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -563,19 +595,23 @@ int main(int argc, const char* argv[])
     }
 
     std::cout << "Starting simulation...\n";
+    if (param.sim.info_display_interval > 0)
+        std::cout << "  Showing model progress every ~"
+                << param.sim.info_display_interval
+                << " seconds.\n";
     do {
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
 #endif
         var.steps ++;
         var.time += var.dt;
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
-            update_temperature(param, var, *var.temperature, *var.ntmp, *var.tmp_result);
+            update_temperature(param, var, *var.temperature, *var.tmp_result);
 
         update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
         update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+        compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -584,7 +620,7 @@ int main(int argc, const char* argv[])
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
-            NMD_stress(param, var, *var.ntmp, *var.stress, *var.tmp_result_sg);
+            NMD_stress(param, var, *var.ntmp, *var.stress, *var.etmp);
             
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -607,7 +643,7 @@ int main(int argc, const char* argv[])
                 if (param.control.has_moving_mesh)
                     update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.tmp_result_sg);
+                compute_dvoldt(var, *var.ntmp, *var.etmp);
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -633,19 +669,13 @@ int main(int argc, const char* argv[])
                         if (quality_is_bad) {
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                                var.output->write_exact(var);
                             }
 
-                            int64_t time_tmp = get_nanoseconds();
                             remesh(param, var, quality_is_bad);
-                            var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                             if (param.sim.has_output_during_remeshing) {
-                                int64_t time_tmp = get_nanoseconds();
-                                output.write_exact(var);
-                                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                                var.output->write_exact(var);
                             }
                         }
                     }
@@ -659,8 +689,10 @@ int main(int argc, const char* argv[])
 
 
         // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) // ignoring poroelastic effect due to inital imbalance 
+        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
+            #pragma acc wait // following founction is not ACC parallelized
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
+        }
 
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
@@ -670,6 +702,7 @@ int main(int argc, const char* argv[])
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain);
 
+        #pragma acc wait
         const int slow_updates_interval = 10;
         if (var.steps % slow_updates_interval == 0) {
             // The functions inside this if-block are expensive in computation is expensive,
@@ -683,8 +716,10 @@ int main(int argc, const char* argv[])
             var.dt = compute_dt(param, var);
         }
 
+        #pragma acc wait
+
         if (param.sim.is_outputting_averaged_fields)
-            output.average_fields(var);
+            var.output->average_fields(var);
         
         int r = 1;
         if (param.control.has_ATS) {
@@ -698,9 +733,7 @@ int main(int argc, const char* argv[])
             //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
             //     output.write_checkpoint(param, var);
 
-            // int64_t time_tmp = get_nanoseconds();
             // output.write(var);
-            // var.func_time.output_time += get_nanoseconds() - time_tmp;
 
             // next_regular_frame ++;
             // starting_step = var.steps; starting_time = var.time;
@@ -723,11 +756,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
-                output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -747,11 +778,9 @@ int main(int argc, const char* argv[])
             // done at arbitrary time steps.
             ) {
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    output.write_checkpoint(param, var);
+                    var.output->write_checkpoint(param, var);
 
-                int64_t time_tmp = get_nanoseconds();
-                output.write(var);
-                var.func_time.output_time += get_nanoseconds() - time_tmp;
+                var.output->write(var);
 
                 next_regular_frame ++;
             }
@@ -765,24 +794,31 @@ int main(int argc, const char* argv[])
                 if (quality_is_bad) {
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
+                        var.output->write_exact(var);
                     }
 
-                    int64_t time_tmp = get_nanoseconds();
                     remesh(param, var, quality_is_bad);
-                    var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 
                     if (param.sim.has_output_during_remeshing) {
-                        int64_t time_tmp = get_nanoseconds();
-                        output.write_exact(var);
-                        var.func_time.output_time += get_nanoseconds() - time_tmp;
+                        var.output->write_exact(var);
                     }
                 }
             }
+
+            if (param.sim.info_display_interval > 0 ) {
+                int64_t now_ns = get_nanoseconds();
+                if (now_ns > var.func_time.show_information_next) {
+                    std::cout << "              Step = " << var.steps
+                        << ", time = " << std::scientific << std::setprecision(5)
+                        << var.time / YEAR2SEC << " yr" << ", wt = ";
+                    print_time_ns(now_ns - var.func_time.start_time);
+                    std::cout << "\n";
+
+                    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
+                }
+            }
         }
-#ifdef USE_NPROF
+#ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
 
@@ -793,11 +829,15 @@ int main(int argc, const char* argv[])
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
-    std::cout << "Time summary...\n  Execute: ";
+    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time - init_time;
+    double computation_time_avg = computation_time * 1.e-9 / var.steps;
+
+    std::cout << "Time summary...\n  Execute : ";
     print_time_ns(duration_ns);
-    std::cout << "\n  Remesh : ";
-    print_time_ns(var.func_time.remesh_time);
+    std::cout << "\n  Initiate: ";
+    print_time_ns(init_time);
     std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+<<<<<<< HEAD
         << 100.*var.func_time.remesh_time/duration_ns << "%)\n";
     std::cout << "  Output : ";
     print_time_ns(var.func_time.output_time);
@@ -813,5 +853,29 @@ int main(int argc, const char* argv[])
     }
 #endif
 
+=======
+        << 100.*init_time/duration_ns << "%)\n";
+    std::cout << "  Compute : ";
+    print_time_ns(computation_time);
+    std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+        << 100.*computation_time/duration_ns << "%)/ " << var.steps
+        << " = " << std::setprecision(6) << computation_time_avg << " s/step\n";
+    if (var.nremesh > 0) {
+        double remesh_time_avg = var.func_time.remesh_time * 1.e-9 / var.nremesh;
+        std::cout << "  Remesh  : ";
+        print_time_ns(var.func_time.remesh_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
+            << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
+    }
+    if (var.noutput > 0) {
+        double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;
+        std::cout << "  Output  : ";
+        print_time_ns(var.func_time.output_time);
+        std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.output_time/duration_ns << "%)/ " << var.noutput
+            << " = " << std::setprecision(2) << output_time_avg << " s/output\n";
+    }
+>>>>>>> origin/master
     return 0;
 }

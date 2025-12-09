@@ -20,6 +20,7 @@ alike.
   * In the same directory, run `./b2 --with-program_options -q` to build
      the library.
 * You will need Python 2.6+ or 3.2+ and the Numpy package.
+* **macOS users**: For OpenMP support on macOS, see the [LLVM OpenMP library build instructions](#llvm) below.
 ### Optional packages
 * [Exodus](https://github.com/gsjaardema/seacas/) for importing a mesh in the ExodusII format
   * Suggested building procedure
@@ -44,6 +45,38 @@ alike.
       make
       ```
     * The header files and built shared library will be in `mmg/build/include` and `mmg/build/lib`. 
+* [HDF5](https://www.hdfgroup.org/solutions/hdf5/) for outputting model results in HDF5-based vtkhdf format, which is compressed (reducing size by up to 50%) and can be visualized directly in Paraview.
+  * The HDF5 Library is generally pre-installed on modern computer operating systems. User can use `which h5cc` to find the path to the HDF5 Library.
+  * The HDF5-based vtkhdf format follows the data structure of VTK, which can be visualized directly in Paraview. Please refer to the official [VTKHDF File Format](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format) documentation for more information.
+
+<div id="llvm"></div>
+
+* [LLVM](https://github.com/llvm/llvm-project) OpenMP library for macOS requires special setup due to Apple Clang lacking built-in OpenMP. 
+  * Suggested building procedure
+    * Download LLVM CMake Modules and OpenMP. (LLVM OpenMP 15.0.7 or newer version will suffice.)
+      ```BASH
+      mkdir -p external && cd external
+      # Download CMake modules
+      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/cmake-15.0.7.src.tar.xz -o cmake-15.0.7.src.tar.xz
+      tar xf cmake-15.0.7.src.tar.xz
+
+      # Download OpenMP source
+      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/openmp-15.0.7.src.tar.xz -o openmp-15.0.7.src.tar.xz
+      tar xf openmp-15.0.7.src.tar.xz
+      ```
+    * Build OpenMP
+      ```BASH
+      # Configure and build for ARM64 (Apple Silicon) or x86_64 (Intel Mac)
+      mkdir -p openmp-15.0.7.src/build && cd openmp-15.0.7.src/build
+      cmake -DCMAKE_INSTALL_PREFIX=$(pwd)/../../openmp-install \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-15.0.7.src/Modules \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DLIBOMP_INSTALL_ALIASES=OFF \
+            ..
+      make -j4 && make install && cd ../../
+      ```
+    * Installed LLVM OpenMP will be in `external/openmp-install`.
 ## Or, using docker
 * Build docker image
   ```bash
@@ -62,15 +95,52 @@ alike.
   directory.
   * If importing an exodus mesh:
     * Set `useexo = 1` and `ndims = 3`. Only 3D exodus mesh can be imported.
-    * Set `EXO_INCLUDE` and `EXO_LIB_DIR` paths if different from the default values.
+    * Set `EXO_INCLUDE` and `EXO_LIB_DIR` paths if it differs from the default values.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
-    * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if different from the default values.
+    * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if it differs from the default values.
+  * If outputing in HDF5-based vtkhdf format:
+    * set `hdf5 = 1`.
+    * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory.
+    * set `HDF5_LIB_DIR` to the HDF5 library directory.
+    * Install python HDF5 lib by `pip install h5py` for further analyzed vtk visualization.
+  * If enabling openMP on macOS:
+    *  set `OPENMP_ROOT_DIR` path if it differs from the default value.
 * Run `make` to build optimized executable.
 * Or run `make opt=0` to build a debugging executable.
 * Or run `make openmp=0` to build the executable without OpenMP. This is
   necessary to debug the code under valgrind.
 * Or run `make opt=-1` to build a memory-specific debugging executable using `-fsanitize=address`, a compiler flag for detacting memory address issues. It can show where the issue occurs and where variables are allocated during execution, without needing additional tools such as GDB or Valgrind. However, valgrind cannot easily coexist with -fsanitize=address. as using both together may cause library-related errors.
+
+### Common make invocations
+
+Here are a few practical examples for common build configurations (run these from the project root):
+
+```bash
+# default optimized 3D build
+make
+
+# debugging build (no optimizations, no OpenMP)
+make opt=0 openmp=0
+
+# build 2D version
+make ndims=2
+
+# enable MMG mesh optimization (requires MMG headers/libs)
+make usemmg=1
+
+# enable Exodus input support (requires seacas/exodus libs)
+make useexo=1
+
+# enable HDF5-based vtkhdf output support (requires HDF5)
+make hdf5=1
+
+# NVHPC/profiler build (uses nvc++ when set)
+make nprof=1
+
+# OpenACC build (NVHPC compiler)
+make openacc=1
+```
 
 # Running DES3D
 * Execute `dynearthsol2d [inputfile: examples/defaults.cfg by default]`.
@@ -103,6 +173,6 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the MIT / X Windows System license. See
 [LICENSE](https://github.com/GeoFLAC/DynEarthSol/blob/master/LICENSE) for the full text.
 
-The files under the subdirectories `3x3-C/`, `ann/`, `tetgen/`
+The files under the subdirectories `3x3-C/`, `nanoflann/`, `tetgen/`
 and `triangles/` are distributed by their own license(s).
 

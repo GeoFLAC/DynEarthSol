@@ -53,7 +53,7 @@ public:
         else {
             // expand
             T* tmp = new T[N*n];
-            std::memcpy(tmp, a_, sizeof(T)*N*n);
+            std::memcpy(tmp, a_, sizeof(T)*N*n_);
             delete [] a_;
             a_ = tmp;
             n_ = n;

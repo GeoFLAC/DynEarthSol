@@ -3,9 +3,6 @@
 #include <cstdio>
 #include <iterator>  // For std::distance
 #include <iostream>
-#ifdef USE_NPROF
-#include <nvToolsExt.h>
-#endif
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -29,6 +26,7 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
+    hdf5_compression_level(param.sim.hdf5_compression_level),
     frame(start_frame),
     time0(0)
 {}
@@ -40,11 +38,9 @@ Output::~Output()
 
 void Output::write_info(const Variables& var, double dt)
 {
-    double run_time = (get_nanoseconds() - start_time) * 1e-9;
-
     char buffer[256];
     std::snprintf(buffer, 255, "%6d\t%10d\t%12.6e\t%12.4e\t%12.6e\t%8d\t%8d\t%8d\n",
-                  frame, var.steps, var.time, dt, run_time,
+                  frame, var.steps, var.time, dt, run_time_ns*1e-9,
                   var.nnode, var.nelem, var.nseg);
 
     std::string filename(modelname + ".info");
@@ -72,23 +68,34 @@ void Output::write_info(const Variables& var, double dt)
 
 void Output::_write(const Variables& var, bool disable_averaging)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
+    run_time_ns = get_nanoseconds() - start_time;
+
     double dt = var.dt;
     double inv_dt = 0; // only used when is_averaged
     if (!disable_averaging && is_averaged) {
         dt = (var.time - time0) / average_interval;
         inv_dt = 1.0 / (var.time - time0);
     }
-    write_info(var, dt);
 
     char filename[256];
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level);
+
+    bin.write_block_metadata(var, "grid");
+    bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
+    bin.write_fieldData(var.steps, "steps");
+    bin.write_fieldData(double(run_time_ns) * 1e-9, "walltime_sec");
+#else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
+#endif
 
     bin.write_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {
@@ -114,6 +121,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         // average_strain_rate = delta_strain / delta_t
         delta_plstrain = &delta_plstrain_avg;
     }
+    #pragma omp parallel for default(none) shared(var, delta_plstrain_avg, inv_dt)
     for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
         delta_plstrain_avg[i] *= inv_dt;
     }
@@ -125,6 +133,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         strain_rate = &strain0;
         double *s0 = strain0.data();
         const double *s = var.strain->data();
+        #pragma omp parallel for default(none) shared(var, strain0, inv_dt, s, s0)
         for (int i=0; i<strain0.num_elements(); ++i) {
             s0[i] = (s[i] - s0[i]) * inv_dt;
         }
@@ -137,6 +146,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
         double tmp = 1.0 / (average_interval + 1);
+        #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
         }
@@ -183,12 +193,15 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.bcflag, "bcflag", var.bcflag->size());
 
     if (has_marker_output) {
-        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+        for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+            bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
             (*ms)->write_save_file(var, bin);
+        }
     }
 
-    bin.close();
-    int64_t duration_ns = get_nanoseconds() - start_time;
+    write_info(var, dt);
 
     if(dt / YEAR2SEC > 0.001)
     {
@@ -198,7 +211,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt / YEAR2SEC << " yr"
               << ", wt = ";
-        print_time_ns(duration_ns);
+        print_time_ns(run_time_ns);
         std::cout << "\n";
     }
     else
@@ -209,29 +222,52 @@ void Output::_write(const Variables& var, bool disable_averaging)
               << ", vmax = " << var.max_global_vel_mag << " m/s"
               << ", dt = " << std::scientific << std::setprecision(5) << dt<< " sec"
               << ", wt = ";
-        print_time_ns(duration_ns);
+        print_time_ns(run_time_ns);
         std::cout << "\n";
     }
 
     frame ++;
 
-#ifdef USE_NPROF
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
 
-void Output::write(const Variables& var)
+void Output::write(Variables& var)
 {
+    int64_t time_tmp = get_nanoseconds();
+
     _write(var);
+
+    var.noutput += 1;
+    int64_t now_ns = get_nanoseconds();
+    var.func_time.output_time += now_ns - time_tmp;
+    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 
-void Output::write_exact(const Variables& var)
+void Output::write_exact(Variables& var)
+{
+    int64_t time_tmp = get_nanoseconds();
+
+    _write(var, true);
+    // check for NaN in var
+    check_nan(var);
+    (var.markersets)[0]->check_marker_elem_consistency(var);
+
+    var.noutput += 1;
+    int64_t now_ns = get_nanoseconds();
+    var.func_time.output_time += now_ns - time_tmp;
+    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
+}
+
+void Output::write_exact_error(const Variables& var)
 {
     _write(var, true);
     // check for NaN in var
     check_nan(var);
+    (var.markersets)[0]->check_marker_elem_consistency(var);
 }
 
 
@@ -280,17 +316,29 @@ void Output::average_fields(Variables& var)
 
 void Output::write_checkpoint(const Param& param, const Variables& var)
 {
-#ifdef USE_NPROF
-    nvtxRangePushA(__FUNCTION__);
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
 #endif
     char filename[256];
+#ifdef HDF5
+    std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
+    HDF5Output bin(filename, hdf5_compression_level, true);
+
+    bin.write_block_metadata(var, "grid");
+
+    bin.write_scalar(var.time, "time");
+    bin.write_scalar(var.compensation_pressure, "compensation_pressure");
+    bin.write_scalar(var.bottom_temperature, "bottom_temperature");
+#else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
 
-    double_vec tmp(2);
+    double_vec tmp(3);
     tmp[0] = var.time;
     tmp[1] = var.compensation_pressure;
-    bin.write_array(tmp, "time compensation_pressure", tmp.size());
+    tmp[2] = var.bottom_temperature;
+    bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
+#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
@@ -303,9 +351,13 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
 
-    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms)
+    for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
+#ifdef HDF5
+        bin.write_block_metadata(var, (*ms)->get_name(), *ms);
+#endif
         (*ms)->write_chkpt_file(bin);
-#ifdef USE_NPROF
+    }
+#ifdef NPROF
     nvtxRangePop();
 #endif
 }

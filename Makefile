@@ -5,6 +5,7 @@
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
 
+<<<<<<< HEAD
 ## Execute "make" if making production run. Or "make opt=0 openmp=0" for debugging run.
 ##
 ## ndims = 3: 3D code; 2: 2D code
@@ -18,6 +19,26 @@
 ##   Note: Requires gospl_extensions to be cloned and built locally:
 ##   git clone https://github.com/GeoFLAC/gospl_extensions.git
 ##   cd gospl_extensions && make && cd ..
+=======
+## Build notes
+## - Run simply `make` to build the optimized production executable.
+## - For a debugging build, run for example: `make opt=0 openmp=0`.
+## Common configuration variables (set on the make command line or edit below):
+##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
+##  - opt = 0..3 : optimization level. 0 = debugging (no optimizations),
+##       1 = low optimization, 2 = default optimized build, 3 = aggressive
+##       optimizations (-march=native, -O3, etc.).
+##  - openacc = 1 : enable OpenACC compilation (NVHPC).
+##  - openmp = 1 : enable OpenMP parallelization.
+##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
+##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
+##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
+##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
+##  - adaptive_time_step = 1 : enable adaptive time stepping.
+##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
+##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
+>>>>>>> origin/master
 
 ndims = 3
 opt = 0
@@ -29,8 +50,13 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
+<<<<<<< HEAD
 use_gospl = 1
 ANNFLAGS = linux-g++
+=======
+hdf5 = 0
+nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
+>>>>>>> origin/master
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -40,21 +66,33 @@ ifneq ($(adaptive_time_step), 1)
 	use_R_S = 0   # Rate - State friction law only works with adaptive time stepping technique
 endif
 
+OSNAME := $(shell uname -s)
+
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
 	CXX = nvc++
+	suffix = .gpu
 else
-	ifeq ($(nprof), 1)
+	ifneq ($(nprof), 0)
 		CXX = nvc++
 	else
-		CXX = g++
+		# Select compiler based on platform
+		ifeq ($(OSNAME), Darwin)
+			# clang++ is the default optimized compiler for macOS
+			CXX = clang++
+		else
+			CXX = g++
+		endif
 	endif
 endif
 CXX_BACKEND = ${CXX}
 
+## path to HDF5's base directory, if not in standard system location
+HDF5_INCLUDE_DIR = #/path/to/include/hdf5/serial
+HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
 
 ## path to cuda's base directory
-CUDA_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2/cuda
+NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
 ## Use conda environment if gospl is activated, otherwise system boost
@@ -68,8 +106,6 @@ endif
 ## Select compiler and linker flags
 ## (Usually you won't need to modify anything below)
 ########################################################################
-
-OSNAME := $(shell uname -s)
 
 BOOST_LDFLAGS = -lboost_program_options
 ifdef BOOST_ROOT_DIR
@@ -153,18 +189,34 @@ endif
 
 
 ifneq (, $(findstring clang++, $(CXX)))
-	CXXFLAGS = -v -DGPP1X
-	LDFLAGS = -v
+	CXXFLAGS = -g -std=c++0x -DGPP1X
+	LDFLAGS = -lm
+	TETGENFLAG = 
+	
+	# macOS needs extra headerpad for install_name_tool
+	ifeq ($(OSNAME), Darwin)
+		LDFLAGS += -Wl,-headerpad_max_install_names
+	endif 
 
 	ifeq ($(opt), 1)
 		CXXFLAGS += -O1
 	else ifeq ($(opt), 2)
 		CXXFLAGS += -O2
+	else ifeq ($(opt), 3)
+		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
+	else # debugging
+		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unknown-pragmas
+		ifeq ($(opt), -1)
+			CXXFLAGS += -fsanitize=address
+			LDFLAGS += -fsanitize=address
+		endif
 	endif
  
 	ifeq ($(openmp), 1)
-		CXXFLAGS += -fopenmp
-		LDFLAGS += -fopenmp
+		# path to OpenMP library directory (for clang++ on macOS)
+		OPENMP_ROOT_DIR = external/openmp-install
+		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
+		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
 	endif
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
@@ -196,10 +248,6 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 		LDFLAGS += -pg
 	endif
 
-	ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
-		ANNFLAGS = macosx-g++-13
-	endif
-
 	GCCVERSION = $(shell $(CXX) --version | grep g++ | sed 's/^.* //g' | cut -d. -f1)
 
 	ifeq ($(shell expr $(GCCVERSION) \> 10), 1)
@@ -226,7 +274,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
-	CXXFLAGS = -mno-fma
+	CXXFLAGS = -g -Minfo=mp,accel
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -236,11 +284,22 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		CXXFLAGS += -O2
 	endif
 
+	ifeq ($(nofma), 1)
+		CXXFLAGS += -mno-fma
+	endif
+
 	ifeq ($(openacc), 1)
-		CXXFLAGS += -acc=gpu -gpu=managed,nofma -Mcuda -DACC
-		LDFLAGS += -acc=gpu -gpu=managed -Mcuda
-		# CXXFLAGS += -acc=gpu -gpu=mem:managed,nofma -cuda -DACC
-		# LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		CXXFLAGS += -acc=gpu -cuda -DACC
+		LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		# CXXFLAGS += -acc=gpu -Mcuda -DACC
+		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
+		ifeq ($(nofma), 1)
+			CXXFLAGS += -gpu=mem:managed,nofma
+			# CXXFLAGS += -gpu=managed,nofma
+		else
+			CXXFLAGS += -gpu=mem:managed
+			# CXXFLAGS += -gpu=managed
+		endif
 	endif
 
 	ifeq ($(openmp), 1)
@@ -248,9 +307,12 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -fopenmp
 	endif
 
-	ifeq ($(nprof), 1)
-		CXXFLAGS += -Minfo=mp,accel -I$(CUDA_DIR)/include -DUSE_NPROF
-		LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt -g
+	ifneq ($(nprof), 0)
+		CXXFLAGS += -I$(NVHPC_DIR)/cuda/include -DNPROF
+		ifeq ($(nprof), 2)
+			CXXFLAGS += -DNPROF_DETAIL
+		endif
+		LDFLAGS += -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXXFLAGS = -march=core2
@@ -270,15 +332,26 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 		LDFLAGS += -mp
 	endif
 
-	ifeq ($(nprof), 1)
-			CXXFLAGS += -Minfo=mp -I$(CUDA_DIR)/include -DUSE_NPROF
-			LDFLAGS += -L$(CUDA_DIR)/lib64 -Wl,-rpath,$(CUDA_DIR)/lib64 -lnvToolsExt
+	ifneq ($(nprof), 0)
+			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DNPROF
+			ifeq ($(nprof), 2)
+				CXXFLAGS += -DNPROF_DETAIL
+			endif
+			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else
 # the only way to display the error message in Makefile ...
 all:
 	@echo "Unknown compiler, check the definition of 'CXX' in the Makefile."
 	@false
+endif
+
+ifeq ($(hdf5), 1)
+	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
+	ifneq ($(OSNAME), Darwin)
+		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
+	endif
 endif
 
 ## Is git in the path?
@@ -306,7 +379,8 @@ SRCS =	\
 	phasechanges.cxx \
 	remeshing.cxx \
 	rheology.cxx \
-	markerset.cxx
+	markerset.cxx \
+	knn.cxx
 
 ifeq ($(use_gospl), 1)
 	SRCS += gospl_driver/gospl-driver.cxx
@@ -323,22 +397,23 @@ INCS =	\
 	utils.hpp \
 	mesh.hpp \
 	markerset.hpp \
-	output.hpp
+	output.hpp \
+	knn.hpp
 
-OBJS = $(SRCS:.cxx=.$(ndims)d.o)
+OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
-EXE = dynearthsol$(ndims)d
+EXE = dynearthsol$(ndims)d$(suffix)
 
 
 ## Libraries
 
 TET_SRCS = tetgen/predicates.cxx tetgen/tetgen.cxx
 TET_INCS = tetgen/tetgen.h
-TET_OBJS = $(TET_SRCS:.cxx=.o)
+TET_OBJS = $(TET_SRCS:.cxx=$(suffix).o)
 
 TRI_SRCS = triangle/triangle.c
 TRI_INCS = triangle/triangle.h
-TRI_OBJS = $(TRI_SRCS:.c=.o)
+TRI_OBJS = $(TRI_SRCS:.c=$(suffix).o)
 
 M_SRCS = $(TRI_SRCS)
 M_INCS = $(TRI_INCS)
@@ -374,10 +449,9 @@ ifeq ($(use_gospl), 1)
 endif
 
 C3X3_DIR = 3x3-C
-C3X3_LIBNAME = 3x3
+C3X3_LIBNAME = 3x3$(suffix)
 
-ANN_DIR = ann
-ANN_LIBNAME = ANN
+ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
 GOSPL_DIR = gospl_driver
@@ -389,6 +463,7 @@ CXXFLAGS += -I$(GOSPL_DIR)
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
+<<<<<<< HEAD
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
 install-gospl-wrapper: 
@@ -400,8 +475,11 @@ install-gospl-wrapper:
 endif
 
 $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
+=======
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
+>>>>>>> origin/master
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
-			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) -L$(ANN_DIR)/lib -l$(ANN_LIBNAME) \
+			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 ifeq ($(use_gospl), 1)
 	@+$(MAKE) install-gospl-wrapper
@@ -421,6 +499,12 @@ ifeq ($(use_gospl), 1)
 endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
+		install_name_tool -add_rpath @executable_path/$(BOOST_LIB_DIR) $@
+ifeq ($(openmp), 1)
+		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_ROOT_DIR)/lib" ]; then \
+			install_name_tool -add_rpath @executable_path/$(OPENMP_ROOT_DIR)/lib $@; \
+		fi
+endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif
@@ -466,36 +550,34 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d.o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
-$(TRI_OBJS): %.o : %.c $(TRI_INCS)
+$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates.o: tetgen/predicates.cxx $(TET_INCS)
+tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen.o: tetgen/tetgen.cxx $(TET_INCS)
+tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) CUDA_DIR=$(CUDA_DIR)
-
-$(ANN_DIR)/lib/lib$(ANN_LIBNAME).a:
-	@+$(MAKE) -C $(ANN_DIR) $(ANNFLAGS)
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+<<<<<<< HEAD
 ifeq ($(use_gospl), 1)
 	@rm -f dynearthsol-gospl
 endif
@@ -508,6 +590,13 @@ ifeq ($(use_gospl), 1)
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 	@+$(MAKE) -C $(ANN_DIR) realclean
+=======
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
+	
+cleanall: clean
+	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
+>>>>>>> origin/master
 
 clean:
 	@rm -f $(OBJS) $(EXE)
