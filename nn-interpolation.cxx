@@ -40,7 +40,7 @@ namespace {
 
         neighbor_vec neighbors(nqueries);
 
-        kdtree.search(queries, neighbors, 1, 3.);
+        kdtree.search(queries, neighbors, nqueries, 1, 3.);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
@@ -142,8 +142,6 @@ namespace {
         // number of neighbors exceeding computational limit
         int queries_max = 1024 * 1024 * 16;
 
-        neighbor_vec neighbors;
-
         int elems_per_block = queries_max / nsample;
         if (elems_per_block < 1) elems_per_block = 1;
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
@@ -151,6 +149,7 @@ namespace {
                nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
+        neighbor_vec neighbors(elems_per_block * nsample * max_el);
 
         conn_t *ptr_conn;
         int nnode_cell;
@@ -168,8 +167,6 @@ namespace {
             if (start >= end) continue;
 
             printf("      Block %3d: element %7d to %7d", b, start, end-1);
-
-            queries.resize((end-start) * nsample);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
@@ -191,10 +188,8 @@ namespace {
                 }
             }
 
-            neighbors.resize((end-start) * nsample * max_el);
-
             // find the nearest point nn in old_center
-            kdtree.search(queries, neighbors, max_el, 3.);
+            kdtree.search(queries, neighbors, (end-start)*nsample, max_el, 3.);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \

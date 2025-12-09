@@ -1044,7 +1044,6 @@ namespace {
             
             printf("      Block %3d:  marker %7d to %7d", b, start, end-1);
 
-            queries.resize(end-start);
             std::fill_n(queries.data(), NDIMS*(end-start),0.);
 
 #ifndef ACC
@@ -1064,9 +1063,7 @@ namespace {
                 }
             }
 
-            neighbors.resize( (end - start) * k );
-
-            kdtree.search(queries, neighbors, k, 3);
+            kdtree.search(queries, neighbors, (end - start), k, 3);
 
             // Loop over all the old markers and identify a containing element in the new mesh.
 #ifndef ACC
