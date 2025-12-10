@@ -4,7 +4,7 @@
 Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(connectivity.size()), nelem_(connectivity.size())
+    : coeff_(connectivity.size()), nelem_(connectivity.size()), elem_dim_(NDIMS)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -41,7 +41,7 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
                                                        const array_t &coord,
                                                        const conn_t &connectivity,
                                                        const double_vec &volume)
-    : coeff_(elem.size()), nelem_(elem.size())
+    : coeff_(elem.size()), nelem_(elem.size()), elem_dim_(NDIMS)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -80,7 +80,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
                                                        const conn_t &conn_surface,
                                                        const double_vec &area,
                                                        const bool is_surface)
-    : coeff_(conn_surface.size()), nelem_(conn_surface.size())
+    : coeff_(conn_surface.size()), nelem_(conn_surface.size()) ,elem_dim_(NDIMS-1)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -113,7 +113,7 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
 
 Barycentric_transformation::Barycentric_transformation(const double** coord,
                                                        const double volume)
-    : coeff_(1), nelem_(1)
+    : coeff_(1), nelem_(1), elem_dim_(NDIMS)
 {
     const double *a = coord[0];
     const double *b = coord[1];
@@ -135,10 +135,24 @@ Barycentric_transformation::~Barycentric_transformation() {};
 void Barycentric_transformation::transform(const double *point, int e, double *result) const
 {
     const double *cf = coeff_[e];
-    for (int d=0; d<NDIMS; d++) {
-        result[d] = cf[index(0,d)];
-        for (int i=0; i<NDIMS; i++)
-            result[d] += cf[index(i+1,d)]*point[i];
+    if (elem_dim_ == 3) {
+        for (int d=0; d<3; d++) {
+            result[d] = cf[index3d(0,d)];
+            for (int i=0; i<3; i++)
+                result[d] += cf[index3d(i+1,d)]*point[i];
+        }
+    } else if (elem_dim_ == 2) {
+        for (int d=0; d<2; d++) {
+            result[d] = cf[index2d(0,d)];
+            for (int i=0; i<2; i++)
+                result[d] += cf[index2d(i+1,d)]*point[i];
+        }
+    } else if (elem_dim_ == 1) {
+        for (int d=0; d<1; d++) {
+            result[d] = cf[index1d(0,d)];
+            for (int i=0; i<1; i++)
+                result[d] += cf[index1d(i+1,d)]*point[i];
+        }
     }
 }
 
@@ -153,33 +167,46 @@ bool Barycentric_transformation::is_inside_elem(const double *point, int elem) c
 
 bool Barycentric_transformation::is_inside(const double *r) const
 {
-#ifdef THREED
+    if (elem_dim_ == 3) {
+        // 3D has larger round-off error in coeff_
+        // => needs greater tolerance
+        const double tolerance = 5e-11;
 
-    // 3D has larger round-off error in coeff_
-    // => needs greater tolerance
-    const double tolerance = 5e-11;
+        if (r[0] >= -tolerance &&
+            r[1] >= -tolerance &&
+            r[2] >= -tolerance &&
+            (r[0] + r[1] + r[2]) <= 1 + tolerance)
+            return 1;
+    } else if (elem_dim_ == 2) {
+        const double tolerance = 1e-12;
 
-    if (r[0] >= -tolerance &&
-        r[1] >= -tolerance &&
-        r[2] >= -tolerance &&
-        (r[0] + r[1] + r[2]) <= 1 + tolerance)
-        return 1;
-#else
+        if (r[0] >= -tolerance &&
+            r[1] >= -tolerance &&
+            (r[0] + r[1]) <= 1 + tolerance)
+            return 1;
+    } else if (elem_dim_ == 1) {
+        const double tolerance = 1e-12;
 
-    const double tolerance = 1e-12;
-
-    if (r[0] >= -tolerance &&
-        r[1] >= -tolerance &&
-        (r[0] + r[1]) <= 1 + tolerance)
-        return 1;
-#endif
+        if (r[0] >= -tolerance &&
+            r[0] <= 1 + tolerance)
+            return 1;
+    }
     return 0;
 }
 
 
-inline int Barycentric_transformation::index(int node, int dim) const
+inline int Barycentric_transformation::index1d(int node, int dim) const
 {
-    return node*NDIMS + dim;
+    return node + dim;
+}
+
+inline int Barycentric_transformation::index2d(int node, int dim) const
+{
+    return node*2 + dim;
+}
+inline int Barycentric_transformation::index3d(int node, int dim) const
+{
+    return node*3 + dim;
 }
 
 void Barycentric_transformation::compute_coeff2d(const double *a,
@@ -190,12 +217,12 @@ void Barycentric_transformation::compute_coeff2d(const double *a,
 {
     double det = 2 * area;
 
-    coeff_e[index(0,0)] = (b[0]*c[1] - b[1]*c[0]) / det;
-    coeff_e[index(0,1)] = (c[0]*a[1] - c[1]*a[0]) / det;
-    coeff_e[index(1,0)] = (b[1] - c[1]) / det;
-    coeff_e[index(1,1)] = (c[1] - a[1]) / det;
-    coeff_e[index(2,0)] = (c[0] - b[0]) / det;
-    coeff_e[index(2,1)] = (a[0] - c[0]) / det;
+    coeff_e[index2d(0,0)] = (b[0]*c[1] - b[1]*c[0]) / det;
+    coeff_e[index2d(0,1)] = (c[0]*a[1] - c[1]*a[0]) / det;
+    coeff_e[index2d(1,0)] = (b[1] - c[1]) / det;
+    coeff_e[index2d(1,1)] = (c[1] - a[1]) / det;
+    coeff_e[index2d(2,0)] = (c[0] - b[0]) / det;
+    coeff_e[index2d(2,1)] = (a[0] - c[0]) / det;
 }
 
 #ifdef THREED
@@ -209,35 +236,35 @@ void Barycentric_transformation::compute_coeff3d(const double *a,
 {
     double det = 6 * volume;
 
-    coeff_e[index(0,0)] = (b[0] * (c[1]*d[2] - d[1]*c[2]) +
+    coeff_e[index3d(0,0)] = (b[0] * (c[1]*d[2] - d[1]*c[2]) +
                            c[0] * (d[1]*b[2] - b[1]*d[2]) +
                            d[0] * (b[1]*c[2] - c[1]*b[2])) / det;
-    coeff_e[index(0,1)] = (a[0] * (d[1]*c[2] - c[1]*d[2]) +
+    coeff_e[index3d(0,1)] = (a[0] * (d[1]*c[2] - c[1]*d[2]) +
                            c[0] * (a[1]*d[2] - d[1]*a[2]) +
                            d[0] * (c[1]*a[2] - a[1]*c[2])) / det;
-    coeff_e[index(0,2)] = (a[0] * (b[1]*d[2] - d[1]*b[2]) +
+    coeff_e[index3d(0,2)] = (a[0] * (b[1]*d[2] - d[1]*b[2]) +
                            b[0] * (d[1]*a[2] - a[1]*d[2]) +
                            d[0] * (a[1]*b[2] - b[1]*a[2])) / det;
 
-    coeff_e[index(1,0)] = ((d[1] - b[1]) * (c[2] - b[2]) -
+    coeff_e[index3d(1,0)] = ((d[1] - b[1]) * (c[2] - b[2]) -
                            (c[1] - b[1]) * (d[2] - b[2])) / det;
-    coeff_e[index(1,1)] = ((c[1] - a[1]) * (d[2] - c[2]) -
+    coeff_e[index3d(1,1)] = ((c[1] - a[1]) * (d[2] - c[2]) -
                            (d[1] - c[1]) * (c[2] - a[2])) / det;
-    coeff_e[index(1,2)] = ((b[1] - d[1]) * (a[2] - d[2]) -
+    coeff_e[index3d(1,2)] = ((b[1] - d[1]) * (a[2] - d[2]) -
                            (a[1] - d[1]) * (b[2] - d[2])) / det;
 
-    coeff_e[index(2,0)] = ((d[2] - b[2]) * (c[0] - b[0]) -
+    coeff_e[index3d(2,0)] = ((d[2] - b[2]) * (c[0] - b[0]) -
                            (c[2] - b[2]) * (d[0] - b[0])) / det;
-    coeff_e[index(2,1)] = ((c[2] - a[2]) * (d[0] - c[0]) -
+    coeff_e[index3d(2,1)] = ((c[2] - a[2]) * (d[0] - c[0]) -
                            (d[2] - c[2]) * (c[0] - a[0])) / det;
-    coeff_e[index(2,2)] = ((b[2] - d[2]) * (a[0] - d[0]) -
+    coeff_e[index3d(2,2)] = ((b[2] - d[2]) * (a[0] - d[0]) -
                            (a[2] - d[2]) * (b[0] - d[0])) / det;
 
-    coeff_e[index(3,0)] = ((d[0] - b[0]) * (c[1] - b[1]) -
+    coeff_e[index3d(3,0)] = ((d[0] - b[0]) * (c[1] - b[1]) -
                            (c[0] - b[0]) * (d[1] - b[1])) / det;
-    coeff_e[index(3,1)] = ((c[0] - a[0]) * (d[1] - c[1]) -
+    coeff_e[index3d(3,1)] = ((c[0] - a[0]) * (d[1] - c[1]) -
                            (d[0] - c[0]) * (c[1] - a[1])) / det;
-    coeff_e[index(3,2)] = ((b[0] - d[0]) * (a[1] - d[1]) -
+    coeff_e[index3d(3,2)] = ((b[0] - d[0]) * (a[1] - d[1]) -
                            (a[0] - d[0]) * (b[1] - d[1])) / det;
 }
 
@@ -249,8 +276,8 @@ void Barycentric_transformation::compute_coeff1d(const double *a,
                                                  double *coeff_e)
 {
     const double det = length;
-    coeff_e[index(0,0)] = b[0] / det;
-    coeff_e[index(0,1)] = -1.0 / det;
+    coeff_e[index1d(0,0)] = b[0] / det;
+    coeff_e[index1d(0,1)] = -1.0 / det;
 }
 
 #endif
