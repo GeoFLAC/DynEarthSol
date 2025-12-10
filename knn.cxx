@@ -155,7 +155,7 @@ void KNN::build_hash_grid(double cell_size) {
     }
     // Small margin
     double eps = 1e-8;
-    int dim[3];
+    int dim[3] = {1,1,1};
     for (int i = 0; i < NDIMS; ++i) {
         minp[i] -= eps;
         maxp[i] += eps;
