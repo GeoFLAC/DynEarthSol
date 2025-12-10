@@ -242,7 +242,7 @@ void KNN::build_hash_grid(double cell_size) {
 
 }
 
-void KNN::knnSearchCuda_hashgrid(const double *queries, const int numQueries,
+void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
                       neighbor* results, int k, int nheap, 
                       double radius2, double cell_size) {
 #ifdef NPROF_DETAIL
@@ -283,7 +283,7 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, const int numQueries,
 
 #endif // ACC
 
-void KNN::search(const array_t& queries, neighbor_vec& neighbors, const int nquery,
+void KNN::search(const array_t& queries, neighbor_vec& neighbors, int nquery,
         int k, double resoTimes)
 {
 #ifdef NPROF_DETAIL
