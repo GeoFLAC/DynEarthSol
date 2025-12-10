@@ -39,6 +39,7 @@ class GoSPLDriver {
 public:
     ModelHandle model_handle;
     bool initialized;
+    bool python_initialized;
     std::vector<std::vector<double>> elevation_history;
     std::vector<double> time_history;
     
@@ -51,6 +52,14 @@ public:
      * Destructor - automatically calls cleanup
      */
     ~GoSPLDriver();
+    
+    /**
+     * Initialize Python and gospl_extensions only (without loading a model)
+     * This is needed before calling generate_mesh()
+     * 
+     * @return true on success, false on failure
+     */
+    bool init_python();
     
     /**
      * Initialize the GoSPL model with a configuration file
@@ -161,6 +170,32 @@ public:
     ElevationStats analyze_elevation_changes(const std::vector<double>& z_before, 
                                            const std::vector<double>& z_after,
                                            const std::string& step_info = "");
+    
+    /**
+     * Set GoSPL verbose mode
+     * 
+     * This controls the detailed progress output from GoSPL processes.
+     * 
+     * @param verbose true to enable verbose output, false to suppress
+     * @return 0 on success, -1 on error
+     */
+    int set_verbose(bool verbose);
+    
+    /**
+     * Generate a GoSPL mesh from surface node coordinates
+     * 
+     * Creates a regular mesh using Delaunay triangulation that covers
+     * the same domain as the DynEarthSol surface nodes. The mesh has
+     * approximately sqrt(n_nodes) x sqrt(n_nodes) vertices.
+     * 
+     * @param x_coords X coordinates of surface nodes
+     * @param y_coords Y coordinates of surface nodes
+     * @param output_file Path to output NPZ file for GoSPL mesh
+     * @return 0 on success, -1 on error
+     */
+    int generate_mesh(const std::vector<double>& x_coords,
+                      const std::vector<double>& y_coords,
+                      const std::string& output_file);
     
     /**
      * Demonstrate elevation interpolation capabilities

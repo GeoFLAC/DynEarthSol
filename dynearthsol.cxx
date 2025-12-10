@@ -525,35 +525,62 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-<<<<<<< HEAD
-#ifdef HAS_GOSPL_CPP_INTERFACE
-    // Initialize GoSPL driver if surface process option is 11
-    if (param.control.surface_process_option == 11) {
-        std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
-        var.gospl_driver = new GoSPLDriver();
-        
-        // Initialize with the config file path from parameters
-        if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
-            std::cout << "GoSPL driver successfully initialized with config: " 
-                      << param.control.surface_process_gospl_config_file << std::endl;
-        } else {
-            std::cerr << "Failed to initialize GoSPL driver with config: " 
-                      << param.control.surface_process_gospl_config_file << std::endl;
-            delete var.gospl_driver;
-            var.gospl_driver = nullptr;
-            return -1;
-        }
-    }
-#endif
-
-    Output output(param, var.func_time.start_time,
-=======
     var.output = new Output(param, var.func_time.start_time,
->>>>>>> origin/master
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
         init(param, var);
+
+#ifdef HAS_GOSPL_CPP_INTERFACE
+        // Initialize GoSPL driver if surface process option is 11
+        // Order: create driver → init Python → generate mesh → load GoSPL model
+        if (param.control.surface_process_option == 11) {
+            std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
+            var.gospl_driver = new GoSPLDriver();
+            
+            // Step 1: Initialize Python/gospl_extensions (needed for generate_mesh)
+            if (!var.gospl_driver->init_python()) {
+                std::cerr << "Failed to initialize Python for GoSPL" << std::endl;
+                delete var.gospl_driver;
+                var.gospl_driver = nullptr;
+                return -1;
+            }
+            
+            // Step 2: Generate GoSPL mesh from DynEarthSol surface nodes
+            std::vector<double> x_coords;
+            std::vector<double> y_coords;
+            
+            for (int i = 0; i < var.nnode; ++i) {
+                if ((*var.bcflag)[i] & BOUNDZ1) {  // Top surface nodes
+                    x_coords.push_back((*var.coord)[i][0]);
+#ifdef THREED
+                    y_coords.push_back((*var.coord)[i][1]);
+#else
+                    y_coords.push_back(0.0);  // 2D case
+#endif
+                }
+            }
+            
+            if (!x_coords.empty()) {
+                std::string mesh_file = "gospl_mesh.npz";
+                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file);
+            }
+            
+            // Step 3: Initialize GoSPL model (loads the mesh we just generated)
+            if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
+                std::cout << "GoSPL driver successfully initialized with config: " 
+                          << param.control.surface_process_gospl_config_file << std::endl;
+                // Suppress verbose output from GoSPL
+                var.gospl_driver->set_verbose(false);
+            } else {
+                std::cerr << "Failed to initialize GoSPL driver with config: " 
+                          << param.control.surface_process_gospl_config_file << std::endl;
+                delete var.gospl_driver;
+                var.gospl_driver = nullptr;
+                return -1;
+            }
+        }
+#endif
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
             // output.write_exact(var);
@@ -837,23 +864,6 @@ int main(int argc, const char* argv[])
     std::cout << "\n  Initiate: ";
     print_time_ns(init_time);
     std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
-<<<<<<< HEAD
-        << 100.*var.func_time.remesh_time/duration_ns << "%)\n";
-    std::cout << "  Output : ";
-    print_time_ns(var.func_time.output_time);
-    std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
-        << 100./var.func_time.output_time/duration_ns << "%)\n";
-
-#ifdef HAS_GOSPL_CPP_INTERFACE
-    // Clean up GoSPL driver if it was created
-    if (var.gospl_driver != nullptr) {
-        std::cout << "Cleaning up GoSPL driver..." << std::endl;
-        delete var.gospl_driver;
-        var.gospl_driver = nullptr;
-    }
-#endif
-
-=======
         << 100.*init_time/duration_ns << "%)\n";
     std::cout << "  Compute : ";
     print_time_ns(computation_time);
@@ -875,7 +885,14 @@ int main(int argc, const char* argv[])
         std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
             << 100.*var.func_time.output_time/duration_ns << "%)/ " << var.noutput
             << " = " << std::setprecision(2) << output_time_avg << " s/output\n";
+#ifdef HAS_GOSPL_CPP_INTERFACE
+        // Clean up GoSPL driver if it was created
+        if (var.gospl_driver != nullptr) {
+            std::cout << "Cleaning up GoSPL driver..." << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+        }
+#endif
     }
->>>>>>> origin/master
     return 0;
 }

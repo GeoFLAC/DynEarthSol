@@ -3,13 +3,15 @@
 #ifdef HAS_GOSPL_CPP_INTERFACE
 
 #include "gospl_extensions.h"
+#include <Python.h>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
+#include <sstream>
 
 // Constructor
-GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false) {
+GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false) {
 }
 
 // Destructor
@@ -17,13 +19,30 @@ GoSPLDriver::~GoSPLDriver() {
     cleanup();
 }
 
-bool GoSPLDriver::initialize(const std::string& config_path) {
-    std::cout << "GoSPL Driver: Initializing with " << config_path << std::endl;
+bool GoSPLDriver::init_python() {
+    if (python_initialized) {
+        return true;  // Already initialized
+    }
     
-    // Initialize gospl extensions
+    // Initialize gospl extensions (this sets up Python)
     if (initialize_gospl_extensions() != 0) {
         std::cerr << "Failed to initialize gospl extensions" << std::endl;
         return false;
+    }
+    
+    python_initialized = true;
+    std::cout << "GoSPL Driver: Python/gospl_extensions initialized" << std::endl;
+    return true;
+}
+
+bool GoSPLDriver::initialize(const std::string& config_path) {
+    std::cout << "GoSPL Driver: Initializing with " << config_path << std::endl;
+    
+    // Initialize Python/gospl extensions if not already done
+    if (!python_initialized) {
+        if (!init_python()) {
+            return false;
+        }
     }
     
     // Create enhanced model
@@ -58,17 +77,29 @@ void GoSPLDriver::cleanup() {
 
 double GoSPLDriver::run_processes_for_dt(double dt, bool verbose) {
     if (!initialized) return -1.0;
-    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0);
+    
+    // Set verbose mode on the Python model object before running
+    // This controls GoSPL's internal progress output
+    std::stringstream ss;
+    ss << "import sys\n"
+       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
+       << "import gospl_python_interface as gpi\n"
+       << "model = gpi._models.get(" << model_handle << ")\n"
+       << "if model is not None:\n"
+       << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
+    PyRun_SimpleString(ss.str().c_str());
+    
+    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0, 0);
 }
 
 int GoSPLDriver::run_processes_for_steps(int num_steps, double dt, bool verbose) {
     if (!initialized) return -1;
-    return ::run_processes_for_steps(model_handle, num_steps, dt, verbose ? 1 : 0);
+    return ::run_processes_for_steps(model_handle, num_steps, dt, verbose ? 1 : 0, 0);
 }
 
 int GoSPLDriver::run_processes_until_time(double target_time, double dt, bool verbose) {
     if (!initialized) return -1;
-    return ::run_processes_until_time(model_handle, target_time, dt, verbose ? 1 : 0);
+    return ::run_processes_until_time(model_handle, target_time, dt, verbose ? 1 : 0, 0);
 }
 
 int GoSPLDriver::apply_velocity_data(const double* coords, const double* velocities,
@@ -391,6 +422,96 @@ void GoSPLDriver::print_final_analysis(int num_steps) {
     std::cout << "\n✓ Simulation completed! Ran for " 
               << std::fixed << std::setprecision(2) << (final_time - start_time) 
               << " time units in " << num_steps << " steps" << std::endl;
+}
+
+int GoSPLDriver::set_verbose(bool verbose) {
+    if (!initialized) {
+        std::cerr << "Error: GoSPL driver not initialized" << std::endl;
+        return -1;
+    }
+    
+    // Build Python code to set verbose mode on the model
+    std::stringstream ss;
+    ss << "import sys\n"
+       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
+       << "import gospl_python_interface as gpi\n"
+       << "model = gpi._models.get(" << model_handle << ")\n"
+       << "if model is not None:\n"
+       << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
+    
+    int result = PyRun_SimpleString(ss.str().c_str());
+    
+    if (result != 0) {
+        std::cerr << "Error: Failed to set verbose mode" << std::endl;
+        return -1;
+    }
+    
+    return 0;
+}
+
+int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
+                                const std::vector<double>& y_coords,
+                                const std::string& output_file) {
+    if (x_coords.size() != y_coords.size() || x_coords.empty()) {
+        std::cerr << "Error: Invalid coordinates for mesh generation" << std::endl;
+        return -1;
+    }
+    
+    size_t n_nodes = x_coords.size();
+    
+    // Find domain extents
+    double x_min = *std::min_element(x_coords.begin(), x_coords.end());
+    double x_max = *std::max_element(x_coords.begin(), x_coords.end());
+    double y_min = *std::min_element(y_coords.begin(), y_coords.end());
+    double y_max = *std::max_element(y_coords.begin(), y_coords.end());
+    
+    // Calculate grid dimensions: approximately sqrt(n_nodes) in each direction
+    int nx = static_cast<int>(std::sqrt(static_cast<double>(n_nodes))) + 1;
+    int ny = nx;  // Square grid
+    
+    std::cout << "Generating GoSPL mesh: " << nx << " x " << ny << " = " << (nx * ny) 
+              << " vertices over domain [" << x_min << ", " << x_max << "] x ["
+              << y_min << ", " << y_max << "]" << std::endl;
+    
+    // Build Python code to generate the mesh
+    std::stringstream ss;
+    ss << std::setprecision(15);
+    ss << "import numpy as np\n"
+       << "from scipy.spatial import Delaunay\n"
+       << "\n"
+       << "# Domain extents\n"
+       << "x_min, x_max = " << x_min << ", " << x_max << "\n"
+       << "y_min, y_max = " << y_min << ", " << y_max << "\n"
+       << "nx, ny = " << nx << ", " << ny << "\n"
+       << "\n"
+       << "# Create regular grid\n"
+       << "x_reg = np.linspace(x_min, x_max, nx)\n"
+       << "y_reg = np.linspace(y_min, y_max, ny)\n"
+       << "xx, yy = np.meshgrid(x_reg, y_reg)\n"
+       << "x_flat = xx.flatten()\n"
+       << "y_flat = yy.flatten()\n"
+       << "z_flat = np.zeros_like(x_flat)  # Elevation initialized to zero\n"
+       << "\n"
+       << "# Create vertices array (n_vertices, 3)\n"
+       << "vertices = np.column_stack([x_flat, y_flat, z_flat])\n"
+       << "\n"
+       << "# Create Delaunay triangulation\n"
+       << "points_2d = np.column_stack([x_flat, y_flat])\n"
+       << "tri = Delaunay(points_2d)\n"
+       << "cells = tri.simplices\n"
+       << "\n"
+       << "# Save mesh file (GoSPL requires v=vertices, c=cells, z=elevations)\n"
+       << "np.savez('" << output_file << "', v=vertices, c=cells, z=z_flat)\n"
+       << "print(f'Successfully generated mesh: " << output_file << " with {len(vertices)} vertices and {len(cells)} cells.')\n";
+    
+    int result = PyRun_SimpleString(ss.str().c_str());
+    
+    if (result != 0) {
+        std::cerr << "Error: Failed to generate mesh" << std::endl;
+        return -1;
+    }
+    
+    return 0;
 }
 
 #endif // HAS_GOSPL_CPP_INTERFACE

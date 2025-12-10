@@ -1637,7 +1637,7 @@ namespace {
 
         // Run GoSPL processes for the current time step
         // dt converted to years; true/false: verbose output on/off.
-        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt / 3.1536e7, true);
+        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt / 3.1536e7, false);
         if (elapsed < 0) {
             std::cerr << "Error: GoSPL process run failed" << std::endl;
             return;
@@ -1654,8 +1654,8 @@ namespace {
             for (std::size_t i = 0; i < ntop; ++i) {
                 // int n = top_nodes[i];
                 double elevation_change = elevations_after[i] - elevations_before[i];
-                dh[i] = elevation_change;
-                // (*var.coord)[n][NDIMS-1] = elevations_after[i];
+                dh[i] = 0.0; // elevation_change;
+                // (*var.coord)[top_nodes[i]][NDIMS-1] = elevations_after[i];
                 
                 // Track maximum elevation change for diagnostics
                 max_elevation_change = std::max(max_elevation_change, std::abs(elevation_change));

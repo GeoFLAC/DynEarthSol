@@ -4,22 +4,6 @@
 #
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
-
-<<<<<<< HEAD
-## Execute "make" if making production run. Or "make opt=0 openmp=0" for debugging run.
-##
-## ndims = 3: 3D code; 2: 2D code
-## opt = 1 ~ 3: optimized build; others: debugging build
-## openacc = 1: enable OpenACC
-## openmp = 1: enable OpenMP
-## adaptive_time_step = 1: use adaptive time stepping technique
-## use_R_S = 1: use Rate - State friction law
-## useexo = 1: import a exodusII mesh (e.g., created with Trelis)
-## use_gospl = 1: enable GoSPL surface processes
-##   Note: Requires gospl_extensions to be cloned and built locally:
-##   git clone https://github.com/GeoFLAC/gospl_extensions.git
-##   cd gospl_extensions && make && cd ..
-=======
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
@@ -38,7 +22,6 @@
 ##  - adaptive_time_step = 1 : enable adaptive time stepping.
 ##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
->>>>>>> origin/master
 
 ndims = 3
 opt = 0
@@ -50,13 +33,9 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
-<<<<<<< HEAD
 use_gospl = 1
-ANNFLAGS = linux-g++
-=======
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
->>>>>>> origin/master
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -180,6 +159,7 @@ ifeq ($(use_gospl), 1)
 	BOOST_ROOT_DIR = $(CONDA_ENV_PATH)
 	
 	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include
+	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include/python3.11
 	GOSPL_LDFLAGS += -lboost_program_options -L$(BOOST_ROOT_DIR)/lib
 	GOSPL_LDFLAGS += -lpython3.11 -L$(BOOST_ROOT_DIR)/lib
 	ifneq ($(OSNAME), Darwin)
@@ -463,7 +443,6 @@ CXXFLAGS += -I$(GOSPL_DIR)
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-<<<<<<< HEAD
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
 install-gospl-wrapper: 
@@ -474,10 +453,7 @@ install-gospl-wrapper:
 	@chmod +x dynearthsol-gospl
 endif
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(ANN_DIR)/lib/lib$(ANN_LIBNAME).a
-=======
 $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
->>>>>>> origin/master
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -577,26 +553,19 @@ $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-<<<<<<< HEAD
 ifeq ($(use_gospl), 1)
 	@rm -f dynearthsol-gospl
 endif
-	@+$(MAKE) -C $(C3X3_DIR) clean
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 	
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 ifeq ($(use_gospl), 1)
 	@rm -f dynearthsol-gospl
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 	@+$(MAKE) -C $(ANN_DIR) realclean
-=======
-	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
-	
-cleanall: clean
-	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
->>>>>>> origin/master
 
 clean:
 	@rm -f $(OBJS) $(EXE)
