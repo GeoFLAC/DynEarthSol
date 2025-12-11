@@ -1034,7 +1034,7 @@ namespace {
         printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
                nblocks, markers_per_block, (unsigned long)nmarkers*k);
 
-        array_t queries(markers_per_block, 0);
+        array_t queries(markers_per_block);
         neighbor_vec neighbors(markers_per_block * k);
 
         for (int b=0; b<nblocks; ++b) {
@@ -1042,8 +1042,6 @@ namespace {
             int end = std::min(start + markers_per_block, nmarkers);
             
             printf("      Block %3d:  marker %7d to %7d", b, start, end-1);
-
-            std::fill_n(queries.data(), NDIMS*(end-start),0.);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
@@ -1056,6 +1054,7 @@ namespace {
                 const int *conn = old_connectivity[ms.get_elem(i)];
                 const double *eta = ms.get_eta(i);
                 for (int j = 0; j < NDIMS; j++) {
+                    queries[idx_q][j] = 0.;
                     for (int l = 0; l < NODES_PER_ELEM; l++) {
                         queries[idx_q][j] += eta[l] * old_coord[ conn[l] ][j];
                     }
