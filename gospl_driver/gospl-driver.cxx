@@ -11,7 +11,8 @@
 #include <sstream>
 
 // Constructor
-GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false) {
+GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false), mesh_bounds_valid(false) {
+    mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
 // Destructor
@@ -102,10 +103,51 @@ int GoSPLDriver::run_processes_until_time(double target_time, double dt, bool ve
     return ::run_processes_until_time(model_handle, target_time, dt, verbose ? 1 : 0, 0);
 }
 
-int GoSPLDriver::apply_velocity_data(const double* coords, const double* velocities,
-                                    int num_points, double timer, int k, double power) {
+int GoSPLDriver::apply_elevation_data(const double* coords, const double* elevations,
+                                      int num_points, int k, double power) {
     if (!initialized) return -1;
-    return ::apply_velocity_data(model_handle, coords, velocities, num_points, timer, k, power);
+    
+    // Build Python code to call apply_elevation_data from gospl_python_interface
+    // This updates GoSPL's internal mesh with the external (DES) topography
+    std::stringstream ss;
+    ss << std::setprecision(15);
+    ss << "import sys\n"
+       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
+       << "import numpy as np\n"
+       << "import gospl_python_interface as gpi\n"
+       << "\n"
+       << "# Build coordinate and elevation arrays\n"
+       << "coords = np.array([";
+    
+    // Write coordinates
+    for (int i = 0; i < num_points * 3; ++i) {
+        if (i > 0) ss << ", ";
+        ss << coords[i];
+    }
+    ss << "], dtype=np.float64).reshape(-1, 3)\n";
+    
+    ss << "elevations = np.array([";
+    for (int i = 0; i < num_points; ++i) {
+        if (i > 0) ss << ", ";
+        ss << elevations[i];
+    }
+    ss << "], dtype=np.float64)\n";
+    
+    ss << "\n"
+       << "# Apply elevation data to GoSPL mesh\n"
+       << "result = gpi.apply_elevation_data(" << model_handle << ", coords, elevations, "
+       << num_points << ", " << k << ", " << power << ")\n"
+       << "if result != 0:\n"
+       << "    print(f'Warning: apply_elevation_data returned {result}')\n";
+    
+    int result = PyRun_SimpleString(ss.str().c_str());
+    
+    if (result != 0) {
+        std::cerr << "Error: Failed to apply elevation data to GoSPL" << std::endl;
+        return -1;
+    }
+    
+    return 0;
 }
 
 int GoSPLDriver::interpolate_elevation_to_points(const double* coords, int num_points,
@@ -311,16 +353,6 @@ void GoSPLDriver::run_controlled_simulation_with_elevation_tracking(double durat
         // Store elevations before step
         std::vector<double> z_before = elevations;
         
-        // Create time-dependent velocity field
-        create_velocity_field_at_coords(current_time, coords.data(), velocities.data(), num_points);
-        
-        // Apply velocity data
-        int vel_result = apply_velocity_data(coords.data(), velocities.data(), num_points, 
-                                           current_time + dt, 3, 1.0);
-        if (vel_result != 0) {
-            std::cerr << "Failed to apply velocity data at step " << step << std::endl;
-        }
-        
         // Run processes for one time step
         double elapsed = run_processes_for_dt(dt, false);
         if (elapsed < 0) {
@@ -465,6 +497,13 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
     double y_min = *std::min_element(y_coords.begin(), y_coords.end());
     double y_max = *std::max_element(y_coords.begin(), y_coords.end());
     
+    // Store mesh bounds for boundary detection during coupling
+    mesh_bounds[0] = x_min;
+    mesh_bounds[1] = x_max;
+    mesh_bounds[2] = y_min;
+    mesh_bounds[3] = y_max;
+    mesh_bounds_valid = true;
+    
     // Calculate grid dimensions: approximately sqrt(n_nodes) in each direction
     int nx = static_cast<int>(std::sqrt(static_cast<double>(n_nodes))) + 1;
     int ny = nx;  // Square grid
@@ -490,7 +529,9 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
        << "xx, yy = np.meshgrid(x_reg, y_reg)\n"
        << "x_flat = xx.flatten()\n"
        << "y_flat = yy.flatten()\n"
-       << "z_flat = np.zeros_like(x_flat)  # Elevation initialized to zero\n"
+       << "# Initialize elevation with random noise (±100m) to provide topographic variation\n"
+       << "np.random.seed(42)  # Reproducible randomness\n"
+       << "z_flat = np.random.uniform(-100.0, 100.0, len(x_flat))\n"
        << "\n"
        << "# Create vertices array (n_vertices, 3)\n"
        << "vertices = np.column_stack([x_flat, y_flat, z_flat])\n"

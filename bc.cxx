@@ -1601,71 +1601,106 @@ namespace {
 
         std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes..." << std::endl;
 
-        // Prepare coordinate and velocity data for GoSPL
+        // Prepare coordinate data for GoSPL
         std::vector<double> coords(ntop * 3);
-        std::vector<double> velocities(ntop * 3);
-        std::vector<double> elevations_before(ntop);
-        std::vector<double> elevations_after(ntop);
+        std::vector<double> gospl_elev_before(ntop);  // GoSPL elevation at DES points BEFORE erosion
+        std::vector<double> gospl_elev_after(ntop);   // GoSPL elevation at DES points AFTER erosion
 
-        // Extract surface node coordinates and velocities
+        // Extract surface node coordinates (use current DES positions for interpolation queries)
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
-            
-            // Coordinates (x, y, z)
-            // HAS_GOSPL_CPP_INTERFACE assumes NDIMS=3.
-            // This condition is ensured during the build process when GoSPL is enabled.
             for(int d=0;d<NDIMS;d++)
-                coords[i * 3 + d] = (*var.coord)[n][d]; // x, y, z
-
-            // Store initial elevations
-            elevations_before[i] = (*var.coord)[n][2];
-
-            // Velocities (vx, vy, vz) - convert from DynEarthSol velocity field
-            for(int d=0;d<NDIMS;d++)
-                velocities[i * 3 + d] = (*var.vel)[n][d]; // vx, vy, vz
+                coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
-        // Apply velocity data to GoSPL model
-        int apply_result = var.gospl_driver->apply_velocity_data(
-            coords.data(), velocities.data(), ntop, 
-            var.time, 3, 1.0  // k=3, power=1.0 for interpolation
+        // Step 1: Update GoSPL mesh with current DES topography
+        std::vector<double> des_elevations(ntop);
+        for (std::size_t i = 0; i < ntop; ++i) {
+            des_elevations[i] = (*var.coord)[top_nodes[i]][2];
+        }
+        int apply_result = var.gospl_driver->apply_elevation_data(
+            coords.data(), des_elevations.data(), ntop, 3, 1.0
         );
-        
         if (apply_result != 0) {
-            std::cerr << "Warning: Failed to apply velocity data to GoSPL" << std::endl;
+            std::cerr << "Warning: Failed to apply elevation data to GoSPL" << std::endl;
         }
 
-        // Run GoSPL processes for the current time step
-        // dt converted to years; true/false: verbose output on/off.
+        // Step 2: Get GoSPL elevation at DES points BEFORE running erosion
+        // (This captures interpolation smoothing but no erosion yet)
+        int interp1 = var.gospl_driver->interpolate_elevation_to_points(
+            coords.data(), ntop, gospl_elev_before.data(), 3, 1.0
+        );
+        if (interp1 != 0) {
+            std::cerr << "Warning: Failed to interpolate elevations before erosion" << std::endl;
+            return;
+        }
+
+        // Step 3: Run GoSPL erosion processes
         double elapsed = var.gospl_driver->run_processes_for_dt(var.dt / 3.1536e7, false);
         if (elapsed < 0) {
             std::cerr << "Error: GoSPL process run failed" << std::endl;
             return;
         }
 
-        // Get updated elevations from GoSPL
-        int interp_result = var.gospl_driver->interpolate_elevation_to_points(
-            coords.data(), ntop, elevations_after.data(), 3, 1.0
+        // Step 4: Get GoSPL elevation at DES points AFTER erosion
+        // (Same interpolation smoothing, but now includes erosion)
+        int interp2 = var.gospl_driver->interpolate_elevation_to_points(
+            coords.data(), ntop, gospl_elev_after.data(), 3, 1.0
         );
-
-        if (interp_result == 0) {
-            // Apply elevation changes to DynEarthSol coordinates
-            double max_elevation_change = 0.0;
-            for (std::size_t i = 0; i < ntop; ++i) {
-                // int n = top_nodes[i];
-                double elevation_change = elevations_after[i] - elevations_before[i];
-                dh[i] = 0.0; // elevation_change;
-                // (*var.coord)[top_nodes[i]][NDIMS-1] = elevations_after[i];
-                
-                // Track maximum elevation change for diagnostics
-                max_elevation_change = std::max(max_elevation_change, std::abs(elevation_change));
-            }
-
-            std::cout << "GoSPL completed: max elevation change = " << max_elevation_change 
-                      << " in " << elapsed << " time units" << std::endl;
-        } else {
-            std::cerr << "Warning: Failed to interpolate elevations from GoSPL" << std::endl;
+        if (interp2 != 0) {
+            std::cerr << "Warning: Failed to interpolate elevations after erosion" << std::endl;
+            return;
         }
+
+        // Step 5: Compute PURE erosion (smoothing error cancels out!)
+        // erosion = gospl_after - gospl_before (both went through same interpolation)
+        double max_erosion = 0.0;
+        double min_erosion = 0.0, sum_erosion = 0.0;
+        int nodes_skipped = 0;
+        
+        // Get GoSPL mesh bounds for boundary check
+        bool check_bounds = var.gospl_driver->mesh_bounds_valid;
+        double x_min = var.gospl_driver->mesh_bounds[0];
+        double x_max = var.gospl_driver->mesh_bounds[1];
+        double y_min = var.gospl_driver->mesh_bounds[2];
+        double y_max = var.gospl_driver->mesh_bounds[3];
+        
+        // Add 5% buffer margin to avoid interpolation issues near edges
+        double x_margin = 0.05 * (x_max - x_min);
+        double y_margin = 0.05 * (y_max - y_min);
+        double x_min_buf = x_min + x_margin;
+        double x_max_buf = x_max - x_margin;
+        double y_min_buf = y_min + y_margin;
+        double y_max_buf = y_max - y_margin;
+        
+        for (std::size_t i = 0; i < ntop; ++i) {
+            int n = top_nodes[i];
+            double x = (*var.coord)[n][0];
+            double y = (*var.coord)[n][1];
+            
+            // Skip nodes outside GoSPL mesh bounds (with buffer margin) to avoid extrapolation errors
+            if (check_bounds && (x < x_min_buf || x > x_max_buf || y < y_min_buf || y > y_max_buf)) {
+                nodes_skipped++;
+                continue;  // Don't apply erosion to this node
+            }
+            
+            double erosion = gospl_elev_after[i] - gospl_elev_before[i];
+            
+            // Track statistics
+            min_erosion = std::min(min_erosion, erosion);
+            max_erosion = std::max(max_erosion, erosion);
+            sum_erosion += erosion;
+            
+            // Apply pure erosion/deposition to DES topography
+            (*var.coord)[n][NDIMS-1] += erosion;
+        }
+
+        std::cout << "GoSPL: erosion [" << min_erosion << ", " << max_erosion << "]"
+                  << " | mean=" << sum_erosion/ntop;
+        if (nodes_skipped > 0) {
+            std::cout << " | " << nodes_skipped << " boundary nodes skipped";
+        }
+        std::cout << std::endl;
     }
 #endif
 

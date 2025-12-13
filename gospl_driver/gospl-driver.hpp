@@ -43,6 +43,10 @@ public:
     std::vector<std::vector<double>> elevation_history;
     std::vector<double> time_history;
     
+    // GoSPL mesh domain bounds [x_min, x_max, y_min, y_max]
+    double mesh_bounds[4];
+    bool mesh_bounds_valid;
+    
     /**
      * Constructor
      */
@@ -111,18 +115,20 @@ public:
     int run_processes_until_time(double target_time, double dt, bool verbose = false);
     
     /**
-     * Apply velocity data to the GoSPL model
+     * Apply elevation data to update GoSPL mesh with external (DES) topography
+     * 
+     * This must be called BEFORE run_processes_for_dt() to ensure GoSPL
+     * starts from the current DynEarthSol surface topography.
      * 
      * @param coords Pointer to coordinates array (num_points * 3)
-     * @param velocities Pointer to velocities array (num_points * 3)
+     * @param elevations Pointer to elevation values array (num_points)
      * @param num_points Number of data points
-     * @param timer Time for velocity application
      * @param k Number of nearest neighbors for interpolation (default: 3)
      * @param power Inverse distance weighting power (default: 1.0)
      * @return 0 on success, -1 on error
      */
-    int apply_velocity_data(const double* coords, const double* velocities,
-                           int num_points, double timer, int k = 3, double power = 1.0);
+    int apply_elevation_data(const double* coords, const double* elevations,
+                            int num_points, int k = 3, double power = 1.0);
     
     /**
      * Interpolate elevation field to external points
