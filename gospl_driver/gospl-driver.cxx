@@ -11,7 +11,9 @@
 #include <sstream>
 
 // Constructor
-GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false), mesh_bounds_valid(false) {
+GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false), 
+                             mesh_bounds_valid(false), coupling_frequency(1), step_counter(0), 
+                             accumulated_dt(0.0) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
@@ -107,47 +109,8 @@ int GoSPLDriver::apply_elevation_data(const double* coords, const double* elevat
                                       int num_points, int k, double power) {
     if (!initialized) return -1;
     
-    // Build Python code to call apply_elevation_data from gospl_python_interface
-    // This updates GoSPL's internal mesh with the external (DES) topography
-    std::stringstream ss;
-    ss << std::setprecision(15);
-    ss << "import sys\n"
-       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
-       << "import numpy as np\n"
-       << "import gospl_python_interface as gpi\n"
-       << "\n"
-       << "# Build coordinate and elevation arrays\n"
-       << "coords = np.array([";
-    
-    // Write coordinates
-    for (int i = 0; i < num_points * 3; ++i) {
-        if (i > 0) ss << ", ";
-        ss << coords[i];
-    }
-    ss << "], dtype=np.float64).reshape(-1, 3)\n";
-    
-    ss << "elevations = np.array([";
-    for (int i = 0; i < num_points; ++i) {
-        if (i > 0) ss << ", ";
-        ss << elevations[i];
-    }
-    ss << "], dtype=np.float64)\n";
-    
-    ss << "\n"
-       << "# Apply elevation data to GoSPL mesh\n"
-       << "result = gpi.apply_elevation_data(" << model_handle << ", coords, elevations, "
-       << num_points << ", " << k << ", " << power << ")\n"
-       << "if result != 0:\n"
-       << "    print(f'Warning: apply_elevation_data returned {result}')\n";
-    
-    int result = PyRun_SimpleString(ss.str().c_str());
-    
-    if (result != 0) {
-        std::cerr << "Error: Failed to apply elevation data to GoSPL" << std::endl;
-        return -1;
-    }
-    
-    return 0;
+    // Use the C interface directly for efficiency (avoids Python string building)
+    return ::apply_elevation_data(model_handle, coords, elevations, num_points, k, power);
 }
 
 int GoSPLDriver::interpolate_elevation_to_points(const double* coords, int num_points,

@@ -47,6 +47,11 @@ public:
     double mesh_bounds[4];
     bool mesh_bounds_valid;
     
+    // Coupling frequency control: couple every N DES steps
+    int coupling_frequency;      // Run GoSPL every N steps (default: 1)
+    int step_counter;            // Current step count since last coupling
+    double accumulated_dt;       // Accumulated time since last coupling (in years)
+    
     /**
      * Constructor
      */

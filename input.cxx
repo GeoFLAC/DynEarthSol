@@ -256,6 +256,8 @@ static void declare_parameters(po::options_description &cfg,
          "Base level of surface processes.")
         ("control.surface_process_gospl_config_file", po::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
+        ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
+         "Run GoSPL coupling every N DES steps (default: 1 = every step). Higher values reduce overhead for erosion-dominated systems.")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),

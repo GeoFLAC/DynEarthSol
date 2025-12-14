@@ -1594,12 +1594,27 @@ namespace {
             return;
         }
 
+        // Coupling frequency control: accumulate time and only couple every N steps
+        double dt_years = var.dt / 3.1536e7;  // Convert to years
+        var.gospl_driver->accumulated_dt += dt_years;
+        var.gospl_driver->step_counter++;
+        
+        // Check if it's time to run GoSPL coupling
+        if (var.gospl_driver->step_counter < var.gospl_driver->coupling_frequency) {
+            return;  // Skip this step, accumulate time for later
+        }
+        
+        // Reset counters for next coupling cycle
+        double total_dt = var.gospl_driver->accumulated_dt;
+        var.gospl_driver->accumulated_dt = 0.0;
+        var.gospl_driver->step_counter = 0;
+
         const int top_bdry = iboundz1;
         const int_vec& top_nodes = *var.bnodes[top_bdry];
         const std::size_t ntop = top_nodes.size();
         double_vec& dh = *var.surfinfo.dh;
 
-        std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes..." << std::endl;
+        std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes (dt=" << total_dt << " yr)..." << std::endl;
 
         // Prepare coordinate data for GoSPL
         std::vector<double> coords(ntop * 3);
@@ -1635,8 +1650,8 @@ namespace {
             return;
         }
 
-        // Step 3: Run GoSPL erosion processes
-        double elapsed = var.gospl_driver->run_processes_for_dt(var.dt / 3.1536e7, false);
+        // Step 3: Run GoSPL erosion processes (using accumulated dt from all skipped steps)
+        double elapsed = var.gospl_driver->run_processes_for_dt(total_dt, false);
         if (elapsed < 0) {
             std::cerr << "Error: GoSPL process run failed" << std::endl;
             return;

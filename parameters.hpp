@@ -181,6 +181,7 @@ struct Control {
     double surf_depo_universal;
     double surf_base_level;
     std::string surface_process_gospl_config_file;
+    int gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;
