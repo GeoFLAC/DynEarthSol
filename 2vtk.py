@@ -11,6 +11,9 @@ options:
     -m          save marker data
     -p          save principal components (s1 and s3) of deviatoric stress
     -t          save all tensor components (default: only 1st/2nd invariants)
+    -u          update existing .vtkhdf file with calculated fields (requires h5py)
+                WARNING: Do not use this option while the simulation is running
+                or accessing the files, as it may corrupt the data.
     -h,--help   show this help
 
 If 'start' is not provided, start from the 0th frame.
@@ -19,9 +22,17 @@ If 'end' is not provided or is -1, end at the last output.
 '''
 
 from __future__ import print_function, unicode_literals
-import sys, os
+import sys, os, shutil
 import base64, zlib, glob
 import numpy as np
+
+# Disable HDF5 file locking to avoid BlockingIOError on some filesystems
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
+try:
+    import h5py
+except ImportError:
+    h5py = None
 from scipy import spatial
 from numpy.linalg  import eigh
 from fractions import Fraction
@@ -49,6 +60,9 @@ output_melting = False
 # Calculate heat flow?
 output_heatflux = False
 conductivity = 3.3
+
+# Update existing VTKHDF file?
+update_vtkhdf = False
 
 # min mutiprocessing threads
 mutiprocessing_threads = 4
@@ -329,6 +343,148 @@ def process_single_frame(args):
 
     return suffix
 
+
+def process_vtkhdf_update(args):
+    des, output_prefix, i = args
+    frame = des.frames[i]
+    
+    # Determine source and target filenames
+    # des.get_fn(frame) returns the filename with extension based on format
+    # But here we know we are dealing with vtkhdf
+    # If des.format is 'hdf5', get_fn returns .vtkhdf
+    # If des.format is 'binary', get_fn returns .save.xxxxxx (no extension or .vtu?)
+    # Let's rely on what Dynearthsol found.
+    
+    src_filename = des.get_fn(frame)
+    if not src_filename.endswith('.vtkhdf'):
+        # If for some reason it doesn't end with .vtkhdf, try appending it
+        if os.path.exists(src_filename + '.vtkhdf'):
+            src_filename += '.vtkhdf'
+        else:
+            print(f"Skipping frame {frame}: {src_filename} is not a .vtkhdf file.")
+            return frame
+
+    suffix = '{0:0=6}'.format(frame)
+
+    if output_in_cwd:
+        # Copy to current directory if not already there
+        # We want to preserve the original filename structure (e.g. model.save.000000.vtkhdf)
+        basename = os.path.basename(src_filename)
+        target_filename = basename
+        if os.path.abspath(src_filename) != os.path.abspath(target_filename):
+            shutil.copy2(src_filename, target_filename)
+    else:
+        # In-place update
+        target_filename = src_filename
+
+    # Now open target_filename in r+ mode
+    try:
+        with h5py.File(target_filename, 'r+') as f:
+            # Helper to create dataset and link
+            def write_dataset(path, data, name_attr=None):
+                # path e.g. /VTKHDF/grid/CellData/stress II
+                if path in f:
+                    del f[path]
+                dset = f.create_dataset(path, data=data, compression="gzip", compression_opts=9, shuffle=True)
+                if name_attr:
+                    dset.attrs['Name'] = np.string_(name_attr) # VTK expects string attributes? or just Name?
+                
+                # Create soft link at root
+                # e.g. /stress II -> /VTKHDF/grid/CellData/stress II
+                link_name = '/' + os.path.basename(path)
+                if link_name in f:
+                    del f[link_name]
+                f[link_name] = h5py.SoftLink(path)
+
+            # Node-based fields (PointData)
+            # -----------------------------
+            # Read necessary fields using des (which reads from file)
+            # Note: des.read_field reads from the file on disk. 
+            # Since we might be modifying a copy, we should read from the source or the target?
+            # des is initialized with modelname. It uses get_fn(frame) to find the file.
+            # If we moved the file, des might not find it if we are not careful.
+            # But here we assume des points to the valid files.
+            
+            coord = des.read_field(frame, 'coordinate')
+            coord0 = des.read_field(frame, 'coord0')
+            
+            # total displacement
+            disp = np.zeros_like(coord)
+            disp[:, 0:des.ndims] = coord - coord0
+            write_dataset('/VTKHDF/grid/PointData/total displacement', disp, 'total displacement')
+            
+            # horizon
+            horizon = coord0[:, -1]
+            write_dataset('/VTKHDF/grid/PointData/horizon', horizon, 'horizon')
+
+            # Cell-based fields (CellData)
+            # ----------------------------
+            strain_rate = des.read_field(frame, 'strain-rate')
+            srII = second_invariant(strain_rate)
+            write_dataset('/VTKHDF/grid/CellData/strain-rate II log10', np.log10(srII + 1e-45), 'strain-rate II log10')
+            
+            strain = des.read_field(frame, 'strain')
+            sI = first_invariant(strain)
+            sII = second_invariant(strain)
+            write_dataset('/VTKHDF/grid/CellData/strain I', sI, 'strain I')
+            write_dataset('/VTKHDF/grid/CellData/strain II', sII, 'strain II')
+            
+            try:
+                stress = des.read_field(frame, 'stress averaged')
+            except KeyError:
+                stress = des.read_field(frame, 'stress')
+            
+            tI = first_invariant(stress)
+            tII = second_invariant(stress)
+            write_dataset('/VTKHDF/grid/CellData/stress I', tI, 'stress I')
+            write_dataset('/VTKHDF/grid/CellData/stress II', tII, 'stress II')
+            
+            effvisc = tII / (srII + 1e-45)
+            write_dataset('/VTKHDF/grid/CellData/effective viscosity', effvisc, 'effective viscosity')
+            
+            if output_principle_stress:
+                s1, s3 = compute_principal_stress(stress)
+                write_dataset('/VTKHDF/grid/CellData/s1', s1, 's1')
+                write_dataset('/VTKHDF/grid/CellData/s3', s3, 's3')
+
+            if output_melting:
+                # Melting calculation logic copied from process_single_frame
+                material = des.read_field(frame, 'material')
+                temperature = des.read_field(frame, 'temperature')
+                connectivity = des.read_field(frame, 'connectivity')
+                nelem = des.nelem_list[i]
+                
+                # Calculate the temperature of element
+                # ecoord = np.array([coord[connectivity[e,:],:].mean(axis=0) for e in range(nelem)])
+                # etemp = np.array([temperature[connectivity[e,:]].mean(axis=0) for e in range(nelem)])
+                # Optimization: Vectorized mean
+                ecoord = coord[connectivity].mean(axis=1)
+                etemp = temperature[connectivity].mean(axis=1)
+
+                melting = np.zeros(sI.shape)
+
+                # find surface
+                bcflag = des.read_field(frame, 'bcflag')
+                filter = Filter()
+                surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
+                orders = np.argsort(surfx)
+                surface = np.vstack((surfx[orders],surfz[orders]))
+                
+                # Interpolate surface z at element x
+                depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
+                pressure = depth * 9.8 * 2900.
+                
+                melting[:] = -1000
+                ind = material < 2
+                melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
+                write_dataset('/VTKHDF/grid/CellData/melting', melting, 'melting')
+
+    except Exception as e:
+        print(f"Error processing frame {frame}: {e}")
+        raise
+
+    return suffix
+
 def main(modelname, start, end, delta):
     des = Dynearthsol(modelname)
     prefix = os.path.basename(modelname) if output_in_cwd else modelname
@@ -357,15 +513,31 @@ def main(modelname, start, end, delta):
 
         args_list = [(des, prefix, i) for i in indices]
 
+        if update_vtkhdf:
+            if h5py is None:
+                print("Error: h5py is required for --update-vtkhdf but it is not installed.", file=sys.stderr)
+                sys.exit(1)
+            target_func = process_vtkhdf_update
+        else:
+            target_func = process_single_frame
+
         with mp.Pool(processes = mutiprocessing_threads) as pool:
-            for result in pool.imap_unordered(process_single_frame, args_list):
+            for result in pool.imap_unordered(target_func, args_list):
                 ndone += 1
                 print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
 
     except ImportError:
         print('Multiprocessing is not available, using single thread instead.')
+        if update_vtkhdf:
+            if h5py is None:
+                print("Error: h5py is required for --update-vtkhdf but it is not installed.", file=sys.stderr)
+                sys.exit(1)
+            target_func = process_vtkhdf_update
+        else:
+            target_func = process_single_frame
+
         for i in indices:
-            result = process_single_frame((des, prefix, i))
+            result = target_func((des, prefix, i))
             ndone += 1
             print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
             
@@ -698,6 +870,8 @@ if __name__ == '__main__':
         output_tensor_components = True
     if '-m' in sys.argv:
         output_markers = True
+    if '-u' in sys.argv or '--update-vtkhdf' in sys.argv:
+        update_vtkhdf = True
     if '-melt' in sys.argv:
         output_melting = True
     if '-heat' in sys.argv:
