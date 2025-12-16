@@ -103,6 +103,102 @@ if npmajor < 1 or (npmajor == 1 and npminor < 8):
     eigh_vectorized = False
 
 
+def calculate_derived_data(des, frame):
+    point_data = {}
+    cell_data = {}
+    
+    # Node-based
+    coord = des.read_field(frame, 'coordinate')
+    coord0 = des.read_field(frame, 'coord0')
+    nnode = coord.shape[0]
+    
+    # total displacement
+    disp = np.zeros((nnode, 3), dtype=coord.dtype)
+    disp[:,0:des.ndims] = coord - coord0
+    point_data['total displacement'] = (disp, 3)
+    
+    # horizon
+    horizon = np.zeros((nnode), dtype=coord.dtype)
+    horizon[:] = coord0[:,-1]
+    point_data['horizon'] = (horizon, 1)
+    
+    # Element-based
+    # Strain Rate
+    strain_rate = des.read_field(frame, 'strain-rate')
+    srII = second_invariant(strain_rate)
+    cell_data['strain-rate II log10'] = (np.log10(srII+1e-45), 1)
+    
+    if output_tensor_components:
+        for d in range(des.nstr):
+            cell_data['strain-rate ' + des.component_names[d]] = (strain_rate[:,d], 1)
+
+    # Strain
+    strain = des.read_field(frame, 'strain')
+    sI = first_invariant(strain)
+    sII = second_invariant(strain)
+    cell_data['strain I'] = (sI, 1)
+    cell_data['strain II'] = (sII, 1)
+    
+    if output_tensor_components:
+        for d in range(des.nstr):
+            cell_data['strain ' + des.component_names[d]] = (strain[:,d], 1)
+
+    # Stress
+    try:
+        stress = des.read_field(frame, 'stress averaged')
+    except KeyError:
+        stress = des.read_field(frame, 'stress')
+    tI = first_invariant(stress)
+    tII = second_invariant(stress)
+    cell_data['stress I'] = (tI, 1)
+    cell_data['stress II'] = (tII, 1)
+    
+    if output_tensor_components:
+        for d in range(des.ndims):
+            cell_data['stress ' + des.component_names[d]] = (stress[:,d], 1)
+        for d in range(des.ndims, des.nstr):
+            cell_data['stress ' + des.component_names[d]] = (stress[:,d], 1)
+
+    # Principal Stress
+    if output_principle_stress:
+        s1, s3 = compute_principal_stress(stress)
+        cell_data['s1'] = (s1, 3)
+        cell_data['s3'] = (s3, 3)
+
+    # Effective Viscosity
+    effvisc = tII / (srII + 1e-45)
+    cell_data['effective viscosity'] = (effvisc, 1)
+
+    # Melting
+    if output_melting:
+        material = des.read_field(frame, 'material')
+        temperature = des.read_field(frame, 'temperature')
+        connectivity = des.read_field(frame, 'connectivity')
+        nelem = des.nelem_list[des.frames.index(frame)]
+        
+        # Optimization: Vectorized mean
+        ecoord = coord[connectivity].mean(axis=1)
+        etemp = temperature[connectivity].mean(axis=1)
+
+        melting = np.zeros(sI.shape)
+
+        # find surface
+        bcflag = des.read_field(frame, 'bcflag')
+        filter = Filter()
+        surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
+        orders = np.argsort(surfx)
+        surface = np.vstack((surfx[orders],surfz[orders]))
+        
+        depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
+        pressure = depth * 9.8 * 2900.
+        
+        melting[:] = -1000
+        ind = material < 2
+        melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
+        cell_data['melting'] = (melting, 1)
+        
+    return point_data, cell_data
+
 def process_single_frame(args):
     des, output_prefix, i = args
 
@@ -133,17 +229,13 @@ def process_single_frame(args):
             convert_field(des, frame, 'velocity', fvtu)
 
         convert_field(des, frame, 'force', fvtu)
-        coord0 = des.read_field(frame, 'coord0')
-        coord = des.read_field(frame, 'coordinate')
-        disp = np.zeros((nnode, 3), dtype=coord.dtype)
-        disp[:,0:des.ndims] = coord - coord0
-        vtk_dataarray(fvtu, disp, 'total displacement', 3)
-        horizon = np.zeros((nnode), dtype=coord.dtype)
-        horizon[:] = coord0[:,-1]
-        vtk_dataarray(fvtu, horizon, 'horizon', 1)
-
-
-
+        
+        # Calculate derived data
+        point_data, cell_data = calculate_derived_data(des, frame)
+        
+        # Write Point Data
+        for name, (data, comps) in point_data.items():
+            vtk_dataarray(fvtu, data, name, comps)
 
         '''
         # find nearest neighbour marker of nodes
@@ -166,17 +258,10 @@ def process_single_frame(args):
             pass
 
         # abjust horizon of sediment node
-        horizon_max = max(horizon)
-        for j in range(nnode):
-            if marker_mattype[nn[1][j]] == 3:
-                horizon[j] = horizon_max
-            else:
-                try:
-                    nnchron[j] = 0.
-                except:
-                    pass
-
-
+        # Note: horizon is now calculated in calculate_derived_data, but we need to read it back if we want to modify it?
+        # The original code here was modifying 'horizon' variable.
+        # But since the sediment adjustment block is commented out, I will ignore it.
+        
         try:
             vtk_dataarray(fvtu, nnchron, 'chron', 1)
         except:
@@ -210,79 +295,16 @@ def process_single_frame(args):
         except KeyError:
             pass
 
-        strain_rate = des.read_field(frame, 'strain-rate')
-        srII = second_invariant(strain_rate)
-        vtk_dataarray(fvtu, np.log10(srII+1e-45), 'strain-rate II log10')
-        if output_tensor_components:
-            for d in range(des.nstr):
-                vtk_dataarray(fvtu, strain_rate[:,d], 'strain-rate ' + des.component_names[d])
-
-        strain = des.read_field(frame, 'strain')
-        sI = first_invariant(strain)
-        sII = second_invariant(strain)
-        vtk_dataarray(fvtu, sI, 'strain I')
-        vtk_dataarray(fvtu, sII, 'strain II')
-        if output_tensor_components:
-            for d in range(des.nstr):
-                vtk_dataarray(fvtu, strain[:,d], 'strain ' + des.component_names[d])
-
-        # averaged stress is more stable and is preferred
-        try:
-            stress = des.read_field(frame, 'stress averaged')
-        except KeyError:
-            stress = des.read_field(frame, 'stress')
-        tI = first_invariant(stress)
-        
-        tII = second_invariant(stress)
-        vtk_dataarray(fvtu, tI, 'stress I')
-        vtk_dataarray(fvtu, tII, 'stress II')
-        if output_tensor_components:
-            # for d in range(des.ndims):
-            #     vtk_dataarray(fvtu, stress[:,d] - tI, 'stress ' + des.component_names[d] + ' dev.')
-            for d in range(des.ndims):
-                vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])                    
-            for d in range(des.ndims, des.nstr):
-                vtk_dataarray(fvtu, stress[:,d], 'stress ' + des.component_names[d])
-        if output_principle_stress:
-            s1, s3 = compute_principal_stress(stress)
-            vtk_dataarray(fvtu, s1, 's1', 3)
-            vtk_dataarray(fvtu, s3, 's3', 3)
+        # Write Cell Data
+        for name, (data, comps) in cell_data.items():
+            vtk_dataarray(fvtu, data, name, comps)
 
         convert_field(des, frame, 'density', fvtu)
         convert_field(des, frame, 'material', fvtu)
         convert_field(des, frame, 'viscosity', fvtu)
-        effvisc = tII / (srII + 1e-45)
-        vtk_dataarray(fvtu, effvisc, 'effective viscosity')
-
+        
         # element number for debugging
         vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
-
-        # melting mantle
-        if output_melting:
-            material = des.read_field(frame, 'material')
-            temperature = des.read_field(frame, 'temperature')
-            connectivity = des.read_field(frame, 'connectivity')
-            # Calculate the temperature of element
-            ecoord = np.array([coord[connectivity[e,:],:].mean(axis=0) for e in range(nelem)])
-            etemp = np.array([temperature[connectivity[e,:]].mean(axis=0) for e in range(nelem)])
-
-            melting = np.zeros(sI.shape)
-
-            # find surface
-            bcflag = des.read_field(frame, 'bcflag')
-            filter = Filter()
-            surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
-            orders = np.argsort(surfx)
-            surface = np.vstack((surfx[orders],surfz[orders]))
-            depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
-            pressure = depth * 9.8 * 2900.
-            # Hirschmann, 2000  https://doi.org/10.1029/2000GC000070
-            # Assumeing solidus is a line between (0 GPa, 1120 C) - (7 GPa, 1800 C)
-            #                                                    adibatic  themral gradient 0.3 C/km
-            melting[:] = -1000
-            ind = material < 2
-            melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
-            vtk_dataarray(fvtu, melting, 'melting')
 
         # # heat flux
         # # 3D is not implemented and tested yet
@@ -368,9 +390,8 @@ def process_vtkhdf_update(args):
 
     if output_in_cwd:
         # Copy to current directory if not already there
-        # We want to preserve the original filename structure (e.g. model.save.000000.vtkhdf)
-        basename = os.path.basename(src_filename)
-        target_filename = basename
+        # Use the standard naming convention: prefix.suffix.vtkhdf
+        target_filename = '{0}.{1}.vtkhdf'.format(output_prefix, suffix)
         if os.path.abspath(src_filename) != os.path.abspath(target_filename):
             shutil.copy2(src_filename, target_filename)
     else:
@@ -396,88 +417,16 @@ def process_vtkhdf_update(args):
                     del f[link_name]
                 f[link_name] = h5py.SoftLink(path)
 
-            # Node-based fields (PointData)
-            # -----------------------------
-            # Read necessary fields using des (which reads from file)
-            # Note: des.read_field reads from the file on disk. 
-            # Since we might be modifying a copy, we should read from the source or the target?
-            # des is initialized with modelname. It uses get_fn(frame) to find the file.
-            # If we moved the file, des might not find it if we are not careful.
-            # But here we assume des points to the valid files.
+            # Calculate derived data
+            point_data, cell_data = calculate_derived_data(des, frame)
             
-            coord = des.read_field(frame, 'coordinate')
-            coord0 = des.read_field(frame, 'coord0')
-            
-            # total displacement
-            disp = np.zeros_like(coord)
-            disp[:, 0:des.ndims] = coord - coord0
-            write_dataset('/VTKHDF/grid/PointData/total displacement', disp, 'total displacement')
-            
-            # horizon
-            horizon = coord0[:, -1]
-            write_dataset('/VTKHDF/grid/PointData/horizon', horizon, 'horizon')
-
-            # Cell-based fields (CellData)
-            # ----------------------------
-            strain_rate = des.read_field(frame, 'strain-rate')
-            srII = second_invariant(strain_rate)
-            write_dataset('/VTKHDF/grid/CellData/strain-rate II log10', np.log10(srII + 1e-45), 'strain-rate II log10')
-            
-            strain = des.read_field(frame, 'strain')
-            sI = first_invariant(strain)
-            sII = second_invariant(strain)
-            write_dataset('/VTKHDF/grid/CellData/strain I', sI, 'strain I')
-            write_dataset('/VTKHDF/grid/CellData/strain II', sII, 'strain II')
-            
-            try:
-                stress = des.read_field(frame, 'stress averaged')
-            except KeyError:
-                stress = des.read_field(frame, 'stress')
-            
-            tI = first_invariant(stress)
-            tII = second_invariant(stress)
-            write_dataset('/VTKHDF/grid/CellData/stress I', tI, 'stress I')
-            write_dataset('/VTKHDF/grid/CellData/stress II', tII, 'stress II')
-            
-            effvisc = tII / (srII + 1e-45)
-            write_dataset('/VTKHDF/grid/CellData/effective viscosity', effvisc, 'effective viscosity')
-            
-            if output_principle_stress:
-                s1, s3 = compute_principal_stress(stress)
-                write_dataset('/VTKHDF/grid/CellData/s1', s1, 's1')
-                write_dataset('/VTKHDF/grid/CellData/s3', s3, 's3')
-
-            if output_melting:
-                # Melting calculation logic copied from process_single_frame
-                material = des.read_field(frame, 'material')
-                temperature = des.read_field(frame, 'temperature')
-                connectivity = des.read_field(frame, 'connectivity')
-                nelem = des.nelem_list[i]
+            # Write Point Data
+            for name, (data, comps) in point_data.items():
+                write_dataset('/VTKHDF/grid/PointData/' + name, data, name)
                 
-                # Calculate the temperature of element
-                # ecoord = np.array([coord[connectivity[e,:],:].mean(axis=0) for e in range(nelem)])
-                # etemp = np.array([temperature[connectivity[e,:]].mean(axis=0) for e in range(nelem)])
-                # Optimization: Vectorized mean
-                ecoord = coord[connectivity].mean(axis=1)
-                etemp = temperature[connectivity].mean(axis=1)
-
-                melting = np.zeros(sI.shape)
-
-                # find surface
-                bcflag = des.read_field(frame, 'bcflag')
-                filter = Filter()
-                surfx, surfz = filter.node(coord[:,0],coord[:,1],bcflag)
-                orders = np.argsort(surfx)
-                surface = np.vstack((surfx[orders],surfz[orders]))
-                
-                # Interpolate surface z at element x
-                depth = np.interp(ecoord[:,0], surface[0], surface[1]) - ecoord[:,1]
-                pressure = depth * 9.8 * 2900.
-                
-                melting[:] = -1000
-                ind = material < 2
-                melting[ind] = (etemp[ind]-273. + depth[ind]*3.e-4) - (1120 + (680./7.e9)*pressure[ind])
-                write_dataset('/VTKHDF/grid/CellData/melting', melting, 'melting')
+            # Write Cell Data
+            for name, (data, comps) in cell_data.items():
+                write_dataset('/VTKHDF/grid/CellData/' + name, data, name)
 
     except Exception as e:
         print(f"Error processing frame {frame}: {e}")
