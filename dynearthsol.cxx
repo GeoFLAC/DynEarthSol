@@ -1,5 +1,6 @@
 #include <iostream>
 #include <limits>
+#include <fstream>
 
 
 #include "constants.hpp"
@@ -531,22 +532,48 @@ int main(int argc, const char* argv[])
     if (! param.sim.is_restarting) {
         init(param, var);
 
+
+        if (param.ic.isostasy_adjustment_time_in_yr > 0) {
+            // output.write_exact(var);
+            isostasy_adjustment(param, var);
+        }
+        if (param.sim.has_initial_checkpoint)
+            var.output->write_checkpoint(param, var);
+    }
+    else {
+        restart(param, var);
+    }
+
 #ifdef HAS_GOSPL_CPP_INTERFACE
-        // Initialize GoSPL driver if surface process option is 11
-        // Order: create driver → init Python → generate mesh → load GoSPL model
-        if (param.control.surface_process_option == 11) {
-            std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
-            var.gospl_driver = new GoSPLDriver();
-            
-            // Step 1: Initialize Python/gospl_extensions (needed for generate_mesh)
-            if (!var.gospl_driver->init_python()) {
-                std::cerr << "Failed to initialize Python for GoSPL" << std::endl;
-                delete var.gospl_driver;
-                var.gospl_driver = nullptr;
-                return -1;
-            }
-            
-            // Step 2: Generate GoSPL mesh from DynEarthSol surface nodes
+    // Initialize GoSPL driver if surface process option is 11
+    // This runs for both fresh starts and restarts
+    if (param.control.surface_process_option == 11) {
+        std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
+        var.gospl_driver = new GoSPLDriver();
+        
+        // Step 1: Initialize Python/gospl_extensions (needed for generate_mesh)
+        if (!var.gospl_driver->init_python()) {
+            std::cerr << "Failed to initialize Python for GoSPL" << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+            return -1;
+        }
+        
+        // Step 2: Generate GoSPL mesh from DynEarthSol surface nodes (or reuse existing on restart)
+        std::string mesh_file = "gospl_mesh.npz";
+        bool reuse_mesh = false;
+        
+        if (param.sim.is_restarting) {
+            // Only check for existing mesh when restarting
+            std::ifstream mesh_check(mesh_file);
+            reuse_mesh = mesh_check.good();
+            mesh_check.close();
+        }
+        
+        if (reuse_mesh) {
+            std::cout << "Restarting: Found existing GoSPL mesh file: " << mesh_file << ". Reusing it." << std::endl;
+        } else {
+            std::cout << "Generating new GoSPL mesh..." << std::endl;
             std::vector<double> x_coords;
             std::vector<double> y_coords;
             
@@ -562,42 +589,31 @@ int main(int argc, const char* argv[])
             }
             
             if (!x_coords.empty()) {
-                std::string mesh_file = "gospl_mesh.npz";
                 var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file, 
                                                 param.control.gospl_mesh_resolution,
                                                 param.control.gospl_initial_topo_amplitude,
                                                 param.control.gospl_mesh_perturbation);
             }
-            
-            // Step 3: Initialize GoSPL model (loads the mesh we just generated)
-            if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
-                std::cout << "GoSPL driver successfully initialized with config: " 
-                          << param.control.surface_process_gospl_config_file << std::endl;
-                // Suppress verbose output from GoSPL
-                var.gospl_driver->set_verbose(false);
-                // Set coupling frequency from config (default: 1 = every step)
-                var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
-                std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)" << std::endl;
-            } else {
-                std::cerr << "Failed to initialize GoSPL driver with config: " 
-                          << param.control.surface_process_gospl_config_file << std::endl;
-                delete var.gospl_driver;
-                var.gospl_driver = nullptr;
-                return -1;
-            }
         }
+        
+        // Step 3: Initialize GoSPL model (loads the mesh)
+        if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
+            std::cout << "GoSPL driver successfully initialized with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+            // Suppress verbose output from GoSPL
+            var.gospl_driver->set_verbose(false);
+            // Set coupling frequency from config (default: 1 = every step)
+            var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
+            std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)" << std::endl;
+        } else {
+            std::cerr << "Failed to initialize GoSPL driver with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+            return -1;
+        }
+    }
 #endif
-
-        if (param.ic.isostasy_adjustment_time_in_yr > 0) {
-            // output.write_exact(var);
-            isostasy_adjustment(param, var);
-        }
-        if (param.sim.has_initial_checkpoint)
-            var.output->write_checkpoint(param, var);
-    }
-    else {
-        restart(param, var);
-    }
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
