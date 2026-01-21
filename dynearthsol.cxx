@@ -563,7 +563,10 @@ int main(int argc, const char* argv[])
             
             if (!x_coords.empty()) {
                 std::string mesh_file = "gospl_mesh.npz";
-                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file);
+                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file, 
+                                                param.control.gospl_mesh_resolution,
+                                                param.control.gospl_initial_topo_amplitude,
+                                                param.control.gospl_mesh_perturbation);
             }
             
             // Step 3: Initialize GoSPL model (loads the mesh we just generated)

@@ -28,3 +28,12 @@ test
 *.log
 *.tsm
 external
+
+# GoSPL / HDF5 output
+dynearthsol-gospl
+*.h5
+*.xmf
+*.xdmf
+*.npz
+*.pvsm
+*.vtkhdf

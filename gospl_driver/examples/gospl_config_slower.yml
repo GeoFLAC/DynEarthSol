@@ -6,6 +6,9 @@ domain:
     seadepo: False
     bc: '1000'
 
+output:
+    dir: 'coupling_slow'
+
 time:
     start: 0.
     end: 50.e6
@@ -13,13 +16,13 @@ time:
     dt: 1.0
 
 spl:
-    K: 4.e-7
+    K: 4.e-6
     d: 0.
     m: 0.4
 
 diffusion:
-    hillslopeKa: 0.02
-    hillslopeKm: 0.1
+    hillslopeKa: 1.0 # 0.2
+    hillslopeKm: 1.0
 
 sea:
     position: -10.
@@ -28,5 +31,3 @@ climate:
   - start: 0.
     uniform: 1
 
-output:
-    dir: 'coupling_slow'

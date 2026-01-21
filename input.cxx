@@ -258,6 +258,12 @@ static void declare_parameters(po::options_description &cfg,
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
          "Run GoSPL coupling every N DES steps (default: 1 = every step). Higher values reduce overhead for erosion-dominated systems.")
+        ("control.gospl_mesh_resolution", po::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
+         "GoSPL mesh node spacing in meters (default: -1 = auto-size based on DES surface nodes). Set to desired resolution for control over GoSPL grid density.")
+        ("control.gospl_initial_topo_amplitude", po::value<double>(&p.control.gospl_initial_topo_amplitude)->default_value(0.0),
+         "Amplitude of random initial topography for GoSPL mesh in meters (default: 100). Set to 0 for flat initial surface.")
+        ("control.gospl_mesh_perturbation", po::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
+         "Fraction of grid spacing to randomly perturb node positions (0-1). 0 = regular grid, 0.3 = moderate perturbation to avoid grid artifacts.")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),

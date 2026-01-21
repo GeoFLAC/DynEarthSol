@@ -24,12 +24,12 @@
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 
 ndims = 3
-opt = 0
+opt = 2
 openacc = 0
 openmp = 1
 nprof = 0
 gprof = 0
-usemmg = 0
+usemmg = 1
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
@@ -121,10 +121,10 @@ endif
 
 ifeq ($(usemmg), 1)
 	# path to MMG3D header files
-	MMG_INCLUDE = ./mmg/build/include
+	MMG_INCLUDE = ${HOME}/opt/mmg/build/include
 
 	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ./mmg/build/lib
+	MMG_LIB_DIR = ${HOME}/opt/mmg/build/lib
 
 	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
 	ifeq ($(ndims), 3)	

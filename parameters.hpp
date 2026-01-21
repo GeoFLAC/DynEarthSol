@@ -182,6 +182,9 @@ struct Control {
     double surf_base_level;
     std::string surface_process_gospl_config_file;
     int gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
+    double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)
+    double gospl_initial_topo_amplitude;  // Initial random topo amplitude (default: 100m, 0=flat)
+    double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;

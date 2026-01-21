@@ -1,4 +1,0 @@
-#!/bin/bash
-# Auto-generated wrapper for DynEarthSol with GoSPL support
-export PYTHONPATH="/home/echoi2/opt/gospl_extensions/cpp_interface:$PYTHONPATH"
-exec "$(dirname "$0")/dynearthsol3d" "$@"

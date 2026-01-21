@@ -446,7 +446,10 @@ int GoSPLDriver::set_verbose(bool verbose) {
 
 int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
                                 const std::vector<double>& y_coords,
-                                const std::string& output_file) {
+                                const std::string& output_file,
+                                double resolution,
+                                double initial_topo_amplitude,
+                                double mesh_perturbation) {
     if (x_coords.size() != y_coords.size() || x_coords.empty()) {
         std::cerr << "Error: Invalid coordinates for mesh generation" << std::endl;
         return -1;
@@ -467,13 +470,38 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
     mesh_bounds[3] = y_max;
     mesh_bounds_valid = true;
     
-    // Calculate grid dimensions: approximately sqrt(n_nodes) in each direction
-    int nx = static_cast<int>(std::sqrt(static_cast<double>(n_nodes))) + 1;
-    int ny = nx;  // Square grid
+    // Calculate grid dimensions
+    int nx, ny;
+    double dx, dy;  // Grid spacing for perturbation calculation
+    if (resolution > 0) {
+        // Use specified resolution
+        nx = static_cast<int>((x_max - x_min) / resolution) + 1;
+        ny = static_cast<int>((y_max - y_min) / resolution) + 1;
+        // Ensure at least 2 nodes in each direction
+        nx = std::max(nx, 2);
+        ny = std::max(ny, 2);
+        dx = (x_max - x_min) / (nx - 1);
+        dy = (y_max - y_min) / (ny - 1);
+        std::cout << "Generating GoSPL mesh with resolution " << resolution << ": ";
+    } else {
+        // Default: approximately sqrt(n_nodes) in each direction
+        nx = static_cast<int>(std::sqrt(static_cast<double>(n_nodes))) + 1;
+        ny = nx;  // Square grid
+        dx = (x_max - x_min) / (nx - 1);
+        dy = (y_max - y_min) / (ny - 1);
+        std::cout << "Generating GoSPL mesh (auto-sized): ";
+    }
     
-    std::cout << "Generating GoSPL mesh: " << nx << " x " << ny << " = " << (nx * ny) 
+    std::cout << nx << " x " << ny << " = " << (nx * ny) 
               << " vertices over domain [" << x_min << ", " << x_max << "] x ["
-              << y_min << ", " << y_max << "]" << std::endl;
+              << y_min << ", " << y_max << "]";
+    if (mesh_perturbation > 0) {
+        std::cout << " (perturbation: " << mesh_perturbation * 100 << "%)";
+    }
+    if (initial_topo_amplitude > 0) {
+        std::cout << " (initial topo: ±" << initial_topo_amplitude << "m)";
+    }
+    std::cout << std::endl;
     
     // Build Python code to generate the mesh
     std::stringstream ss;
@@ -485,6 +513,9 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
        << "x_min, x_max = " << x_min << ", " << x_max << "\n"
        << "y_min, y_max = " << y_min << ", " << y_max << "\n"
        << "nx, ny = " << nx << ", " << ny << "\n"
+       << "dx, dy = " << dx << ", " << dy << "\n"
+       << "mesh_perturbation = " << mesh_perturbation << "\n"
+       << "initial_topo_amplitude = " << initial_topo_amplitude << "\n"
        << "\n"
        << "# Create regular grid\n"
        << "x_reg = np.linspace(x_min, x_max, nx)\n"
@@ -492,9 +523,25 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
        << "xx, yy = np.meshgrid(x_reg, y_reg)\n"
        << "x_flat = xx.flatten()\n"
        << "y_flat = yy.flatten()\n"
-       << "# Initialize elevation with random noise (±100m) to provide topographic variation\n"
+       << "\n"
+       << "# Apply random perturbation to grid positions (except boundary nodes)\n"
        << "np.random.seed(42)  # Reproducible randomness\n"
-       << "z_flat = np.random.uniform(-100.0, 100.0, len(x_flat))\n"
+       << "if mesh_perturbation > 0:\n"
+       << "    # Create mask for interior nodes (not on boundary)\n"
+       << "    is_boundary = (xx == x_min) | (xx == x_max) | (yy == y_min) | (yy == y_max)\n"
+       << "    is_interior = ~is_boundary.flatten()\n"
+       << "    # Random perturbation scaled by grid spacing\n"
+       << "    perturbation_x = np.random.uniform(-0.5, 0.5, len(x_flat)) * dx * mesh_perturbation\n"
+       << "    perturbation_y = np.random.uniform(-0.5, 0.5, len(y_flat)) * dy * mesh_perturbation\n"
+       << "    # Apply only to interior nodes\n"
+       << "    x_flat[is_interior] += perturbation_x[is_interior]\n"
+       << "    y_flat[is_interior] += perturbation_y[is_interior]\n"
+       << "\n"
+       << "# Initialize elevation\n"
+       << "if initial_topo_amplitude > 0:\n"
+       << "    z_flat = np.random.uniform(-initial_topo_amplitude, initial_topo_amplitude, len(x_flat))\n"
+       << "else:\n"
+       << "    z_flat = np.zeros(len(x_flat))\n"
        << "\n"
        << "# Create vertices array (n_vertices, 3)\n"
        << "vertices = np.column_stack([x_flat, y_flat, z_flat])\n"

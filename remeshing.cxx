@@ -2131,7 +2131,17 @@ void compute_metric_field(const Variables &var, const conn_t &connectivity, cons
 #endif
     for (int e=0;e<var.nelem;e++) {
         const int *conn = connectivity[e];
-        double plstrain = resolution/(1.0+5.0*(*var.plstrain)[e]);
+	// to respect the element size in the previous mesh,
+	// approximate resolution as follows assuming regular tet or equilateral tri:
+	// - Regular tetrahedron volume V = a^3/(6*sqrt(2)) -> a ~ (8.49*V)^(1/3)
+	// - Equilateral triangle area A = (sqrt(3)/4)*a^2 -> a ~ (2.31*A)^(1/2)
+#ifdef THREED
+	double orig_size = 2.0 * std::cbrt(8.49*(*var.volume)[e]);
+#else
+	double orig_size = 2.0 * std::sqrt(2.31*(*var.volume)[e]);
+#endif
+        double plstrain = orig_size/(1.0+5.0*(*var.plstrain)[e]);
+        // double plstrain = resolution/(1.0+5.0*(*var.plstrain)[e]);
         // resolution/(1.0+(*var.plstrain)[e]);
         etmp[e] = plstrain * (*var.volume)[e];
     }

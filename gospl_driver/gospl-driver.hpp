@@ -202,11 +202,17 @@ public:
      * @param x_coords X coordinates of surface nodes
      * @param y_coords Y coordinates of surface nodes
      * @param output_file Path to output NPZ file for GoSPL mesh
+     * @param resolution Desired mesh spacing (in same units as coordinates). If <= 0, uses sqrt(n_nodes) approach.
+     * @param initial_topo_amplitude Amplitude of random initial topography (in meters). 0 = flat.
+     * @param mesh_perturbation Fraction of grid spacing to randomly perturb nodes (0-1). 0 = regular grid, 0.3 = moderate perturbation.
      * @return 0 on success, -1 on error
      */
     int generate_mesh(const std::vector<double>& x_coords,
                       const std::vector<double>& y_coords,
-                      const std::string& output_file);
+                      const std::string& output_file,
+                      double resolution = -1.0,
+                      double initial_topo_amplitude = 100.0,
+                      double mesh_perturbation = 0.0);
     
     /**
      * Demonstrate elevation interpolation capabilities
