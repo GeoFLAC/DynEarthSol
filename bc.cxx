@@ -298,17 +298,15 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r1 = bc.vbc_val_x0_ratio1;
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
-#ifdef THREED
-    #pragma acc parallel loop gang vector async
-#else
+#ifndef THREED
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
         double* tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop gang vector async
 #endif
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.nnode; ++i) {
 
         // fast path: skip nodes not on boundary
@@ -763,17 +761,15 @@ void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r1 = bc.vbc_val_x0_ratio1;
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
-#ifdef THREED
-    #pragma acc parallel loop gang vector async
-#else
+#ifndef THREED
     double zmin = 0;
     for (int k=0; k<var.nnode; ++k) {
         double* tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
-    #pragma acc parallel loop gang vector async
 #endif
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.nnode; ++i) {
 
         // fast path: skip nodes not on boundary
