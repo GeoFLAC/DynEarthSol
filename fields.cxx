@@ -647,6 +647,8 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
     apply_damping(param, var, force);
     
+    #pragma acc wait
+
 #ifdef NPROF
     nvtxRangePop();
 #endif

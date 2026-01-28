@@ -175,7 +175,7 @@ namespace {
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
@@ -190,6 +190,8 @@ namespace {
                     }
                 }
             }
+
+            #pragma acc wait
 
             neighbors.resize((end-start) * nsample * max_el);
 
@@ -281,6 +283,8 @@ namespace {
                 }
             }
         } // end of for (int b=0; b<nblocks; b++)
+
+        #pragma acc wait
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
