@@ -652,6 +652,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         const array_t& vel = *var.vel;
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
 
+        #pragma acc loop seq
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
 #ifdef THREED
             pp_element += ppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
@@ -709,18 +710,21 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         if(1){
             double div = trace(edot);
             //double div2 = ((*var.volume)[e] / (*var.volume_old)[e] - 1) / var.dt;
+            #pragma acc loop seq
             for (int i=0; i<NDIMS; ++i) {
                 edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;  // XXX: should NDIMS -> 3 in plane strain?
             }
         }
 
         // update strain with strain rate
+        #pragma acc loop seq
         for (int i=0; i<NSTR; ++i) {
             es[i] += edot[i] * var.dt;
         }
 
         // modified strain increment
         double de[NSTR];
+        #pragma acc loop seq
         for (int i=0; i<NSTR; ++i) {
             de[i] = edot[i] * var.dt;
         }
@@ -789,6 +793,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
+                #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
                 double svII = second_invariant2(sv);
@@ -798,6 +803,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                        amc, anphi, anpsi, hardn, ten_max);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
+                #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
@@ -814,9 +820,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double spII = second_invariant2(sp);
 
                 // use the smaller as the final stress
-                if (svII < spII)
+                if (svII < spII) {
+                    #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
+                }
                 else {
+                    #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
@@ -866,6 +875,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
+                #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
                 double svII = second_invariant2(sv);
@@ -884,6 +894,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
+                #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
@@ -900,9 +911,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double spII = second_invariant2(sp);
 
                 // use the smaller as the final stress
-                if (svII < spII)
+                if (svII < spII) {
+                    #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
+                }
                 else {
+                    #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
