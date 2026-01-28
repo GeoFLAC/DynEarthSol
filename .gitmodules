@@ -1,0 +1,4 @@
+[submodule "knn-bvh"]
+	path = knn-bvh
+	url = https://github.com/chaseshyu/knn-bvh.git
+	ignore = dirty

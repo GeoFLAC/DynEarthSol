@@ -1007,20 +1007,17 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush(__FUNCTION__);
 #endif
-        const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
+        const int k_neig = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
         int nmarkers = ms.get_nmarkers();
 
-        int nquery_max = 1024 * 1024 * 32;
-
-        int markers_per_block = nquery_max / k;
-        if (markers_per_block < 1) markers_per_block = 1;
+        int markers_per_block = std::max(kdtree.max_batch_size(k_neig), 1);
         int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
+
         printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
-               nblocks, markers_per_block, (unsigned long)nmarkers*k);
+               nblocks, markers_per_block, (unsigned long)nmarkers * k_neig);
 
         array_t queries(markers_per_block);
-        neighbor_vec neighbors(markers_per_block * k);
 
         for (int b=0; b<nblocks; ++b) {
             int start = b * markers_per_block;
@@ -1031,7 +1028,7 @@ namespace {
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
-                old_connectivity, start, end) firstprivate(k)
+                old_connectivity, start, end)
 #endif
             #pragma acc parallel loop gang vector
             for (int i = start; i < end; i++) {
@@ -1047,23 +1044,26 @@ namespace {
                 }
             }
 
-            kdtree.search(queries, neighbors, (end - start), k, 3);
+            neighbor* neighbors = kdtree.search(queries, (end - start), k_neig, false);
 
             // Loop over all the old markers and identify a containing element in the new mesh.
 #ifndef ACC
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
-                nmarkers, queries, neighbors, start, end) firstprivate(k)
+                nmarkers, queries, neighbors, start, end) firstprivate(k_neig)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop gang vector deviceptr(neighbors)
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
 
                 // 2. look for nearby elements.
-                neighbor* nn_idx = neighbors.data() + idx_q*k;
+                neighbor* nn_idx = neighbors + idx_q * k_neig;
 
-                for( int j = 0; j < k; j++ ) {
+                for( int j = 0; j < k_neig; j++ ) {
                     int e = nn_idx[j].idx;
+
+                    if (e < 0) break; // no more neighbors
+
                     double r[NDIMS];
 
                     bary.transform(queries[idx_q], e, r);
@@ -1341,7 +1341,6 @@ namespace {
             }
         }
 
-        neighbor_vec neighbors(nnew);
         AMD_vec marker_data_all(nnew);
         array_t points(ms.get_nmarkers());
 
@@ -1358,12 +1357,34 @@ namespace {
         nvtxRangePush("create kdtree for markers");
 #endif
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree);
+
+        int MAX_EXPECTED_N = -1;
+        // Estimate the maximum number of points by the end of the iteration cycle.
+        // We add a 20% + 10,000 baseline padding to prevent reallocations.
+        if (is_surface) {
+            MAX_EXPECTED_N = ms.get_nmarkers() * 1.2 + 10000;
+            if (MAX_EXPECTED_N < ms.get_nmarkers() + nnew) {
+                MAX_EXPECTED_N = ms.get_nmarkers() + nnew + 10000;
+            }
+        }
+        
+        KNN kdtree(param, points, nano_kdtree, MAX_EXPECTED_N);
+
+        if (!is_surface && nnew > 0) {
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(nnew, k_neig);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+            printf("    Marker replenish: knn: %10s pts (%s) for %11s q w/ %2d k%s\n",
+                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                    format_with_commas((unsigned long)ne).c_str(), k_neig, mem_str);
+        }
+
 #ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
 
-        kdtree.search(queries, neighbors, nnew, k_neig, 3.);
+        neighbor* neighbors = kdtree.search(queries, nnew, k_neig, false);
 
         #pragma acc wait
         const ElemMarkerInfo* emi_ptr = emi.data();
@@ -1376,7 +1397,7 @@ namespace {
                 ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, ntop_elems, \
                 genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
 #endif
-        #pragma acc parallel loop gang vector reduction(||:is_no_nn)
+        #pragma acc parallel loop gang vector deviceptr(neighbors) reduction(||:is_no_nn)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             int start = mk_start[i];

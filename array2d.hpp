@@ -201,6 +201,26 @@ public:
         }
     }
 
+#ifdef ACC
+    void pack_to_xyz_float(std::vector<float3>& buffer, std::size_t limit_size = 0) const {
+        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+
+        if (buffer.size() < count)
+            buffer.resize(count);
+
+        #pragma acc parallel loop gang vector
+        for (std::size_t i = 0; i < count; ++i) {
+            buffer[i].x = (float)(*this)[i][0];
+            buffer[i].y = (float)(*this)[i][1];
+#ifdef THREED
+            buffer[i].z = (float)(*this)[i][2];
+#else
+            buffer[i].z = 0.0;
+#endif
+        }
+    }
+#endif
+
     //
     // constructors & destructor
     //

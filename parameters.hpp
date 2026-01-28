@@ -15,6 +15,9 @@
 
 #include "constants.hpp"
 #include "array2d.hpp"
+#ifdef ACC
+#include "knn_bvh.hpp"
+#endif
 
 typedef std::pair<int,int> int_pair;
 typedef std::pair<double,double> double_pair;
@@ -73,12 +76,14 @@ typedef array_t::ConstIndirectAccessor ConstArrayIndirectAccessor;
 
 class Output;
 
+#ifndef ACC
 struct neighbor {
     int idx;
     double dist2;
     neighbor() : idx(-1), dist2(0.0) {}
     neighbor(int e, double a) : idx(e), dist2(a) {}
 };
+#endif
 
 // Update markers in surface elements
 struct MarkerUpdate {

@@ -38,14 +38,12 @@ namespace {
             elem_center(*var.coord, *var.connectivity, queries);
         }
 
-        neighbor_vec neighbors(nqueries);
-
-        kdtree.search(queries, neighbors, nqueries, 1, 3.);
+        neighbor* neighbors = kdtree.search(queries, nqueries, 1, false);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop gang vector deviceptr(neighbors)
         for (int i=0; i<nqueries; i++) {
             idx[i] = int(neighbors[i].idx);
             is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
@@ -145,8 +143,7 @@ namespace {
         }
         int nsample = sample_eta.size();
 
-        // number of neighbors exceeding computational limit
-        int queries_max = 1024 * 1024 * 16;
+        int queries_max = std::max(kdtree.max_batch_size(max_el), nsample);
         int elems_per_block_max = queries_max / nsample;
 
         int elems_per_block = std::min(elems_per_block_max, nchanged);
@@ -155,10 +152,10 @@ namespace {
                nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
-        neighbor_vec neighbors(elems_per_block * nsample * max_el);
 
         conn_t *ptr_conn;
         int nnode_cell;
+        double resoTimes;
         if (is_surface) {
             ptr_conn = var.connectivity_surface;
             nnode_cell = NODES_PER_FACET;
@@ -196,14 +193,14 @@ namespace {
             }
 
             // find the nearest point nn in old_center
-            kdtree.search(queries, neighbors, (end-start)*nsample, max_el, 3.);
+            neighbor* neighbors = kdtree.search(queries, (end-start)*nsample, max_el, false);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop gang vector deviceptr(neighbors)
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];
@@ -618,7 +615,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
 
         int_vec idx(nqueries); // nearest element
         int_vec is_changed(nqueries); // is the element changed during remeshing?
-        int_vec idx_changed(nqueries); 
+        int_vec idx_changed(nqueries);
 
         nn_t elems_vec;
         ratio_t ratios_vec;
