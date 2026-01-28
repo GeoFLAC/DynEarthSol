@@ -1051,7 +1051,7 @@ namespace {
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
                 old_connectivity, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 // 1. Get physical coordinates, x, of an old marker.
@@ -1065,8 +1065,6 @@ namespace {
             }
 
             neighbors.resize( (end - start) * k );
-
-            #pragma acc wait
 
             kdtree.search(queries, neighbors, k, 3);
 
@@ -1108,6 +1106,8 @@ namespace {
 
         int_vec removed_markers;
 
+        #pragma acc wait
+
         for (int i = 0; i < nmarkers; i++) {
             int e = ms.get_elem(i);
             if (e >= 0)
@@ -1130,6 +1130,8 @@ namespace {
                 }
             }
         }
+
+        #pragma acc wait
 
         ms.remove_markers(param, var, removed_markers, markers_in_elem);
 
@@ -1595,8 +1597,6 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
         // delete recorded marker
         remove_markers(param, var, delete_marker, markers_in_elem);
-
-        #pragma acc wait
 
         int_pair_vec unplenished_elems;
         for (int i=0; i<var.ntop_elems; i++) {

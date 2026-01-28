@@ -201,7 +201,7 @@ namespace {
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];
@@ -281,6 +281,8 @@ namespace {
                 }
             }
         } // end of for (int b=0; b<nblocks; b++)
+
+        #pragma acc wait
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
