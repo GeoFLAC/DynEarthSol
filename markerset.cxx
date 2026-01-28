@@ -1027,7 +1027,7 @@ namespace {
 
         int nmarkers = ms.get_nmarkers();
 
-        int nquery_max = 1024 * 1024 * 32;
+        int nquery_max = 1024 * 1024 * 16;
 
         int markers_per_block = nquery_max / k;
         if (markers_per_block < 1) markers_per_block = 1;
