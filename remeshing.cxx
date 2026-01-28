@@ -548,6 +548,8 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 
     Barycentric_transformation bary(tiny_coord, tiny_conn, tiny_vol);
 
+    #pragma acc wait
+
     // find old nodes that are connected to tiny elements and are not excluded
     // (most of the nodes of tiny elements are newly inserted by the remeshing library)
     for (int i=0; i<npoints; ++i) {
@@ -2980,6 +2982,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
+    #pragma acc wait
+
 #ifdef NPROF_DETAIL
     nvtxRangePush("reset bounrdary condition");
 #endif
@@ -3011,6 +3015,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         update_strain_rate(var, *var.strain_rate);
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     }
+
+    #pragma acc wait
 
     std::cout << "  Remeshing finished.\n";
 
