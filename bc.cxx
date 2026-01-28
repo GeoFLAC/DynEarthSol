@@ -1135,6 +1135,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     for (int e=0; e<var.nelem; ++e)
         (*var.etmp_int)[e] = -1;
 
+    #pragma acc wait
+
     for (int i=0; i<nbdrytypes; i++) {
         if (var.vbc_types[i] != 0 &&
             var.vbc_types[i] != 2 &&
@@ -1145,7 +1147,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 
         int bound, nbdry_nodes;
 
-        #pragma acc kernels async
+        #pragma acc kernels
         {
             bound = static_cast<int>(var.bfacets[i]->size());
             nbdry_nodes = static_cast<int>(var.bnodes[i]->size());

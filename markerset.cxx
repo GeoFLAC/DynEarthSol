@@ -1075,7 +1075,7 @@ namespace {
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
                 nmarkers, queries, neighbors, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop async
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
@@ -1107,6 +1107,8 @@ namespace {
         }
 
         int_vec removed_markers;
+
+        #pragma acc wait
 
         for (int i = 0; i < nmarkers; i++) {
             int e = ms.get_elem(i);

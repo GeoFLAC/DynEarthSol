@@ -407,6 +407,9 @@ void update_mesh(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
+
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -434,6 +437,8 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
+
+        #pragma acc wait
 
         // do not apply vbc to allow free boundary
 
