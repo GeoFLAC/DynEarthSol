@@ -278,13 +278,13 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     double_vec *new_init_elem_size_n = new double_vec(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n);
 
+    #pragma acc wait
+
     array_t *new_vel = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
 
     array_t *new_coord0 = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
-
-    #pragma acc wait
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -297,6 +297,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.init_elem_size_n;
     var.init_elem_size_n = new_init_elem_size_n;
+
+    #pragma acc wait
 
     delete var.vel;
     var.vel = new_vel;

@@ -526,6 +526,8 @@ namespace {
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
+            #pragma acc wait
+
             tensor_t *new_stress = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
@@ -534,11 +536,6 @@ namespace {
 
             double_vec *new_old_mean_stress = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
-
-            double_vec *new_radiogenic_source = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
-
-            #pragma acc wait
 
             delete var.plstrain;
             var.plstrain = new_plstrain;
@@ -549,6 +546,11 @@ namespace {
             delete var.strain;
             var.strain = new_strain;
 
+            #pragma acc wait
+
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
+
             delete var.stress;
             var.stress = new_stress;
 
@@ -557,6 +559,8 @@ namespace {
 
             delete var.old_mean_stress;
             var.old_mean_stress = new_old_mean_stress;
+
+            #pragma acc wait
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
