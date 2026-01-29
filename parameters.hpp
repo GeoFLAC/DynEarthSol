@@ -516,6 +516,7 @@ struct Variables {
     int noutput;
     Time func_time;
     Output *output;
+    int nsedi_acc;
 
     int nnode;
     int nelem;

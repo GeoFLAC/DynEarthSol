@@ -35,6 +35,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.nsedi_acc = 0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -382,7 +383,8 @@ void update_mesh(const Param& param, Variables& var)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem, \
+                      var.nsedi_acc);
     }
 
 #ifdef NPROF_DETAIL
@@ -799,6 +801,13 @@ int main(int argc, const char* argv[])
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
 
+                if (var.nsedi_acc > 0) {
+                    std::cout << "                New added markers:";
+                    // other information to show
+                    std::cout << " sediment(" << var.nsedi_acc << ")";
+                    var.nsedi_acc = 0;
+                    std::cout << "\n";
+                }
 
                 info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }
