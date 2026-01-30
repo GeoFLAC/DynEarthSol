@@ -215,6 +215,9 @@ namespace {
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
                         old_e = neighbors[(query_start + j) * max_el + jj].idx;
+
+                        if (old_e < 0) break; // occurs when cuda knn cannot find enough neighbors
+
                         bary.transform(queries[query_start + j], old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
