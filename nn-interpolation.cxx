@@ -38,6 +38,19 @@ namespace {
             elem_center(*var.coord, *var.connectivity, queries);
         }
 
+        {
+            printf(is_surface ? "    Top surface:      "
+                              : "    Element:          ");  fflush(stdout);
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(nqueries, 1);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+            printf("knn: %10s pts (%s) for %11s q w/  1 k%s\n",
+                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be, 
+                    format_with_commas((unsigned long)nqueries).c_str(), mem_str);
+        }
+
         neighbor* neighbors = kdtree.search(queries, nqueries, 1, false);
 
 #ifndef ACC
@@ -93,9 +106,12 @@ namespace {
         ratios_vec.resize(nchanged, false);
         empty_vec.resize(nchanged, 0);
 
+        printf(is_surface ? "    Top surface ACM:  "
+                          : "    Element ACM:      ");  fflush(stdout);
+
         if (!nchanged) {
             // no changed element, return directly
-            printf("      No changed element, skip ACM mapping.\n");
+            printf("no changes\n");
             return;
         }
 
@@ -148,8 +164,29 @@ namespace {
 
         int elems_per_block = std::min(elems_per_block_max, nchanged);
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
-        printf("    Using %d blocks, elements per block: %d, total queries: %lu\n",
-               nblocks, elems_per_block, (unsigned long)nchanged * nsample);
+
+        {
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            int nq_nn = is_surface ? (int)(*var.bfacets[iboundz1]).size() : var.nelem;
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(elems_per_block * nsample, max_el);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+            printf("knn: %10s pts (%s) for %11s q w/ %2d k%s",
+                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                    format_with_commas((unsigned long)nchanged * nsample).c_str(),
+                    max_el, mem_str
+                    ); fflush(stdout);
+
+            if (nblocks > 1) {
+                printf("/blk (%d x %sq|%se)", nblocks,
+                        format_with_commas((unsigned long)elems_per_block * nsample).c_str(),
+                        format_with_commas((unsigned long)elems_per_block).c_str());
+                fflush(stdout);
+            } else {
+                printf(" (%s elem)\n", format_with_commas((unsigned long)nchanged).c_str());
+            }
+        }
 
         array_t queries(elems_per_block*nsample);
 
@@ -169,7 +206,8 @@ namespace {
             int end = std::min((b + 1) * elems_per_block, nchanged);
             if (start >= end) continue;
 
-            printf("      Block %3d: element %7d to %7d", b, start, end-1);
+            if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
+
             queries.resize((end - start) * nsample);
 
 #ifndef ACC
@@ -282,6 +320,8 @@ namespace {
         } // end of for (int b=0; b<nblocks; b++)
 
         #pragma acc wait
+        
+        if (nblocks > 1) printf("\n");
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -327,15 +367,14 @@ namespace {
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree);
+        KNN kdtree(param, points, nano_kdtree, false);
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
-        printf("    Finding nearest neighbor...\n");
+
         find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed, is_surface);
 
-        printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface);
 
 #ifdef NPROF_DETAIL
@@ -620,15 +659,10 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         nn_t elems_vec;
         ratio_t ratios_vec;
         double_vec empty_vec; // radio between old element and boundary empty
-        
+
         prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
-        if (is_surface) {
-            printf("  Interpolating surface fields...\n");
-        } else {
-            printf("  Interpolating element fields...\n");
-        }
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 

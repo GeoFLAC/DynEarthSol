@@ -94,22 +94,37 @@ void prepare_interpolation(const Param& param, const Variables &var,
 #endif
 
     NANOKDTree nano_kdtree(NDIMS, cloud);
-    KNN kdtree(param, old_coord, nano_kdtree);
+    KNN kdtree(param, old_coord, nano_kdtree, false);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
-    std::cout << "  Node:\n    Finding nearest neighbor...\n";
-
     int max_el = 1;
-    int queries_max = std::max(kdtree.max_batch_size(max_el), 1);
+    int nodes_per_block_max = std::max(kdtree.max_batch_size(max_el), 1);
 
-    int nodes_per_block = std::min(queries_max, var.nnode);
+    int nodes_per_block = std::min(nodes_per_block_max, var.nnode);
     int nblocks = (var.nnode + nodes_per_block - 1) / nodes_per_block;
-    
-    printf("      Using %d blocks, nodes per block: %d, total nodes: %d\n",
-           nblocks, nodes_per_block, var.nnode);
+
+    {
+        char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+        char mem_str[32] = "";
+        size_t qm = KNN::query_mem_bytes(nodes_per_block, max_el);
+        if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+        printf("    Node:             knn: %10s pts (%s) for %11s q w/ %2d k%s",
+                format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                format_with_commas((unsigned long)var.nnode).c_str(), max_el, mem_str
+                ); fflush(stdout);
+
+        if (nblocks > 1) {
+            printf("/blk (%d x %sq)", nblocks,
+                    format_with_commas((unsigned long)nodes_per_block).c_str());
+            fflush(stdout);
+        } else {
+            printf("\n");
+        }
+    }
 
     array_t block_queries;
 
@@ -118,7 +133,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
         int end = std::min((b + 1) * nodes_per_block, var.nnode);
         if (start >= end) continue;
 
-        printf("        Block %3d:    node %7d to %7d", b, start, end - 1);
+        if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
         
         block_queries.resize(end - start);
         #pragma omp parallel for default(none) shared(var, block_queries, start, end)
@@ -265,6 +280,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
         }
     }
 
+    if (nblocks > 1) printf("\n");
+
     // print(std::cout, *var.coord);
     // std::cout << '\n';
     // print(std::cout, el);
@@ -289,8 +306,6 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
     prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
-
-    std::cout << "    Interpolating fields...\n";
 
     const int n = var.nnode;
 

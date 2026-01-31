@@ -1011,19 +1011,37 @@ namespace {
 
         int nmarkers = ms.get_nmarkers();
 
-        int markers_per_block = std::max(kdtree.max_batch_size(k_neig), 1);
+        int markers_per_block_max = std::max(kdtree.max_batch_size(k_neig), 1);
+        int markers_per_block = std::min(markers_per_block_max, nmarkers);
         int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
 
-        printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
-               nblocks, markers_per_block, (unsigned long)nmarkers * k_neig);
+        {
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(markers_per_block, k_neig);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+            printf("    Marker remapping: knn: %10s pts (%s) for %11s q w/ %2d k%s",
+                   format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                   format_with_commas((unsigned long)nmarkers).c_str(), k_neig, mem_str);
+
+            if (nblocks > 1) {
+                printf("/blk (%d x %sq)", nblocks,
+                        format_with_commas((unsigned long)markers_per_block).c_str());
+                fflush(stdout);
+            } else {
+                printf("\n");
+            }
+        }
 
         array_t queries(markers_per_block);
 
         for (int b=0; b<nblocks; ++b) {
             int start = b * markers_per_block;
             int end = std::min(start + markers_per_block, nmarkers);
-            
-            printf("      Block %3d:  marker %7d to %7d", b, start, end-1);
+
+            if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
+
             queries.resize(end - start);
 
 #ifndef ACC
@@ -1084,6 +1102,8 @@ namespace {
                 ms.set_elem(i, -1.); // mark this marker for removal
             }
         }
+
+        if (nblocks > 1) printf("\n");
 
         int_vec removed_markers;
 
@@ -1368,7 +1388,7 @@ namespace {
             }
         }
         
-        KNN kdtree(param, points, nano_kdtree, MAX_EXPECTED_N);
+        KNN kdtree(param, points, nano_kdtree, false, MAX_EXPECTED_N);
 
         if (!is_surface && nnew > 0) {
             char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
@@ -1742,7 +1762,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree);
+        KNN kdtree(param, points, nano_kdtree, false);
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -1761,6 +1781,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifdef NPROF_DETAIL
     nvtxRangePush("find unplenished elements");
 #endif
+
 
     int nunplenished = 0;
 

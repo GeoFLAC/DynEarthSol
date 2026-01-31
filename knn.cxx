@@ -11,11 +11,16 @@
 #include "utils.hpp"
 
 
+void KNN::backend_str(char* buf, size_t n) const
+{
+    snprintf(buf, n, "%s", backend_name());
+}
 
-KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, int capacity) :
+KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, bool is_msg_, int capacity) :
     resolution(param.mesh.resolution), points_vec(points_vec_),
     numPoints(points_vec_.size()),
-    nano_kdtree(nano_kdtree_)
+    nano_kdtree(nano_kdtree_),
+    is_msg(is_msg_)
 {
     h_results = nullptr;
     h_results_capacity = 0;
@@ -69,12 +74,13 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    printf("      Running knn query on %d points ", numPoints);
+
+    if (is_msg) printf("      knn: %d pts ", numPoints);
 
     const size_t required_size = (size_t)nquery * k_neig;
 
 #ifdef ACC
-    printf("(lbvh GPU)\n");
+    if (is_msg) printf("(lbvh GPU)\n");
 
     if (is_sync_to_host && required_size > h_results_capacity) {
         if (h_results) delete[] h_results;
@@ -128,7 +134,7 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
             d_guess_radii_sq));
 
 #else
-    printf("(nano-kdtree)\n");
+    if (is_msg) printf("(nano-kdtree)\n");
 
     if (required_size > h_results_capacity) {
         if (h_results) delete[] h_results;
