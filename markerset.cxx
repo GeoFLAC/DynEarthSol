@@ -1130,6 +1130,8 @@ namespace {
             }
         }
 
+        #pragma acc wait
+
         ms.remove_markers(param, var, removed_markers, markers_in_elem);
 
 #ifdef NPROF_DETAIL
@@ -1594,8 +1596,6 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
         // delete recorded marker
         remove_markers(param, var, delete_marker, markers_in_elem);
-
-        #pragma acc wait
 
         int_pair_vec unplenished_elems;
         for (int i=0; i<var.ntop_elems; i++) {
