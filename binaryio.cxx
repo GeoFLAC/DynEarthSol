@@ -428,9 +428,9 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nelem = nnode;
 
         if (!is_checkpoint) {
-            array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
-            write_nodal_vec_array(*mcoord, "Points", nnode);
-            delete mcoord;
+            array_t mcoord(nnode);
+            ms->calculate_marker_coord(var, mcoord); // coordinate of markers
+            write_nodal_vec_array(mcoord, "Points", nnode);
 
             int_vec int_tmp(nelem);
             for (int i=0; i<nelem; i++) int_tmp[i] = i;
