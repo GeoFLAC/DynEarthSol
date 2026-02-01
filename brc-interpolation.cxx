@@ -182,8 +182,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
                     // np is a node close to q
                     int np = conn[m];
                     const int_vec &np_elem = old_support[np];
-                    for (std::size_t j=0; j<np_elem.size(); j++) {
-                        e = np_elem[j];
+                    for (std::size_t jj=0; jj<np_elem.size(); jj++) {
+                        e = np_elem[jj];
                         auto it = std::find(searched.begin(), searched.end(), e);
                         if (it != searched.end()) {
                             // this element has been searched before
