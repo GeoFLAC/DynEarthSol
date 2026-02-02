@@ -38,14 +38,12 @@ namespace {
             elem_center(*var.coord, *var.connectivity, queries);
         }
 
-        neighbor_vec neighbors(nqueries);
-
-        kdtree.search(queries, neighbors, nqueries, 1, 3.);
+        neighbor* neighbors = kdtree.search(queries, nqueries, 1, 3., false);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop deviceptr(neighbors)
         for (int i=0; i<nqueries; i++) {
             idx[i] = int(neighbors[i].idx);
             is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
@@ -149,7 +147,6 @@ namespace {
                nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
-        neighbor_vec neighbors(elems_per_block * nsample * max_el);
 
         conn_t *ptr_conn;
         int nnode_cell;
@@ -189,14 +186,14 @@ namespace {
             }
 
             // find the nearest point nn in old_center
-            kdtree.search(queries, neighbors, (end-start)*nsample, max_el, 3.);
+            neighbor* neighbors = kdtree.search(queries, (end-start)*nsample, max_el, 3., false);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop deviceptr(neighbors)
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];

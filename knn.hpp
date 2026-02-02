@@ -31,20 +31,22 @@ public:
             double resoTimes = 3);
     ~KNN();
 
-    void search(const array_t& queries, neighbor_vec& neighbors, int nquery,
-            int k, double resoTimes = 3);
+    neighbor* search(const array_t& queries, int nquery, int k_neig, double resoTimes = 3,
+            bool is_sync_to_host = true);
 private:
     const double* points;
     int numPoints;
+    size_t results_capacity;
+    neighbor* h_results;
 
     const int resolution;
     const int resoTimes;
     HashGrid grid;
     NANOKDTree& nano_kdtree;
-    // HashGrid* d_grid;
 
-    // double3* d_points;
 #ifdef ACC
+    neighbor* d_results; 
+
     void build_hash_grid(double cell_size);
 
     void knnSearchCuda_hashgrid(const double* queries, int numQueries,

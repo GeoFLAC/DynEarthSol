@@ -1022,20 +1022,20 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush(__FUNCTION__);
 #endif
-        const int k = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
+        const int k_neig = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
         int nmarkers = ms.get_nmarkers();
 
         int nquery_max = 1024 * 1024 * 16;
 
-        int markers_per_block = nquery_max / k;
+        int markers_per_block = nquery_max / k_neig;
         if (markers_per_block < 1) markers_per_block = 1;
         int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
+
         printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
-               nblocks, markers_per_block, (unsigned long)nmarkers*k);
+               nblocks, markers_per_block, (unsigned long)nmarkers * k_neig);
 
         array_t queries(markers_per_block, 0);
-        neighbor_vec neighbors(markers_per_block * k);
 
         for (int b=0; b<nblocks; ++b) {
             int start = b * markers_per_block;
@@ -1047,7 +1047,7 @@ namespace {
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
-                old_connectivity, start, end) firstprivate(k)
+                old_connectivity, start, end)
 #endif
             #pragma acc parallel loop
             for (int i = start; i < end; i++) {
@@ -1062,23 +1062,26 @@ namespace {
                 }
             }
 
-            kdtree.search(queries, neighbors, (end - start), k, 3);
+            neighbor* neighbors = kdtree.search(queries, (end - start), k_neig, 3.0, false);
 
             // Loop over all the old markers and identify a containing element in the new mesh.
 #ifndef ACC
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
-                nmarkers, queries, neighbors, start, end) firstprivate(k)
+                nmarkers, queries, neighbors, start, end) firstprivate(k_neig)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop deviceptr(neighbors)
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
 
                 // 2. look for nearby elements.
-                neighbor* nn_idx = neighbors.data() + idx_q*k;
+                neighbor* nn_idx = neighbors + idx_q * k_neig;
 
-                for( int j = 0; j < k; j++ ) {
+                for( int j = 0; j < k_neig; j++ ) {
                     int e = nn_idx[j].idx;
+
+                    if (e < 0) break; // no more neighbors
+
                     double r[NDIMS];
 
                     bary.transform(queries[idx_q], e, r);
@@ -1318,7 +1321,6 @@ namespace {
             }
         }
 
-        neighbor_vec neighbors(nnew);
         AMD_vec marker_data_all(nnew);
         array_t points(ms.get_nmarkers());
 
@@ -1340,13 +1342,13 @@ namespace {
         nvtxRangePop();
 #endif
 
-        kdtree.search(queries, neighbors, nnew, k_neig, 3.);
+        neighbor* neighbors = kdtree.search(queries, nnew, k_neig, 3., false);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
                 ms, marker_data_all, ne, is_surface, emi, genesis, nneed_mk, mk_idx, neighbors, queries, etas)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop gang vector deviceptr(neighbors)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
 

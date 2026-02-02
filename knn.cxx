@@ -107,8 +107,12 @@ KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_
     nano_kdtree(nano_kdtree_),
     resoTimes(resoTimes_)
 {
+    h_results = nullptr;
+    results_capacity = 0;
 #ifdef ACC
     build_hash_grid(resolution * 2.5);
+
+    d_results = nullptr;
 #else
     nano_kdtree.buildIndex();
 #endif
@@ -124,16 +128,24 @@ KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_
 
 KNN::~KNN()
 {
+    if (h_results) {
+        delete[] h_results;
+        h_results = nullptr;
+    }
 #ifdef ACC
     delete [] grid.params.D3;
     delete [] grid.params.D5;
-#endif
     // use managed memory
-    // cudaFree(grid.cell_starts);
-    // cudaFree(grid.point_indices);
+    cudaFree(grid.cell_starts);
+    cudaFree(grid.point_indices);
     // cudaFree(d_grid);
 
     // cudaFree(d_points);
+    if (d_results) {
+        cudaFree(d_results);
+        d_results = nullptr;
+    }
+#endif
 };
 
 #ifdef ACC
@@ -243,7 +255,7 @@ void KNN::build_hash_grid(double cell_size) {
 }
 
 void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
-                      neighbor* results, int k, int nheap, 
+                      neighbor* results, int k_neig, int nheap, 
                       double radius2, double cell_size) {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -264,7 +276,7 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
     int threadsPerBlock = 256;
     int numBlocks = (numQueries + threadsPerBlock - 1) / threadsPerBlock;
     knn_hashgrid_kernel<<<numBlocks, threadsPerBlock>>>(
-        points, numPoints, queries, numQueries, results, k, nheap, radius2, grid
+        points, numPoints, queries, numQueries, results, k_neig, nheap, radius2, grid
     );
 
     // use managed memory
@@ -283,23 +295,45 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, int numQueries,
 
 #endif // ACC
 
-void KNN::search(const array_t& queries, neighbor_vec& neighbors, int nquery,
-        int k, double resoTimes)
+neighbor* KNN::search(const array_t& queries, int nquery, int k_neig, double resoTimes,
+            bool is_sync_to_host)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
     printf("      Running knn query on %d points ", numPoints);
 
+    size_t required_size = (size_t)nquery * k_neig;
+
+    if (required_size > results_capacity) {
+#ifdef ACC
+        if (d_results) cudaFree(d_results);
+
+        cudaError_t err = cudaMallocManaged(&d_results, required_size * sizeof(neighbor));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA Malloc failed: %s\n", cudaGetErrorString(err));
+            throw std::runtime_error("CUDA Malloc failed");
+        }
+        if (is_sync_to_host) {
+            if (h_results) delete[] h_results;
+            h_results = new neighbor[required_size];
+        }
+#else
+        if (h_results) delete[] h_results;
+        h_results = new neighbor[required_size];
+#endif
+        results_capacity = required_size;
+    }
+
 #ifdef ACC
     printf("(cuda spatial hash grid)\n");
 
-    int heapSize = k * 100;
+    int heapSize = k_neig * 100;
     double maxDist = resoTimes * resolution;
     double cell_size = maxDist;
 
     knnSearchCuda_hashgrid(queries.data(), nquery,
-        neighbors.data(), k, heapSize, maxDist * maxDist, cell_size);
+        d_results, k_neig, heapSize, maxDist * maxDist, cell_size);
 
     // long max_size = 1024 * 1024 * 256;
     // int nqueries = queries.size();
@@ -325,26 +359,50 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors, int nquery,
 
     cudaDeviceSynchronize();
 
+    int is_error = 0;
+    neighbor* ptr = d_results; // 獲取 device pointer
+    
+    #pragma acc parallel loop deviceptr(ptr) reduction(+:is_error)
+    for (int i = 0; i < nquery; i++) {
+        if (ptr[i*k_neig].idx == -1) {
+            is_error++;
+            printf("Error: No neighbor found for query %d\n", i); 
+        }
+    }
+    if (is_error > 0) {
+            printf("Error: KNN search failed for %d points (detected on Device).\n", is_error);
+            exit(133);
+    }
+
+    if (is_sync_to_host) {
+        cudaMemcpy(h_results, d_results, required_size * sizeof(neighbor), cudaMemcpyDeviceToHost);
+        return h_results;
+    } else {
+        return d_results;
+    }
+
 #else
     printf("(nano-kdtree)\n");
 
     #pragma omp parallel for default(none) \
-        shared(queries, neighbors, k, nano_kdtree, nquery)
+        shared(queries, h_results, k_neig, nano_kdtree, nquery)
     for (int i = 0; i < nquery; ++i) {
-        neighbor *result = neighbors.data() + i * k;
+        neighbor *result = h_results + i * k_neig;
 
-        size_t_vec nn_idx(k);
-        double_vec out_dists_sqr(k);
-        KNNResultSet resultSet(k);
+        size_t_vec nn_idx(k_neig);
+        double_vec out_dists_sqr(k_neig);
+        KNNResultSet resultSet(k_neig);
         resultSet.init(nn_idx.data(), out_dists_sqr.data());
 
         nano_kdtree.findNeighbors(resultSet, queries.data() + i * NDIMS);
 
-        for (int j = 0; j < k; ++j) {
+        for (int j = 0; j < k_neig; ++j) {
             result[j].idx = nn_idx[j];
             result[j].dist2 = out_dists_sqr[j];
         }
     }
+
+    return h_results;
 
 #endif
 
