@@ -150,12 +150,15 @@ namespace {
 
         conn_t *ptr_conn;
         int nnode_cell;
+        double resoTimes;
         if (is_surface) {
             ptr_conn = var.connectivity_surface;
             nnode_cell = NODES_PER_FACET;
+            resoTimes = 6.0;
         } else {
             ptr_conn = var.connectivity;
             nnode_cell = NODES_PER_ELEM;
+            resoTimes = 3.0;
         }
 
         for (int b=0; b<nblocks; b++) {
@@ -186,7 +189,7 @@ namespace {
             }
 
             // find the nearest point nn in old_center
-            neighbor* neighbors = kdtree.search(queries, (end-start)*nsample, max_el, 3., false);
+            neighbor* neighbors = kdtree.search(queries, (end-start)*nsample, max_el, resoTimes, false);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
