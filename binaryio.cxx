@@ -553,30 +553,33 @@ void HDF5Output::write_scalar(const T &A, const std::string& name)
 
     H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, &A);
 
-    if (name == "NumberOfConnectivityIds") return;
-
-    std::string vis_name = name;
-    bool is_field = false;
-    if (kind == "marker") {
-        if (name == "NumberOfPoints") {
-            vis_name = block_base + ".nmarkers";
-            is_field = true;
-        } else if (name == "NumberOfCells") {
-            return;
+    if (name != "NumberOfConnectivityIds") {
+        std::string vis_name = name;
+        bool is_field = false;
+        if (kind == "marker") {
+            if (name == "NumberOfPoints") {
+                vis_name = block_base + ".nmarkers";
+                is_field = true;
+            } else if (name == "NumberOfCells") {
+                // do nothing
+            } else {
+                create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
+            }
+        } else if (kind == "grid") {
+            if (name == "NumberOfPoints") {
+                vis_name = "nnode";
+                is_field = true;
+            } else if (name == "NumberOfCells") {
+                vis_name = "nelem";
+                is_field = true;
+            }
+            create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
         }
-    } else if (kind == "grid") {
-        if (name == "NumberOfPoints") {
-            vis_name = "nnode";
-            is_field = true;
-        } else if (name == "NumberOfCells") {
-            vis_name = "nelem";
-            is_field = true;
+        
+        if (is_field) {
+            vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
+            create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
         }
-    }
-    create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
-    if (is_field) {
-        vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
-        create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
     }
     H5Dclose(dset_id);
     H5Sclose(space_id);
@@ -619,14 +622,16 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
     H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
 
-    if (std::string(name) == "Offsets" || std::string(name) == "Types") return;
-    if (kind == "marker" && std::string(name) == "Connectivity") return;
+    bool skip_virtual = (std::string(name) == "Offsets" || std::string(name) == "Types");
+    if (kind == "marker" && std::string(name) == "Connectivity") skip_virtual = true;
 
-    if (std::string(name) == "Connectivity") {
-        int len2D = len / nnode_cell;
-        create_virtual_dataset(full_name, "connectivity", space_id, dtype_id, len2D, nnode_cell);
-    } else {
-        create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+    if (!skip_virtual) {
+        if (std::string(name) == "Connectivity") {
+            int len2D = len / nnode_cell;
+            create_virtual_dataset(full_name, "connectivity", space_id, dtype_id, len2D, nnode_cell);
+        } else {
+            create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+        }
     }
     H5Dclose(dset_id);
     H5Pclose(dcpl_id);
