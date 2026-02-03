@@ -2119,7 +2119,13 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     if (var.steps != 0) {
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
-            std::fill(var.surfinfo.dhacc->begin(), var.surfinfo.dhacc->end(), 0.);
+
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(var)
+#endif
+            #pragma acc parallel loop gang vector
+            for (int i=0;i<var.surfinfo.ntop;i++)
+                (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
             // set marker of sediment.
             markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
