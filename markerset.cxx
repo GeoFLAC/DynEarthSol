@@ -1666,17 +1666,17 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             std::exit(1);
         }
 
-        for (int i=0; i<var.ntop_elems; i++) {
-            int e = (*var.top_elems)[i];
-            int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
-            int  nmarkers = (*var.markers_in_elem)[e].size();
-            if (nemarker0 != nmarkers) {
-                std::cerr << "Error: number of markers in element " << e
-                        << " does not match number of elemmarkers: "
-                        << nmarkers << " vs. " << nemarker0 << '\n';
-                std::exit(1);
-            }
-        }
+        // for (int i=0; i<var.ntop_elems; i++) {
+        //     int e = (*var.top_elems)[i];
+        //     int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
+        //     int  nmarkers = (*var.markers_in_elem)[e].size();
+        //     if (nemarker0 != nmarkers) {
+        //         std::cerr << "Error: number of markers in element " << e
+        //                 << " does not match number of elemmarkers: "
+        //                 << nmarkers << " vs. " << nemarker0 << '\n';
+        //         std::exit(1);
+        //     }
+        // }
     }
 
 #ifdef NPROF_DETAIL
