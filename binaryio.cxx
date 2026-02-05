@@ -827,9 +827,9 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
     }
 
     H5Dclose(vds_dset_id);
+    H5Sclose(src_space_id);
     H5Pclose(vds_dcpl);
     H5Sclose(vds_space_id);
-    H5Sclose(src_space_id);
 }
 
 HDF5Input::HDF5Input(const char *filename)
@@ -855,8 +855,8 @@ void HDF5Input::read_header()
 
     int ndims = -1;
     H5Aread(attr, atype, &ndims);
-    H5Aclose(attr);
     H5Tclose(atype);
+    H5Aclose(attr);
 
     if (H5Aexists(file_id, "revision") <= 0) {
         std::cerr << "Error: missing attribute revision in HDF5 file\n";
@@ -868,8 +868,8 @@ void HDF5Input::read_header()
 
     int revision = -1;
     H5Aread(attr, atype, &revision);
-    H5Aclose(attr);
     H5Tclose(atype);
+    H5Aclose(attr);
 }
 
 HDF5Input::~HDF5Input()
