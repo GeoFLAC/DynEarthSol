@@ -599,13 +599,15 @@ void HDF5Output::write_scalar(const T &A, const std::string& name)
             } else if (name == "NumberOfCells") {
                 vis_name = "nelem";
                 is_field = true;
+            } else {
+                create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
             }
-            create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
         }
         
         if (is_field) {
-            vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
-            create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
+            create_virtual_dataset(full_name, vis_name, space_id, dtype_id); // Create at root for restart/legacy
+            std::string field_name = "/VTKHDF/grid/FieldData/" + vis_name;
+            create_virtual_dataset(full_name, field_name, space_id, dtype_id); // Create in FieldData for ParaView
         }
     }
     H5Dclose(dset_id);
