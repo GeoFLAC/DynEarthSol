@@ -99,7 +99,7 @@ public:
 
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id);
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len);
-    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N, int dest_N = -1);
 
     void add_soft_link(const std::string& assemblyNodePath, const std::string& linkName,
                         const std::string& targetAbsPath);
