@@ -404,7 +404,20 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nelem = var.nelem;
 
         if (!is_checkpoint) {
+#ifdef THREED
             write_array(*var.coord, "Points",  nnode);
+#else
+            // VTKHDF requires 3D points
+            Array2D<double, 3> coord3d(nnode);
+            const double *c2d = var.coord->data();
+            #pragma omp parallel for default(none) shared(nnode, coord3d, c2d)
+            for (int i=0; i<nnode; ++i) {
+                coord3d[i][0] = c2d[2*i];
+                coord3d[i][1] = c2d[2*i+1];
+                coord3d[i][2] = 0.0;
+            }
+            write_array(coord3d, "Points", nnode);
+#endif
 
             int* conn_ptr = var.connectivity->data();
             int_vec int_tmp(conn_ptr, conn_ptr + nelem*nnode_cell);
@@ -424,7 +437,21 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
 
         if (!is_checkpoint) {
             array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
+
+#ifdef THREED
             write_array(*mcoord, "Points",  nnode);
+#else
+            // VTKHDF requires 3D points
+            Array2D<double, 3> coord3d(nnode);
+            const double *c2d = mcoord->data();
+            #pragma omp parallel for default(none) shared(nnode, coord3d, c2d)
+            for (int i=0; i<nnode; ++i) {
+                coord3d[i][0] = c2d[2*i];
+                coord3d[i][1] = c2d[2*i+1];
+                coord3d[i][2] = 0.0;
+            }
+            write_array(coord3d, "Points", nnode);
+#endif
             delete mcoord;
 
             int_vec int_tmp(nelem);
@@ -682,7 +709,14 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
             vis_name = block_base + ".coord";
         }
     }
-    create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N);
+
+    int dest_N = -1;
+#ifndef THREED
+    // Map 3D Points -> 2D coordinate
+    if (std::string(name) == "Points") dest_N = 2; 
+#endif
+
+    create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N, dest_N);
 
     H5Dclose(dset_id);
     H5Pclose(dcpl_id);
@@ -752,17 +786,43 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 }
 
 // 2D array
-void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N)
+void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N, int dest_N)
 {
-    hsize_t vds_dims[2] = { len, static_cast<hsize_t>(N) };
+    if (dest_N == -1) dest_N = N;
+
+    hsize_t vds_dims[2] = { len, static_cast<hsize_t>(dest_N) };
     hid_t vds_space_id = H5Screate_simple(2, vds_dims, nullptr);
 
     hid_t vds_dcpl = H5Pcreate(H5P_DATASET_CREATE);
     hid_t src_space_id = H5Scopy(space_id);
 
+    // If source and dest dimensions differ (e.g. 3D source -> 2D virtual), select hyperslab
+    if (N != dest_N) {
+        hsize_t start[2] = {0, 0};
+        hsize_t count[2] = {len, static_cast<hsize_t>(dest_N)};
+
+        // Select first dest_N columns from source
+        herr_t status = H5Sselect_hyperslab(src_space_id, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        if (status < 0) {
+           std::cerr << "Error selecting source hyperslab for VDS " << dest_name << "\n";
+        }
+
+        // Select all of virtual dataset (which is dest_N wide)
+        status = H5Sselect_hyperslab(vds_space_id, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        if (status < 0) {
+           std::cerr << "Error selecting virtual hyperslab for VDS " << dest_name << "\n";
+        }
+    }
+
     herr_t status = H5Pset_virtual(vds_dcpl, vds_space_id, ".", src_name.c_str(), src_space_id);
+    if (status < 0) {
+        std::cerr << "Error setting virtual dataset mapping for " << dest_name << "\n";
+    }
 
     hid_t vds_dset_id = H5Dcreate2(file_id, dest_name.c_str(), dtype_id, vds_space_id, H5P_DEFAULT, vds_dcpl, H5P_DEFAULT);
+    if (vds_dset_id < 0) {
+        std::cerr << "Error creating virtual dataset " << dest_name << "\n";
+    }
 
     H5Dclose(vds_dset_id);
     H5Pclose(vds_dcpl);
