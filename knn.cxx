@@ -2,6 +2,7 @@
 
 #include "parameters.hpp"
 #include "knn.hpp"
+#include "utils.hpp"
 
 #ifdef ACC
 
@@ -108,7 +109,9 @@ KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_
     resoTimes(resoTimes_)
 {
     h_results = nullptr;
-    results_capacity = 0;
+
+    d_results_capacity = 0;
+    h_results_capacity = 0;
 #ifdef ACC
     build_hash_grid(resolution * 2.5);
 
@@ -128,7 +131,7 @@ KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_
 
 KNN::~KNN()
 {
-    if (h_results) {
+    if (h_results_capacity > 0) {
         delete[] h_results;
         h_results = nullptr;
     }
@@ -141,7 +144,7 @@ KNN::~KNN()
     // cudaFree(d_grid);
 
     // cudaFree(d_points);
-    if (d_results) {
+    if (d_results_capacity > 0) {
         cudaFree(d_results);
         d_results = nullptr;
     }
@@ -305,25 +308,18 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig, double res
 
     size_t required_size = (size_t)nquery * k_neig;
 
-    if (required_size > results_capacity) {
 #ifdef ACC
+    if (required_size > d_results_capacity) {
         if (d_results) cudaFree(d_results);
 
-        cudaError_t err = cudaMallocManaged(&d_results, required_size * sizeof(neighbor));
+        cudaError_t err = cudaMalloc(&d_results, required_size * sizeof(neighbor));
         if (err != cudaSuccess) {
             fprintf(stderr, "CUDA Malloc failed: %s\n", cudaGetErrorString(err));
             throw std::runtime_error("CUDA Malloc failed");
         }
-        if (is_sync_to_host) {
-            if (h_results) delete[] h_results;
-            h_results = new neighbor[required_size];
-        }
-#else
-        if (h_results) delete[] h_results;
-        h_results = new neighbor[required_size];
-#endif
-        results_capacity = required_size;
+        d_results_capacity = required_size;
     }
+#endif
 
 #ifdef ACC
     printf("(cuda spatial hash grid)\n");
@@ -357,6 +353,14 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig, double res
     //         neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
     // }
 
+    if (is_sync_to_host) {
+        if (required_size > h_results_capacity) {
+            if (h_results) delete[] h_results;
+            h_results = new neighbor[required_size];
+            h_results_capacity = required_size;
+        }
+    }
+
     cudaDeviceSynchronize();
 
     int is_error = 0;
@@ -376,13 +380,25 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig, double res
 
     if (is_sync_to_host) {
         cudaMemcpy(h_results, d_results, required_size * sizeof(neighbor), cudaMemcpyDeviceToHost);
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
         return h_results;
     } else {
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
         return d_results;
     }
 
 #else
     printf("(nano-kdtree)\n");
+
+    if (required_size > h_results_capacity) {
+        if (h_results) delete[] h_results;
+        h_results = new neighbor[required_size];
+        h_results_capacity = required_size;
+    }
 
     #pragma omp parallel for default(none) \
         shared(queries, h_results, k_neig, nano_kdtree, nquery)
@@ -402,11 +418,10 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig, double res
         }
     }
 
-    return h_results;
-
-#endif
-
 #ifdef NPROF_DETAIL
     nvtxRangePop();
+#endif
+    return h_results;
+
 #endif
 }

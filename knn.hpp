@@ -36,7 +36,8 @@ public:
 private:
     const double* points;
     int numPoints;
-    size_t results_capacity;
+    size_t d_results_capacity;
+    size_t h_results_capacity;
     neighbor* h_results;
 
     const int resolution;
