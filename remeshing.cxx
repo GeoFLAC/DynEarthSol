@@ -754,8 +754,9 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
     std::exit(12);
 #else
 
-    int_vec inverse[nbdrytypes], nfacets;
-    std::vector<int*> facet;
+    int_vec inverse[nbdrytypes];
+    int_vec nfacets(nbdrytypes, 0);
+    std::vector<int*> facet(nbdrytypes, NULL);
 
     // before deleting boundary points, create a new triangulation
     // TODO: skip boundary bdrynode_deleting.size()==0, but retaining its facets
@@ -904,8 +905,8 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
 
             // storing the new boundary facets for later
             // ownership of "pconnectivity" array is transferred to "facet"
-            facet.push_back(pconnectivity);
-            nfacets.push_back(new_nelem);
+            facet[i] = pconnectivity;
+            nfacets[i] = new_nelem;
         }
     }
 
