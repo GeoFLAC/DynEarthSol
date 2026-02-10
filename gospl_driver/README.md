@@ -29,11 +29,8 @@ This directory contains the integration code for GoSPL (Geomorphological Landsca
 
    The `install-local` target sets up the standard library structure that DynEarthSol's Makefile expects.
 
-   **Note**: This step requires the GoSPL conda environment to be set up first:
-   ```bash
-   conda create -n gospl gospl -c conda-forge
-   conda activate gospl
-   ```
+   **Note**: This step requires the GoSPL conda environment to be set up first: Follow [the goSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html)
+   
 
 ## Build and Runtime Workflow
 
