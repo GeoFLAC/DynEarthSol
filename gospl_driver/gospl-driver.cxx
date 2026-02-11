@@ -11,9 +11,11 @@
 #include <sstream>
 
 // Constructor
-GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false), 
-                             mesh_bounds_valid(false), coupling_frequency(1), step_counter(0), 
-                             accumulated_dt(0.0) {
+GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false),
+                             mesh_bounds_valid(false), coupling_frequency(1), step_counter(0),
+                             accumulated_dt(0.0), has_prev_rate(false), remaining_steps(0),
+                             base_coupling_frequency(1), adaptive_coupling_frequency(1),
+                             rate_change_tolerance(0.3), rate_change_metric(0.0) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 

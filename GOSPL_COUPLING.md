@@ -89,11 +89,32 @@ This differencing cancels out interpolation smoothing, ensuring only true erosio
 ### Coupling Frequency
 
 When `gospl_coupling_frequency = N`:
-- GoSPL runs every N DES time steps
+- GoSPL runs every N DES time steps (or adaptive N, see below)
 - GoSPL receives the accumulated time (N × dt)
-- The full elevation change is applied in one step
+- Erosion is distributed gradually across all N steps using linear rate extrapolation
+- On each non-coupling step, the erosion rate from the previous cycle is applied with linear extrapolation
+- On coupling steps, a new erosion rate is computed and stored for the next cycle
 
-Use higher coupling frequencies for erosion-dominated systems to reduce computational overhead.
+#### Gradual Application with Linear Extrapolation
+
+Instead of applying the full elevation change as a lump sum, the coupling distributes erosion continuously:
+1. After each GoSPL call, the erosion rate (dh/dt in m/s) is computed and stored
+2. During the N-1 non-coupling steps, this rate is applied incrementally with linear extrapolation
+3. Linear extrapolation: `rate_current = rate_base + (rate_base - rate_previous) × progress`
+4. A 2× limiter prevents excessive extrapolation for stability
+
+This approach eliminates impulsive perturbations and produces smoother topography evolution.
+
+#### Adaptive Coupling Frequency
+
+Set `gospl_rate_change_tolerance` (default: 0.3) to enable adaptive frequency adjustment:
+- The system monitors relative changes in erosion rates between coupling cycles
+- If rate change exceeds the tolerance, coupling frequency doubles (couple more often)
+- If rate change is below tolerance/4, coupling frequency halves (couple less often)
+- Adaptive N is bounded between 1 and 4× the user-specified base frequency
+- Set `gospl_rate_change_tolerance = 0` to disable adaptive behavior
+
+Use higher base coupling frequencies for erosion-dominated systems to reduce computational overhead. The adaptive mechanism will automatically increase coupling when rates change rapidly.
 
 ### Boundary Buffer
 

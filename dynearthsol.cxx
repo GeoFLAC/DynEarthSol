@@ -604,7 +604,14 @@ int main(int argc, const char* argv[])
             var.gospl_driver->set_verbose(false);
             // Set coupling frequency from config (default: 1 = every step)
             var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
+            var.gospl_driver->base_coupling_frequency = param.control.gospl_coupling_frequency;
+            var.gospl_driver->adaptive_coupling_frequency = param.control.gospl_coupling_frequency;
+            var.gospl_driver->rate_change_tolerance = param.control.gospl_rate_change_tolerance;
             std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)" << std::endl;
+            if (param.control.gospl_rate_change_tolerance > 0) {
+                std::cout << "GoSPL adaptive coupling enabled (tolerance: "
+                          << var.gospl_driver->rate_change_tolerance << ")" << std::endl;
+            }
         } else {
             std::cerr << "Failed to initialize GoSPL driver with config: " 
                       << param.control.surface_process_gospl_config_file << std::endl;

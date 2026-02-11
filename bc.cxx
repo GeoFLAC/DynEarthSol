@@ -1596,23 +1596,48 @@ namespace {
 
         // Coupling frequency control: accumulate time and only couple every N steps
         double dt_years = var.dt / 3.1536e7;  // Convert to years
+        double dt_seconds = var.dt;
         var.gospl_driver->accumulated_dt += dt_years;
         var.gospl_driver->step_counter++;
-        
-        // Check if it's time to run GoSPL coupling
-        if (var.gospl_driver->step_counter < var.gospl_driver->coupling_frequency) {
-            return;  // Skip this step, accumulate time for later
-        }
-        
-        // Reset counters for next coupling cycle
-        double total_dt = var.gospl_driver->accumulated_dt;
-        var.gospl_driver->accumulated_dt = 0.0;
-        var.gospl_driver->step_counter = 0;
 
         const int top_bdry = iboundz1;
         const int_vec& top_nodes = *var.bnodes[top_bdry];
         const std::size_t ntop = top_nodes.size();
         double_vec& dh = *var.surfinfo.dh;
+
+        // Check if it's time to run GoSPL coupling
+        if (var.gospl_driver->step_counter < var.gospl_driver->adaptive_coupling_frequency) {
+            // ===== NON-COUPLING STEP: Apply gradual erosion from previous coupling cycle =====
+            if (!var.gospl_driver->pending_erosion_rate.empty()) {
+                for (std::size_t i = 0; i < ntop; ++i) {
+                    int n = top_nodes[i];
+
+                    // Linear extrapolation: rate + (rate - prev_rate) * progress
+                    double progress = (double)var.gospl_driver->step_counter /
+                                      var.gospl_driver->adaptive_coupling_frequency;
+                    double rate_i = var.gospl_driver->pending_erosion_rate[i];
+                    if (var.gospl_driver->has_prev_rate) {
+                        double prev_rate_i = var.gospl_driver->prev_erosion_rate[i];
+                        rate_i += (rate_i - prev_rate_i) * progress;
+                    }
+
+                    // Limiter: clamp extrapolated rate to 2x magnitude of base rate
+                    double base_rate = var.gospl_driver->pending_erosion_rate[i];
+                    double limit = 2.0 * std::abs(base_rate) + 1e-20;  // small epsilon for zero rates
+                    rate_i = std::max(-limit, std::min(limit, rate_i));
+
+                    (*var.coord)[n][NDIMS-1] += rate_i * dt_seconds;
+                }
+            }
+            return;
+        }
+
+        // ===== COUPLING STEP: Run full GoSPL simulation =====
+        // Reset counters for next coupling cycle
+        double total_dt = var.gospl_driver->accumulated_dt;
+        double total_dt_seconds = total_dt * 3.1536e7;  // Convert years to seconds
+        var.gospl_driver->accumulated_dt = 0.0;
+        var.gospl_driver->step_counter = 0;
 
         std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes (dt=" << total_dt << " yr)..." << std::endl;
 
@@ -1672,14 +1697,14 @@ namespace {
         double max_erosion = 0.0;
         double min_erosion = 0.0, sum_erosion = 0.0;
         int nodes_skipped = 0;
-        
+
         // Get GoSPL mesh bounds for boundary check
         bool check_bounds = var.gospl_driver->mesh_bounds_valid;
         double x_min = var.gospl_driver->mesh_bounds[0];
         double x_max = var.gospl_driver->mesh_bounds[1];
         double y_min = var.gospl_driver->mesh_bounds[2];
         double y_max = var.gospl_driver->mesh_bounds[3];
-        
+
         // Add 5% buffer margin to avoid interpolation issues near edges
         double x_margin = 0.05 * (x_max - x_min);
         double y_margin = 0.05 * (y_max - y_min);
@@ -1687,27 +1712,74 @@ namespace {
         double x_max_buf = x_max - x_margin;
         double y_min_buf = y_min + y_margin;
         double y_max_buf = y_max - y_margin;
-        
+
+        // Store previous rates and prepare new rate vector
+        if (!var.gospl_driver->pending_erosion_rate.empty()) {
+            var.gospl_driver->prev_erosion_rate = var.gospl_driver->pending_erosion_rate;
+        }
+        var.gospl_driver->pending_erosion_rate.resize(ntop);
+
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
             double x = (*var.coord)[n][0];
             double y = (*var.coord)[n][1];
-            
+
+            double erosion = 0.0;
+            double erosion_rate = 0.0;
+
             // Skip nodes outside GoSPL mesh bounds (with buffer margin) to avoid extrapolation errors
             if (check_bounds && (x < x_min_buf || x > x_max_buf || y < y_min_buf || y > y_max_buf)) {
                 nodes_skipped++;
-                continue;  // Don't apply erosion to this node
+                erosion_rate = 0.0;  // No erosion at boundary nodes
+            } else {
+                erosion = gospl_elev_after[i] - gospl_elev_before[i];
+
+                // Track statistics
+                min_erosion = std::min(min_erosion, erosion);
+                max_erosion = std::max(max_erosion, erosion);
+                sum_erosion += erosion;
+
+                // Compute erosion rate in m/s
+                erosion_rate = erosion / total_dt_seconds;
+
+                // Apply first step's worth of erosion
+                (*var.coord)[n][NDIMS-1] += erosion_rate * dt_seconds;
             }
-            
-            double erosion = gospl_elev_after[i] - gospl_elev_before[i];
-            
-            // Track statistics
-            min_erosion = std::min(min_erosion, erosion);
-            max_erosion = std::max(max_erosion, erosion);
-            sum_erosion += erosion;
-            
-            // Apply pure erosion/deposition to DES topography
-            (*var.coord)[n][NDIMS-1] += erosion;
+
+            // Store erosion rate for gradual application in subsequent steps
+            var.gospl_driver->pending_erosion_rate[i] = erosion_rate;
+        }
+
+        // Mark that we now have a previous rate for extrapolation
+        var.gospl_driver->has_prev_rate = true;
+
+        // Compute adaptive coupling frequency based on rate-change metric
+        if (var.gospl_driver->has_prev_rate && var.gospl_driver->rate_change_tolerance > 0 &&
+            !var.gospl_driver->prev_erosion_rate.empty()) {
+            double sum_diff_sq = 0.0, sum_rate_sq = 0.0;
+            for (std::size_t i = 0; i < ntop; ++i) {
+                double diff = var.gospl_driver->pending_erosion_rate[i] -
+                              var.gospl_driver->prev_erosion_rate[i];
+                sum_diff_sq += diff * diff;
+                sum_rate_sq += var.gospl_driver->pending_erosion_rate[i] *
+                               var.gospl_driver->pending_erosion_rate[i];
+            }
+            double metric = (sum_rate_sq > 1e-30) ? std::sqrt(sum_diff_sq / sum_rate_sq) : 0.0;
+            var.gospl_driver->rate_change_metric = metric;
+
+            int N = var.gospl_driver->adaptive_coupling_frequency;
+            int N_base = var.gospl_driver->base_coupling_frequency;
+            double tol = var.gospl_driver->rate_change_tolerance;
+
+            if (metric > tol && N > 1) {
+                N = std::max(1, N / 2);  // Halve: couple more often
+            } else if (metric < tol / 4.0 && N < 4 * N_base) {
+                N = std::min(4 * N_base, N * 2);  // Double: couple less often
+            }
+            var.gospl_driver->adaptive_coupling_frequency = N;
+
+            std::cout << "GoSPL: rate_change=" << metric
+                      << " | adaptive N=" << N << std::endl;
         }
 
         std::cout << "GoSPL: erosion [" << min_erosion << ", " << max_erosion << "]"

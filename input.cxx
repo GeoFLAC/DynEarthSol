@@ -258,6 +258,10 @@ static void declare_parameters(po::options_description &cfg,
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
          "Run GoSPL coupling every N DES steps (default: 1 = every step). Higher values reduce overhead for erosion-dominated systems.")
+        ("control.gospl_rate_change_tolerance", po::value<double>(&p.control.gospl_rate_change_tolerance)->default_value(0.3),
+         "Rate-change tolerance for adaptive GoSPL coupling frequency. "
+         "When relative change exceeds this, N is halved; when below tolerance/4, N is doubled. "
+         "Set to 0 to disable adaptive frequency.")
         ("control.gospl_mesh_resolution", po::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
          "GoSPL mesh node spacing in meters (default: -1 = auto-size based on DES surface nodes). Set to desired resolution for control over GoSPL grid density.")
         ("control.gospl_initial_topo_amplitude", po::value<double>(&p.control.gospl_initial_topo_amplitude)->default_value(0.0),

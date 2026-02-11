@@ -51,6 +51,18 @@ public:
     int coupling_frequency;      // Run GoSPL every N steps (default: 1)
     int step_counter;            // Current step count since last coupling
     double accumulated_dt;       // Accumulated time since last coupling (in years)
+
+    // --- Gradual application state ---
+    std::vector<double> pending_erosion_rate;    // dh/dt rate to apply per DES step (per node, in m/s)
+    std::vector<double> prev_erosion_rate;       // Previous cycle's rate (for extrapolation)
+    bool has_prev_rate;                          // Whether prev_erosion_rate is valid (false on first cycle)
+    int remaining_steps;                         // Steps remaining to apply pending rate
+
+    // --- Adaptive coupling frequency ---
+    int base_coupling_frequency;                 // User-specified baseline N
+    int adaptive_coupling_frequency;             // Currently active N (may differ from base)
+    double rate_change_tolerance;                // Threshold for adapting N (default: 0.3 = 30% change)
+    double rate_change_metric;                   // Last computed rate-change metric (for diagnostics)
     
     /**
      * Constructor
