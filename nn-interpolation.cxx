@@ -172,7 +172,7 @@ namespace {
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
@@ -188,8 +188,6 @@ namespace {
                 }
             }
 
-            #pragma acc wait
-
             // find the nearest point nn in old_center
             kdtree.search(queries, neighbors, (end-start)*nsample, max_el, 3.);
 
@@ -198,7 +196,7 @@ namespace {
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];

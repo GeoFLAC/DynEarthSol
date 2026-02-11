@@ -1049,7 +1049,7 @@ namespace {
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
                 old_connectivity, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 // 1. Get physical coordinates, x, of an old marker.
@@ -1062,8 +1062,6 @@ namespace {
                 }
             }
 
-            #pragma acc wait
-
             kdtree.search(queries, neighbors, (end - start), k, 3);
 
             // Loop over all the old markers and identify a containing element in the new mesh.
@@ -1071,7 +1069,7 @@ namespace {
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
                 nmarkers, queries, neighbors, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
