@@ -19,13 +19,13 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
 
-        const double *a = coord[n0];
-        const double *b = coord[n1];
-        const double *c = coord[n2];
+        ConstArrayAccessor a = coord[n0];
+        ConstArrayAccessor b = coord[n1];
+        ConstArrayAccessor c = coord[n2];
 
 #ifdef THREED
         int n3 = connectivity[e][3];
-        const double *d = coord[n3];
+        ConstArrayAccessor d = coord[n3];
 
         compute_coeff3d(a, b, c, d, volume[e], coeff_[e]);
 #else
@@ -57,13 +57,13 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
 
-        const double *a = coord[n0];
-        const double *b = coord[n1];
-        const double *c = coord[n2];
+        ConstArrayAccessor a = coord[n0];
+        ConstArrayAccessor b = coord[n1];
+        ConstArrayAccessor c = coord[n2];
 
 #ifdef THREED
         int n3 = connectivity[e][3];
-        const double *d = coord[n3];
+        ConstArrayAccessor d = coord[n3];
 
         compute_coeff3d(a, b, c, d, volume[e], coeff_[i]);
 #else
@@ -94,12 +94,12 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         int n0 = conn_surface[e][0];
         int n1 = conn_surface[e][1];
 
-        const double *a = coord[n0];
-        const double *b = coord[n1];
+        ConstArrayAccessor a = coord[n0];
+        ConstArrayAccessor b = coord[n1];
 
 #ifdef THREED
         int n2 = conn_surface[e][2];
-        const double *c = coord[n2];
+        ConstArrayAccessor c = coord[n2];
 
         compute_coeff2d(a, b, c, area[e], coeff_[e]);
 #else
@@ -111,16 +111,16 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
 #endif
 }
 
-Barycentric_transformation::Barycentric_transformation(const double** coord,
+Barycentric_transformation::Barycentric_transformation(ConstArrayIndirectAccessor coord,
                                                        const double volume)
     : coeff_(1), nelem_(1), elem_dim_(NDIMS)
 {
-    const double *a = coord[0];
-    const double *b = coord[1];
-    const double *c = coord[2];
+    ConstArrayAccessor a = coord[0];
+    ConstArrayAccessor b = coord[1];
+    ConstArrayAccessor c = coord[2];
 
 #ifdef THREED
-    const double *d = coord[3];
+    ConstArrayAccessor d = coord[3];
 
     compute_coeff3d(a, b, c, d, volume, coeff_[0]);
 #else
@@ -131,10 +131,10 @@ Barycentric_transformation::Barycentric_transformation(const double** coord,
 
 Barycentric_transformation::~Barycentric_transformation() {};
 
-
-void Barycentric_transformation::transform(const double *point, int e, double *result) const
+template <typename T>
+void Barycentric_transformation::transform(T point, int e, double *result) const
 {
-    const double *cf = coeff_[e];
+    ConstCoeffAccessor cf = coeff_[e];
     if (elem_dim_ == 3) {
         for (int d=0; d<3; d++) {
             result[d] = cf[index3d(0,d)];
@@ -156,8 +156,17 @@ void Barycentric_transformation::transform(const double *point, int e, double *r
     }
 }
 
+template
+void Barycentric_transformation::transform<double*>(double* point, int e, double *result) const;
+template
+void Barycentric_transformation::transform<const double*>(const double* point, int e, double *result) const;
+template
+void Barycentric_transformation::transform<ArrayAccessor>(ArrayAccessor point, int e, double *result) const;
+template
+void Barycentric_transformation::transform<ConstArrayAccessor>(ConstArrayAccessor point, int e, double *result) const;
 
-bool Barycentric_transformation::is_inside_elem(const double *point, int elem) const
+
+bool Barycentric_transformation::is_inside_elem(ConstArrayAccessor point, int elem) const
 {
     double r[NDIMS];
     transform(point, elem, r);
@@ -209,11 +218,11 @@ inline int Barycentric_transformation::index3d(int node, int dim) const
     return node*3 + dim;
 }
 
-void Barycentric_transformation::compute_coeff2d(const double *a,
-                                                 const double *b,
-                                                 const double *c,
+void Barycentric_transformation::compute_coeff2d(ConstArrayAccessor a,
+                                                 ConstArrayAccessor b,
+                                                 ConstArrayAccessor c,
                                                  double area,
-                                                 double *coeff_e)
+                                                 CoeffAccessor coeff_e)
 {
     double det = 2 * area;
 
@@ -227,12 +236,12 @@ void Barycentric_transformation::compute_coeff2d(const double *a,
 
 #ifdef THREED
 
-void Barycentric_transformation::compute_coeff3d(const double *a,
-                                                 const double *b,
-                                                 const double *c,
-                                                 const double *d,
+void Barycentric_transformation::compute_coeff3d(ConstArrayAccessor a,
+                                                 ConstArrayAccessor b,
+                                                 ConstArrayAccessor c,
+                                                 ConstArrayAccessor d,
                                                  double volume,
-                                                 double *coeff_e)
+                                                 CoeffAccessor coeff_e)
 {
     double det = 6 * volume;
 
@@ -270,10 +279,10 @@ void Barycentric_transformation::compute_coeff3d(const double *a,
 
 #else
 
-void Barycentric_transformation::compute_coeff1d(const double *a,
-                                                 const double *b,
+void Barycentric_transformation::compute_coeff1d(ConstArrayAccessor a,
+                                                 ConstArrayAccessor b,
                                                  double length,
-                                                 double *coeff_e)
+                                                 CoeffAccessor coeff_e)
 {
     const double det = length;
     coeff_e[index1d(0,0)] = b[0] / det;

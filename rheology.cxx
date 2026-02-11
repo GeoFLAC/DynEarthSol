@@ -10,7 +10,8 @@
 #include "utils.hpp"
 
 #pragma acc routine seq
-static void principal_stresses3(const double* s, double p[3], double v[3][3])
+template <typename T>
+static void principal_stresses3(T s, double p[3], double v[3][3])
 {
     /* s is a flattened stress vector, with the components {XX, YY, ZZ, XY, XZ, YZ}.
      * Returns the eigenvalues p and eignvectors v.
@@ -69,7 +70,8 @@ static void principal_stresses3(const double* s, double p[3], double v[3][3])
 }
 
 #pragma acc routine seq
-static void principal_stresses2(const double* s, double p[2],
+template <typename T>
+static void principal_stresses2(T s, double p[2],
                                 double& cos2t, double& sin2t)
 {
     /* 's' is a flattened stress vector, with the components {XX, ZZ, XZ}.
@@ -103,7 +105,7 @@ static void principal_stresses2(const double* s, double p[2],
 }
 
 #pragma acc routine seq
-static void compute_slip_rate2(const double* s, double& vx, double& vz, double& slip_rate)
+static void compute_slip_rate2(ConstTensorAccessor s, double& vx, double& vz, double& slip_rate)
 {
     /* Computes the slip magnitude by projecting velocity (vx, vz) onto the maximum shear direction.
      *
@@ -146,7 +148,7 @@ static void compute_slip_rate2(const double* s, double& vx, double& vz, double& 
 }
 
 #pragma acc routine seq
-static void compute_slip_rate3(const double* s, double vx, double vy, double vz, double& slip_rate)
+static void compute_slip_rate3(ConstTensorAccessor s, double vx, double vy, double vz, double& slip_rate)
 {
     /* Computes the slip magnitude by projecting velocity (vx, vy, vz) onto the maximum shear direction in 3D.
      *
@@ -232,7 +234,8 @@ void refresh_rsf_friction(const Param& param, Variables& var,
 }
 
 #pragma acc routine seq
-static void elastic(double bulkm, double shearm, const double* de, double* s)
+template <typename T>
+static void elastic(double bulkm, double shearm, const double* de, T s)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
@@ -245,7 +248,8 @@ static void elastic(double bulkm, double shearm, const double* de, double* s)
 }
 
 #pragma acc routine seq
-static void elastic_effective(double bulkm, double shearm, const double* de, double* s,  double &dpp)
+template <typename T>
+static void elastic_effective(double bulkm, double shearm, const double* de, T s,  double &dpp)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
@@ -259,8 +263,9 @@ static void elastic_effective(double bulkm, double shearm, const double* de, dou
 }
 
 #pragma acc routine seq
+template <typename T>
 static void maxwell(double bulkm, double shearm, double viscosity, double dt,
-                    double dv, const double* de, double* s)
+                    double dv, const double* de, T s)
 {
     // non-dimensional parameter: dt/ relaxation time
     double tmp = 0.5 * dt * shearm / viscosity;
@@ -280,7 +285,7 @@ static void maxwell(double bulkm, double shearm, double viscosity, double dt,
 
 #pragma acc routine seq
 static void viscous(double bulkm, double viscosity, double total_dv,
-                    const double* edot, double* s)
+                    ConstTensorAccessor edot, TensorAccessor s)
 {
     /* Viscous Model + incompressibility enforced by bulk modulus */
 
@@ -293,10 +298,11 @@ static void viscous(double bulkm, double viscosity, double total_dv,
 }
 
 #pragma acc routine seq
+template <typename T>
 static void elasto_plastic(double bulkm, double shearm,
                            double amc, double anphi, double anpsi,
                            double hardn, double ten_max,
-                           const double* de, double& depls, double* s,
+                           const double* de, double& depls, T s,
                            int &failure_mode,
                            bool has_hydraulic_diffusion,
                            double &dpp)
@@ -453,11 +459,12 @@ static void elasto_plastic(double bulkm, double shearm,
 }
 
 #pragma acc routine seq
+template <typename T>
 static void elasto_plastic2d(double bulkm, double shearm,
                              double amc, double anphi, double anpsi,
                              double hardn, double ten_max,
-                             const double* de, double& depls,
-                             double* s, double &syy,
+                             double* de, double& depls,
+                             T s, double &syy,
                              int &failure_mode,
                              bool has_hydraulic_diffusion,
                              double &dpp)
@@ -686,7 +693,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double pp_element = 0.0;
         double dpp_element = 0.0;
 
@@ -710,10 +717,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         }
 
         // stress, strain and strain_rate of this element
-        double* s = stress[e];
+        TensorAccessor s = stress[e];
         double& syy = stressyy[e];
-        double* es = strain[e];
-        double* edot = strain_rate[e];
+        TensorAccessor es = strain[e];
+        TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
 
         // Calculate effective pore pressure using Biot's coefficient
@@ -998,7 +1005,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-        double* s = stress[e];
+        ConstTensorAccessor s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
     }
 #ifdef NPROF

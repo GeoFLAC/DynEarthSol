@@ -402,6 +402,9 @@ C3X3_LIBNAME = 3x3$(suffix)
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
+# Enable Array2D structure of Array
+CXXFLAGS += -DSOA
+
 ## Action
 
 .PHONY: all clean take-snapshot

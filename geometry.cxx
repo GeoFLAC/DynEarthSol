@@ -12,7 +12,8 @@
 #include "output.hpp"
 
 /* Given two points, returns the distance^2 */
-double dist2(const double* a, const double* b)
+template <typename T>
+double dist2(T a, T b)
 {
     double sum = 0;
     for (int i=0; i<NDIMS; ++i) {
@@ -22,14 +23,19 @@ double dist2(const double* a, const double* b)
     return sum;
 }
 
+template
+double dist2<ConstArrayAccessor>(ConstArrayAccessor a, ConstArrayAccessor b);
+template
+double dist2<double*>(double *a, double *b);
+
 
 /* Given four 3D points, returns the (signed) volume of the enclosed
    tetrahedron */
 #pragma acc routine seq
-static double tetrahedron_volume(const double *d0,
-                                 const double *d1,
-                                 const double *d2,
-                                 const double *d3)
+static double tetrahedron_volume(ConstArrayAccessor d0,
+                                 ConstArrayAccessor d1,
+                                 ConstArrayAccessor d2,
+                                 ConstArrayAccessor d3)
 {
     double x01 = d0[0] - d1[0];
     double x12 = d1[0] - d2[0];
@@ -49,9 +55,9 @@ static double tetrahedron_volume(const double *d0,
 }
 
 #pragma acc routine seq
-static double triangle_area2d(const double *a,
-                            const double *b,
-                            const double *c)
+static double triangle_area2d(ConstArrayAccessor a,
+                            ConstArrayAccessor b,
+                            ConstArrayAccessor c)
 {
     double ab0, ab1, ac0, ac1;
 
@@ -67,9 +73,9 @@ static double triangle_area2d(const double *a,
 
 /* Given two points, returns the area of the enclosed triangle */
 #pragma acc routine seq
-static double triangle_area(const double *a,
-                            const double *b,
-                            const double *c)
+static double triangle_area(ConstArrayAccessor a,
+                            ConstArrayAccessor b,
+                            ConstArrayAccessor c)
 {
     double ab0, ab1, ac0, ac1;
 
@@ -99,27 +105,27 @@ static double triangle_area(const double *a,
 #endif
 }
 
-double compute_area_facet(const double **coord)
+double compute_area_facet(ConstArrayIndirectAccessor coord)
 {
-    const double *a = coord[0];
-    const double *b = coord[1];
+    ConstArrayAccessor a = coord[0];
+    ConstArrayAccessor b = coord[1];
 
 #ifndef THREED
     return std::fabs(a[0]-b[0]);
 #else
-    const double *c = coord[2];
+    ConstArrayAccessor c = coord[2];
 
     return triangle_area2d(a, b, c);
 #endif
 }
 
-double compute_volume(const double **coord)
+double compute_volume(ConstArrayIndirectAccessor coord)
 {
-    const double *a = coord[0];
-    const double *b = coord[1];
-    const double *c = coord[2];
+    ConstArrayAccessor a = coord[0];
+    ConstArrayAccessor b = coord[1];
+    ConstArrayAccessor c = coord[2];
 #ifdef THREED
-    const double *d = coord[3];
+    ConstArrayAccessor d = coord[3];
     return tetrahedron_volume(a, b, c, d);
 #else
     return triangle_area(a, b, c);
@@ -143,13 +149,13 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
 
-        const double *a = coord[n0];
-        const double *b = coord[n1];
-        const double *c = coord[n2];
+        ConstArrayAccessor a = coord[n0];
+        ConstArrayAccessor b = coord[n1];
+        ConstArrayAccessor c = coord[n2];
 
 #ifdef THREED
         int n3 = connectivity[e][3];
-        const double *d = coord[n3];
+        ConstArrayAccessor d = coord[n3];
         volume[e] = tetrahedron_volume(a, b, c, d);
 #else
         volume[e] = triangle_area(a, b, c);
@@ -176,13 +182,13 @@ void compute_volume(const Variables &var,
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
 
-        const double *a = (*var.coord)[n0];
-        const double *b = (*var.coord)[n1];
-        const double *c = (*var.coord)[n2];
+        ConstArrayAccessor a = (*var.coord)[n0];
+        ConstArrayAccessor b = (*var.coord)[n1];
+        ConstArrayAccessor c = (*var.coord)[n2];
 
 #ifdef THREED
         int n3 = (*var.connectivity)[e][3];
-        const double *d = (*var.coord)[n3];
+        ConstArrayAccessor d = (*var.coord)[n3];
         volume[e] = tetrahedron_volume(a, b, c, d);
 #else
         volume[e] = triangle_area(a, b, c);
@@ -209,8 +215,8 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
-        const int *conn = (*var.connectivity)[e];
-        const double *strain_rate= (*var.strain_rate)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
         // dj = (volume[e] - volume_old[e]) / volume_old[e] / dt
         double dj = trace(strain_rate);
@@ -254,7 +260,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double dj = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             int n = conn[i];
@@ -286,7 +292,7 @@ void NMD_stress(const Param& param, const Variables &var,
     if(false) {
         #pragma omp parallel for default(none) shared(var,centroid,tmp_result)
         for (int e=0;e<var.nelem;e++) {
-            const int *conn = (*var.connectivity)[e];
+            const auto conn = (*var.connectivity)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 const double *d = (*var.coord)[conn[i]];
                 tmp_result[i][e] = 1. / sqrt( dist2(d, centroid[e])  );
@@ -298,7 +304,7 @@ void NMD_stress(const Param& param, const Variables &var,
         for (int n=0;n<var.nnode;n++) {
             double dist_inv_sum = 0.;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const int *conn = (*var.connectivity)[*e];
+                const auto conn = (*var.connectivity)[*e];
                 for (int i=0;i<NODES_PER_ELEM;i++) {
                     if (n == conn[i]) {
                         dist_inv_sum += tmp_result[ i ][*e];
@@ -319,9 +325,7 @@ void NMD_stress(const Param& param, const Variables &var,
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
-        const int *conn = (*var.connectivity)[e];
-        double dp = (*var.dpressure)[e];
-        etmp[e] = dp * (*var.volume)[e];
+        etmp[e] = (*var.dpressure)[e] * (*var.volume)[e];
     }
 
 #ifndef ACC
@@ -358,7 +362,7 @@ void NMD_stress(const Param& param, const Variables &var,
             factor = 1;
         }
 
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             int n = conn[i];
@@ -366,7 +370,9 @@ void NMD_stress(const Param& param, const Variables &var,
         }
         double dp_el = dp / NODES_PER_ELEM;
 
-    	double* s = stress[e];
+    	TensorAccessor s = stress[e];
+
+
 	    double dp_orig = (*var.dpressure)[e];
         double ddp = ( - dp_orig + dp_el ) / NDIMS * factor;
 	    for (int i=0; i<NDIMS; ++i)
@@ -422,7 +428,7 @@ double compute_dt(const Param& param, Variables& var)
 
         // calculate maxium velocity in the element
         const array_t& vel = *var.vel;
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double weight = 1.0 / NODES_PER_ELEM; 
 
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
@@ -451,16 +457,16 @@ double compute_dt(const Param& param, Variables& var)
 
         // std::cout<< "Element: " << e << " max_vem: " << global_max_vem << std::scientific << std::setprecision(5) << std::endl;
 
-        const double *a = (*var.coord)[n0];
-        const double *b = (*var.coord)[n1];
-        const double *c = (*var.coord)[n2];
+        ConstArrayAccessor a = (*var.coord)[n0];
+        ConstArrayAccessor b = (*var.coord)[n1];
+        ConstArrayAccessor c = (*var.coord)[n2];
 
         // min height of this element
         double minh;
 #ifdef THREED
         {
             int n3 = (*var.connectivity)[e][3];
-            const double *d = (*var.coord)[n3];
+            ConstArrayAccessor d = (*var.coord)[n3];
 
             // max facet area of this tet
             double maxa = std::max(std::max(triangle_area(a, b, c),
@@ -572,16 +578,16 @@ double compute_dt_PT(const Param& param, const Variables& var)
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
 
-        const double *a = (*var.coord)[n0];
-        const double *b = (*var.coord)[n1];
-        const double *c = (*var.coord)[n2];
+        ConstArrayAccessor a = (*var.coord)[n0];
+        ConstArrayAccessor b = (*var.coord)[n1];
+        ConstArrayAccessor c = (*var.coord)[n2];
 
         // min height of this element
         double minh;
 #ifdef THREED
         {
             int n3 = (*var.connectivity)[e][3];
-            const double *d = (*var.coord)[n3];
+            ConstArrayAccessor d = (*var.coord)[n3];
 
             // max facet area of this tet
             double maxa = std::max(std::max(triangle_area(a, b, c),
@@ -707,7 +713,7 @@ void compute_mass(const Param &param, const Variables &var,
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
-            double *tr = tmp_result[e];
+            ElemCacheAccessor tr = tmp_result[e];
             double rho;
 
             if(param.control.use_global_velocity_scaling)
@@ -765,7 +771,7 @@ void compute_mass(const Param &param, const Variables &var,
             ymass[n]=0;
         
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                double *tr = tmp_result[*e];
+                ConstElemCacheAccessor tr = tmp_result[*e];
                 volume_n[n] += tr[0];
                 mass[n] += tr[1];
                 if (param.control.has_thermal_diffusion)
@@ -798,14 +804,14 @@ void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shap
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
 
-        const double *d0 = (*var.coord)[n0];
-        const double *d1 = (*var.coord)[n1];
-        const double *d2 = (*var.coord)[n2];
+        ConstArrayAccessor d0 = (*var.coord)[n0];
+        ConstArrayAccessor d1 = (*var.coord)[n1];
+        ConstArrayAccessor d2 = (*var.coord)[n2];
 
 #ifdef THREED
         {
             int n3 = (*var.connectivity)[e][3];
-            const double *d3 = (*var.coord)[n3];
+            ConstArrayAccessor d3 = (*var.coord)[n3];
 
             double iv = 1 / (6 * (*var.volume)[e]);
 
@@ -877,14 +883,14 @@ double elem_quality(const array_t &coord, const conn_t &connectivity,
     int n1 = connectivity[e][1];
     int n2 = connectivity[e][2];
 
-    const double *a = coord[n0];
-    const double *b = coord[n1];
-    const double *c = coord[n2];
+    ConstArrayAccessor a = coord[n0];
+    ConstArrayAccessor b = coord[n1];
+    ConstArrayAccessor c = coord[n2];
 
 #ifdef THREED
     {
         int n3 = connectivity[e][3];
-        const double *d = coord[n3];
+        ConstArrayAccessor d = coord[n3];
         double normalization_factor = 216 * std::sqrt(3);
 
         double area_sum = (triangle_area(a, b, c) +

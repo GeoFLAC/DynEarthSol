@@ -17,7 +17,8 @@
 namespace {
 
 #pragma acc routine seq
-void normal_vector_of_facet(const double **facet_coord, double *normal, double &zcenter)
+template <typename T>
+void normal_vector_of_facet(T facet_coord, double *normal, double &zcenter)
 {
 #ifdef THREED
     // vectors: n0-n1 and n0-n2
@@ -113,9 +114,11 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
             int f = j->second;
             double tmp;
 
-            const double *facet_coord[NODES_PER_FACET];
+            int idx[NODES_PER_FACET];
             for (int k=0; k<NODES_PER_FACET; ++k)
-                facet_coord[k] = (*var.coord)[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
+                idx[k] = (*var.connectivity)[e][NODE_OF_FACET[f][k]];
+
+            ConstArrayIndirectAccessor facet_coord = var.coord->view_const(idx);
 
             normal_vector_of_facet(facet_coord, normal, tmp);
 
@@ -230,7 +233,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 
         uint flag = (*var.bcflag)[i];
         if (flag & BOUNDX0) {
-            const double *x = (*var.coord)[i];
+            ConstArrayAccessor x = (*var.coord)[i];
             if (!if_init0) {
                BOUNDX0_max = x[1];
                BOUNDX0_min = x[1];
@@ -244,7 +247,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 }
             }
         } else if (flag & BOUNDX1) {
-            const double *x = (*var.coord)[i];
+            ConstArrayAccessor x = (*var.coord)[i];
             if (!if_init1) {
                BOUNDX1_max = x[1];
                BOUNDX1_min = x[1];
@@ -320,7 +323,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
     #pragma acc parallel loop gang vector async reduction(min:zmin)
     for (int k=0; k<var.nnode; ++k) {
-        double* tmpx = (*var.coord)[k];
+        ConstArrayAccessor tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
@@ -346,11 +349,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         if (! is_on_boundary(*var.bcflag, i)) continue;
 
         uint flag = (*var.bcflag)[i];
-        double *v = vel[i];
+        ArrayAccessor v = vel[i];
 
 #ifdef THREED
 #else
-        const double *x = (*var.coord)[i];
+        ConstArrayAccessor x = (*var.coord)[i];
         double ratio, rr, dvr;
         double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
         double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
@@ -536,7 +539,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         //
         for (int ib=iboundn0; ib<=iboundn3; ib++) {
             const double eps = 1e-15;
-            const double *n = (*var.bnormals)[ib]; // unit normal vector
+            ConstArrayAccessor n = (*var.bnormals)[ib]; // unit normal vector
 
             if (flag & (1 << ib)) {
                 double fac = 0;
@@ -755,16 +758,18 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 int e = (*var.bfacets[i])[n].first;
                 // this facet is the f-th facet of e
                 int f = (*var.bfacets[i])[n].second;
-                const int *conn = (*var.connectivity)[e];
+                ConstConnAccessor conn = (*var.connectivity)[e];
 
                 // the outward-normal vector
                 double normal[NDIMS];
                 // the z-coordinate of the facet center
                 double zcenter;
 
-                const double *facet_coord[NODES_PER_FACET];
+                int idx[NODES_PER_FACET];
                 for (int j=0; j<NODES_PER_FACET; ++j)
-                    facet_coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
+                    idx[j] = conn[NODE_OF_FACET[f][j]];
+
+                ConstArrayIndirectAccessor facet_coord = var.coord->view_const(idx);
 
                 normal_vector_of_facet(facet_coord, normal, zcenter);
 
@@ -804,14 +809,12 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 }
 
                 (*var.etmp_int)[e] = n;
-                double *tmp = (*var.tmp_result)[n];
+                ElemCacheAccessor tmp = (*var.tmp_result)[n];
                 // lithostatc support - Archimed force (normal to the surface)
                 for (int j=0; j<NODES_PER_FACET; ++j) {
                     int nn = conn[NODE_OF_FACET[f][j]];
-                    double *f = force[nn];
-                    for (int d=0; d<NDIMS; ++d) {
-                            tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
-                    }
+                    for (int d=0; d<NDIMS; ++d)
+                        tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
                 }
             }
 
@@ -828,7 +831,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                     if (ibound < 0) continue;  // not a boundary element
 
                     int f = (*var.bfacets[i])[ibound].second;  // facet index
-                    const int *conn = (*var.connectivity)[e];
+                    ConstConnAccessor conn = (*var.connectivity)[e];
                     for (int l=0; l<NODES_PER_FACET; ++l) {
                         if (n == conn[NODE_OF_FACET[f][l]]) {
                             for (int d=0; d<NDIMS; ++d)
@@ -884,15 +887,18 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     for (int n = 0; n < bound; ++n) {
         int e = bdry[n].first;      // This facet belongs to element e
         int f = bdry[n].second;     // This facet is the f-th facet of element e
-        const int *conn = (*var.connectivity)[e];  // Element connectivity
+        ConstConnAccessor conn = (*var.connectivity)[e];  // Element connectivity
 
         // Outward-normal vector and z-center for the facet
         double normal[NDIMS] = {0.0}; 
         double zcenter = 0.0;
 
-        const double *facet_coord[NODES_PER_FACET];
+        int idx[NODES_PER_FACET];
+
         for (int j=0; j<NODES_PER_FACET; ++j)
-            facet_coord[j] = (*var.coord)[conn[NODE_OF_FACET[f][j]]];
+            idx[j] = conn[NODE_OF_FACET[f][j]];
+
+        ConstArrayIndirectAccessor facet_coord = var.coord->view_const(idx);
 
         normal_vector_of_facet(facet_coord, normal, zcenter);
 
@@ -930,7 +936,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         // Apply the traction to the boundary facet nodes
         for (int j = 0; j < NODES_PER_FACET; ++j) {
             int nn = conn[NODE_OF_FACET[f][j]];  // Get global node index for this facet
-            double *force_node = force[nn];      // Pointer to the force array for this node
+            ArrayAccessor force_node = force[nn];      // Pointer to the force array for this node
 
             // Distribute the traction (stress) to the nodes on the facet
             for (int d = 0; d < NDIMS; ++d) {
@@ -993,7 +999,7 @@ namespace {
                 // this facet is the f-th facet of e
                 int f = top[i].second;
 
-                const int *conn = (*var.connectivity)[e];
+                ConstConnAccessor conn = (*var.connectivity)[e];
                 int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
                 int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
                 int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
@@ -1090,7 +1096,7 @@ namespace {
                     // this facet is the f-th facet of e
                     int f = top[k].second;
 
-                    const int *conn = (*var.connectivity)[e];
+                    ConstConnAccessor conn = (*var.connectivity)[e];
                     int n0 = conn[NODE_OF_FACET[f][0]];
                     int n1 = conn[NODE_OF_FACET[f][1]];
                     int n2 = conn[NODE_OF_FACET[f][2]];
@@ -1545,12 +1551,9 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #endif
         #pragma acc parallel loop gang vector async
         for (int i=0; i<var.ntop_elems; i++) {
-            const double *coord1[NODES_PER_ELEM];
-
             const int e = (*var.top_elems)[i];
 
-            for (int j=0; j<NODES_PER_ELEM;j++)
-                coord1[j] = (*var.coord)[(*var.connectivity)[e][j]];
+            ConstArrayIndirectAccessor coord1 = var.coord->view_const((*var.connectivity)[e]);
             double new_volumes = compute_volume(coord1);
             double rdv =  new_volumes / volume[e];
             volume[e] = new_volumes;
@@ -1652,21 +1655,14 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #endif
         #pragma acc parallel loop gang vector async
         for (int i=0;i<var.surfinfo.etop;i++) {
-            int_vec n(NDIMS);
             double dh_e = 0.;
 
-            for (int j=0;j<NDIMS;j++) {
-                int k = (*var.surfinfo.elem_and_nodes)[i][j];
-                n[j] = (*var.surfinfo.top_nodes)[k];
-                dh_e += (*var.surfinfo.dh)[k];
-            }
+            for (int j=0;j<NDIMS;j++)
+                dh_e += (*var.surfinfo.dh)[(*var.surfinfo.elem_and_nodes)[i][j]];
 
-#ifdef THREED
-            double base = (((*var.coord)[n[1]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[2]][1] - (*var.coord)[n[0]][1]) \
-                - ((*var.coord)[n[2]][0] - (*var.coord)[n[0]][0])*((*var.coord)[n[1]][1] - (*var.coord)[n[0]][1]))/2.0;
-#else
-            double base = (*var.coord)[n[0]][0] - (*var.coord)[n[1]][0];
-#endif
+            ConstArrayIndirectAccessor coord_surf = var.coord->view_const((*var.connectivity_surface)[i]);
+            double base = compute_area_facet(coord_surf);
+
             (*var.surfinfo.edvacc_surf)[i] += dh_e * base / NDIMS;
         }
     }

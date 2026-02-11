@@ -17,7 +17,7 @@ void test_barycentric_transformation(Variables &var)
 
     // p is the mid point of element 1
     int e = 1;
-    const int *conn = (*var.connectivity)[e];
+    ConstConnAccessor conn = (*var.connectivity)[e];
     for (int d=0; d<NDIMS; d++)
         p[d] = (*var.coord)[conn[0]][d] / NODES_PER_ELEM;
     for (int i=1; i<NODES_PER_ELEM; i++)

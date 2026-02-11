@@ -421,7 +421,6 @@ void update_mesh(const Param& param, Variables& var)
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
 #endif
-    #pragma serial async
     {
         double_vec *tmp = var.volume;
         var.volume = var.volume_old;

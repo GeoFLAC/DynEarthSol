@@ -43,6 +43,34 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
+typedef array_t::Accessor ArrayAccessor;
+typedef tensor_t::Accessor TensorAccessor;
+typedef shapefn::Accessor ShapefnAccessor;
+// typedef regattr_t::Accessor RegattrAccessor;
+typedef elem_cache::Accessor ElemCacheAccessor;
+
+typedef conn_t::Accessor ConnAccessor;
+typedef segment_t::Accessor SegmentAccessor;
+// typedef segflag_t::Accessor SegflagAccessor;
+// typedef regular_t::Accessor RegularAccessor;
+
+typedef array_t::ConstAccessor ConstArrayAccessor;
+typedef tensor_t::ConstAccessor ConstTensorAccessor;
+typedef shapefn::ConstAccessor ConstShapefnAccessor;
+// typedef regattr_t::ConstAccessor ConstRegattrAccessor;
+typedef elem_cache::ConstAccessor ConstElemCacheAccessor;
+
+typedef conn_t::ConstAccessor ConstConnAccessor;
+typedef segment_t::ConstAccessor ConstSegmentAccessor;
+// typedef segflag_t::ConstAccessor ConstSegflagAccessor;
+typedef regular_t::ConstAccessor ConstRegularAccessor;
+
+typedef array_t::ConstIndirectAccessor ConstArrayIndirectAccessor;
+// typedef tensor_t::ConstIndirectAccessor ConstTensorIndirectAccessor;
+// typedef shapefn::ConstIndirectAccessor ConstShapefnIndirectAccessor;
+// typedef regattr_t::ConstIndirectAccessor ConstRegattrIndirectAccessor;
+// typedef elem_cache::ConstIndirectAccessor ConstElemCacheIndirectAccessor;
+
 class Output;
 
 struct neighbor {
@@ -76,7 +104,11 @@ struct AppendMarkerData {
     AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0), genesis(0) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = 0.0;
     }
-    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s, int g)
+    AppendMarkerData(ConstShapefnAccessor e, int el, int mt, double t, double d, double dis, double s, int g)
+        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s), genesis(g) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
+    }
+    AppendMarkerData(ConstElemCacheAccessor e, int el, int mt, double t, double d, double dis, double s, int g)
         : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s), genesis(g) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
     }
