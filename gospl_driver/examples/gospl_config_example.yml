@@ -6,11 +6,14 @@ domain:
     seadepo: False
     bc: '1000'
 
+output:
+    dir: 'gospl_output'
+
 time:
     start: 0.
     end: 50.e6
-    tout: 1.e6
-    dt: 1.e5
+    tout: 5000.0
+    dt: 1.0
 
 spl:
     K: 4.e-6
@@ -18,22 +21,8 @@ spl:
     m: 0.4
 
 diffusion:
-    hillslopeKa: 0.2
+    hillslopeKa: 1.0 # 0.2
     hillslopeKm: 1.0
-
-flexure: 
-    method: 'FD'
-    regdx: 5000.
-    ninterp: 4
-    thick: 20.e3
-    rhoc: 2300.0
-    rhoa: 3300.0
-    young: 65e9
-    nu: 0.25
-    bcN: "0Slope0Shear"
-    bcE: "Mirror"
-    bcS: "0Displacement0Slope"
-    bcW: "Mirror"
 
 sea:
     position: -10.
@@ -42,5 +31,3 @@ climate:
   - start: 0.
     uniform: 1
 
-output:
-    dir: 'coupling_test'
