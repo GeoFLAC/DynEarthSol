@@ -171,7 +171,7 @@ void MarkerSet::append_markers(AMD_vec &md)
     // Ensure sufficient array size
     while ( _nmarkers + nmarker > _reserved_space ) {
         // Resize the marker-related arrays if necessary.
-        const int newsize = _nmarkers * over_alloc_ratio;
+        const int newsize = _reserved_space * over_alloc_ratio;
         resize( newsize );
     }
 
