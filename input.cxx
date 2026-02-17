@@ -42,10 +42,10 @@ static void declare_parameters(po::options_description &cfg,
          "Output step interval")
         ("sim.output_time_interval_in_yr", po::value<double>(&p.sim.output_time_interval_in_yr),
          "Output time interval (in years)")
-        ("sim.info_display_interval", po::value<int>(&p.sim.info_display_interval)->default_value(300),
-         "Output walltime interval for showing model status on screen (in seconds).\n"
-         " 0: no printing model status on screen based on walltime intervel.\n"
-         ">0: specified second interval for showing model status on screen after the last result output.")
+        ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
+         "Step interval for showing model status on screen.\n"
+         " 0: use default (= 5 * mesh.quality_check_step_interval).\n"
+         ">0: must be a multiple of mesh.quality_check_step_interval.")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")
@@ -857,6 +857,19 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
             std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
             std::exit(1);
+    }
+
+    // Ensure info_display_step_interval is a multiple of quality_check_step_interval
+    if (p.sim.info_display_step_interval <= 0)
+        p.sim.info_display_step_interval = p.mesh.quality_check_step_interval*5;
+    if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
+        int q = p.mesh.quality_check_step_interval;
+        p.sim.info_display_step_interval = ((p.sim.info_display_step_interval + q - 1) / q) * q;
+        std::cout << "  info_display_step_interval rounded up to "
+                  << p.sim.info_display_step_interval
+                  << " (must be a multiple of quality_check_step_interval="
+                  << q << ")\n";
+        std::exit(1);
     }
 
     // these parameters are required in mesh.meshing_elem_shape >= 1
