@@ -2117,23 +2117,26 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 #endif
 }
 
-void compute_metric_field(const Variables &var, const conn_t &connectivity, const double resolution, double_vec &metric, double_vec &etmp)
+void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
 {
-    /* dvoldt is the volumetric strain rate, weighted by the element volume,
-     * lumped onto the nodes.
+    /* Compute the desired element size (metric) for MMG remeshing.
+     * Uses the current element size as the base, and only refines
+     * where plastic strain is present.
      */
     std::fill_n(metric.begin(), var.nnode, 0);
 
-#ifdef GPP1X
-    #pragma omp parallel for default(none) shared(var,connectivity,etmp,resolution)
-#else
-    #pragma omp parallel for default(none) shared(var,connectivity,etmp) firstprivate(resolution)
-#endif
+    #pragma omp parallel for default(none) shared(var,etmp)
     for (int e=0;e<var.nelem;e++) {
-        const int *conn = connectivity[e];
-        double plstrain = resolution/(1.0+5.0*(*var.plstrain)[e]);
-        // resolution/(1.0+(*var.plstrain)[e]);
-        etmp[e] = plstrain * (*var.volume)[e];
+        // Compute characteristic element size from volume
+#ifdef THREED
+        double elem_size = std::cbrt(6.0 * std::sqrt(2.0) * (*var.volume)[e]);
+#else
+        double elem_size = std::sqrt(2.0 * (*var.volume)[e]);
+#endif
+        // Use the element's own size as the base; only refine where
+        // there is plastic strain
+        double target_size = elem_size / (1.0 + 5.0 * (*var.plstrain)[e]);
+        etmp[e] = target_size * (*var.volume)[e];
     }
 
     #pragma omp parallel for default(none) shared(var,metric,etmp)
@@ -2274,7 +2277,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
         exit(EXIT_FAILURE);
     //   b) give solutions values and positions
-    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.etmp);
+    compute_metric_field(var, *var.ntmp, *var.etmp);
     //      i) If sol array is available:
     if( MMG3D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
         exit(EXIT_FAILURE);
@@ -2525,7 +2528,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
         exit(EXIT_FAILURE);
     //   b) give solutions values and positions
-    compute_metric_field(var, old_connectivity, param.mesh.resolution, *var.ntmp, *var.etmp);
+    compute_metric_field(var, *var.ntmp, *var.etmp);
     //      i) If sol array is available:
     if( MMG2D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
         exit(EXIT_FAILURE);
