@@ -2129,9 +2129,9 @@ void compute_metric_field(const Variables &var, double_vec &metric, double_vec &
     for (int e=0;e<var.nelem;e++) {
         // Compute characteristic element size from volume
 #ifdef THREED
-        double elem_size = std::cbrt(6.0 * std::sqrt(2.0) * (*var.volume)[e]);
+        double elem_size = std::cbrt((*var.volume)[e] / (sizefactor * 0.8));
 #else
-        double elem_size = std::sqrt(2.0 * (*var.volume)[e]);
+        double elem_size = std::sqrt((*var.volume)[e] / sizefactor);
 #endif
         // Use the element's own size as the base; only refine where
         // there is plastic strain
