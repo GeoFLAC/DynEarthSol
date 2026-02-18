@@ -2120,30 +2120,21 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
 {
     /* Compute the desired element size (metric) for MMG remeshing.
-     * Uses the current element size as the base, and only refines
-     * where plastic strain is present.
+     * Uses scale0 (frozen initial element size) as the base, and only
+     * refines where plastic strain is present.
      */
     std::fill_n(metric.begin(), var.nnode, 0);
 
-    #pragma omp parallel for default(none) shared(var,etmp)
-    for (int e=0;e<var.nelem;e++) {
-        // Compute characteristic element size from volume
-#ifdef THREED
-        double elem_size = std::cbrt((*var.volume)[e] / (sizefactor * 0.8));
-#else
-        double elem_size = std::sqrt((*var.volume)[e] / sizefactor);
-#endif
-        // Use the element's own size as the base; only refine where
-        // there is plastic strain
-        double target_size = elem_size / (1.0 + 5.0 * (*var.plstrain)[e]);
-        etmp[e] = target_size * (*var.volume)[e];
-    }
+    // Refine where plastic strain is present
+    #pragma omp parallel for default(none) shared(var, etmp)
+    for (int e = 0; e < var.nelem; e++)
+        etmp[e] = (*var.volume)[e] / (1.0 + 5.0 * (*var.plstrain)[e]);
 
-    #pragma omp parallel for default(none) shared(var,metric,etmp)
-    for (int n=0;n<var.nnode;n++) {
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
+    #pragma omp parallel for default(none) shared(var, metric, etmp)
+    for (int n = 0; n < var.nnode; n++) {
+        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
             metric[n] += etmp[*e];
-        metric[n] /= (*var.volume_n)[n];
+        metric[n] *= (*var.scale0)[n] / (*var.volume_n)[n];
     }
 }
 
@@ -2654,6 +2645,36 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 #endif
 
 } // anonymous namespace
+
+
+void initialize_scale0(Variables &var)
+{
+    /* Compute and freeze the initial nodal element size distribution.
+     * Called once at step 0 to capture the mesh refinement zones defined
+     * in the input file. This frozen field is subsequently interpolated
+     * to new nodes during remeshing to prevent refinement zones from
+     * diffusing away.
+     */
+    double_vec &etmp = *var.etmp;
+    double_vec &scale0 = *var.scale0;
+
+    #pragma omp parallel for default(none) shared(var, etmp)
+    for (int e = 0; e < var.nelem; e++) {
+#ifdef THREED
+        double elem_size = std::cbrt((*var.volume)[e] / sizefactor);
+#else
+        double elem_size = std::sqrt((*var.volume)[e] / sizefactor);
+#endif
+        etmp[e] = elem_size * (*var.volume)[e];
+    }
+
+    std::fill_n(scale0.begin(), var.nnode, 0);
+    for (int n = 0; n < var.nnode; n++) {
+        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
+            scale0[n] += etmp[*e];
+        scale0[n] /= (*var.volume_n)[n];
+    }
+}
 
 
 int bad_mesh_quality(const Param &param, const Variables &var, int &index)

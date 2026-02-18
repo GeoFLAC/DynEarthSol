@@ -592,6 +592,7 @@ struct Variables {
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
     double_vec *ntmp;
+    double_vec *scale0;   // frozen initial nodal element size for MMG metric
     double_vec *radiogenic_source;
 
     // For hyraulic proceses

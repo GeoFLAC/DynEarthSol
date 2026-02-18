@@ -348,6 +348,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+    bin.write_array(*var.scale0, "scale0", var.scale0->size());
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
 

@@ -255,6 +255,9 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     double_vec *new_dppressure = new double_vec(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
 
+    double_vec *new_scale0 = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.scale0, *new_scale0);
+
     array_t *new_vel = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
 
@@ -271,6 +274,9 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.dppressure;
     var.dppressure = new_dppressure;
+
+    delete var.scale0;
+    var.scale0 = new_scale0;
 
     delete var.vel;
     var.vel = new_vel;
