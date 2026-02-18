@@ -2647,7 +2647,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 } // anonymous namespace
 
 
-void initialize_scale0(Variables &var)
+void initialize_scale0(const Variables &var, double_vec &scale0)
 {
     /* Compute and freeze the initial nodal element size distribution.
      * Called once at step 0 to capture the mesh refinement zones defined
@@ -2655,23 +2655,30 @@ void initialize_scale0(Variables &var)
      * to new nodes during remeshing to prevent refinement zones from
      * diffusing away.
      */
-    double_vec &etmp = *var.etmp;
-    double_vec &scale0 = *var.scale0;
 
-    #pragma omp parallel for default(none) shared(var, etmp)
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; e++) {
 #ifdef THREED
         double elem_size = std::cbrt((*var.volume)[e] / sizefactor);
 #else
         double elem_size = std::sqrt((*var.volume)[e] / sizefactor);
 #endif
-        etmp[e] = elem_size * (*var.volume)[e];
+        (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
     std::fill_n(scale0.begin(), var.nnode, 0);
+
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, scale0)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
         for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            scale0[n] += etmp[*e];
+            scale0[n] += (*var.etmp)[*e];
         scale0[n] /= (*var.volume_n)[n];
     }
 }

@@ -182,7 +182,7 @@ void init(const Param& param, Variables& var)
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    initialize_scale0(var);
+    initialize_scale0(var, *var.scale0);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
