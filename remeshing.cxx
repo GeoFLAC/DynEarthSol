@@ -2944,10 +2944,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.support_arr;
         delete var.support_idx;
         create_support(var);
-        delete var.neighbor;
-        delete var.contact;
-        delete var.ctmp;
-        create_neighbor(var);
+        // delete var.neighbor;
+        // delete var.contact;
+        // delete var.ctmp;
+        // create_neighbor(var);
 
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
