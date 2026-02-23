@@ -2844,13 +2844,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segflag.steal_ref(*var.segflag);
 
 #ifdef THREED
-#if defined USEMMG
-    optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
-         old_segment, old_segflag);
-#else
         if (param.mesh.meshing_elem_shape == 0) {
+#if defined USEMMG
+            optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+#else
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
+#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                     old_segment, old_segflag);
@@ -2858,26 +2859,25 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             std::exit(1);
         }
-#endif
 #else  // if 2d
-#if defined USEMMG
-        optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
-#else
         if (param.mesh.meshing_elem_shape == 0) {
+#if defined USEMMG
+            optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
+                old_segment, old_segflag);
+#else
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
+#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
         } else if (param.mesh.meshing_elem_shape == 2) {
             new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
         } else {
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             std::exit(1);
         }        
-#endif
 #endif
         reallocate_tmp(param, var);
 
