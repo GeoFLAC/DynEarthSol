@@ -403,6 +403,8 @@ struct IC {
     double surface_heat_flux;
     double rh_dome_amplitude;
     double rh_dome_width;
+    double rh_dome_width_y;
+    double rh_dome_azimuth;
     int nhlayer;
     double_vec radiogenic_heat_boundry;
     int_vec radiogenic_heat_mat_in_layer;
