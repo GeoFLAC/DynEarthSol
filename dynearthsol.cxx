@@ -182,7 +182,7 @@ void init(const Param& param, Variables& var)
     var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    initialize_scale0(var, *var.scale0);
+    initialize_elem_size_n(var, *var.init_elem_size_n);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
@@ -318,7 +318,7 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.ppressure, "pore pressure");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
-        bin_chkpt.read_array(*var.scale0, "scale0");
+        bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
 
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");

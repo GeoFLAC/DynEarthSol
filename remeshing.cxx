@@ -2120,7 +2120,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
 {
     /* Compute the desired element size (metric) for MMG remeshing.
-     * Uses scale0 (frozen initial element size) as the base, and only
+     * Uses init_elem_size_n (frozen initial element size) as the base, and only
      * refines where plastic strain is present.
      */
     std::fill_n(metric.begin(), var.nnode, 0);
@@ -2134,7 +2134,7 @@ void compute_metric_field(const Variables &var, double_vec &metric, double_vec &
     for (int n = 0; n < var.nnode; n++) {
         for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
             metric[n] += etmp[*e];
-        metric[n] *= (*var.scale0)[n] / (*var.volume_n)[n];
+        metric[n] *= (*var.init_elem_size_n)[n] / (*var.volume_n)[n];
     }
 }
 
@@ -2647,7 +2647,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 } // anonymous namespace
 
 
-void initialize_scale0(const Variables &var, double_vec &scale0)
+void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 {
     /* Compute and freeze the initial nodal element size distribution.
      * Called once at step 0 to capture the mesh refinement zones defined
@@ -2669,17 +2669,17 @@ void initialize_scale0(const Variables &var, double_vec &scale0)
         (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
-    std::fill_n(scale0.begin(), var.nnode, 0);
+    std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
 
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, scale0)
+    #pragma omp parallel for default(none) shared(var, init_elem_size_n)
 #endif
     #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
         for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            scale0[n] += (*var.etmp)[*e];
-        scale0[n] /= (*var.volume_n)[n];
+            init_elem_size_n[n] += (*var.etmp)[*e];
+        init_elem_size_n[n] /= (*var.volume_n)[n];
     }
 }
 
