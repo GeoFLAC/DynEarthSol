@@ -255,6 +255,9 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     double_vec *new_dppressure = new double_vec(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
 
+    double_vec *new_init_elem_size_n = new double_vec(var.nnode);
+    interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n);
+
     array_t *new_vel = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
 
@@ -272,11 +275,15 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     delete var.dppressure;
     var.dppressure = new_dppressure;
 
+    delete var.init_elem_size_n;
+    var.init_elem_size_n = new_init_elem_size_n;
+
     delete var.vel;
     var.vel = new_vel;
 
     delete var.coord0;
     var.coord0 = new_coord0;
+
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif

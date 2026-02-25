@@ -6,6 +6,7 @@
 *.chkpt.*
 *.info
 *.vt[u,p]
+*.vtkhdf
 confdefs.h
 snapshot.diff
 dynearthsol[2,3]d
