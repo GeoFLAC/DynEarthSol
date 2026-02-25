@@ -29,6 +29,7 @@ void allocate_variables(const Param &param, Variables& var)
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
         var.dppressure = new double_vec(n);
+        var.init_elem_size_n = new double_vec(n);
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
