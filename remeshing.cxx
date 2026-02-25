@@ -2120,30 +2120,21 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
 {
     /* Compute the desired element size (metric) for MMG remeshing.
-     * Uses the current element size as the base, and only refines
-     * where plastic strain is present.
+     * Uses init_elem_size_n (frozen initial element size) as the base, and only
+     * refines where plastic strain is present.
      */
     std::fill_n(metric.begin(), var.nnode, 0);
 
-    #pragma omp parallel for default(none) shared(var,etmp)
-    for (int e=0;e<var.nelem;e++) {
-        // Compute characteristic element size from volume
-#ifdef THREED
-        double elem_size = std::cbrt(6.0 * std::sqrt(2.0) * (*var.volume)[e]);
-#else
-        double elem_size = std::sqrt(2.0 * (*var.volume)[e]);
-#endif
-        // Use the element's own size as the base; only refine where
-        // there is plastic strain
-        double target_size = elem_size / (1.0 + 5.0 * (*var.plstrain)[e]);
-        etmp[e] = target_size * (*var.volume)[e];
-    }
+    // Refine where plastic strain is present
+    #pragma omp parallel for default(none) shared(var, etmp)
+    for (int e = 0; e < var.nelem; e++)
+        etmp[e] = (*var.volume)[e] / (1.0 + 5.0 * (*var.plstrain)[e]);
 
-    #pragma omp parallel for default(none) shared(var,metric,etmp)
-    for (int n=0;n<var.nnode;n++) {
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
+    #pragma omp parallel for default(none) shared(var, metric, etmp)
+    for (int n = 0; n < var.nnode; n++) {
+        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
             metric[n] += etmp[*e];
-        metric[n] /= (*var.volume_n)[n];
+        metric[n] *= (*var.init_elem_size_n)[n] / (*var.volume_n)[n];
     }
 }
 
@@ -2656,6 +2647,43 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 } // anonymous namespace
 
 
+void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
+{
+    /* Compute and freeze the initial nodal element size distribution.
+     * Called once at step 0 to capture the mesh refinement zones defined
+     * in the input file. This frozen field is subsequently interpolated
+     * to new nodes during remeshing to prevent refinement zones from
+     * diffusing away.
+     */
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; e++) {
+#ifdef THREED
+        double elem_size = std::cbrt((*var.volume)[e] / sizefactor);
+#else
+        double elem_size = std::sqrt((*var.volume)[e] / sizefactor);
+#endif
+        (*var.etmp)[e] = elem_size * (*var.volume)[e];
+    }
+
+    std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
+
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, init_elem_size_n)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n = 0; n < var.nnode; n++) {
+        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
+            init_elem_size_n[n] += (*var.etmp)[*e];
+        init_elem_size_n[n] /= (*var.volume_n)[n];
+    }
+}
+
+
 int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 {
 #ifdef NPROF
@@ -2816,13 +2844,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segflag.steal_ref(*var.segflag);
 
 #ifdef THREED
-#if defined USEMMG
-    optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
-         old_segment, old_segflag);
-#else
         if (param.mesh.meshing_elem_shape == 0) {
+#if defined USEMMG
+            optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
+                    old_segment, old_segflag);
+#else
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
+#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                     old_segment, old_segflag);
@@ -2830,26 +2859,25 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             std::exit(1);
         }
-#endif
 #else  // if 2d
-#if defined USEMMG
-        optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
-#else
         if (param.mesh.meshing_elem_shape == 0) {
+#if defined USEMMG
+            optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
+                old_segment, old_segflag);
+#else
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
+#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
         } else if (param.mesh.meshing_elem_shape == 2) {
             new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
-                 old_segment, old_segflag);
+                old_segment, old_segflag);
         } else {
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             std::exit(1);
         }        
-#endif
 #endif
         reallocate_tmp(param, var);
 
