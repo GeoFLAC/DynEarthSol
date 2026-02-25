@@ -1608,7 +1608,8 @@ namespace {
         // Check if it's time to run GoSPL coupling
         if (var.gospl_driver->step_counter < var.gospl_driver->adaptive_coupling_frequency) {
             // ===== NON-COUPLING STEP: Apply gradual erosion from previous coupling cycle =====
-            if (!var.gospl_driver->pending_erosion_rate.empty()) {
+            // Guard against empty vector (before first coupling) and size mismatch (after remeshing)
+            if (var.gospl_driver->pending_erosion_rate.size() == ntop) {
                 for (std::size_t i = 0; i < ntop; ++i) {
                     int n = top_nodes[i];
 
@@ -1616,7 +1617,8 @@ namespace {
                     double progress = (double)var.gospl_driver->step_counter /
                                       var.gospl_driver->adaptive_coupling_frequency;
                     double rate_i = var.gospl_driver->pending_erosion_rate[i];
-                    if (var.gospl_driver->has_prev_rate) {
+                    if (var.gospl_driver->has_prev_rate &&
+                        var.gospl_driver->prev_erosion_rate.size() == ntop) {
                         double prev_rate_i = var.gospl_driver->prev_erosion_rate[i];
                         rate_i += (rate_i - prev_rate_i) * progress;
                     }
@@ -1714,8 +1716,10 @@ namespace {
         double y_max_buf = y_max - y_margin;
 
         // Store previous rates and prepare new rate vector
+        // has_prev_rate is only true when prev_erosion_rate is actually populated
         if (!var.gospl_driver->pending_erosion_rate.empty()) {
             var.gospl_driver->prev_erosion_rate = var.gospl_driver->pending_erosion_rate;
+            var.gospl_driver->has_prev_rate = true;
         }
         var.gospl_driver->pending_erosion_rate.resize(ntop);
 
@@ -1749,9 +1753,6 @@ namespace {
             // Store erosion rate for gradual application in subsequent steps
             var.gospl_driver->pending_erosion_rate[i] = erosion_rate;
         }
-
-        // Mark that we now have a previous rate for extrapolation
-        var.gospl_driver->has_prev_rate = true;
 
         // Compute adaptive coupling frequency based on rate-change metric
         if (var.gospl_driver->has_prev_rate && var.gospl_driver->rate_change_tolerance > 0 &&
