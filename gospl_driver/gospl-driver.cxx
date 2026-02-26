@@ -15,7 +15,8 @@ GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initia
                              mesh_bounds_valid(false), coupling_frequency(1), step_counter(0),
                              accumulated_dt(0.0), has_prev_rate(false), remaining_steps(0),
                              base_coupling_frequency(1), adaptive_coupling_frequency(1),
-                             rate_change_tolerance(0.3), rate_change_metric(0.0) {
+                             rate_change_tolerance(0.3), rate_change_metric(0.0),
+                             velocity_coupling(false) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
@@ -80,9 +81,9 @@ void GoSPLDriver::cleanup() {
     }
 }
 
-double GoSPLDriver::run_processes_for_dt(double dt, bool verbose) {
+double GoSPLDriver::run_processes_for_dt(double dt, bool verbose, bool skip_tectonics) {
     if (!initialized) return -1.0;
-    
+
     // Set verbose mode on the Python model object before running
     // This controls GoSPL's internal progress output
     std::stringstream ss;
@@ -93,8 +94,14 @@ double GoSPLDriver::run_processes_for_dt(double dt, bool verbose) {
        << "if model is not None:\n"
        << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
     PyRun_SimpleString(ss.str().c_str());
-    
-    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0, 0);
+
+    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0, skip_tectonics ? 1 : 0);
+}
+
+int GoSPLDriver::apply_velocity_data(const double* coords, const double* velocities,
+                                     int num_points, double timer, int k, double power) {
+    if (!initialized) return -1;
+    return ::apply_velocity_data(model_handle, coords, velocities, num_points, timer, k, power);
 }
 
 int GoSPLDriver::run_processes_for_steps(int num_steps, double dt, bool verbose) {

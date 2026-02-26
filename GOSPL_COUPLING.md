@@ -28,6 +28,7 @@ surface_process_gospl_config_file = gospl_config.yml
 | `gospl_mesh_resolution` | -1 | Mesh node spacing in meters (-1 = auto-sized based on DES surface nodes) |
 | `gospl_initial_topo_amplitude` | 0.0 | Amplitude of random initial topography in meters (0 = flat) |
 | `gospl_mesh_perturbation` | 0.3 | Fraction of grid spacing to randomly perturb node positions (0-1) |
+| `gospl_velocity_coupling` | false | Send DES vertical surface velocities to GoSPL as `upsub` (see [GOSPL_VELOCITY_COUPLING.md](GOSPL_VELOCITY_COUPLING.md)) |
 
 ### Example Configuration
 
@@ -131,3 +132,4 @@ A 5% buffer on each edge of the GoSPL mesh prevents extrapolation errors for nod
 
 - [`gospl_driver/DESIGN_DECISIONS.md`](gospl_driver/DESIGN_DECISIONS.md) - Design decisions and deferred improvements
 - [`gospl_driver/examples/core-complex-3d-with-gospl.cfg`](gospl_driver/examples/core-complex-3d-with-gospl.cfg) - Example configuration
+- [`GOSPL_VELOCITY_COUPLING.md`](GOSPL_VELOCITY_COUPLING.md) - Velocity coupling: passing DES tectonic velocities to GoSPL

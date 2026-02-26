@@ -268,6 +268,10 @@ static void declare_parameters(po::options_description &cfg,
          "Amplitude of random initial topography for GoSPL mesh in meters (default: 100). Set to 0 for flat initial surface.")
         ("control.gospl_mesh_perturbation", po::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
          "Fraction of grid spacing to randomly perturb node positions (0-1). 0 = regular grid, 0.3 = moderate perturbation to avoid grid artifacts.")
+        ("control.gospl_velocity_coupling", po::value<bool>(&p.control.gospl_velocity_coupling)->default_value(false),
+         "Send DES vertical node velocities to GoSPL as upsub at each coupling step. "
+         "Prevents double-counting of tectonic uplift/subsidence already resolved by the DES FEM solve. "
+         "When enabled, GoSPL's own tectonic file (if any) is bypassed (skip_tectonics=true).")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),

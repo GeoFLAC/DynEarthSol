@@ -186,6 +186,7 @@ struct Control {
     double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)
     double gospl_initial_topo_amplitude;  // Initial random topo amplitude (default: 100m, 0=flat)
     double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
+    bool gospl_velocity_coupling;   // Send DES vertical velocities to GoSPL as upsub (default: false)
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;

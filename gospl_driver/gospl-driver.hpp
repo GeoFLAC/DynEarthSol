@@ -63,6 +63,9 @@ public:
     int adaptive_coupling_frequency;             // Currently active N (may differ from base)
     double rate_change_tolerance;                // Threshold for adapting N (default: 0.3 = 30% change)
     double rate_change_metric;                   // Last computed rate-change metric (for diagnostics)
+
+    // --- Velocity coupling ---
+    bool velocity_coupling;                      // Send DES vertical velocities to GoSPL as upsub (default: false)
     
     /**
      * Constructor
@@ -104,12 +107,15 @@ public:
     
     /**
      * Run GoSPL processes for a specific time step
-     * 
+     *
      * @param dt Time step size
      * @param verbose Print progress information (default: false)
+     * @param skip_tectonics Skip internal getTectonics() call (default: false).
+     *        Set true when using apply_velocity_data() to prevent GoSPL from
+     *        overwriting upsub with its own tectonic file.
      * @return Elapsed time on success, -1.0 on error
      */
-    double run_processes_for_dt(double dt, bool verbose = false);
+    double run_processes_for_dt(double dt, bool verbose = false, bool skip_tectonics = false);
     
     /**
      * Run GoSPL processes for a specified number of steps
@@ -147,6 +153,25 @@ public:
     int apply_elevation_data(const double* coords, const double* elevations,
                             int num_points, int k = 3, double power = 1.0);
     
+    /**
+     * Apply vertical velocity data to GoSPL's internal uplift/subsidence field (upsub).
+     *
+     * Call this BEFORE run_processes_for_dt() and with skip_tectonics=true so that
+     * GoSPL uses the DES-computed vertical velocity rather than its own tectonic file.
+     *
+     * @param coords Pointer to coordinates array (num_points * 3), in metres
+     * @param velocities Pointer to velocities array (num_points * 3), in m/yr.
+     *        Only the vertical component (index [i*3+2] for 3-D) is used by GoSPL.
+     * @param num_points Number of data points
+     * @param timer Current simulation time in years (used for bookkeeping)
+     * @param k Number of nearest neighbours for interpolation (default: 3)
+     * @param power Inverse distance weighting power (default: 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int apply_velocity_data(const double* coords, const double* velocities,
+                            int num_points, double timer,
+                            int k = 3, double power = 1.0);
+
     /**
      * Interpolate elevation field to external points
      * 
