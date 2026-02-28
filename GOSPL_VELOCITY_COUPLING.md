@@ -1,6 +1,6 @@
 # GoSPL Velocity Coupling
 
-This document describes the **velocity coupling** extension to the DynEarthSol (DES) – GoSPL interface. With velocity coupling enabled, DES surface node vertical velocities are passed to GoSPL at each coupling step as its internal uplift/subsidence field (`upsub`). This replaces the need for GoSPL to read its own tectonic file and ensures that the landscape evolution model sees the same tectonic forcing as the geodynamic model.
+This document describes the **velocity coupling** extension to the DynEarthSol (DES) – GoSPL interface. With velocity coupling enabled, the expected tectonic displacement of DES surface nodes is pre-added to the elevation sent to GoSPL at each coupling step. GoSPL then runs its landscape evolution on the correctly-uplifted surface, so erosion rates respond dynamically to the geodynamic velocity field without any risk of double-counting.
 
 ## Background
 
@@ -9,50 +9,39 @@ This document describes the **velocity coupling** extension to the DynEarthSol (
 Without velocity coupling, the exchange at each GoSPL call is:
 
 ```
-DES surface topography  →  GoSPL (sets elevation field)
-                           GoSPL runs erosion/deposition
-GoSPL erosion change    →  DES (updates surface node positions)
+DES surface topography (current)  →  GoSPL (sets elevation field)
+                                      GoSPL runs erosion/deposition
+GoSPL erosion change              →  DES (updates surface node positions)
 ```
 
-GoSPL's internal tectonic uplift/subsidence (`upsub`) is either:
-- read from a separate tectonic file specified in the GoSPL YAML, or
-- absent (zero), treating topography as purely erosion-modified.
+GoSPL computes river incision, hillslope diffusion, and drainage reorganisation on the **current** DES topography without knowing that the crust is actively rising or sinking. This means:
 
-In either case, the uplift/subsidence that DES resolves through its FEM solve is **not** communicated to GoSPL. GoSPL therefore computes river incision, hillslope diffusion, and drainage reorganisation on a surface that does not rise or sink in response to the actual geodynamic deformation. This can cause drainage networks to form incorrectly or not respond dynamically to active deformation.
+- In a fast-uplifting region, GoSPL's slopes are underestimated → erosion is too slow.
+- Drainage networks do not respond dynamically to deformation.
 
 ### Velocity coupling
 
 With `gospl_velocity_coupling = 1`, the exchange becomes:
 
 ```
-DES surface topography   →  GoSPL (sets elevation field)
-DES surface vertical Vz  →  GoSPL upsub field (m/yr)
-                            GoSPL runs erosion WITH correct uplift rate
-Pure erosion only        →  DES (uplift contribution removed to avoid double-counting)
+DES topography + expected uplift  →  GoSPL (pre-uplifted elevation)
+                                      GoSPL runs erosion on uplifted surface
+GoSPL erosion change              →  DES (pure erosion, no double-counting)
 ```
 
-GoSPL now sees the correct tectonic context, so slope-driven processes (stream power erosion, hillslope diffusion) respond dynamically to the geodynamic velocity field.
+GoSPL sees the topography as it will appear after the current coupling interval's tectonic motion, so stream power incision and hillslope diffusion are driven by the correct slopes.
 
 ---
 
-## The Double-Counting Problem and Its Solution
+## Why Pre-Uplift Rather Than Passing `upsub`?
 
-When DES passes vertical velocities to GoSPL, both models apply the same uplift:
+An alternative approach would be to use GoSPL's `apply_velocity_data()` API to set its internal `upsub` (uplift/subsidence rate) field and then subtract the resulting displacement from the before/after difference. This was the initial implementation but it was abandoned because:
 
-| Model | What it applies |
-|-------|----------------|
-| DES FEM solve | Moves surface nodes by `vz × dt` (tectonic uplift) |
-| GoSPL (via `upsub`) | Internally raises its elevation field by `upsub × dt` |
+1. **`apply_velocity_data` uses a `timer` argument** that GoSPL interprets as the time point of the velocity data. Passing the current simulation time (e.g. 500 000 yr) caused GoSPL to compute a cumulative displacement from t = 0, producing a displacement orders of magnitude larger than the one-interval increment — and making the subtraction correction wildly incorrect.
 
-If we naively take `gospl_after − gospl_before` as the elevation change to apply back to DES, we would apply the uplift a second time, creating runaway surface growth.
+2. **GoSPL applies `upsub` progressively** across its own internal sub-steps, so `gospl_after − gospl_before` does not simply equal `upsub × Δt + erosion`; the interaction between uplift and erosion within sub-steps makes the correction inexact.
 
-**Fix:** The pure erosion signal is isolated by subtracting the uplift contribution:
-
-```
-Δh_erosion = (gospl_after − gospl_before) − vz_yr × Δt
-```
-
-where `vz_yr` is the surface node vertical velocity in m yr⁻¹ and `Δt` is the accumulated coupling interval in years. Only `Δh_erosion` is applied back to DES, exactly as in the elevation-only coupling scheme.
+The pre-uplift approach sidesteps both issues: GoSPL's internal state is never touched for velocity, and no correction is needed.
 
 ---
 
@@ -60,31 +49,45 @@ where `vz_yr` is the surface node vertical velocity in m yr⁻¹ and `Δt` is th
 
 At each **coupling step** the sequence is:
 
-1. **Push DES topography → GoSPL**
-   `apply_elevation_data()` interpolates current DES surface elevations onto the GoSPL mesh.
+1. **Build pre-uplifted elevation**
+   For each surface node `i`:
+   ```
+   z_preuplifted[i] = z_DES[i] + vz[i] × Δt_seconds
+   ```
+   where `vz[i]` is the DES vertical velocity (m s⁻¹) and `Δt_seconds` is the accumulated coupling interval in seconds.
+   When `gospl_velocity_coupling = 0` this is just `z_DES[i]`.
 
-2. **Push DES vertical velocities → GoSPL `upsub`**
-   `apply_velocity_data()` sends surface node vertical velocities (converted to m yr⁻¹) to GoSPL's uplift/subsidence field. Only executed when `gospl_velocity_coupling = 1`.
+2. **Push pre-uplifted elevation → GoSPL**
+   `apply_elevation_data()` interpolates the pre-uplifted elevations onto the GoSPL mesh.
 
 3. **Query elevation before erosion**
-   `interpolate_elevation_to_points()` snapshots the GoSPL elevation at DES node positions (`z_before`). This baseline captures any interpolation smoothing so it cancels out in the differencing step.
+   `interpolate_elevation_to_points()` snapshots GoSPL's elevation at DES node positions (`z_before`). Any interpolation smoothing is recorded in this baseline so it cancels in the differencing step.
 
 4. **Run GoSPL**
-   `run_processes_for_dt()` advances GoSPL by the accumulated coupling time `Δt`.
-   When velocity coupling is on, `skip_tectonics = true` is passed, which prevents GoSPL's internal `getTectonics()` from overwriting the `upsub` values just set in step 2.
+   `run_processes_for_dt()` advances GoSPL by the accumulated coupling time `Δt` (years). GoSPL performs erosion/deposition only — no `upsub` is set, so no correction is needed.
 
 5. **Query elevation after erosion**
-   `interpolate_elevation_to_points()` snapshots the updated GoSPL elevation at DES positions (`z_after`).
+   `interpolate_elevation_to_points()` gives `z_after`.
 
 6. **Compute pure erosion**
    ```
-   Δh_total  = z_after − z_before                 (erosion + uplift)
-   Δh_erosion = Δh_total − vz_yr × Δt             (subtract uplift; velocity coupling only)
-   erosion_rate = Δh_erosion / Δt_seconds          (m s⁻¹)
+   Δh_erosion = z_after − z_before        (pure erosion; GoSPL added no uplift)
+   erosion_rate = Δh_erosion / Δt_seconds  (m s⁻¹)
    ```
 
 7. **Apply erosion to DES**
-   The first step's worth of erosion (`erosion_rate × dt`) is applied immediately. On subsequent non-coupling steps the rate is spread gradually with linear extrapolation, exactly as in the base coupling scheme (see [GOSPL_COUPLING.md](GOSPL_COUPLING.md)).
+   The first step's worth of erosion (`erosion_rate × dt`) is applied immediately. On subsequent non-coupling steps the rate is distributed gradually with linear extrapolation, exactly as in the base coupling scheme (see [GOSPL_COUPLING.md](GOSPL_COUPLING.md)).
+
+   The DES FEM solve simultaneously applies the tectonic deformation (`vz × dt` per step) — this is the DES side of the uplift. The two contributions are additive and independent.
+
+### Why there is no double-counting
+
+| What applies the uplift | Source |
+|-------------------------|--------|
+| DES FEM solve | Moves surface nodes by `vz × dt` each step |
+| GoSPL (pre-uplift approach) | **None** — GoSPL only adds erosion to the pre-uplifted surface |
+
+Because GoSPL never moves its elevation field due to an uplift rate, `gospl_after − gospl_before` is strictly erosion/deposition.
 
 ---
 
@@ -117,9 +120,9 @@ gospl_velocity_coupling = 1
 | `gospl_coupling_frequency` | `gospl_velocity_coupling` | Behaviour |
 |:-:|:-:|---|
 | 1 | 0 | Elevation-only coupling every step (original scheme) |
-| N > 1 | 0 | Gradual erosion application with linear extrapolation, no velocity exchange |
-| 1 | 1 | Velocity coupling every step |
-| N > 1 | 1 | Velocity coupling at coupling steps; velocity at the coupling step is held constant across the N-step interval for the extrapolation |
+| N > 1 | 0 | Gradual erosion application with linear extrapolation |
+| 1 | 1 | Velocity coupling every step; `z_preuplifted = z_DES + vz × dt` |
+| N > 1 | 1 | Velocity coupling at coupling steps; uplift uses `vz` at that step times the full accumulated `Δt` |
 
 Adaptive coupling frequency (`gospl_rate_change_tolerance`) works unchanged alongside velocity coupling.
 
@@ -127,22 +130,19 @@ Adaptive coupling frequency (`gospl_rate_change_tolerance`) works unchanged alon
 
 ## GoSPL Configuration Notes
 
-When `gospl_velocity_coupling = 1`:
-
-- GoSPL's **`tecdata`** key in the YAML config can be left empty or omitted. The `skip_tectonics` flag prevents `getTectonics()` from being called, so any pre-existing tectonic file is silently bypassed for each run.
-- GoSPL's `upsub` (vertical) and `hdisp` (horizontal) fields are both updated by `apply_velocity_data()`. Currently only the vertical component is populated from DES data; horizontal components are set to zero.
-- If you previously had a tectonic file that you want GoSPL to retain (e.g. for a background plate motion), do **not** enable velocity coupling — the two approaches are mutually exclusive.
+When `gospl_velocity_coupling = 1`, GoSPL's `tecdata` key in the YAML config may be left empty or omitted. The pre-uplift approach does not interact with GoSPL's internal tectonic machinery at all (`getTectonics()` is called normally), so a pre-existing tectonic file will still run if present. If you have a tectonic file that provides background plate motion or other forcing, it will add on top of the DES-derived pre-uplift.
 
 ---
 
 ## Unit Conventions
 
-| Quantity | DES internal unit | GoSPL unit | Conversion |
-|----------|------------------|------------|------------|
-| Time step `dt` | seconds (s) | years (yr) | `÷ 3.1536 × 10⁷` |
-| Vertical velocity `vz` | m s⁻¹ | m yr⁻¹ | `× 3.1536 × 10⁷` |
+| Quantity | DES internal unit | Used as | Conversion |
+|----------|------------------|---------|------------|
+| Time step `dt` | seconds (s) | `total_dt_seconds` | `accumulated_dt_yr × 3.1536 × 10⁷` |
+| Vertical velocity `vz` | m s⁻¹ | m s⁻¹ (multiplied by `total_dt_seconds`) | — |
+| Pre-uplift displacement | metres (m) | added to z before `apply_elevation_data` | — |
 | Elevation | metres (m) | metres (m) | — |
-| Erosion rate (internal) | m s⁻¹ | — | applied as `rate × dt_s` |
+| Erosion rate (internal) | m s⁻¹ | applied as `rate × dt_s` per step | — |
 
 ---
 
@@ -152,37 +152,39 @@ When `gospl_velocity_coupling = 1`:
 
 | File | Change |
 |------|--------|
-| `gospl_driver/gospl-driver.hpp` | Added `bool velocity_coupling` member; added `skip_tectonics` parameter to `run_processes_for_dt()`; declared `apply_velocity_data()` |
-| `gospl_driver/gospl-driver.cxx` | Constructor initialises `velocity_coupling = false`; `run_processes_for_dt()` forwards `skip_tectonics` to C API; new `apply_velocity_data()` wraps C interface |
+| `gospl_driver/gospl-driver.hpp` | Added `bool velocity_coupling` member; added `skip_tectonics` parameter to `run_processes_for_dt()` (kept for future use); declared `apply_velocity_data()` (kept for future use) |
+| `gospl_driver/gospl-driver.cxx` | Constructor initialises `velocity_coupling = false`; `run_processes_for_dt()` forwards `skip_tectonics` to C API; `apply_velocity_data()` wraps C interface |
 | `parameters.hpp` | Added `bool gospl_velocity_coupling` to `Control` struct |
 | `input.cxx` | Registered `control.gospl_velocity_coupling` option (default `false`) |
 | `dynearthsol.cxx` | Passes `gospl_velocity_coupling` to driver at startup; prints status message |
-| `bc.cxx` | **Step 1b** (new): builds velocity array in m yr⁻¹ and calls `apply_velocity_data()` before querying before-elevations; **Step 3**: passes `skip_tectonics = velocity_coupling`; **erosion loop**: subtracts `vz_yr × Δt` from raw GoSPL diff when coupling is on |
+| `bc.cxx` | **Step 1** (modified): adds `vz × Δt_seconds` to `des_elevations[i]` when velocity coupling is on before calling `apply_elevation_data()`; no other changes to the coupling loop |
 
-### Key functions
+### Key code change in `bc.cxx`
 
 ```cpp
-// gospl-driver.hpp / gospl-driver.cxx
-int  GoSPLDriver::apply_velocity_data(const double* coords,
-                                      const double* velocities,  // m/yr, [vx, vy, vz] per point
-                                      int num_points, double timer,
-                                      int k = 3, double power = 1.0);
+// Step 1: build elevation to hand to GoSPL
+for (std::size_t i = 0; i < ntop; ++i) {
+    int n = top_nodes[i];
+    double z = (*var.coord)[n][NDIMS-1];
+    if (var.gospl_driver->velocity_coupling) {
+        z += (*var.vel)[n][NDIMS-1] * total_dt_seconds;  // pre-add tectonic uplift
+    }
+    des_elevations[i] = z;
+}
+apply_elevation_data(coords, des_elevations, ntop, 3, 1.0);
 
-double GoSPLDriver::run_processes_for_dt(double dt,
-                                         bool verbose = false,
-                                         bool skip_tectonics = false);
+// Steps 2–6 are unchanged; no correction in the erosion loop.
+erosion = gospl_elev_after[i] - gospl_elev_before[i];  // pure erosion
 ```
-
-The `skip_tectonics` parameter maps directly to the `skip_tectonics` argument of the underlying `gospl_extensions` C API function `run_processes_for_dt()`.
 
 ---
 
 ## Limitations and Future Work
 
-- **Single-step velocity snapshot**: The surface velocity is sampled once per coupling step and held constant for the duration of the coupling interval. This is consistent with the piecewise-constant rate approximation used for erosion in the gradual-application scheme.
-- **Vertical only**: Horizontal velocities (`hdisp`) are zeroed. Horizontal advection of the GoSPL mesh by DES horizontal surface velocities is not yet implemented.
-- **Static GoSPL mesh**: The GoSPL mesh is generated once at initialisation. Large lateral displacements of the DES surface may eventually carry surface nodes outside the GoSPL domain; the 5% boundary buffer mitigates edge-interpolation errors.
-- **Velocity used is from the current coupling step**: If the simulation undergoes remeshing between coupling steps, the velocity at the coupling step is used. Post-remeshing changes to node numbering are handled because the velocity array is rebuilt from scratch using current `top_nodes` at each coupling step.
+- **Single-step velocity snapshot**: `vz` is sampled once per coupling step and assumed constant for the full interval `Δt`. This is the same piecewise-constant approximation used for the erosion rate in the gradual-application scheme.
+- **Vertical only**: The pre-uplift applies only to the vertical coordinate. Horizontal advection of the GoSPL mesh by DES horizontal surface velocities is not implemented.
+- **Static GoSPL mesh**: The GoSPL mesh is generated once at initialisation. Large lateral displacements of DES surface nodes may eventually carry them outside the GoSPL domain; the 5% boundary buffer mitigates edge-interpolation errors.
+- **`apply_velocity_data` / `skip_tectonics` retained**: These driver functions are preserved in the API for potential future use (e.g. a hybrid scheme), but are not called in the current coupling loop.
 
 ---
 

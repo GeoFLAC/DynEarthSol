@@ -1655,36 +1655,30 @@ namespace {
                 coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
-        // Step 1: Update GoSPL mesh with current DES topography
+        // Step 1: Update GoSPL mesh with DES topography.
+        // When velocity coupling is on, pre-add the expected tectonic displacement
+        // (vz * total_dt) to the elevation before handing it to GoSPL.  GoSPL then
+        // runs its landscape evolution on the correctly-uplifted surface, so it
+        // computes the right erosion rates (faster incision on steeper, rising slopes)
+        // without us having to touch GoSPL's internal upsub field.
+        // The before/after differencing then yields pure erosion with no correction.
+        const double SEC_PER_YR = 3.1536e7;
         std::vector<double> des_elevations(ntop);
         for (std::size_t i = 0; i < ntop; ++i) {
-            des_elevations[i] = (*var.coord)[top_nodes[i]][2];
+            int n = top_nodes[i];
+            double z = (*var.coord)[n][NDIMS-1];
+            if (var.gospl_driver->velocity_coupling) {
+                // Pre-add the vertical displacement DES will apply over this interval.
+                // vz [m/s] * total_dt_seconds [s] = displacement [m].
+                z += (*var.vel)[n][NDIMS-1] * total_dt_seconds;
+            }
+            des_elevations[i] = z;
         }
         int apply_result = var.gospl_driver->apply_elevation_data(
             coords.data(), des_elevations.data(), ntop, 3, 1.0
         );
         if (apply_result != 0) {
             std::cerr << "Warning: Failed to apply elevation data to GoSPL" << std::endl;
-        }
-
-        // Step 1b: Apply DES vertical velocities to GoSPL upsub (velocity coupling mode)
-        // This tells GoSPL to use DES-computed uplift/subsidence rather than its own tectonic file.
-        // Stored in m/yr for GoSPL (DES var.vel is in m/s).
-        const double SEC_PER_YR = 3.1536e7;
-        if (var.gospl_driver->velocity_coupling) {
-            std::vector<double> vel_data(ntop * 3, 0.0);
-            for (std::size_t i = 0; i < ntop; ++i) {
-                int n = top_nodes[i];
-                // GoSPL expects velocities in m/yr; vertical component at index [i*3+(NDIMS-1)]
-                vel_data[i * 3 + (NDIMS-1)] = (*var.vel)[n][NDIMS-1] * SEC_PER_YR;
-            }
-            double timer_yr = var.time / SEC_PER_YR;
-            int vel_result = var.gospl_driver->apply_velocity_data(
-                coords.data(), vel_data.data(), ntop, timer_yr, 3, 1.0
-            );
-            if (vel_result != 0) {
-                std::cerr << "Warning: Failed to apply velocity data to GoSPL" << std::endl;
-            }
         }
 
         // Step 2: Get GoSPL elevation at DES points BEFORE running erosion
@@ -1698,10 +1692,7 @@ namespace {
         }
 
         // Step 3: Run GoSPL erosion processes (using accumulated dt from all skipped steps)
-        // When velocity coupling is on, skip GoSPL's internal getTectonics() so our
-        // apply_velocity_data() values are not overwritten by GoSPL's own tectonic file.
-        double elapsed = var.gospl_driver->run_processes_for_dt(
-            total_dt, false, var.gospl_driver->velocity_coupling);
+        double elapsed = var.gospl_driver->run_processes_for_dt(total_dt, false);
         if (elapsed < 0) {
             std::cerr << "Error: GoSPL process run failed" << std::endl;
             return;
@@ -1759,16 +1750,9 @@ namespace {
                 nodes_skipped++;
                 erosion_rate = 0.0;  // No erosion at boundary nodes
             } else {
+                // Pure erosion: GoSPL ran on the pre-uplifted surface and only added
+                // erosion/deposition — no uplift component to subtract.
                 erosion = gospl_elev_after[i] - gospl_elev_before[i];
-
-                // When velocity coupling is on, gospl_after - gospl_before includes both
-                // erosion AND the uplift/subsidence GoSPL applied via upsub.
-                // The DES FEM solve already accounts for that same uplift, so subtract it
-                // to avoid double-counting: pure_erosion = total_change - vz * total_dt.
-                if (var.gospl_driver->velocity_coupling) {
-                    double vz_yr = (*var.vel)[top_nodes[i]][NDIMS-1] * SEC_PER_YR;
-                    erosion -= vz_yr * total_dt;  // total_dt is in years
-                }
 
                 // Track statistics
                 min_erosion = std::min(min_erosion, erosion);
