@@ -1255,6 +1255,44 @@ namespace {
         return v1 + t * (v2 - v1);
     }
 
+    // Interpolate deposition time and set genesis=4 for a new sediment marker placed in element e.
+    // Averages existing sediment markers in two groups (reworked: genesis 2|4 → ind=0, others → ind=1)
+    // and picks the first non-empty group for interpolation.  If no suitable reference exists,
+    // ti and ge are left unchanged.
+    void compute_sed_marker_time_genesis(
+        const Param& param, const Variables& var, const MarkerSet& ms,
+        int e, int e_local, const ElemMarkerInfo* emi_ptr,
+        double* x, double& ti, int& ge)
+    {
+        if (e_local == -1 || emi_ptr[e_local].nmarker == 0) return;
+
+        ElemMarkerInfo emi_base[2];
+        for (int m : (*var.markers_in_elem)[e]) {
+            if (ms.get_mattype(m) != param.mat.mattype_sed) continue;
+            int ind = (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) ? 0 : 1;
+            emi_base[ind].value += ms.get_time(m);
+            const double* eta = ms.get_eta(m);
+            int* conn = (*var.connectivity)[e];
+            for (int d = 0; d < NDIMS; ++d)
+                for (int kk = 0; kk < NODES_PER_ELEM; ++kk)
+                    emi_base[ind].coord[d] += (*var.coord)[conn[kk]][d] * eta[kk];
+            emi_base[ind].nmarker++;
+        }
+
+        for (int k = 0; k < 2; ++k) {
+            if (emi_base[k].nmarker == 0) continue;
+            if (emi_base[k].nmarker > 1) {
+                emi_base[k].value /= emi_base[k].nmarker;
+                for (int d = 0; d < NDIMS; ++d)
+                    emi_base[k].coord[d] /= emi_base[k].nmarker;
+            }
+            ti = std::max(interpolate_nd(emi_base[k].coord, emi_base[k].value,
+                                         emi_ptr[e_local].coord, emi_ptr[e_local].value, x), 0.0);
+            ge = 4; // sediment with interpolation
+            break;
+        }
+    }
+
     void replenish_markers_with_mattype_from_nn(const Param& param, const Variables &var,
             int_pair_vec &unplenished_elems, int genesis, bool is_surface = false, const EMI_vec& emi = EMI_vec())
     {
@@ -1266,7 +1304,7 @@ namespace {
 
         int k_neig = 1, nnew = 0;
         int ne = unplenished_elems.size();
-        int_vec nneed_mk(ne), mk_idx(ne);
+        int_vec nneed_mk(ne), mk_start(ne, 0);
         MarkerSet &ms = *var.markersets[0];
 
 #ifndef ACC
@@ -1276,23 +1314,22 @@ namespace {
         for (int i=0; i<ne; ++i)
             nneed_mk[i] = param.markers.min_num_markers_in_element - unplenished_elems[i].second;
 
-        // serial accumulation
-        for (int i=0; i<ne; ++i) {
-            nnew += nneed_mk[i];
-            mk_idx[i] = nnew;
-        }
+        for (int i=1; i<ne; ++i)
+            mk_start[i] = mk_start[i-1] + nneed_mk[i-1];
+        nnew = mk_start[ne-1] + nneed_mk[ne-1];
 
         array_t queries(nnew);
         shapefn etas(nnew);
 
         // normal random cannot be parallelized in acc
-        #pragma omp parallel for default(none) shared(ms, unplenished_elems, nneed_mk, etas, ne, var, mk_idx)
+        #pragma omp parallel for default(none) \
+                shared(ms, unplenished_elems, nneed_mk, etas, ne, var, mk_start)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             int num_marker_in_elem = unplenished_elems[i].second;
 
             for (int j=0; j<nneed_mk[i]; ++j) {
-                double *eta = etas[ (i==0 ? j : mk_idx[i-1] + j) ];
+                double *eta = etas[mk_start[i] + j];
                 ms.random_eta_seed(eta, e + num_marker_in_elem + var.steps);
 
                 num_marker_in_elem++;
@@ -1300,13 +1337,14 @@ namespace {
         }
 
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, unplenished_elems, nneed_mk, etas, queries, ne, mk_idx)
+        #pragma omp parallel for default(none) \
+                shared(var, unplenished_elems, nneed_mk, etas, queries, ne, mk_start)
 #endif
         #pragma acc parallel loop async
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             for (int j=0; j<nneed_mk[i]; ++j) {
-                int m_idx = (i==0 ? j : mk_idx[i-1] + j);
+                int m_idx = mk_start[i] + j;
                 double *x = queries[m_idx];
                 const int *conn = (*var.connectivity)[e];
                 for (int d=0; d<NDIMS; d++) {
@@ -1342,68 +1380,36 @@ namespace {
 
         kdtree.search(queries, neighbors, nnew, k_neig, 3.);
 
+        #pragma acc wait
+        const ElemMarkerInfo* emi_ptr = emi.data();
+        const int* top_elems_ptr = var.top_elems->data();
+        const int ntop_elems = var.ntop_elems;
+
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
-                ms, marker_data_all, ne, is_surface, emi, genesis, nneed_mk, mk_idx, neighbors, queries, etas)
+                ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, ntop_elems, \
+                genesis, nneed_mk, mk_start, neighbors, queries, etas)
 #endif
         #pragma acc parallel loop
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
+            int start = mk_start[i];
 
             for (int j=0; j<nneed_mk[i]; ++j) {
-                int m_idx = (i==0 ? j : mk_idx[i-1] + j);
+                int m_idx = start + j;
                 int m = neighbors[m_idx].idx;
                 double *x = queries[m_idx];
 
-                const int mt = ms.get_mattype(m);
+                int mt = ms.get_mattype(m);
                 double ti = ms.get_time(m);
                 int ge = genesis;
 
                 if (is_surface && mt == param.mat.mattype_sed) {
-                    int e_local = var.arctop_elems.at(e);
-                    if (emi[e_local].nmarker > 0) {
-                        int emarker_size = (*var.markers_in_elem)[e].size();
-                        ElemMarkerInfo emi_base[2];
-                        for (int ii= 0; ii<emarker_size; ++ii) {
-                            int m = (*var.markers_in_elem)[e][ii];
-                            if (ms.get_mattype(m) == param.mat.mattype_sed) {
-                                int ind = 1;
-                                if (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) {
-                                    ind = 0;
-                                }
-                                emi_base[ind].value += ms.get_time(m);
-                                const double* eta = ms.get_eta(m);
-                                int *conn = (*var.connectivity)[e];
-                                for (int d=0; d<NDIMS; ++d) {
-                                    for (int kk=0; kk<NODES_PER_ELEM; ++kk) {
-                                        emi_base[ind].coord[d] += (*var.coord)[conn[kk]][d] * eta[kk];
-                                    }
-                                }
-                                emi_base[ind].nmarker++;
-                            }
-                        }
-                        for (int k=0; k<2; ++k) {
-                            if (emi_base[k].nmarker > 0) {
-                                if (emi_base[k].nmarker > 1) {
-                                    emi_base[k].value /= emi_base[k].nmarker;
-                                    for (int d=0; d<NDIMS; ++d) {
-                                        emi_base[k].coord[d] /= emi_base[k].nmarker;
-                                    }
-                                }
-                                ti = interpolate_nd(emi_base[k].coord, emi_base[k].value,
-                                    emi[e_local].coord, emi[e_local].value, x);
-                                ti = std::max(ti, 0.0);
-                                ge = 4; // sediment with interpolation
-                                // printf("replenishing with %d\n",j);
-                                break;
-                            }
-                        }
-                    }
+                    int e_local = binary_search_index(top_elems_ptr, ntop_elems, e);
+                    compute_sed_marker_time_genesis(param, var, ms, e, e_local, emi_ptr, x, ti, ge);
                 }
 
-                marker_data_all[m_idx] =
-                    AppendMarkerData(etas[m_idx], e, mt, ti, 0., 0., 0., ge);
-
+                marker_data_all[m_idx] = AppendMarkerData(etas[m_idx], e, mt, ti, 0., 0., 0., ge);
                 ++(*var.elemmarkers)[e][mt];
             }
         }
