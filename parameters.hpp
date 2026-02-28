@@ -190,6 +190,7 @@ struct Mesh {
     double mmg_hmax_factor;
     double mmg_hmin_factor;
     double mmg_hausd_factor;
+    double mmg_init_coarsening_factor;
 };
 
 struct Control {

@@ -12,6 +12,16 @@
 #include "tetgen/tetgen.h"
 #undef TETLIBRARY
 
+#ifdef USEMMG
+#include "mmg/mmg3d/libmmg3d.h"
+#endif
+
+#else // !THREED
+
+#ifdef USEMMG
+#include "mmg/mmg2d/libmmg2d.h"
+#endif
+
 #endif // THREED
 
 #ifdef USEEXODUS
@@ -47,6 +57,13 @@ namespace std {
 }
 #endif //_MSC_VER
 #endif // WIN32
+
+// equilateral triangle area = 0.433*s^2, equilateral tetrahedron volume = 0.118*s^3
+#ifdef THREED
+const double sizefactor = 0.118;
+#else
+const double sizefactor = 0.433;
+#endif
 
 
 namespace { // anonymous namespace
@@ -739,6 +756,443 @@ void set_3d_quality_str(std::string &quality, double max_ratio,
     }
 }
 
+#ifdef USEMMG
+struct CentroidCloud {
+    const double *pts;  // AoS layout: x0,y0,z0, x1,y1,z1, ...
+    int n;
+    CentroidCloud(const double *p, int n_) : pts(p), n(n_) {}
+    inline size_t kdtree_get_point_count() const { return (size_t)n; }
+    inline double kdtree_get_pt(size_t i, size_t d) const {
+        return pts[i * NDIMS + d];
+    }
+    template<class BBOX> bool kdtree_get_bbox(BBOX&) const { return false; }
+};
+using CentroidKDTree = nanoflann::KDTreeSingleIndexAdaptor<
+    nanoflann::L2_Simple_Adaptor<double, CentroidCloud>,
+    CentroidCloud, NDIMS>;
+
+
+static void propagate_regattr_nearest(
+    // Coarse mesh (TetGen output, AoS layout)
+    int coarse_nelem,
+    const double *coarse_coord,       // [coarse_nnode × NDIMS]
+    const int    *coarse_conn,        // [coarse_nelem × NODES_PER_ELEM], 0-indexed
+    const double *coarse_regattr,     // [coarse_nelem], per-element material
+    // Fine mesh (MMG output, AoS layout)
+    int fine_nelem,
+    const double *fine_coord,         // [fine_nnode × NDIMS]
+    const int    *fine_conn,          // [fine_nelem × NODES_PER_ELEM], 0-indexed
+    // Output
+    double *fine_regattr)             // [fine_nelem], caller-allocated
+{
+    // 1. Build coarse element centroid array (AoS)
+    std::vector<double> coarse_cents(coarse_nelem * NDIMS, 0.0);
+    for (int e = 0; e < coarse_nelem; ++e) {
+        for (int n = 0; n < NODES_PER_ELEM; ++n)
+            for (int d = 0; d < NDIMS; ++d)
+                coarse_cents[e*NDIMS+d] +=
+                    coarse_coord[coarse_conn[e*NODES_PER_ELEM+n]*NDIMS+d];
+        for (int d = 0; d < NDIMS; ++d)
+            coarse_cents[e*NDIMS+d] /= NODES_PER_ELEM;
+    }
+
+    // 2. Build KD-tree over coarse centroids
+    CentroidCloud cloud(coarse_cents.data(), coarse_nelem);
+    CentroidKDTree kdtree(NDIMS, cloud,
+        nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+    kdtree.buildIndex();
+
+    // 3. For each fine element: find nearest coarse centroid and copy regattr
+    std::vector<double> fine_cent(NDIMS);
+    for (int e = 0; e < fine_nelem; ++e) {
+        fine_cent.assign(NDIMS, 0.0);
+        for (int n = 0; n < NODES_PER_ELEM; ++n)
+            for (int d = 0; d < NDIMS; ++d)
+                fine_cent[d] += fine_coord[fine_conn[e*NODES_PER_ELEM+n]*NDIMS+d];
+        for (int d = 0; d < NDIMS; ++d)
+            fine_cent[d] /= NODES_PER_ELEM;
+
+        std::size_t nearest_idx;
+        double dist_sq;
+        nanoflann::KNNResultSet<double> result(1);
+        result.init(&nearest_idx, &dist_sq);
+        kdtree.findNeighbors(result, fine_cent.data(),
+            nanoflann::SearchParameters());
+
+        fine_regattr[e] = coarse_regattr[nearest_idx];
+    }
+}
+
+
+static void compute_init_metric(
+    int nnode, int nelem,
+    const int *conn,               // coarse connectivity [nelem × NODES_PER_ELEM]
+    const double *elem_region,     // coarse pregattr [nelem]: region indices when per-region, ignored when uniform
+    int n_regions, const double *regattr,  // original region attrs (NDIMS+2 per region)
+    double max_elem_size,          // global volume constraint (>0 if uniform, else 0)
+    double resolution,
+    std::vector<double> &metric)   // output [nnode]
+{
+    metric.resize(nnode);
+
+    if (max_elem_size > 0) {
+        // Uniform target: convert volume constraint to edge length
+        // Convention in DES3D: max_elem_size ≈ sizefactor * resolution^NDIMS
+        double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
+        std::fill(metric.begin(), metric.end(), target);
+    }
+    else {
+        // Per-region: connectivity-based projection from coarse elements to nodes.
+        // elem_region[e] is the region index (0..n_regions-1) for element e,
+        // as stamped by TetGen's -A flag using the temporarily encoded region index.
+        // Nodes shared by elements of different regions get an averaged metric,
+        // providing a smooth transition at zone boundaries.
+        const int attr_stride = NDIMS + 2;
+        std::vector<int> count(nnode, 0);
+        std::fill(metric.begin(), metric.end(), 0.0);
+
+        for (int e = 0; e < nelem; ++e) {
+            int r = (int)elem_region[e];
+            if (r < 0 || r >= n_regions) r = 0;
+            double vol = regattr[r * attr_stride + NDIMS + 1];
+            double target = (vol > 0) ? std::pow(vol / sizefactor, 1.0 / NDIMS) : resolution;
+
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                int ni = conn[e * NODES_PER_ELEM + k];
+                metric[ni] += target;
+                count[ni]++;
+            }
+        }
+
+        for (int i = 0; i < nnode; ++i)
+            metric[i] = (count[i] > 0) ? metric[i] / count[i] : resolution;
+    }
+}
+
+#ifdef THREED
+static void mmg_refine_init_mesh_3d(
+    const Mesh &mesh,
+    double max_elem_size,        // original TetGen target (for metric)
+    int n_regions, const double *regattr,   // original region attrs (for metric)
+    // In/out mesh arrays (replaced with fine arrays on return)
+    int &nnode, int &nelem, int &nseg,
+    double *&pcoord,    // [nnode × 3], AoS
+    int    *&pconn,     // [nelem × 4], 0-indexed
+    int    *&pseg,      // [nseg × 3], 0-indexed
+    int    *&psegflag,  // [nseg]
+    double *&pregattr,  // [nelem]
+    double_vec *fine_init_metric_n)  // optional: per-node desired edge length on fine mesh
+{
+    // --- Save coarse mesh for regattr propagation ---
+    const int cn = nnode, ce = nelem, cs = nseg;
+    double_vec cc(pcoord, pcoord + cn * NDIMS);
+    int_vec    ck(pconn,  pconn  + ce * NODES_PER_ELEM);
+    double_vec cra(pregattr ? pregattr : nullptr,
+                            pregattr ? pregattr + ce : nullptr);
+
+    // --- Initialize MMG3D ---
+    MMG5_pMesh mmgMesh = NULL;
+    MMG5_pSol  mmgSol  = NULL;
+    MMG3D_Init_mesh(MMG5_ARG_start,
+                    MMG5_ARG_ppMesh, &mmgMesh,
+                    MMG5_ARG_ppMet,  &mmgSol,
+                    MMG5_ARG_end);
+
+    if (MMG3D_Set_meshSize(mmgMesh, cn, ce, 0, cs, 0, 0) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Vertices: pcoord is already AoS x0,y0,z0,... as produced by TetGen
+    if (MMG3D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Tetrahedra: MMG is 1-indexed
+    int_vec conn1(ce * NODES_PER_ELEM);
+    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
+        conn1[i] = pconn[i] + 1;
+    if (MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Boundary triangles: MMG is 1-indexed
+    int_vec seg1(cs * NODES_PER_FACET);
+    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
+        seg1[i] = pseg[i] + 1;
+    if (MMG3D_Set_triangles(mmgMesh, seg1.data(), psegflag) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // --- Compute uniform or per-region metric ---
+    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    double_vec metric;
+    compute_init_metric(cn, ce, ck.data(), cra.data(),
+                        n_regions, regattr, max_elem_size, mesh.resolution, metric);
+
+    if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
+        std::exit(EXIT_FAILURE);
+    if (MMG3D_Set_scalarSols(mmgSol, metric.data()) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // --- MMG parameters ---
+    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
+    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_verbose,  mesh.mmg_verbose);
+    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_debug,    mesh.mmg_debug);
+    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmax,
+                         mesh.mmg_hmax_factor * mesh.resolution);
+    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmin,
+                         mesh.mmg_hmin_factor * mesh.resolution);
+    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hausd,
+                         mesh.mmg_hausd_factor * mesh.resolution);
+
+    // --- Run ---
+    const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
+    if (ier == MMG5_STRONGFAILURE) {
+        std::cerr << "Error: MMG init mesh refinement failed (strong failure)\n";
+        std::exit(EXIT_FAILURE);
+    }
+
+    // --- Free old coarse arrays ---
+    delete [] pcoord;    pcoord    = nullptr;
+    delete [] pconn;     pconn     = nullptr;
+    delete [] pseg;      pseg      = nullptr;
+    delete [] psegflag;  psegflag  = nullptr;
+    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
+
+    // --- Extract fine mesh ---
+    int na;
+    MMG3D_Get_meshSize(mmgMesh, &nnode, &nelem, NULL, &nseg, NULL, &na);
+
+    pcoord   = new double[nnode * NDIMS];
+    pconn    = new int   [nelem * NODES_PER_ELEM];
+    pseg     = new int   [nseg  * NODES_PER_FACET];
+    psegflag = new int   [nseg];
+    pregattr = new double[nelem];
+
+    for (int i = 0; i < nnode; ++i)
+        MMG3D_Get_vertex(mmgMesh,
+            pcoord + i*3, pcoord + i*3+1, pcoord + i*3+2,
+            NULL, NULL, NULL);
+
+    for (int i = 0; i < nelem; ++i) {
+        MMG3D_Get_tetrahedron(mmgMesh,
+            pconn + i*4, pconn + i*4+1, pconn + i*4+2, pconn + i*4+3,
+            NULL, NULL);
+        for (int j = 0; j < NODES_PER_ELEM; ++j)
+            pconn[i*NODES_PER_ELEM+j] -= 1;  // back to 0-indexed
+    }
+
+    for (int i = 0; i < nseg; ++i) {
+        MMG3D_Get_triangle(mmgMesh,
+            pseg + i*3, pseg + i*3+1, pseg + i*3+2,
+            psegflag + i, NULL);
+        for (int j = 0; j < NODES_PER_FACET; ++j)
+            pseg[i*NODES_PER_FACET+j] -= 1;  // back to 0-indexed
+    }
+
+    // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
+    // Propagate coarse REGION INDICES (from cra) to fine elements, then project to nodes.
+    // This gives a zone-aware per-node desired edge length that precisely reflects the
+    // user's zone definition, avoiding the smoothing introduced by MMG's transition region.
+    if (!cra.empty()) {
+        if (max_elem_size <= 0 && n_regions > 0) {
+            // Per-region case: propagate region indices to fine elements, then compute metric
+            std::vector<double> fine_region_idx(nelem);
+            propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
+                                        nelem, pcoord, pconn, fine_region_idx.data());
+            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+                                n_regions, regattr, max_elem_size, mesh.resolution, *fine_init_metric_n);
+        } else {
+            // Uniform case: exact constant metric
+            const double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
+            fine_init_metric_n->assign(nnode, target);
+        }
+    }
+
+    // --- Propagate regattr via nearest-centroid from coarse ---
+    // When per-region volumes were used (max_elem_size<=0 and n_regions>0),
+    // cra contains region indices (temporarily encoded by points_to_mesh).
+    // Decode back to actual mattypes before propagation.
+    if (!cra.empty()) {
+        const double *mattype_src = cra.data();
+        std::vector<double> coarse_actual_mattype;
+        if (max_elem_size <= 0 && n_regions > 0) {
+            const int attr_stride = NDIMS + 2;
+            coarse_actual_mattype.resize(ce);
+            for (int e = 0; e < ce; ++e)
+                coarse_actual_mattype[e] = regattr[(int)cra[e] * attr_stride + NDIMS];
+            mattype_src = coarse_actual_mattype.data();
+        }
+        propagate_regattr_nearest(ce, cc.data(), ck.data(), mattype_src,
+                                    nelem, pcoord, pconn, pregattr);
+    }
+    else
+        std::fill(pregattr, pregattr + nelem, 0.0);
+
+    MMG3D_Free_all(MMG5_ARG_start,
+                   MMG5_ARG_ppMesh, &mmgMesh,
+                   MMG5_ARG_ppMet,  &mmgSol,
+                   MMG5_ARG_end);
+
+    std::cerr << "MMG init refinement done: "
+                << nnode << " nodes, " << nelem << " elements\n";
+}
+#endif // THREED
+
+#ifndef THREED
+static void mmg_refine_init_mesh_2d(
+    const Mesh &mesh,
+    double max_elem_size,        // original TetGen target (for metric)
+    int n_regions, const double *regattr,   // original region attrs (for metric)
+    // In/out mesh arrays (replaced with fine arrays on return)
+    int &nnode, int &nelem, int &nseg,
+    double *&pcoord,    // [nnode × 2], AoS
+    int    *&pconn,     // [nelem × 3], 0-indexed
+    int    *&pseg,      // [nseg × 2], 0-indexed
+    int    *&psegflag,  // [nseg]
+    double *&pregattr,  // [nelem]
+    double_vec *fine_init_metric_n)  // optional: per-node desired edge length on fine mesh
+{
+    // --- Save coarse mesh for regattr propagation ---
+    const int cn = nnode, ce = nelem, cs = nseg;
+    double_vec cc(pcoord, pcoord + cn * NDIMS);
+    int_vec    ck(pconn,  pconn  + ce * NODES_PER_ELEM);
+    double_vec cra(pregattr ? pregattr : nullptr,
+                            pregattr ? pregattr + ce : nullptr);
+
+    // --- Initialize MMG2D ---
+    MMG5_pMesh mmgMesh = NULL;
+    MMG5_pSol  mmgSol  = NULL;
+    MMG2D_Init_mesh(MMG5_ARG_start,
+                    MMG5_ARG_ppMesh, &mmgMesh,
+                    MMG5_ARG_ppMet,  &mmgSol,
+                    MMG5_ARG_end);
+
+    if (MMG2D_Set_meshSize(mmgMesh, cn, ce, 0, cs) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Vertices
+    if (MMG2D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Triangles
+    int_vec conn1(ce * NODES_PER_ELEM);
+    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
+        conn1[i] = pconn[i] + 1;
+    if (MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // Edges
+    int_vec seg1(cs * NODES_PER_FACET);
+    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
+        seg1[i] = pseg[i] + 1;
+    if (MMG2D_Set_edges(mmgMesh, seg1.data(), psegflag) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // --- Compute metric ---
+    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    double_vec metric;
+    compute_init_metric(cn, ce, ck.data(), cra.data(),
+                        n_regions, regattr, max_elem_size, mesh.resolution, metric);
+
+    if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
+        std::exit(EXIT_FAILURE);
+    if (MMG2D_Set_scalarSols(mmgSol, metric.data()) != 1)
+        std::exit(EXIT_FAILURE);
+
+    // --- Run ---
+    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
+    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose,  mesh.mmg_verbose);
+    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_debug,    mesh.mmg_debug);
+    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmax,
+                         mesh.mmg_hmax_factor * mesh.resolution);
+    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmin,
+                         mesh.mmg_hmin_factor * mesh.resolution);
+    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hausd,
+                         mesh.mmg_hausd_factor * mesh.resolution);
+
+    const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
+    if (ier == MMG5_STRONGFAILURE) {
+        std::cerr << "Error: MMG2D init mesh refinement failed (strong failure)\n";
+        std::exit(EXIT_FAILURE);
+    }
+
+    // --- Free old coarse arrays ---
+    delete [] pcoord;    pcoord    = nullptr;
+    delete [] pconn;     pconn     = nullptr;
+    delete [] pseg;      pseg      = nullptr;
+    delete [] psegflag;  psegflag  = nullptr;
+    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
+
+    // --- Extract fine mesh ---
+    int nquad;
+    MMG2D_Get_meshSize(mmgMesh, &nnode, &nelem, &nquad, &nseg);
+
+    pcoord   = new double[nnode * NDIMS];
+    pconn    = new int   [nelem * NODES_PER_ELEM];
+    pseg     = new int   [nseg  * NODES_PER_FACET];
+    psegflag = new int   [nseg];
+    pregattr = new double[nelem];
+
+    for (int i = 0; i < nnode; ++i)
+        MMG2D_Get_vertex(mmgMesh,
+            pcoord + i*2, pcoord + i*2+1,
+            NULL, NULL, NULL);
+
+    for (int i = 0; i < nelem; ++i) {
+        MMG2D_Get_triangle(mmgMesh,
+            pconn + i*3, pconn + i*3+1, pconn + i*3+2,
+            NULL, NULL);
+        for (int j = 0; j < NODES_PER_ELEM; ++j)
+            pconn[i*NODES_PER_ELEM+j] -= 1;
+    }
+
+    for (int i = 0; i < nseg; ++i) {
+        MMG2D_Get_edge(mmgMesh,
+            pseg + i*2, pseg + i*2+1,
+            psegflag + i, NULL, NULL);
+        for (int j = 0; j < NODES_PER_FACET; ++j)
+            pseg[i*NODES_PER_FACET+j] -= 1;
+    }
+
+    // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
+    if (fine_init_metric_n && !cra.empty()) {
+        if (max_elem_size <= 0 && n_regions > 0) {
+            std::vector<double> fine_region_idx(nelem);
+            propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
+                                        nelem, pcoord, pconn, fine_region_idx.data());
+            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+                                n_regions, regattr, 0.0, mesh.resolution, *fine_init_metric_n);
+        } else {
+            const double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
+            fine_init_metric_n->assign(nnode, target);
+        }
+    }
+
+    // --- Propagate regattr ---
+    // Decode region indices back to actual mattypes when per-region volumes are used.
+    if (!cra.empty()) {
+        const double *mattype_src = cra.data();
+        std::vector<double> coarse_actual_mattype;
+        if (max_elem_size <= 0 && n_regions > 0) {
+            const int attr_stride = NDIMS + 2;
+            coarse_actual_mattype.resize(ce);
+            for (int e = 0; e < ce; ++e)
+                coarse_actual_mattype[e] = regattr[(int)cra[e] * attr_stride + NDIMS];
+            mattype_src = coarse_actual_mattype.data();
+        }
+        propagate_regattr_nearest(ce, cc.data(), ck.data(), mattype_src,
+                                    nelem, pcoord, pconn, pregattr);
+    }
+    else
+        std::fill(pregattr, pregattr + nelem, 0.0);
+
+    MMG2D_Free_all(MMG5_ARG_start,
+                   MMG5_ARG_ppMesh, &mmgMesh,
+                   MMG5_ARG_ppMet,  &mmgSol,
+                   MMG5_ARG_end);
+    std::cerr << "MMG2D init refinement done: "
+                << nnode << " nodes, " << nelem << " elements\n";
+}
+#endif // !THREED
+#endif // USEMMG
+
 
 #ifdef THREED
 void tetrahedralize_polyhedron
@@ -860,12 +1314,72 @@ void points_to_mesh(const Param &param, Variables &var,
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag;
 
+    double coarse_max_elem_size = max_elem_size;
+    std::vector<double> coarse_regattr_vec;
+    const double *coarse_regattr_ptr = regattr;
+
+#ifdef USEMMG
+    // Step 1: scale volume for coarse TetGen mesh
+    if (max_elem_size > 0) {
+        coarse_max_elem_size = max_elem_size *
+            std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+    } else {
+        // per-region: encode region index as temporary mattype so TetGen -A
+        // stamps coarse elements with their zone index (0, 1, ...).
+        // This allows compute_init_metric() to use connectivity-based projection,
+        // correctly preserving per-zone resolution (e.g. meshing_option=2).
+        const int stride = NDIMS + 2;
+        coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
+        // Find the fine zone: region with the smallest volume constraint.
+        // Keep it at target density so TetGen places elements near the fine zone
+        // resolution directly, avoiding a large MMG transition zone that would
+        // cause over-refinement at the first remesh.
+        double min_vol = std::numeric_limits<double>::max();
+        for (int r = 0; r < nregions; ++r) {
+            double vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+            if (vol > 0 && vol < min_vol) min_vol = vol;
+        }
+        for (int r = 0; r < nregions; ++r) {
+            coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
+            double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+            // Only coarsen non-fine zones; fine zone stays at target density.
+            if (vol > 0 && vol > min_vol) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+        }
+        coarse_regattr_ptr = coarse_regattr_vec.data();
+    }
+
+    // For the coarse TetGen mesh, hardcode optlevel=0 to save time
+    Mesh coarse_mesh = param.mesh;
+    coarse_mesh.tetgen_optlevel = 0;
+
+    points_to_new_mesh(coarse_mesh, npoints, points,
+                       n_init_segments, init_segments, init_segflags,
+                       nregions, coarse_regattr_ptr,
+                       coarse_max_elem_size, vertex_per_polygon,
+                       var.nnode, var.nelem, var.nseg,
+                       pcoord, pconnectivity, psegment, psegflag, pregattr);
+
+    // Step 2: MMG refinement — also compute fine-mesh init size hint
+#ifdef THREED
+    mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
+                            var.nnode, var.nelem, var.nseg,
+                            pcoord, pconnectivity, psegment, psegflag, pregattr,
+                            var.init_elem_size_n);
+#else
+    mmg_refine_init_mesh_2d(param.mesh, max_elem_size, nregions, regattr,
+                            var.nnode, var.nelem, var.nseg,
+                            pcoord, pconnectivity, psegment, psegflag, pregattr,
+                            var.init_elem_size_n);
+#endif
+
+#else // !USEMMG
     points_to_new_mesh(param.mesh, npoints, points,
                        n_init_segments, init_segments, init_segflags,
                        nregions, regattr,
                        max_elem_size, vertex_per_polygon,
                        var.nnode, var.nelem, var.nseg,
                        pcoord, pconnectivity, psegment, psegflag, pregattr);
+#endif
 
     var.coord = new array_t(pcoord, var.nnode);
     var.connectivity = new conn_t(pconnectivity, var.nelem);
@@ -1597,6 +2111,50 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag;
 
+#ifdef USEMMG
+    // Step 1: scale volume for coarse TetGen mesh
+    double coarse_max_elem_size = max_elem_size;
+    std::vector<double> coarse_regattr_vec;
+    const double *coarse_regattr_ptr = regattr;
+
+    if (max_elem_size > 0) {
+        coarse_max_elem_size = max_elem_size *
+            std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+    } else {
+        // per-region: encode region index as temporary mattype so TetGen -A
+        // stamps coarse elements with their zone index (0, 1, ...).
+        // This allows compute_init_metric() to use connectivity-based projection,
+        // correctly preserving per-zone resolution.
+        const int stride = NDIMS + 2;
+        coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
+        for (int r = 0; r < nregions; ++r) {
+            coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
+            double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+            if (vol > 0) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+        }
+        coarse_regattr_ptr = coarse_regattr_vec.data();
+    }
+
+    tetrahedralize_polyhedron(param.mesh.max_ratio,
+                              param.mesh.min_tet_angle, coarse_max_elem_size,
+                              0,
+                              param.mesh.meshing_verbosity,
+                              0, // HARDCODED optlevel=0 for coarse mesh
+                              npoints, n_init_segments, points,
+                              NULL, init_segflags,
+                              facets,
+                              nregions, coarse_regattr_ptr,
+                              &var.nnode, &var.nelem, &var.nseg,
+                              &pcoord, &pconnectivity,
+                              &psegment, &psegflag, &pregattr);
+
+    // Step 2: MMG refinement — also compute fine-mesh init size hint
+    mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
+                            var.nnode, var.nelem, var.nseg,
+                            pcoord, pconnectivity, psegment, psegflag, pregattr,
+                            var.init_elem_size_n);
+
+#else // !USEMMG
     tetrahedralize_polyhedron(param.mesh.max_ratio,
                               param.mesh.min_tet_angle, max_elem_size,
                               0,
@@ -1609,6 +2167,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                               &var.nnode, &var.nelem, &var.nseg,
                               &pcoord, &pconnectivity,
                               &psegment, &psegflag, &pregattr);
+#endif
 
     var.coord = new array_t(pcoord, var.nnode);
     var.connectivity = new conn_t(pconnectivity, var.nelem);
@@ -2082,7 +2641,7 @@ void discard_internal_segments(int &nseg, segment_t &segment, segflag_t &segflag
 
 
 void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
-                      segment_t &segment, regattr_t *regattr)
+                      segment_t &segment, regattr_t *regattr, double_vec *init_elem_size_n)
 /* Note: the last argument is a pointer to regional attribute. If the pointer
  * is not NULL (when the initial mesh is created, before creating markers),
  * regattr is renumbered.
@@ -2190,6 +2749,16 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             regattr2[i][0] = (*regattr)[n][0];
         }
         regattr->steal_ref(regattr2);
+    }
+
+    if (init_elem_size_n != nullptr) {
+        if (init_elem_size_n->size() > 0) {
+            double_vec hint2(nnode);
+            for (int i=0; i<nnode; ++i) {
+                hint2[i] = (*init_elem_size_n)[nd_idx[i]];
+            }
+            *init_elem_size_n = std::move(hint2);
+        }
     }
 }
 
@@ -2851,7 +3420,7 @@ void create_new_mesh(const Param& param, Variables& var)
     if (param.mesh.is_discarding_internal_segments)
         discard_internal_segments(var.nseg, *var.segment, *var.segflag);
 
-    renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, var.regattr);
+    renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, var.regattr, var.init_elem_size_n);
 
     // std::cout << "segment:\n";
     // print(std::cout, *var.segment);

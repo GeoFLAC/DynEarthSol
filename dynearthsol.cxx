@@ -40,6 +40,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.init_elem_size_n = new double_vec(0);
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -185,7 +186,9 @@ void init(const Param& param, Variables& var)
     var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
+#ifdef USEMMG
     initialize_elem_size_n(var, *var.init_elem_size_n);
+#endif
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
@@ -328,8 +331,9 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.ppressure, "pore pressure");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+#ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
-
+#endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
