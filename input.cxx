@@ -44,7 +44,7 @@ static void declare_parameters(po::options_description &cfg,
          "Output time interval (in years)")
         ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
          "Step interval for showing model status on screen.\n"
-         " 0: use default (= 5 * mesh.quality_check_step_interval).\n"
+         " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
          ">0: must be a multiple of mesh.quality_check_step_interval.")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
@@ -861,7 +861,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
     // Ensure info_display_step_interval is a multiple of quality_check_step_interval
     if (p.sim.info_display_step_interval <= 0)
-        p.sim.info_display_step_interval = p.mesh.quality_check_step_interval*5;
+        p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
         int q = p.mesh.quality_check_step_interval;
         p.sim.info_display_step_interval = ((p.sim.info_display_step_interval + q - 1) / q) * q;
