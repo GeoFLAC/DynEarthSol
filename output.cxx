@@ -243,7 +243,6 @@ void Output::write(Variables& var)
     var.noutput += 1;
     int64_t now_ns = get_nanoseconds();
     var.func_time.output_time += now_ns - time_tmp;
-    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 
@@ -259,7 +258,6 @@ void Output::write_exact(Variables& var)
     var.noutput += 1;
     int64_t now_ns = get_nanoseconds();
     var.func_time.output_time += now_ns - time_tmp;
-    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 void Output::write_exact_error(const Variables& var)
