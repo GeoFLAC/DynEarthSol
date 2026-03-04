@@ -204,6 +204,10 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
                         if (n_searched < MAX_SEARCH) {
                             searched[n_searched++] = e;
+                        } else {
+                            printf("Error: barycentric_node_interpolation prepare_interpolation: ");
+                            printf("MAX_SEARCH (%d) exceeded for node %d.\n", MAX_SEARCH, i);
+                            std::exit(11);
                         }
 
                         bary.transform(q, e, r);
