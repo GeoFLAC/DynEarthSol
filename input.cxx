@@ -272,6 +272,12 @@ static void declare_parameters(po::options_description &cfg,
          "Send DES vertical node velocities to GoSPL as upsub at each coupling step. "
          "Prevents double-counting of tectonic uplift/subsidence already resolved by the DES FEM solve. "
          "When enabled, GoSPL's own tectonic file (if any) is bypassed (skip_tectonics=true).")
+        ("control.gospl_elevation_sync_interval", po::value<int>(&p.control.gospl_elevation_sync_interval)->default_value(10),
+         "Apply a gentle GoSPL elevation drift correction every N coupling steps (0 = never). "
+         "Keeps GoSPL and DES elevation fields aligned while preserving GoSPL drainage network state.")
+        ("control.gospl_elevation_drift_alpha", po::value<double>(&p.control.gospl_elevation_drift_alpha)->default_value(0.2),
+         "Blending strength for GoSPL elevation drift correction [0, 1]. "
+         "0 = no correction, 1 = full reset, 0.2 = gentle nudge (default).")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),

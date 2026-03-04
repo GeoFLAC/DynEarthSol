@@ -16,7 +16,9 @@ GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initia
                              accumulated_dt(0.0), has_prev_rate(false), remaining_steps(0),
                              base_coupling_frequency(1), adaptive_coupling_frequency(1),
                              rate_change_tolerance(0.3), rate_change_metric(0.0),
-                             velocity_coupling(false) {
+                             velocity_coupling(false),
+                             needs_elevation_reset(true), elevation_sync_counter(0),
+                             elevation_sync_interval(10), elevation_drift_alpha(0.2) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
@@ -66,6 +68,7 @@ bool GoSPLDriver::initialize(const std::string& config_path) {
               << ", dt=" << dt << std::endl;
     
     initialized = true;
+    needs_elevation_reset = true;   // full reset required on first coupling step
     return true;
 }
 
@@ -127,6 +130,28 @@ int GoSPLDriver::interpolate_elevation_to_points(const double* coords, int num_p
     if (!initialized) return -1;
     return ::interpolate_elevation_to_points(model_handle, coords, num_points, elevations, k, power);
 }
+
+// --- v2 redesigned coupling API wrappers ---
+
+int GoSPLDriver::set_uplift_rate(const double* coords, const double* vz_yr,
+                                 int num_points, int k, double power) {
+    if (!initialized) return -1;
+    return ::set_uplift_rate(model_handle, coords, vz_yr, num_points, k, power);
+}
+
+int GoSPLDriver::run_and_get_erosion(double dt, const double* coords, int num_points,
+                                     double* erosion, int k, double power) {
+    if (!initialized) return -1;
+    return ::run_and_get_erosion(model_handle, dt, coords, num_points, erosion, k, power);
+}
+
+int GoSPLDriver::apply_drift_correction(const double* coords, const double* des_elev,
+                                        int num_points, double alpha, int k, double power) {
+    if (!initialized) return -1;
+    return ::apply_drift_correction(model_handle, coords, des_elev, num_points, alpha, k, power);
+}
+
+// -------------------------------------------
 
 double GoSPLDriver::get_current_time() {
     if (!initialized) return -1.0;

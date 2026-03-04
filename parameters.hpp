@@ -187,6 +187,8 @@ struct Control {
     double gospl_initial_topo_amplitude;  // Initial random topo amplitude (default: 100m, 0=flat)
     double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
     bool gospl_velocity_coupling;   // Send DES vertical velocities to GoSPL as upsub (default: false)
+    int    gospl_elevation_sync_interval;  // Apply drift correction every N coupling steps (0=never; default 10)
+    double gospl_elevation_drift_alpha;    // Drift correction blending strength [0,1] (default 0.2)
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;

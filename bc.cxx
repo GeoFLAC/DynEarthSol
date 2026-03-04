@@ -1643,83 +1643,75 @@ namespace {
 
         std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes (dt=" << total_dt << " yr)..." << std::endl;
 
-        // Prepare coordinate data for GoSPL
-        std::vector<double> coords(ntop * 3);
-        std::vector<double> gospl_elev_before(ntop);  // GoSPL elevation at DES points BEFORE erosion
-        std::vector<double> gospl_elev_after(ntop);   // GoSPL elevation at DES points AFTER erosion
+        // Detect post-remesh: node count changed → force full elevation reset
+        if (var.gospl_driver->pending_erosion_rate.size() != ntop)
+            var.gospl_driver->needs_elevation_reset = true;
 
-        // Extract surface node coordinates (use current DES positions for interpolation queries)
-        for (std::size_t i = 0; i < ntop; ++i) {
-            int n = top_nodes[i];
-            for(int d=0;d<NDIMS;d++)
-                coords[i * 3 + d] = (*var.coord)[n][d];
-        }
-
-        // Step 1: Update GoSPL mesh with DES topography.
-        // When velocity coupling is on, pre-add the expected tectonic displacement
-        // (vz * total_dt) to the elevation before handing it to GoSPL.  GoSPL then
-        // runs its landscape evolution on the correctly-uplifted surface, so it
-        // computes the right erosion rates (faster incision on steeper, rising slopes)
-        // without us having to touch GoSPL's internal upsub field.
-        // The before/after differencing then yields pure erosion with no correction.
+        // Extract current DES surface coordinates and elevations
         const double SEC_PER_YR = 3.1536e7;
+        std::vector<double> coords(ntop * 3);
         std::vector<double> des_elevations(ntop);
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
-            double z = (*var.coord)[n][NDIMS-1];
-            if (var.gospl_driver->velocity_coupling) {
-                // Pre-add the vertical displacement DES will apply over this interval.
-                // vz [m/s] * total_dt_seconds [s] = displacement [m].
-                z += (*var.vel)[n][NDIMS-1] * total_dt_seconds;
-            }
-            des_elevations[i] = z;
-        }
-        int apply_result = var.gospl_driver->apply_elevation_data(
-            coords.data(), des_elevations.data(), ntop, 3, 1.0
-        );
-        if (apply_result != 0) {
-            std::cerr << "Warning: Failed to apply elevation data to GoSPL" << std::endl;
+            for (int d = 0; d < NDIMS; d++)
+                coords[i * 3 + d] = (*var.coord)[n][d];
+            des_elevations[i] = (*var.coord)[n][NDIMS-1];
         }
 
-        // Step 2: Get GoSPL elevation at DES points BEFORE running erosion
-        // (This captures interpolation smoothing but no erosion yet)
-        int interp1 = var.gospl_driver->interpolate_elevation_to_points(
-            coords.data(), ntop, gospl_elev_before.data(), 3, 1.0
-        );
-        if (interp1 != 0) {
-            std::cerr << "Warning: Failed to interpolate elevations before erosion" << std::endl;
+        // ---- Three-tier elevation management ----
+        GoSPLDriver* gd = var.gospl_driver;
+        if (gd->needs_elevation_reset) {
+            // Full reset: DES is authoritative (first step or post-remesh)
+            int apply_result = gd->apply_elevation_data(
+                coords.data(), des_elevations.data(), ntop, 3, 1.0);
+            if (apply_result != 0)
+                std::cerr << "Warning: Failed to apply elevation data to GoSPL" << std::endl;
+            gd->needs_elevation_reset = false;
+            gd->elevation_sync_counter = 0;
+        } else if (gd->elevation_sync_interval > 0 &&
+                   (gd->elevation_sync_counter % gd->elevation_sync_interval == 0)) {
+            // Gentle drift correction: nudges hGlobal toward DES without resetting drainage
+            int drift_result = gd->apply_drift_correction(
+                coords.data(), des_elevations.data(), ntop,
+                gd->elevation_drift_alpha, 3, 1.0);
+            if (drift_result != 0)
+                std::cerr << "Warning: Failed to apply elevation drift correction to GoSPL" << std::endl;
+        }
+        // (else: GoSPL evolves freely — drainage state fully preserved this step)
+        gd->elevation_sync_counter++;
+
+        // ---- Velocity coupling: pass DES vz as GoSPL upsub ----
+        if (gd->velocity_coupling) {
+            std::vector<double> vz_yr(ntop);
+            for (std::size_t i = 0; i < ntop; ++i)
+                vz_yr[i] = (*var.vel)[top_nodes[i]][NDIMS-1] * SEC_PER_YR;  // m/s → m/yr
+            int ret = gd->set_uplift_rate(coords.data(), vz_yr.data(), ntop, 3, 1.0);
+            if (ret != 0)
+                std::cerr << "Warning: Failed to set uplift rate in GoSPL" << std::endl;
+        }
+
+        // ---- Run GoSPL and get net erosion in one call ----
+        // run_and_get_erosion: snapshots hGlobal, runs GoSPL (with skip_tectonics if
+        // set_uplift_rate was called), computes delta_h on native mesh, IDWs once.
+        std::vector<double> net_erosion(ntop, 0.0);
+        int run_result = gd->run_and_get_erosion(
+            total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
+        if (run_result != 0) {
+            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
             return;
         }
 
-        // Step 3: Run GoSPL erosion processes (using accumulated dt from all skipped steps)
-        double elapsed = var.gospl_driver->run_processes_for_dt(total_dt, false);
-        if (elapsed < 0) {
-            std::cerr << "Error: GoSPL process run failed" << std::endl;
-            return;
-        }
-
-        // Step 4: Get GoSPL elevation at DES points AFTER erosion
-        // (Same interpolation smoothing, but now includes erosion)
-        int interp2 = var.gospl_driver->interpolate_elevation_to_points(
-            coords.data(), ntop, gospl_elev_after.data(), 3, 1.0
-        );
-        if (interp2 != 0) {
-            std::cerr << "Warning: Failed to interpolate elevations after erosion" << std::endl;
-            return;
-        }
-
-        // Step 5: Compute PURE erosion (smoothing error cancels out!)
-        // erosion = gospl_after - gospl_before (both went through same interpolation)
+        // ---- Apply erosion to DES + store rate for gradual application ----
         double max_erosion = 0.0;
         double min_erosion = 0.0, sum_erosion = 0.0;
         int nodes_skipped = 0;
 
         // Get GoSPL mesh bounds for boundary check
-        bool check_bounds = var.gospl_driver->mesh_bounds_valid;
-        double x_min = var.gospl_driver->mesh_bounds[0];
-        double x_max = var.gospl_driver->mesh_bounds[1];
-        double y_min = var.gospl_driver->mesh_bounds[2];
-        double y_max = var.gospl_driver->mesh_bounds[3];
+        bool check_bounds = gd->mesh_bounds_valid;
+        double x_min = gd->mesh_bounds[0];
+        double x_max = gd->mesh_bounds[1];
+        double y_min = gd->mesh_bounds[2];
+        double y_max = gd->mesh_bounds[3];
 
         // Add 5% buffer margin to avoid interpolation issues near edges
         double x_margin = 0.05 * (x_max - x_min);
@@ -1730,70 +1722,63 @@ namespace {
         double y_max_buf = y_max - y_margin;
 
         // Store previous rates and prepare new rate vector
-        // has_prev_rate is only true when prev_erosion_rate is actually populated
-        if (!var.gospl_driver->pending_erosion_rate.empty()) {
-            var.gospl_driver->prev_erosion_rate = var.gospl_driver->pending_erosion_rate;
-            var.gospl_driver->has_prev_rate = true;
+        if (!gd->pending_erosion_rate.empty()) {
+            gd->prev_erosion_rate = gd->pending_erosion_rate;
+            gd->has_prev_rate = true;
         }
-        var.gospl_driver->pending_erosion_rate.resize(ntop);
+        gd->pending_erosion_rate.resize(ntop);
 
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
             double x = (*var.coord)[n][0];
             double y = (*var.coord)[n][1];
 
-            double erosion = 0.0;
             double erosion_rate = 0.0;
 
-            // Skip nodes outside GoSPL mesh bounds (with buffer margin) to avoid extrapolation errors
+            // Skip nodes outside GoSPL mesh bounds (with buffer margin)
             if (check_bounds && (x < x_min_buf || x > x_max_buf || y < y_min_buf || y > y_max_buf)) {
                 nodes_skipped++;
-                erosion_rate = 0.0;  // No erosion at boundary nodes
             } else {
-                // Pure erosion: GoSPL ran on the pre-uplifted surface and only added
-                // erosion/deposition — no uplift component to subtract.
-                erosion = gospl_elev_after[i] - gospl_elev_before[i];
+                double erosion = net_erosion[i];  // metres; negative = erosion, positive = deposition
 
                 // Track statistics
                 min_erosion = std::min(min_erosion, erosion);
                 max_erosion = std::max(max_erosion, erosion);
                 sum_erosion += erosion;
 
-                // Compute erosion rate in m/s
+                // Erosion rate in m/s for gradual application
                 erosion_rate = erosion / total_dt_seconds;
 
                 // Apply first step's worth of erosion
                 (*var.coord)[n][NDIMS-1] += erosion_rate * dt_seconds;
             }
 
-            // Store erosion rate for gradual application in subsequent steps
-            var.gospl_driver->pending_erosion_rate[i] = erosion_rate;
+            // Store for gradual application on subsequent non-coupling steps
+            gd->pending_erosion_rate[i] = erosion_rate;
         }
 
         // Compute adaptive coupling frequency based on rate-change metric
-        if (var.gospl_driver->has_prev_rate && var.gospl_driver->rate_change_tolerance > 0 &&
-            !var.gospl_driver->prev_erosion_rate.empty()) {
+        if (gd->has_prev_rate && gd->rate_change_tolerance > 0 &&
+            !gd->prev_erosion_rate.empty()) {
             double sum_diff_sq = 0.0, sum_rate_sq = 0.0;
             for (std::size_t i = 0; i < ntop; ++i) {
-                double diff = var.gospl_driver->pending_erosion_rate[i] -
-                              var.gospl_driver->prev_erosion_rate[i];
+                double diff = gd->pending_erosion_rate[i] - gd->prev_erosion_rate[i];
                 sum_diff_sq += diff * diff;
-                sum_rate_sq += var.gospl_driver->pending_erosion_rate[i] *
-                               var.gospl_driver->pending_erosion_rate[i];
+                sum_rate_sq += gd->pending_erosion_rate[i] * gd->pending_erosion_rate[i];
             }
             double metric = (sum_rate_sq > 1e-30) ? std::sqrt(sum_diff_sq / sum_rate_sq) : 0.0;
-            var.gospl_driver->rate_change_metric = metric;
+            gd->rate_change_metric = metric;
 
-            int N = var.gospl_driver->adaptive_coupling_frequency;
-            int N_base = var.gospl_driver->base_coupling_frequency;
-            double tol = var.gospl_driver->rate_change_tolerance;
+            int N = gd->adaptive_coupling_frequency;
+            int N_base = gd->base_coupling_frequency;
+            double tol = gd->rate_change_tolerance;
 
             if (metric > tol && N > 1) {
                 N = std::max(1, N / 2);  // Halve: couple more often
             } else if (metric < tol / 4.0 && N < 4 * N_base) {
                 N = std::min(4 * N_base, N * 2);  // Double: couple less often
             }
-            var.gospl_driver->adaptive_coupling_frequency = N;
+            gd->adaptive_coupling_frequency = N;
 
             std::cout << "GoSPL: rate_change=" << metric
                       << " | adaptive N=" << N << std::endl;

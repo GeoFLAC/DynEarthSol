@@ -66,7 +66,13 @@ public:
 
     // --- Velocity coupling ---
     bool velocity_coupling;                      // Send DES vertical velocities to GoSPL as upsub (default: false)
-    
+
+    // --- Drainage continuity state (v2 redesigned API) ---
+    bool   needs_elevation_reset;    // Full reset on next coupling step (init + post-remesh)
+    int    elevation_sync_counter;   // Coupling steps since last full/drift reset
+    int    elevation_sync_interval;  // Apply drift correction every N steps (0 = never; default 10)
+    double elevation_drift_alpha;    // Drift correction blending strength [0,1] (default 0.2)
+
     /**
      * Constructor
      */
@@ -185,9 +191,59 @@ public:
     int interpolate_elevation_to_points(const double* coords, int num_points,
                                        double* elevations, int k = 3, double power = 1.0);
     
+    // --- v2 redesigned coupling API ---
+
+    /**
+     * Interpolate DES vertical velocities (m/yr) onto the GoSPL mesh and store
+     * internally. Consumed by the next run_and_get_erosion() call.
+     *
+     * @param coords     DES surface node coordinates (num_points * 3)
+     * @param vz_yr      Vertical velocity at each node in m/yr (num_points)
+     * @param num_points Number of DES surface nodes
+     * @param k          IDW neighbours (default 3)
+     * @param power      IDW power exponent (default 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int set_uplift_rate(const double* coords, const double* vz_yr,
+                        int num_points, int k = 3, double power = 1.0);
+
+    /**
+     * Run GoSPL for dt years and return net erosion (metres) at query points.
+     * Uses native-mesh differencing — no before/after IDW trick needed.
+     * If set_uplift_rate() was called, upsub is applied and GoSPL runs with
+     * skip_tectonics=true.
+     *
+     * @param dt         Coupling interval in years
+     * @param coords     Query coordinates (num_points * 3)
+     * @param num_points Number of query points
+     * @param erosion    Output erosion array (pre-allocated, num_points doubles)
+     * @param k          IDW neighbours (default 3)
+     * @param power      IDW power exponent (default 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int run_and_get_erosion(double dt, const double* coords, int num_points,
+                            double* erosion, int k = 3, double power = 1.0);
+
+    /**
+     * Gently blend GoSPL's hGlobal toward the DES elevation without a full reset.
+     * h_new[i] = h[i] + alpha*(h_des[i] - h[i])
+     * Preserves drainage network; use every elevation_sync_interval coupling steps.
+     *
+     * @param coords      DES surface node coordinates (num_points * 3)
+     * @param des_elev    DES elevation at each surface node in metres (num_points)
+     * @param num_points  Number of DES surface nodes
+     * @param alpha       Blending strength [0,1]: 0.2 = nudge, 1.0 = full reset
+     * @param k           IDW neighbours (default 3)
+     * @param power       IDW power exponent (default 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int apply_drift_correction(const double* coords, const double* des_elev,
+                               int num_points, double alpha,
+                               int k = 3, double power = 1.0);
+
     /**
      * Get current simulation time
-     * 
+     *
      * @return Current time on success, -1.0 on error
      */
     double get_current_time();

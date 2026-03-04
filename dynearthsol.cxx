@@ -611,6 +611,8 @@ int main(int argc, const char* argv[])
             var.gospl_driver->adaptive_coupling_frequency = param.control.gospl_coupling_frequency;
             var.gospl_driver->rate_change_tolerance = param.control.gospl_rate_change_tolerance;
             var.gospl_driver->velocity_coupling = param.control.gospl_velocity_coupling;
+            var.gospl_driver->elevation_sync_interval = param.control.gospl_elevation_sync_interval;
+            var.gospl_driver->elevation_drift_alpha   = param.control.gospl_elevation_drift_alpha;
             std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)" << std::endl;
             if (param.control.gospl_rate_change_tolerance > 0) {
                 std::cout << "GoSPL adaptive coupling enabled (tolerance: "
