@@ -149,6 +149,11 @@ void BinaryOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const cha
 template
 void BinaryOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
 
+void BinaryOutput::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len)
+{
+    write_array(A, name, len);
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 BinaryInput::BinaryInput(const char *filename)
@@ -404,20 +409,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nelem = var.nelem;
 
         if (!is_checkpoint) {
-#ifdef THREED
-            write_array(*var.coord, "Points",  nnode);
-#else
-            // VTKHDF requires 3D points
-            Array2D<double, 3> coord3d(nnode);
-            const double *c2d = var.coord->data();
-            #pragma omp parallel for default(none) shared(nnode, coord3d, c2d)
-            for (int i=0; i<nnode; ++i) {
-                coord3d[i][0] = c2d[2*i];
-                coord3d[i][1] = c2d[2*i+1];
-                coord3d[i][2] = 0.0;
-            }
-            write_array(coord3d, "Points", nnode);
-#endif
+            write_nodal_vec_array(*var.coord, "Points", nnode);
 
             int* conn_ptr = var.connectivity->data();
             int_vec int_tmp(conn_ptr, conn_ptr + nelem*nnode_cell);
@@ -437,21 +429,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
 
         if (!is_checkpoint) {
             array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
-
-#ifdef THREED
-            write_array(*mcoord, "Points",  nnode);
-#else
-            // VTKHDF requires 3D points
-            Array2D<double, 3> coord3d(nnode);
-            const double *c2d = mcoord->data();
-            #pragma omp parallel for default(none) shared(nnode, coord3d, c2d)
-            for (int i=0; i<nnode; ++i) {
-                coord3d[i][0] = c2d[2*i];
-                coord3d[i][1] = c2d[2*i+1];
-                coord3d[i][2] = 0.0;
-            }
-            write_array(coord3d, "Points", nnode);
-#endif
+            write_nodal_vec_array(*mcoord, "Points", nnode);
             delete mcoord;
 
             int_vec int_tmp(nelem);
@@ -669,7 +647,7 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
 
 // 2D array
 template<typename T, int N>
-void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len)
+void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len, int dest_N)
 {
     std::string mid;
     if (has_metadata) {
@@ -712,12 +690,6 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
         }
     }
 
-    int dest_N = -1;
-#ifndef THREED
-    // Map 3D Points -> 2D coordinate
-    if (std::string(name) == "Points") dest_N = 2; 
-#endif
-
     create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N, dest_N);
 
     H5Dclose(dset_id);
@@ -735,21 +707,40 @@ void HDF5Output::write_array<uint>(const std::vector<uint>& A, const char *name,
 template
 void HDF5Output::write_array<unsigned char>(const std::vector<unsigned char>& A, const char *name, hsize_t);
 template
-void HDF5Output::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, hsize_t, int);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void HDF5Output::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, hsize_t, int);
 #endif
 template
-void HDF5Output::write_array<double,1>(const Array2D<double,1>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,1>(const Array2D<double,1>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t, int);
+
+void HDF5Output::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, hsize_t len)
+{
+#ifdef THREED
+    write_array(A, name, len);
+#else
+    // Store as 3-component in PointData for ParaView glyph arrows,
+    // but keep the root virtual dataset at NDIMS components so legacy
+    // readers (Dynearthsol.py / 2vtk.py) continue to read the correct shape.
+    Array2D<double, 3> A3d(len);
+    #pragma omp parallel for default(none) shared(len, A3d, A)
+    for (hsize_t i=0; i<len; ++i) {
+        A3d[i][0] = A[i][0];
+        A3d[i][1] = A[i][1];
+        A3d[i][2] = 0.0;
+    }
+    write_array(A3d, name, len, NDIMS);
+#endif
+}
 
 // scaler
 void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id)

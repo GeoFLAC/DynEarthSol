@@ -97,7 +97,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
 #endif
 
-    bin.write_array(*var.vel, "velocity", var.vel->size());
+    bin.write_nodal_vec_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {
         // average_velocity = displacement / delta_t
         double *c0 = coord0.data();
@@ -105,7 +105,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (int i=0; i<coord0.num_elements(); ++i) {
             c0[i] = (c[i] - c0[i]) * inv_dt;
         }
-        bin.write_array(coord0, "velocity averaged", coord0.size());
+        bin.write_nodal_vec_array(coord0, "velocity averaged", coord0.size());
     }
     
     bin.write_array(*var.temperature, "temperature", var.temperature->size());
@@ -186,7 +186,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
     bin.write_array(tmp, "material", tmp.size());
 
-    bin.write_array(*var.force, "force", var.force->size());
+    bin.write_nodal_vec_array(*var.force, "force", var.force->size());
 
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 
