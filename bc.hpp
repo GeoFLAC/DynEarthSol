@@ -15,6 +15,6 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
                        tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
-                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
+                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem, int& nsedi_acc);
 
 #endif

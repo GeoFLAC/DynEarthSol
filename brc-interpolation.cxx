@@ -28,7 +28,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
@@ -58,7 +58,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         const int *conn = connectivity[e];
@@ -104,7 +104,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     neighbor_vec neighbors(var.nnode);
 
     printf("    Finding knn for barycentric node interpolation...\n");
-    kdtree.search(*var.coord, neighbors, 1, 3.0);
+    kdtree.search(*var.coord, neighbors, var.nnode, 1, 3.0);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -278,13 +278,13 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     double_vec *new_init_elem_size_n = new double_vec(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n);
 
+    #pragma acc wait
+
     array_t *new_vel = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
 
     array_t *new_coord0 = new array_t(var.nnode);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
-
-    #pragma acc wait
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -297,6 +297,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.init_elem_size_n;
     var.init_elem_size_n = new_init_elem_size_n;
+
+    #pragma acc wait
 
     delete var.vel;
     var.vel = new_vel;

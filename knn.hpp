@@ -31,7 +31,7 @@ public:
             double resoTimes = 3);
     ~KNN();
 
-    void search(const array_t& queries, neighbor_vec& neighbors, 
+    void search(const array_t& queries, neighbor_vec& neighbors, const int nquery,
             int k, double resoTimes = 3);
 private:
     const double* points;

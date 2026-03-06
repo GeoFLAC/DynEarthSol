@@ -35,6 +35,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.nsedi_acc = 0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -382,7 +383,8 @@ void update_mesh(const Param& param, Variables& var)
     {
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem, \
+                      var.nsedi_acc);
     }
 
 #ifdef NPROF_DETAIL
@@ -408,6 +410,9 @@ void update_mesh(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
+
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -435,6 +440,8 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
+
+        #pragma acc wait
 
         // do not apply vbc to allow free boundary
 
@@ -578,6 +585,7 @@ int main(int argc, const char* argv[])
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
+        nvtxRangePush("kernel");
 #endif
         var.steps ++;
         var.time += var.dt;
@@ -694,6 +702,10 @@ int main(int argc, const char* argv[])
 
         #pragma acc wait
 
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
+
         if (param.sim.is_outputting_averaged_fields)
             var.output->average_fields(var);
         
@@ -789,6 +801,13 @@ int main(int argc, const char* argv[])
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
 
+                if (var.nsedi_acc > 0) {
+                    std::cout << "                New added markers:";
+                    // other information to show
+                    std::cout << " sediment(" << var.nsedi_acc << ")";
+                    var.nsedi_acc = 0;
+                    std::cout << "\n";
+                }
 
                 info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }

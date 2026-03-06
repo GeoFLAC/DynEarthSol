@@ -548,6 +548,8 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 
     Barycentric_transformation bary(tiny_coord, tiny_conn, tiny_vol);
 
+    #pragma acc wait
+
     // find old nodes that are connected to tiny elements and are not excluded
     // (most of the nodes of tiny elements are newly inserted by the remeshing library)
     for (int i=0; i<npoints; ++i) {
@@ -2810,7 +2812,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         const double *coord[NODES_PER_FACET];
         for (int j=0; j<NODES_PER_FACET; ++j)
@@ -2822,7 +2824,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         double inv_volume = 1.0 / old_surface_area[i];
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
@@ -2949,7 +2951,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         const double *coord[NODES_PER_FACET];
         for (int j=0; j<NODES_PER_FACET; ++j)
@@ -2961,7 +2963,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
@@ -2970,7 +2972,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e];
 
@@ -2979,6 +2981,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("reset bounrdary condition");
@@ -2993,7 +2997,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, nbot)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<nbot; ++i) {
             int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;
@@ -3011,6 +3015,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         update_strain_rate(var, *var.strain_rate);
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     }
+
+    #pragma acc wait
 
     std::cout << "  Remeshing finished.\n";
 

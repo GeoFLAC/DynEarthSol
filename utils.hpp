@@ -200,6 +200,19 @@ static double second_invariant(const double* t)
 }
 
 
+#pragma acc routine seq
+static inline int binary_search_index(const int* arr, int size, int target) {
+    int low = 0, high = size - 1;
+    while (low <= high) {
+        int mid = low + (high - low) / 2;
+        if (arr[mid] == target) return mid;
+        if (arr[mid] < target) low = mid + 1;
+        else high = mid - 1;
+    }
+    return -1;
+}
+
+
 static int findNearestNeighbourIndex( double x_new, const double_vec& x )
 {
     /* find nearest neighbour index for interpolation
@@ -281,7 +294,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int e=0; e<var.nelem;e++) {
             if (std::isnan((*var.volume)[e]))
                 is_nan += out_nan_error("volume", e);
@@ -316,7 +329,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
                 is_nan += out_nan_error("temperature", n);
