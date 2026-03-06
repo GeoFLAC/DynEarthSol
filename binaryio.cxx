@@ -149,6 +149,11 @@ void BinaryOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const cha
 template
 void BinaryOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
 
+void BinaryOutput::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len)
+{
+    write_array(A, name, len);
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 BinaryInput::BinaryInput(const char *filename)
@@ -404,7 +409,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nelem = var.nelem;
 
         if (!is_checkpoint) {
-            write_array(*var.coord, "Points",  nnode);
+            write_nodal_vec_array(*var.coord, "Points", nnode);
 
             int* conn_ptr = var.connectivity->data();
             int_vec int_tmp(conn_ptr, conn_ptr + nelem*nnode_cell);
@@ -424,7 +429,7 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
 
         if (!is_checkpoint) {
             array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
-            write_array(*mcoord, "Points",  nnode);
+            write_nodal_vec_array(*mcoord, "Points", nnode);
             delete mcoord;
 
             int_vec int_tmp(nelem);
@@ -553,30 +558,35 @@ void HDF5Output::write_scalar(const T &A, const std::string& name)
 
     H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, &A);
 
-    if (name == "NumberOfConnectivityIds") return;
-
-    std::string vis_name = name;
-    bool is_field = false;
-    if (kind == "marker") {
-        if (name == "NumberOfPoints") {
-            vis_name = block_base + ".nmarkers";
-            is_field = true;
-        } else if (name == "NumberOfCells") {
-            return;
+    if (name != "NumberOfConnectivityIds") {
+        std::string vis_name = name;
+        bool is_field = false;
+        if (kind == "marker") {
+            if (name == "NumberOfPoints") {
+                vis_name = block_base + ".nmarkers";
+                is_field = true;
+            } else if (name == "NumberOfCells") {
+                // do nothing
+            } else {
+                create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
+            }
+        } else if (kind == "grid") {
+            if (name == "NumberOfPoints") {
+                vis_name = "nnode";
+                is_field = true;
+            } else if (name == "NumberOfCells") {
+                vis_name = "nelem";
+                is_field = true;
+            } else {
+                create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
+            }
         }
-    } else if (kind == "grid") {
-        if (name == "NumberOfPoints") {
-            vis_name = "nnode";
-            is_field = true;
-        } else if (name == "NumberOfCells") {
-            vis_name = "nelem";
-            is_field = true;
+        
+        if (is_field) {
+            create_virtual_dataset(full_name, vis_name, space_id, dtype_id); // Create at root for restart/legacy
+            std::string field_name = "/VTKHDF/grid/FieldData/" + vis_name;
+            create_virtual_dataset(full_name, field_name, space_id, dtype_id); // Create in FieldData for ParaView
         }
-    }
-    create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
-    if (is_field) {
-        vis_name = "/VTKHDF/grid/FieldData/" + vis_name;
-        create_virtual_dataset(full_name, vis_name, space_id, dtype_id);
     }
     H5Dclose(dset_id);
     H5Sclose(space_id);
@@ -619,14 +629,16 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
     H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
 
-    if (std::string(name) == "Offsets" || std::string(name) == "Types") return;
-    if (kind == "marker" && std::string(name) == "Connectivity") return;
+    bool skip_virtual = (std::string(name) == "Offsets" || std::string(name) == "Types");
+    if (kind == "marker" && std::string(name) == "Connectivity") skip_virtual = true;
 
-    if (std::string(name) == "Connectivity") {
-        int len2D = len / nnode_cell;
-        create_virtual_dataset(full_name, "connectivity", space_id, dtype_id, len2D, nnode_cell);
-    } else {
-        create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+    if (!skip_virtual) {
+        if (std::string(name) == "Connectivity") {
+            int len2D = len / nnode_cell;
+            create_virtual_dataset(full_name, "connectivity", space_id, dtype_id, len2D, nnode_cell);
+        } else {
+            create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+        }
     }
     H5Dclose(dset_id);
     H5Pclose(dcpl_id);
@@ -635,7 +647,7 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
 
 // 2D array
 template<typename T, int N>
-void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len)
+void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len, int dest_N)
 {
     std::string mid;
     if (has_metadata) {
@@ -677,7 +689,8 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
             vis_name = block_base + ".coord";
         }
     }
-    create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N);
+
+    create_virtual_dataset(full_name, vis_name, space_id, dtype_id, len, N, dest_N);
 
     H5Dclose(dset_id);
     H5Pclose(dcpl_id);
@@ -694,21 +707,40 @@ void HDF5Output::write_array<uint>(const std::vector<uint>& A, const char *name,
 template
 void HDF5Output::write_array<unsigned char>(const std::vector<unsigned char>& A, const char *name, hsize_t);
 template
-void HDF5Output::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, hsize_t, int);
 #ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
 template
-void HDF5Output::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, hsize_t, int);
 #endif
 template
-void HDF5Output::write_array<double,1>(const Array2D<double,1>& A, const char *name, hsize_t);
+void HDF5Output::write_array<double,1>(const Array2D<double,1>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, hsize_t, int);
 template
-void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t);
+void HDF5Output::write_array<int,1>(const Array2D<int,1>& A, const char *name, hsize_t, int);
+
+void HDF5Output::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, hsize_t len)
+{
+#ifdef THREED
+    write_array(A, name, len);
+#else
+    // Store as 3-component in PointData for ParaView glyph arrows,
+    // but keep the root virtual dataset at NDIMS components so legacy
+    // readers (Dynearthsol.py / 2vtk.py) continue to read the correct shape.
+    Array2D<double, 3> A3d(len);
+    #pragma omp parallel for default(none) shared(len, A3d, A)
+    for (hsize_t i=0; i<len; ++i) {
+        A3d[i][0] = A[i][0];
+        A3d[i][1] = A[i][1];
+        A3d[i][2] = 0.0;
+    }
+    write_array(A3d, name, len, NDIMS);
+#endif
+}
 
 // scaler
 void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id)
@@ -747,22 +779,48 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 }
 
 // 2D array
-void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N)
+void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N, int dest_N)
 {
-    hsize_t vds_dims[2] = { len, static_cast<hsize_t>(N) };
+    if (dest_N == -1) dest_N = N;
+
+    hsize_t vds_dims[2] = { len, static_cast<hsize_t>(dest_N) };
     hid_t vds_space_id = H5Screate_simple(2, vds_dims, nullptr);
 
     hid_t vds_dcpl = H5Pcreate(H5P_DATASET_CREATE);
     hid_t src_space_id = H5Scopy(space_id);
 
+    // If source and dest dimensions differ (e.g. 3D source -> 2D virtual), select hyperslab
+    if (N != dest_N) {
+        hsize_t start[2] = {0, 0};
+        hsize_t count[2] = {len, static_cast<hsize_t>(dest_N)};
+
+        // Select first dest_N columns from source
+        herr_t status = H5Sselect_hyperslab(src_space_id, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        if (status < 0) {
+           std::cerr << "Error selecting source hyperslab for VDS " << dest_name << "\n";
+        }
+
+        // Select all of virtual dataset (which is dest_N wide)
+        status = H5Sselect_hyperslab(vds_space_id, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        if (status < 0) {
+           std::cerr << "Error selecting virtual hyperslab for VDS " << dest_name << "\n";
+        }
+    }
+
     herr_t status = H5Pset_virtual(vds_dcpl, vds_space_id, ".", src_name.c_str(), src_space_id);
+    if (status < 0) {
+        std::cerr << "Error setting virtual dataset mapping for " << dest_name << "\n";
+    }
 
     hid_t vds_dset_id = H5Dcreate2(file_id, dest_name.c_str(), dtype_id, vds_space_id, H5P_DEFAULT, vds_dcpl, H5P_DEFAULT);
+    if (vds_dset_id < 0) {
+        std::cerr << "Error creating virtual dataset " << dest_name << "\n";
+    }
 
     H5Dclose(vds_dset_id);
+    H5Sclose(src_space_id);
     H5Pclose(vds_dcpl);
     H5Sclose(vds_space_id);
-    H5Sclose(src_space_id);
 }
 
 HDF5Input::HDF5Input(const char *filename)
@@ -788,8 +846,8 @@ void HDF5Input::read_header()
 
     int ndims = -1;
     H5Aread(attr, atype, &ndims);
-    H5Aclose(attr);
     H5Tclose(atype);
+    H5Aclose(attr);
 
     if (H5Aexists(file_id, "revision") <= 0) {
         std::cerr << "Error: missing attribute revision in HDF5 file\n";
@@ -801,8 +859,8 @@ void HDF5Input::read_header()
 
     int revision = -1;
     H5Aread(attr, atype, &revision);
-    H5Aclose(attr);
     H5Tclose(atype);
+    H5Aclose(attr);
 }
 
 HDF5Input::~HDF5Input()

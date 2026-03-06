@@ -15,6 +15,7 @@ class Barycentric_transformation {
     typedef Array2D<double,NODES_PER_ELEM*NDIMS> coeff_t;
     coeff_t coeff_;
     int nelem_;
+    int elem_dim_;
 
 public:
 
@@ -41,7 +42,9 @@ public:
 
 private:
 
-    inline int index(int node, int dim) const;
+    inline int index1d(int node, int dim) const;
+    inline int index2d(int node, int dim) const;
+    inline int index3d(int node, int dim) const;
 
     void compute_coeff2d(const double *a,
                          const double *b,

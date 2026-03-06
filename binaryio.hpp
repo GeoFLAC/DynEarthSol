@@ -36,6 +36,8 @@ public:
 
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
+
+    void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len);
 };
 
 
@@ -87,7 +89,9 @@ public:
     void write_array(const std::vector<T>& A, const char *name, hsize_t len);
 
     template <typename T, int N>
-    void write_array(const Array2D<T,N>& A, const char *name, hsize_t len);
+    void write_array(const Array2D<T,N>& A, const char *name, hsize_t len, int dest_N = -1);
+
+    void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, hsize_t len);
 
     void write_attribute(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id);
     template <typename T>
@@ -99,7 +103,7 @@ public:
 
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id);
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len);
-    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N);
+    void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len, int N, int dest_N = -1);
 
     void add_soft_link(const std::string& assemblyNodePath, const std::string& linkName,
                         const std::string& targetAbsPath);

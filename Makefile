@@ -402,10 +402,10 @@ $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
 			-o $@
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
-		install_name_tool -add_rpath @executable_path/$(BOOST_LIB_DIR) $@
+		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
 ifeq ($(openmp), 1)
 		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_ROOT_DIR)/lib" ]; then \
-			install_name_tool -add_rpath @executable_path/$(OPENMP_ROOT_DIR)/lib $@; \
+			install_name_tool -add_rpath $(OPENMP_ROOT_DIR)/lib $@; \
 		fi
 endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
