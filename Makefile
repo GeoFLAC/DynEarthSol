@@ -36,6 +36,7 @@ use_R_S = 0
 useexo = 0
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
+OPENMP_VERSION = 19.1.7
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -160,6 +161,13 @@ ifneq (, $(findstring clang++, $(CXX)))
 	ifeq ($(openmp), 1)
 		# path to OpenMP library directory (for clang++ on macOS)
 		OPENMP_ROOT_DIR = external/openmp-install
+		ifeq ($(OSNAME), Darwin)
+			ifeq ($(filter openmp-install,$(MAKECMDGOALS)),)
+				ifeq ($(wildcard $(OPENMP_ROOT_DIR)/lib/libomp.dylib),)
+					$(error OpenMP library not found at $(OPENMP_ROOT_DIR). Run: make openmp-install)
+				endif
+			endif
+		endif
 		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
 		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
 	endif
@@ -392,7 +400,7 @@ CXXFLAGS += -I$(ANN_DIR)/include
 
 ## Action
 
-.PHONY: all clean take-snapshot
+.PHONY: all clean take-snapshot openmp-install
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
@@ -405,7 +413,7 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
 ifeq ($(openmp), 1)
 		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_ROOT_DIR)/lib" ]; then \
-			install_name_tool -add_rpath $(OPENMP_ROOT_DIR)/lib $@; \
+			install_name_tool -add_rpath @executable_path/$(OPENMP_ROOT_DIR)/lib $@; \
 		fi
 endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
@@ -478,13 +486,16 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
 
-deepclean: 
+deepclean:
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
-	
+
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 
 clean:
 	@rm -f $(OBJS) $(EXE)
+
+openmp-install:
+	@bash external/install-openmp.sh $(OPENMP_VERSION)

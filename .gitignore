@@ -27,4 +27,5 @@ test
 *.nsys-rep
 *.log
 *.tsm
-external
+external/*
+!external/install-openmp.sh
