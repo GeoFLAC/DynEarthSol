@@ -51,32 +51,16 @@ alike.
 
 <div id="llvm"></div>
 
-* [LLVM](https://github.com/llvm/llvm-project) OpenMP library for macOS requires special setup due to Apple Clang lacking built-in OpenMP. 
-  * Suggested building procedure
-    * Download LLVM CMake Modules and OpenMP. (LLVM OpenMP 15.0.7 or newer version will suffice.)
-      ```BASH
-      mkdir -p external && cd external
-      # Download CMake modules
-      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/cmake-15.0.7.src.tar.xz -o cmake-15.0.7.src.tar.xz
-      tar xf cmake-15.0.7.src.tar.xz
+* [LLVM](https://github.com/llvm/llvm-project) OpenMP library for macOS requires special setup due to Apple Clang lacking built-in OpenMP.
+  * Run from the DynEarthSol directory:
+    ```bash
+    # Install default version (19.1.7) — downloads LLVM source from GitHub and builds into external/openmp-install/
+    make openmp-install
 
-      # Download OpenMP source
-      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/openmp-15.0.7.src.tar.xz -o openmp-15.0.7.src.tar.xz
-      tar xf openmp-15.0.7.src.tar.xz
-      ```
-    * Build OpenMP
-      ```BASH
-      # Configure and build for ARM64 (Apple Silicon) or x86_64 (Intel Mac)
-      mkdir -p openmp-15.0.7.src/build && cd openmp-15.0.7.src/build
-      cmake -DCMAKE_INSTALL_PREFIX=$(pwd)/../../openmp-install \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-15.0.7.src/Modules \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DLIBOMP_INSTALL_ALIASES=OFF \
-            ..
-      make -j4 && make install && cd ../../
-      ```
-    * Installed LLVM OpenMP will be in `external/openmp-install`.
+    # Or install a specific version
+    make openmp-install OPENMP_VERSION=18.1.8
+    ```
+  * Installed LLVM OpenMP will be in `external/openmp-install`.
 ## Or, using docker
 * Build docker image
   ```bash
