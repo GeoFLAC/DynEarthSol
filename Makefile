@@ -162,11 +162,11 @@ ifneq (, $(findstring clang++, $(CXX)))
 		# path to OpenMP library directory (for clang++ on macOS)
 		OPENMP_ROOT_DIR = external/openmp-install
 		ifeq ($(OSNAME), Darwin)
-			ifeq ($(filter openmp-install,$(MAKECMDGOALS)),)
-				ifeq ($(wildcard $(OPENMP_ROOT_DIR)/lib/libomp.dylib),)
-					$(error OpenMP library not found at $(OPENMP_ROOT_DIR). Run: make openmp-install)
-				endif
-			endif
+ifeq ($(filter openmp-install clean cleanall deepclean,$(MAKECMDGOALS)),)
+ifeq ($(wildcard $(OPENMP_ROOT_DIR)/lib/libomp.dylib),)
+$(error OpenMP library not found at $(OPENMP_ROOT_DIR). Run: make openmp-install)
+endif
+endif
 		endif
 		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
 		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
