@@ -74,9 +74,13 @@ HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
-## Use conda environment if gospl is activated, otherwise system boost
+## Use conda environment only if boost is actually installed there, otherwise system boost
 ifdef CONDA_PREFIX
-	BOOST_ROOT_DIR = $(CONDA_PREFIX)
+	ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
+		BOOST_ROOT_DIR = $(CONDA_PREFIX)
+	else
+		BOOST_ROOT_DIR = /usr
+	endif
 else
 	BOOST_ROOT_DIR = /usr
 endif
@@ -87,13 +91,27 @@ endif
 ########################################################################
 
 BOOST_LDFLAGS = -lboost_program_options
+# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other
+MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
 ifdef BOOST_ROOT_DIR
 	# check existence of stage/ directory
 	has_stage_dir = $(wildcard $(BOOST_ROOT_DIR)/stage)
 	ifeq (, $(has_stage_dir))
 		# no stage dir, BOOST_ROOT_DIR is the installation directory
-		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)/include
-		BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/lib
+		ifeq ($(BOOST_ROOT_DIR), /usr)
+			# Conda environments can disrupt gcc's default search order, so explicitly
+			# add the multiarch path before /usr/include (keeps bits/stdint-least.h
+			# resolvable) and use the multiarch lib dir where boost is installed.
+			ifneq ($(MULTIARCH),)
+				BOOST_CXXFLAGS = -I/usr/include/$(MULTIARCH) -I/usr/include
+				BOOST_LIB_DIR = /usr/lib/$(MULTIARCH)
+			else
+				BOOST_LIB_DIR = /usr/lib
+			endif
+		else
+			BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)/include
+			BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/lib
+		endif
 	else
 		# with stage dir, BOOST_ROOT_DIR is the build directory
 		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)
@@ -156,14 +174,11 @@ ifeq ($(use_gospl), 1)
 	
 	# Use conda libraries even when not in conda environment (for GoSPL compatibility)
 	CONDA_ENV_PATH = $(HOME)/miniconda3/envs/gospl
-	BOOST_ROOT_DIR = $(CONDA_ENV_PATH)
-	
-	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include
-	GOSPL_CXXFLAGS += -I$(BOOST_ROOT_DIR)/include/python3.11
-	GOSPL_LDFLAGS += -lboost_program_options -L$(BOOST_ROOT_DIR)/lib
-	GOSPL_LDFLAGS += -lpython3.11 -L$(BOOST_ROOT_DIR)/lib
+
+	GOSPL_CXXFLAGS += -I$(CONDA_ENV_PATH)/include/python3.11
+	GOSPL_LDFLAGS += -lpython3.11 -L$(CONDA_ENV_PATH)/lib
 	ifneq ($(OSNAME), Darwin)
-		GOSPL_LDFLAGS += -Wl,-rpath=$(BOOST_ROOT_DIR)/lib
+		GOSPL_LDFLAGS += -Wl,-rpath=$(CONDA_ENV_PATH)/lib
 	endif
 endif
 
