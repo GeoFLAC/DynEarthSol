@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <unordered_map>
 #include <iomanip>
@@ -1594,128 +1595,107 @@ namespace {
             return;
         }
 
-        // Coupling frequency control: accumulate time and only couple every N steps
-        double dt_years = var.dt / 3.1536e7;  // Convert to years
+        // Accumulate time; only couple every N steps
+        const double SEC_PER_YR = 3.1536e7;
+        double dt_years = var.dt / SEC_PER_YR;
         var.gospl_driver->accumulated_dt += dt_years;
         var.gospl_driver->step_counter++;
-        
-        // Check if it's time to run GoSPL coupling
-        if (var.gospl_driver->step_counter < var.gospl_driver->coupling_frequency) {
-            return;  // Skip this step, accumulate time for later
-        }
-        
-        // Reset counters for next coupling cycle
+
+        if (var.gospl_driver->step_counter < var.gospl_driver->coupling_frequency)
+            return;  // GoSPL idle this step
+
+        // ===== COUPLING STEP =====
         double total_dt = var.gospl_driver->accumulated_dt;
         var.gospl_driver->accumulated_dt = 0.0;
-        var.gospl_driver->step_counter = 0;
+        var.gospl_driver->step_counter   = 0;
 
-        const int top_bdry = iboundz1;
-        const int_vec& top_nodes = *var.bnodes[top_bdry];
+        const int_vec& top_nodes = *var.bnodes[iboundz1];
         const std::size_t ntop = top_nodes.size();
-        double_vec& dh = *var.surfinfo.dh;
 
-        std::cout << "Running GoSPL surface processes for " << ntop << " surface nodes (dt=" << total_dt << " yr)..." << std::endl;
+        std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
+                  << ntop << " surface nodes, vel_coupling="
+                  << (var.gospl_driver->velocity_coupling ? "on" : "off")
+                  << std::endl;
 
-        // Prepare coordinate data for GoSPL
+        // Build coordinate array for current DES surface nodes
         std::vector<double> coords(ntop * 3);
-        std::vector<double> gospl_elev_before(ntop);  // GoSPL elevation at DES points BEFORE erosion
-        std::vector<double> gospl_elev_after(ntop);   // GoSPL elevation at DES points AFTER erosion
-
-        // Extract surface node coordinates (use current DES positions for interpolation queries)
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
-            for(int d=0;d<NDIMS;d++)
+            for (int d = 0; d < NDIMS; d++)
                 coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
-        // Step 1: Update GoSPL mesh with current DES topography
-        std::vector<double> des_elevations(ntop);
-        for (std::size_t i = 0; i < ntop; ++i) {
-            des_elevations[i] = (*var.coord)[top_nodes[i]][2];
-        }
-        int apply_result = var.gospl_driver->apply_elevation_data(
-            coords.data(), des_elevations.data(), ntop, 3, 1.0
-        );
-        if (apply_result != 0) {
-            std::cerr << "Warning: Failed to apply elevation data to GoSPL" << std::endl;
+        // Re-initialize GoSPL topography only on first step or after remeshing.
+        // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
+        if (var.gospl_driver->needs_elevation_reset) {
+            std::vector<double> des_elev(ntop);
+            for (std::size_t i = 0; i < ntop; ++i)
+                des_elev[i] = (*var.coord)[top_nodes[i]][NDIMS-1];
+            int r = var.gospl_driver->apply_elevation_data(
+                coords.data(), des_elev.data(), ntop, 3, 1.0);
+            if (r != 0)
+                std::cerr << "Warning: Failed to reset GoSPL elevation" << std::endl;
+            var.gospl_driver->needs_elevation_reset = false;
         }
 
-        // Step 2: Get GoSPL elevation at DES points BEFORE running erosion
-        // (This captures interpolation smoothing but no erosion yet)
-        int interp1 = var.gospl_driver->interpolate_elevation_to_points(
-            coords.data(), ntop, gospl_elev_before.data(), 3, 1.0
-        );
-        if (interp1 != 0) {
-            std::cerr << "Warning: Failed to interpolate elevations before erosion" << std::endl;
+        // Pass all three DES surface velocity components to GoSPL
+        if (var.gospl_driver->velocity_coupling) {
+            std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
+            for (std::size_t i = 0; i < ntop; ++i) {
+                int n = top_nodes[i];
+                vx_yr[i] = (*var.vel)[n][0]       * SEC_PER_YR;
+#ifdef THREED
+                vy_yr[i] = (*var.vel)[n][1]        * SEC_PER_YR;
+#else
+                vy_yr[i] = 0.0;
+#endif
+                vz_yr[i] = (*var.vel)[n][NDIMS-1]  * SEC_PER_YR;
+            }
+            int r = var.gospl_driver->set_surface_velocity(
+                coords.data(), vx_yr.data(), vy_yr.data(), vz_yr.data(), ntop, 3, 1.0);
+            if (r != 0)
+                std::cerr << "Warning: Failed to set surface velocity in GoSPL" << std::endl;
+
+            // Velocity transfer diagnostics
+            double vx_min = *std::min_element(vx_yr.begin(), vx_yr.end());
+            double vx_max = *std::max_element(vx_yr.begin(), vx_yr.end());
+            double vy_min = *std::min_element(vy_yr.begin(), vy_yr.end());
+            double vy_max = *std::max_element(vy_yr.begin(), vy_yr.end());
+            double vz_min = *std::min_element(vz_yr.begin(), vz_yr.end());
+            double vz_max = *std::max_element(vz_yr.begin(), vz_yr.end());
+            std::cout << "  vel DES->GoSPL (m/yr):"
+                      << " vx=[" << vx_min << ", " << vx_max << "]"
+                      << " vy=[" << vy_min << ", " << vy_max << "]"
+                      << " vz=[" << vz_min << ", " << vz_max << "]"
+                      << std::endl;
+        }
+
+        // Run GoSPL and get net dh in one call.
+        // Internally: horiz advection (if vel set) + uplift + erosion/deposition,
+        // differenced on the native GoSPL mesh, IDW-interpolated to DES query points.
+        std::vector<double> net_erosion(ntop, 0.0);
+        int run_result = var.gospl_driver->run_and_get_erosion(
+            total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
+        if (run_result != 0) {
+            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
             return;
         }
 
-        // Step 3: Run GoSPL erosion processes (using accumulated dt from all skipped steps)
-        double elapsed = var.gospl_driver->run_processes_for_dt(total_dt, false);
-        if (elapsed < 0) {
-            std::cerr << "Error: GoSPL process run failed" << std::endl;
-            return;
-        }
-
-        // Step 4: Get GoSPL elevation at DES points AFTER erosion
-        // (Same interpolation smoothing, but now includes erosion)
-        int interp2 = var.gospl_driver->interpolate_elevation_to_points(
-            coords.data(), ntop, gospl_elev_after.data(), 3, 1.0
-        );
-        if (interp2 != 0) {
-            std::cerr << "Warning: Failed to interpolate elevations after erosion" << std::endl;
-            return;
-        }
-
-        // Step 5: Compute PURE erosion (smoothing error cancels out!)
-        // erosion = gospl_after - gospl_before (both went through same interpolation)
-        double max_erosion = 0.0;
-        double min_erosion = 0.0, sum_erosion = 0.0;
-        int nodes_skipped = 0;
-        
-        // Get GoSPL mesh bounds for boundary check
-        bool check_bounds = var.gospl_driver->mesh_bounds_valid;
-        double x_min = var.gospl_driver->mesh_bounds[0];
-        double x_max = var.gospl_driver->mesh_bounds[1];
-        double y_min = var.gospl_driver->mesh_bounds[2];
-        double y_max = var.gospl_driver->mesh_bounds[3];
-        
-        // Add 5% buffer margin to avoid interpolation issues near edges
-        double x_margin = 0.05 * (x_max - x_min);
-        double y_margin = 0.05 * (y_max - y_min);
-        double x_min_buf = x_min + x_margin;
-        double x_max_buf = x_max - x_margin;
-        double y_min_buf = y_min + y_margin;
-        double y_max_buf = y_max - y_margin;
-        
+        // Apply dh to all DES surface nodes.
+        // The GoSPL mesh is padded beyond the DES domain (gospl_mesh_padding),
+        // so all DES nodes query interior GoSPL nodes, free of boundary artifacts.
+        double min_dh = 0, max_dh = 0, sum_dh = 0;
         for (std::size_t i = 0; i < ntop; ++i) {
             int n = top_nodes[i];
-            double x = (*var.coord)[n][0];
-            double y = (*var.coord)[n][1];
-            
-            // Skip nodes outside GoSPL mesh bounds (with buffer margin) to avoid extrapolation errors
-            if (check_bounds && (x < x_min_buf || x > x_max_buf || y < y_min_buf || y > y_max_buf)) {
-                nodes_skipped++;
-                continue;  // Don't apply erosion to this node
-            }
-            
-            double erosion = gospl_elev_after[i] - gospl_elev_before[i];
-            
-            // Track statistics
-            min_erosion = std::min(min_erosion, erosion);
-            max_erosion = std::max(max_erosion, erosion);
-            sum_erosion += erosion;
-            
-            // Apply pure erosion/deposition to DES topography
-            (*var.coord)[n][NDIMS-1] += erosion;
+            double dh = net_erosion[i];
+            min_dh = std::min(min_dh, dh);
+            max_dh = std::max(max_dh, dh);
+            sum_dh += dh;
+            (*var.coord)[n][NDIMS-1] += dh;
         }
 
-        std::cout << "GoSPL: erosion [" << min_erosion << ", " << max_erosion << "]"
-                  << " | mean=" << sum_erosion/ntop;
-        if (nodes_skipped > 0) {
-            std::cout << " | " << nodes_skipped << " boundary nodes skipped";
-        }
-        std::cout << std::endl;
+        std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
+                  << " mean=" << sum_dh / ntop << std::endl;
     }
 #endif
 

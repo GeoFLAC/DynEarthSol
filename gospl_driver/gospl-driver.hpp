@@ -51,6 +51,10 @@ public:
     int coupling_frequency;      // Run GoSPL every N steps (default: 1)
     int step_counter;            // Current step count since last coupling
     double accumulated_dt;       // Accumulated time since last coupling (in years)
+
+    // Simple coupling scheme (ASPECT–FastScape style)
+    bool needs_elevation_reset;  // true at init and after remeshing; GoSPL re-inits from DES
+    bool velocity_coupling;      // if true, send all 3 DES velocity components each coupling step
     
     /**
      * Constructor
@@ -91,13 +95,52 @@ public:
     bool is_initialized() const { return initialized; }
     
     /**
+     * Pass all three DES surface velocity components to GoSPL.
+     * vz drives uplift/subsidence; vx/vy drive semi-Lagrangian horizontal
+     * advection of the elevation field. Consumed by the next run_and_get_erosion().
+     *
+     * @param coords     DES surface node coordinates (num_points * 3)
+     * @param vx_yr      X-velocity at each node in m/yr (num_points)
+     * @param vy_yr      Y-velocity at each node in m/yr (num_points)
+     * @param vz_yr      Z-velocity (uplift) at each node in m/yr (num_points)
+     * @param num_points Number of DES surface nodes
+     * @param k          IDW nearest-neighbour count (default: 3)
+     * @param power      IDW power exponent (default: 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int set_surface_velocity(const double* coords,
+                             const double* vx_yr,
+                             const double* vy_yr,
+                             const double* vz_yr,
+                             int num_points, int k = 3, double power = 1.0);
+
+    /**
+     * Run GoSPL for dt years and return net erosion (metres) at query coordinates.
+     * Uses native-mesh differencing; one IDW pass for the result.
+     * If set_surface_velocity() was called, horizontal advection and uplift are
+     * applied and GoSPL runs with skip_tectonics=true.
+     *
+     * @param dt         Coupling interval in years
+     * @param coords     Query coordinates (num_points * 3)
+     * @param num_points Number of query points
+     * @param erosion    Output erosion array (pre-allocated, num_points doubles)
+     * @param k          IDW nearest-neighbour count (default: 3)
+     * @param power      IDW power exponent (default: 1.0)
+     * @return 0 on success, -1 on error
+     */
+    int run_and_get_erosion(double dt, const double* coords, int num_points,
+                            double* erosion, int k = 3, double power = 1.0);
+
+    /**
      * Run GoSPL processes for a specific time step
-     * 
+     *
      * @param dt Time step size
      * @param verbose Print progress information (default: false)
+     * @param skip_tectonics Skip GoSPL's built-in tectonic forcing (default: false)
      * @return Elapsed time on success, -1.0 on error
      */
-    double run_processes_for_dt(double dt, bool verbose = false);
+    double run_processes_for_dt(double dt, bool verbose = false,
+                                bool skip_tectonics = false);
     
     /**
      * Run GoSPL processes for a specified number of steps
@@ -205,6 +248,7 @@ public:
      * @param resolution Desired mesh spacing (in same units as coordinates). If <= 0, uses sqrt(n_nodes) approach.
      * @param initial_topo_amplitude Amplitude of random initial topography (in meters). 0 = flat.
      * @param mesh_perturbation Fraction of grid spacing to randomly perturb nodes (0-1). 0 = regular grid, 0.3 = moderate perturbation.
+     * @param padding Fractional extension beyond DES domain on each side (default 0.1). Keeps DES nodes away from GoSPL boundary artifacts.
      * @return 0 on success, -1 on error
      */
     int generate_mesh(const std::vector<double>& x_coords,
@@ -212,7 +256,8 @@ public:
                       const std::string& output_file,
                       double resolution = -1.0,
                       double initial_topo_amplitude = 100.0,
-                      double mesh_perturbation = 0.0);
+                      double mesh_perturbation = 0.0,
+                      double padding = 0.1);
     
     /**
      * Demonstrate elevation interpolation capabilities

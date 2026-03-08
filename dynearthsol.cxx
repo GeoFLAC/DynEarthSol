@@ -592,10 +592,11 @@ int main(int argc, const char* argv[])
             }
             
             if (!x_coords.empty()) {
-                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file, 
+                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file,
                                                 param.control.gospl_mesh_resolution,
                                                 param.control.gospl_initial_topo_amplitude,
-                                                param.control.gospl_mesh_perturbation);
+                                                param.control.gospl_mesh_perturbation,
+                                                param.control.gospl_mesh_padding);
             }
         }
         
@@ -607,7 +608,9 @@ int main(int argc, const char* argv[])
             var.gospl_driver->set_verbose(false);
             // Set coupling frequency from config (default: 1 = every step)
             var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
-            std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)" << std::endl;
+            var.gospl_driver->velocity_coupling  = param.control.gospl_velocity_coupling;
+            std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)"
+                      << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
         } else {
             std::cerr << "Failed to initialize GoSPL driver with config: " 
                       << param.control.surface_process_gospl_config_file << std::endl;
@@ -725,6 +728,7 @@ int main(int argc, const char* argv[])
                             }
 
                             remesh(param, var, quality_is_bad);
+                            if (var.gospl_driver) var.gospl_driver->needs_elevation_reset = true;
 
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
@@ -850,6 +854,7 @@ int main(int argc, const char* argv[])
                     }
 
                     remesh(param, var, quality_is_bad);
+                    if (var.gospl_driver) var.gospl_driver->needs_elevation_reset = true;
 
                     if (param.sim.has_output_during_remeshing) {
                         var.output->write_exact(var);

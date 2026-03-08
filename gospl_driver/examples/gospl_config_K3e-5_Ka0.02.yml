@@ -3,11 +3,11 @@ name: Test escarpment retreat
 domain:
     npdata: ['./gospl_mesh','v','c','z']
     flowdir: 1
-    seadepo: True
+    seadepo: False
     bc: '1000'
 
 output:
-    dir: 'velcoupled-buffer-straight/K3e-8Ka0.1'
+    dir: 'velcoupled-buffer-newKs/K3e-5Ka0.02'
 
 time:
     start: 0.
@@ -16,18 +16,17 @@ time:
     dt: 1.0
 
 spl:
-    K: 3.0e-8 #4.e-6
+    K: 3.0e-5 #3.0e-8
     d: 0.
     m: 0.4
 
 diffusion:
-    hillslopeKa: 0.1 # 0.2
+    hillslopeKa: 0.02 # 0.1
     hillslopeKm: 1.0
 
 sea:
-    position: -10.
+    position: -2000.
 
 climate:
   - start: 0.
     uniform: 1
-

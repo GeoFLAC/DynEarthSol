@@ -11,9 +11,10 @@
 #include <sstream>
 
 // Constructor
-GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false), 
-                             mesh_bounds_valid(false), coupling_frequency(1), step_counter(0), 
-                             accumulated_dt(0.0) {
+GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false),
+                             mesh_bounds_valid(false), coupling_frequency(1), step_counter(0),
+                             accumulated_dt(0.0),
+                             needs_elevation_reset(true), velocity_coupling(false) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
@@ -78,11 +79,26 @@ void GoSPLDriver::cleanup() {
     }
 }
 
-double GoSPLDriver::run_processes_for_dt(double dt, bool verbose) {
+int GoSPLDriver::set_surface_velocity(const double* coords,
+                                       const double* vx_yr,
+                                       const double* vy_yr,
+                                       const double* vz_yr,
+                                       int num_points, int k, double power) {
+    if (!initialized) return -1;
+    return ::set_surface_velocity(model_handle, coords, vx_yr, vy_yr, vz_yr,
+                                  num_points, k, power);
+}
+
+int GoSPLDriver::run_and_get_erosion(double dt, const double* coords, int num_points,
+                                     double* erosion, int k, double power) {
+    if (!initialized) return -1;
+    return ::run_and_get_erosion(model_handle, dt, coords, num_points, erosion, k, power);
+}
+
+double GoSPLDriver::run_processes_for_dt(double dt, bool verbose, bool skip_tectonics) {
     if (!initialized) return -1.0;
-    
+
     // Set verbose mode on the Python model object before running
-    // This controls GoSPL's internal progress output
     std::stringstream ss;
     ss << "import sys\n"
        << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
@@ -91,8 +107,9 @@ double GoSPLDriver::run_processes_for_dt(double dt, bool verbose) {
        << "if model is not None:\n"
        << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
     PyRun_SimpleString(ss.str().c_str());
-    
-    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0, 0);
+
+    return ::run_processes_for_dt(model_handle, dt, verbose ? 1 : 0,
+                                  skip_tectonics ? 1 : 0);
 }
 
 int GoSPLDriver::run_processes_for_steps(int num_steps, double dt, bool verbose) {
@@ -449,7 +466,8 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
                                 const std::string& output_file,
                                 double resolution,
                                 double initial_topo_amplitude,
-                                double mesh_perturbation) {
+                                double mesh_perturbation,
+                                double padding) {
     if (x_coords.size() != y_coords.size() || x_coords.empty()) {
         std::cerr << "Error: Invalid coordinates for mesh generation" << std::endl;
         return -1;
@@ -457,44 +475,52 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
     
     size_t n_nodes = x_coords.size();
     
-    // Find domain extents
+    // Find DES domain extents
     double x_min = *std::min_element(x_coords.begin(), x_coords.end());
     double x_max = *std::max_element(x_coords.begin(), x_coords.end());
     double y_min = *std::min_element(y_coords.begin(), y_coords.end());
     double y_max = *std::max_element(y_coords.begin(), y_coords.end());
-    
-    // Store mesh bounds for boundary detection during coupling
+
+    // Store DES domain bounds (used for diagnostic output)
     mesh_bounds[0] = x_min;
     mesh_bounds[1] = x_max;
     mesh_bounds[2] = y_min;
     mesh_bounds[3] = y_max;
     mesh_bounds_valid = true;
-    
-    // Calculate grid dimensions
+
+    // Extend the GoSPL mesh beyond the DES domain by the padding fraction on each side.
+    // This keeps all DES surface nodes in the interior of the GoSPL mesh, away from
+    // boundary artifacts (truncated drainage basins, BC enforcement).
+    double x_pad = padding * (x_max - x_min);
+    double y_pad = padding * (y_max - y_min);
+    double x_min_ext = x_min - x_pad;
+    double x_max_ext = x_max + x_pad;
+    double y_min_ext = y_min - y_pad;
+    double y_max_ext = y_max + y_pad;
+
+    // Calculate grid dimensions over the extended domain
     int nx, ny;
     double dx, dy;  // Grid spacing for perturbation calculation
     if (resolution > 0) {
-        // Use specified resolution
-        nx = static_cast<int>((x_max - x_min) / resolution) + 1;
-        ny = static_cast<int>((y_max - y_min) / resolution) + 1;
-        // Ensure at least 2 nodes in each direction
+        nx = static_cast<int>((x_max_ext - x_min_ext) / resolution) + 1;
+        ny = static_cast<int>((y_max_ext - y_min_ext) / resolution) + 1;
         nx = std::max(nx, 2);
         ny = std::max(ny, 2);
-        dx = (x_max - x_min) / (nx - 1);
-        dy = (y_max - y_min) / (ny - 1);
+        dx = (x_max_ext - x_min_ext) / (nx - 1);
+        dy = (y_max_ext - y_min_ext) / (ny - 1);
         std::cout << "Generating GoSPL mesh with resolution " << resolution << ": ";
     } else {
-        // Default: approximately sqrt(n_nodes) in each direction
         nx = static_cast<int>(std::sqrt(static_cast<double>(n_nodes))) + 1;
-        ny = nx;  // Square grid
-        dx = (x_max - x_min) / (nx - 1);
-        dy = (y_max - y_min) / (ny - 1);
+        ny = nx;
+        dx = (x_max_ext - x_min_ext) / (nx - 1);
+        dy = (y_max_ext - y_min_ext) / (ny - 1);
         std::cout << "Generating GoSPL mesh (auto-sized): ";
     }
-    
-    std::cout << nx << " x " << ny << " = " << (nx * ny) 
-              << " vertices over domain [" << x_min << ", " << x_max << "] x ["
-              << y_min << ", " << y_max << "]";
+
+    std::cout << nx << " x " << ny << " = " << (nx * ny)
+              << " vertices over extended domain [" << x_min_ext << ", " << x_max_ext << "] x ["
+              << y_min_ext << ", " << y_max_ext << "]"
+              << " (padding=" << padding * 100 << "% beyond DES domain)";
     if (mesh_perturbation > 0) {
         std::cout << " (perturbation: " << mesh_perturbation * 100 << "%)";
     }
@@ -509,9 +535,9 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
     ss << "import numpy as np\n"
        << "from scipy.spatial import Delaunay\n"
        << "\n"
-       << "# Domain extents\n"
-       << "x_min, x_max = " << x_min << ", " << x_max << "\n"
-       << "y_min, y_max = " << y_min << ", " << y_max << "\n"
+       << "# Extended domain extents (padded beyond DES domain)\n"
+       << "x_min, x_max = " << x_min_ext << ", " << x_max_ext << "\n"
+       << "y_min, y_max = " << y_min_ext << ", " << y_max_ext << "\n"
        << "nx, ny = " << nx << ", " << ny << "\n"
        << "dx, dy = " << dx << ", " << dy << "\n"
        << "mesh_perturbation = " << mesh_perturbation << "\n"
