@@ -323,6 +323,7 @@ struct IC {
     double weakzone_ysemi_axis;
     double weakzone_zsemi_axis;
     double weakzone_standard_deviation;
+    double weakzone_gaussian_amplitude; // x-shift amplitude for weakzone_option=4 (meters)
 
     int temperature_option;
     std::string Temp_filename;

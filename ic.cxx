@@ -93,6 +93,54 @@ namespace {
     };
 
 
+    class Gaussian_planar_zone : public Zone
+    {
+        // Planar weak zone whose x-position is offset by a Gaussian function of y.
+        // In any xz cross-section: identical to Planar_zone (azimuth + inclination).
+        // In map view (xy): the fault trace follows x0 + A*exp(-(y-y0)^2 / 2*sigma^2).
+    private:
+        const double az, incl;
+        const double halfwidth;
+        const double ymin, ymax;
+        const double zmin, zmax;
+        const double *x0;
+        const double gaussian_amplitude; // x-shift at y=y0, in meters
+        const double inv2sigma2;         // 1 / (2 * sigma^2)
+
+    public:
+        Gaussian_planar_zone(const double center[NDIMS], double azimuth, double inclination,
+                             double halfwidth_,
+                             double ymin_, double ymax_,
+                             double zmin_, double zmax_,
+                             double amplitude, double sigma) :
+            az(std::tan(azimuth * DEG2RAD)),
+            incl(1 / std::tan(inclination * DEG2RAD)),
+            halfwidth(halfwidth_),
+            ymin(ymin_), ymax(ymax_),
+            zmin(zmin_), zmax(zmax_),
+            x0(center),
+            gaussian_amplitude(amplitude),
+            inv2sigma2(1.0 / (2.0 * sigma * sigma))
+        {}
+
+        bool contains(const double x[NDIMS]) const
+        {
+            if (x[NDIMS-1] <= zmin || x[NDIMS-1] >= zmax) return false;
+#ifdef THREED
+            if (x[1] <= ymin || x[1] >= ymax) return false;
+            const double dy = x[1] - x0[1];
+            const double x_shift = gaussian_amplitude * std::exp(-dy * dy * inv2sigma2);
+            return std::fabs( (x[0] - x0[0] - x_shift)
+                              - az * dy
+                              + incl * (x[NDIMS-1] - x0[NDIMS-1]) ) < halfwidth;
+#else
+            return std::fabs( (x[0] - x0[0])
+                              + incl * (x[NDIMS-1] - x0[NDIMS-1]) ) < halfwidth;
+#endif
+        }
+    };
+
+
     class Gaussian_distribution_point_zone : public Zone
     {
     private:
@@ -386,6 +434,30 @@ void initial_weak_zone(const Param &param, const Variables &var,
         weakzone_center[NDIMS-1] = -param.ic.weakzone_zcenter * param.mesh.zlength;
         weakzone = new Gaussian_distribution_point_zone(weakzone_center, param.ic.weakzone_standard_deviation);
         weakvalue = new Gaussian_distribution_point_value(weakzone_center, param.ic.weakzone_standard_deviation);
+        break;
+    case 4:
+        // Planar weak zone with Gaussian map-view shape.
+        // In any xz cross-section: same geometry as case 1 (azimuth + inclination + halfwidth).
+        // In map view: fault x-position is shifted by A*exp(-(y-y0)^2/(2*sigma^2)),
+        // producing a Gaussian bulge along strike.
+        weakzone_center[0] = param.ic.weakzone_xcenter * param.mesh.xlength;
+#ifdef THREED
+        weakzone_center[1] = param.ic.weakzone_ycenter * param.mesh.ylength;
+#endif
+        weakzone_center[NDIMS-1] = -param.ic.weakzone_zcenter * param.mesh.zlength;
+        weakzone = new Gaussian_planar_zone(weakzone_center,
+                                            param.ic.weakzone_azimuth,
+                                            param.ic.weakzone_inclination,
+                                            param.ic.weakzone_halfwidth * param.mesh.resolution,
+#ifdef THREED
+                                            param.ic.weakzone_y_min * param.mesh.ylength,
+                                            param.ic.weakzone_y_max * param.mesh.ylength,
+#endif
+                                            -param.ic.weakzone_depth_max * param.mesh.zlength,
+                                            -param.ic.weakzone_depth_min * param.mesh.zlength,
+                                            param.ic.weakzone_gaussian_amplitude,
+                                            param.ic.weakzone_standard_deviation);
+        weakvalue = new Constant_value();
         break;
     default:
         std::cerr << "Error: unknown weakzone_option: " << param.ic.weakzone_option << '\n';

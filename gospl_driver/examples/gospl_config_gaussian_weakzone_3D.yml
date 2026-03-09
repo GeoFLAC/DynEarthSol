@@ -1,0 +1,46 @@
+# GoSPL configuration equivalent to gaussian_weakzone_3D.prm (ASPECT-FastScape)
+#
+# ASPECT domain : 100km (x) x 80km (y) x 20km (z)
+# Extension     : +/-1.5 cm/yr in x-direction (DES handles; GoSPL receives velocities)
+# FastScape K_f : 1e-5  -> spl.K
+# FastScape m   : 0.4   -> spl.m
+# FastScape n   : 1     -> GoSPL default
+# FastScape K_d : 1e-2  -> diffusion.hillslopeKa
+# FastScape flow: multi-direction (p=-1) -> flowdir: 6
+# FastScape bc  : Left=1, Right=1 (open base level in x) -> bc '1001'
+#                 (W and E open; S and N closed to match tangential y boundaries)
+# Output        : every 20,000 yr (matching ASPECT visualization output interval)
+
+name: Gaussian weakzone 3D rift (DES-GoSPL)
+
+domain:
+    npdata: ['./gospl_mesh_gaussian_3D','v','c','z']
+    flowdir: 6          # multi-flow direction (matches FastScape p=-1)
+    seadepo: False
+    bc: '1001'          # W and E boundaries open (base level); N and S closed
+
+output:
+    dir: 'output_gaussian_weakzone_3D'
+
+time:
+    start: 0.
+    end: 1.e6           # matches ASPECT end time
+    tout: 20000.0       # matches ASPECT visualization output interval (20 kyr)
+    dt: 10000.0         # FastScape max timestep; overridden at runtime by coupling interval
+
+spl:
+    K: 1.0e-5           # bedrock river incision rate (FastScape K_f)
+    d: 0.               # detachment-limited (no SPL-level deposition)
+    m: 0.4              # drainage area exponent (FastScape m)
+    # n=1 (slope exponent) is GoSPL's default, matching FastScape slope exponent=1
+
+diffusion:
+    hillslopeKa: 1.0e-2 # bedrock hillslope diffusivity (FastScape K_d = 1e-2 m^2/yr)
+    hillslopeKm: 1.0    # marine diffusivity multiplier
+
+sea:
+    position: -2000.    # sea level 2 km below initial surface; prevents marine flooding
+
+climate:
+  - start: 0.
+    uniform: 1          # uniform unit precipitation (matches FastScape default)

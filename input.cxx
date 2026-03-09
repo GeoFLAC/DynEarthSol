@@ -536,7 +536,12 @@ static void declare_parameters(po::options_description &cfg,
         ("ic.weakzone_zsemi_axis", po::value<double>(&p.ic.weakzone_zsemi_axis)->default_value(1e3),
          "Length of weak zone semi-axis in z direction (in meters)\n")
         ("ic.weakzone_standard_deviation", po::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
-         "Standard deviation of Gussian distribution point weak zone (in meters)\n")
+         "Standard deviation of Gaussian weak zone (in meters).\n"
+         "Used as point-Gaussian std dev (option 3) and as along-strike sigma (option 4).\n")
+        ("ic.weakzone_gaussian_amplitude", po::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
+         "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
+         "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
+         "A = weakzone_gaussian_amplitude and sigma = weakzone_standard_deviation.\n")
 
         ("ic.temperature_option", po::value<int>(&p.ic.temperature_option)->default_value(0),
          "How to set the initial temperature?\n"
