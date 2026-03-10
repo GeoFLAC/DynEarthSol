@@ -1,5 +1,6 @@
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 
 
 #include "constants.hpp"
@@ -507,6 +508,19 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 
 int main(int argc, const char* argv[])
 {
+#if defined(__APPLE__) && defined(_OPENMP)
+    // macOS/LLVM libomp sets blocktime=0 on Apple Silicon (hybrid CPU detection),
+    // causing threads to immediately yield between parallel regions. This hurts
+    // throughput in tight time loops with many short parallel regions.
+    // OMP_WAIT_POLICY=active restores spin-wait behavior. No-op if already set.
+    if (!getenv("OMP_WAIT_POLICY") && !getenv("KMP_BLOCKTIME")) {
+        setenv("OMP_WAIT_POLICY", "active", 0);
+        std::cout << "[OpenMP] macOS: OMP_WAIT_POLICY=active set to avoid libomp "
+                     "zero-blocktime regression on Apple Silicon.\n"
+                     "         Override: export OMP_WAIT_POLICY=passive | KMP_BLOCKTIME=<ms>\n";
+    }
+#endif
+
     //
     // read command line
     //

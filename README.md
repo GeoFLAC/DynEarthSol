@@ -78,7 +78,23 @@ alike.
       ```
     * Installed LLVM OpenMP will be in `external/openmp-install`.
 
+  * macOS / Apple Silicon — OpenMP thread-wait performance
+
+    LLVM `libomp` hardcodes hybrid-CPU detection for all Apple Silicon, setting
+    thread *blocktime* to **0 µs**. Threads yield immediately after each parallel
+    region instead of spin-waiting, reducing CPU utilisation to ~250% on a 6-core
+    Mac vs. ~600% on Linux. DES3D automatically sets `OMP_WAIT_POLICY=active` at startup on macOS (unless
+    `OMP_WAIT_POLICY` or `KMP_BLOCKTIME` is already set), restoring near-Linux
+    throughput. A notice is printed at startup confirming this.
+
+    To override:
+    ```bash
+    export OMP_WAIT_POLICY=passive   # yield immediately, lower power
+    export KMP_BLOCKTIME=20          # fine-grained control (ms, libomp only)
+    ```
+
 ## Or, using docker
+
 * Build docker image
   ```bash
   ./build.sh
