@@ -308,10 +308,12 @@ endif
 
 SRCS =	\
 	barycentric-fn.cxx \
+	ats_output_scheduler.cxx \
 	brc-interpolation.cxx \
 	bc.cxx \
 	binaryio.cxx \
 	dynearthsol.cxx \
+	earthquake_state.cxx \
 	fields.cxx \
 	geometry.cxx \
 	ic.cxx \
@@ -329,9 +331,11 @@ SRCS =	\
 
 INCS =	\
 	array2d.hpp \
+	ats_output_scheduler.hpp \
 	barycentric-fn.hpp \
 	binaryio.hpp \
 	constants.hpp \
+	earthquake_state.hpp \
 	parameters.hpp \
 	matprops.hpp \
 	sortindex.hpp \
