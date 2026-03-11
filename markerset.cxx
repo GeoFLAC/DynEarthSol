@@ -1372,9 +1372,15 @@ namespace {
         bool is_no_nn = false;
 
 #ifndef ACC
+#ifdef GPP1X
         #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
                 ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, ntop_elems, \
                 genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
+#else
+        #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
+                ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, \
+                genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
+#endif
 #endif
         #pragma acc parallel loop gang vector reduction(||:is_no_nn)
         for (int i=0; i<ne; ++i) {
