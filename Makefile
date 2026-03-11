@@ -321,6 +321,7 @@ SRCS =	\
 	input.cxx \
 	matprops.cxx \
 	mesh.cxx \
+	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
 	phasechanges.cxx \
@@ -336,6 +337,7 @@ INCS =	\
 	binaryio.hpp \
 	constants.hpp \
 	earthquake_state.hpp \
+	monitor.hpp \
 	parameters.hpp \
 	matprops.hpp \
 	sortindex.hpp \

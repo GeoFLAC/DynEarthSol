@@ -15,6 +15,7 @@
 #include "matprops.hpp"
 #include "markerset.hpp"
 #include "mesh.hpp"
+#include "monitor.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
@@ -563,6 +564,7 @@ int main(int argc, const char* argv[])
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
+    monitor_initialize(param, var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
@@ -667,7 +669,9 @@ int main(int argc, const char* argv[])
                                 var.output->write_exact(var);
                             }
 
+                            monitor_before_remesh(param, var);
                             remesh(param, var, quality_is_bad);
+                            monitor_remesh_update(param, var);
 
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
@@ -692,6 +696,8 @@ int main(int argc, const char* argv[])
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
+
+        monitor_write_if_due(param, var);
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
@@ -756,7 +762,9 @@ int main(int argc, const char* argv[])
                         var.output->write_exact(var);
                     }
 
+                    monitor_before_remesh(param, var);
                     remesh(param, var, quality_is_bad);
+                    monitor_remesh_update(param, var);
 
                     if (param.sim.has_output_during_remeshing) {
                         var.output->write_exact(var);
@@ -781,6 +789,8 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+
+    monitor_finalize(var);
 
     // at end of code, clean up lost memory reported by valgrind
     end(var);
