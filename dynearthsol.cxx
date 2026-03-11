@@ -4,8 +4,10 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "ats_output_scheduler.hpp"
 #include "bc.hpp"
 #include "binaryio.hpp"
+#include "earthquake_state.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
 #include "ic.hpp"
@@ -196,6 +198,10 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        initial_friction_coeff(param, var, *var.dyn_fric_coeff);
+        initial_state_variable(param, var, *var.state_variable);
+    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -346,6 +352,13 @@ void restart(const Param& param, Variables& var)
         initial_weak_zone(param, var, *var.plstrain);
     }
 
+    // Restart currently initializes RSF state from material parameters.
+    // This keeps legacy checkpoints compatible even without RSF state datasets.
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        initial_friction_coeff(param, var, *var.dyn_fric_coeff);
+        initial_state_variable(param, var, *var.state_variable);
+    }
+
     // For some reason, the following is added by Denis
     // However, it is not clear why this is needed.
     if (param.control.has_ATS) {
@@ -431,7 +444,8 @@ void isostasy_adjustment(const Param &param, Variables &var)
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel,
+            *var.dyn_fric_coeff, *var.state_variable);
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -487,7 +501,8 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel);
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -554,6 +569,8 @@ int main(int argc, const char* argv[])
     double starting_time = var.time; // var.time & var.steps might be set in restart()
     double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+    EarthquakeState earthquake;
+    init_earthquake_state(param, earthquake);
 
     double residual_old = std::numeric_limits<double>::max();
     double relative_change = 1.0;
@@ -592,7 +609,8 @@ int main(int argc, const char* argv[])
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel,
+            *var.dyn_fric_coeff, *var.state_variable);
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -624,7 +642,8 @@ int main(int argc, const char* argv[])
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                     *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel);
+                    *var.ppressure, *var.dppressure, *var.vel,
+                    *var.dyn_fric_coeff, *var.state_variable);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);
@@ -696,48 +715,12 @@ int main(int argc, const char* argv[])
 
         if (param.sim.is_outputting_averaged_fields)
             var.output->average_fields(var);
-        
-        int r = 1;
+
+        update_earthquake_tracking(param, var, earthquake);
+
         if (param.control.has_ATS) {
-            // r = std::pow(2, log10(var.dt) + 9);
-            // r = std::max(r, 1);
-            // if ((! param.sim.is_outputting_averaged_fields || (var.steps % param.sim.is_outputting_averaged_fields == 0)) &&
-            // // When output_averaged_fields in turned on, the output cannot be
-            // // done at arbitrary time steps.
-            // (((var.steps - starting_step) >= r * param.sim.output_step_interval) ||
-            // ((var.time - starting_time) > param.sim.output_time_interval_in_yr * YEAR2SEC)) ) {
-            //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-            //     output.write_checkpoint(param, var);
-
-            // output.write(var);
-
-            // next_regular_frame ++;
-            // starting_step = var.steps; starting_time = var.time;
-            // }
-
-            if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-               (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
-              ||
-              (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
-               (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
-              ||
-              (var.max_global_vel_mag > 1e-8)  // **New condition for high velocity**
-             )
-            // time or step output requirements are met
-            &&
-            ((! param.sim.is_outputting_averaged_fields) ||
-                (param.sim.is_outputting_averaged_fields &&
-                    (var.steps % param.mesh.quality_check_step_interval == 0)))
-            // When is_outputting_averaged_fields is turned on, the output cannot be
-            // done at arbitrary time steps.
-            ) {
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    var.output->write_checkpoint(param, var);
-
-                var.output->write(var);
-
-                next_regular_frame ++;
-            }
+            handle_ats_output(param, var, *var.output, earthquake,
+                              starting_time, starting_step, next_regular_frame);
         } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
                (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
