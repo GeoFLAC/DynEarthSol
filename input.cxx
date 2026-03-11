@@ -66,6 +66,15 @@ static void declare_parameters(po::options_description &cfg,
          "Output time-averaged (smoothed) field variables or not. These fields are: velocity, strain rate, and stress.\n"
          "no: output instantaneous fields. The velocity and strain-rate might oscillate temporally.\n"
          "yes: output field variables averaged over mesh.quality_check_step_interval time steps.\n")
+        // For rate-and-state + ATS output control
+        ("sim.earthquake_output_step_interval", po::value<int>(&p.sim.earthquake_output_step_interval)->default_value(50),
+         "Output step interval while earthquake mode is active.")
+        ("sim.earthquake_start_factor", po::value<double>(&p.sim.earthquake_start_factor)->default_value(5.0),
+         "Earthquake start threshold factor: vmax > factor * max_vbc_val.")
+        ("sim.earthquake_end_factor", po::value<double>(&p.sim.earthquake_end_factor)->default_value(2.0),
+         "Earthquake end threshold factor: vmax < factor * max_vbc_val.")
+        ("sim.seismic_moment_calculate_output", po::value<bool>(&p.sim.seismic_moment_calculate_output)->default_value(false),
+         "If true, seismic moment and magnitude are accumulated during earthquake mode.")
         ("sim.hdf5_compression_level", po::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
             "HDF5 compression level (0-9). 0: no compression; 9: max. compression. \n"
             "A higher compression level could slow down the output speed.")
@@ -702,6 +711,13 @@ static void declare_parameters(po::options_description &cfg,
          "rate-and-state friction parameter b '[d0, d1, d2, ...]' (-)")
         ("mat.characteristic_velocity", po::value<std::string>()->default_value("[1e-6]"),
          "rate-and-state friction parameter V0 '[d0, d1, d2, ...]' (-)")
+        ("mat.characteristic_distance", po::value<std::string>()->default_value("[4e-3]"),
+         "rate-and-state friction parameter Dc '[d0, d1, d2, ...]' (-)")
+        ("mat.state_var_model", po::value<int>(&p.mat.state_var_model)->default_value(0),
+         "State variable evolution model for rate-and-state friction.\n"
+         "0: steady-state friction (no state evolution),\n"
+         "1: aging law,\n"
+         "2: slip law.")
         ;
     /*
     Example of bulk modulus of rock-forming minerals
@@ -870,6 +886,18 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << " (must be a multiple of quality_check_step_interval="
                   << q << ")\n";
         std::exit(1);
+    }
+    if (p.sim.earthquake_output_step_interval < 1) {
+        std::cerr << "Error: sim.earthquake_output_step_interval must be >= 1.\n";
+        std::exit(1);
+    }
+    if (p.sim.earthquake_start_factor <= 0 || p.sim.earthquake_end_factor <= 0) {
+        std::cerr << "Error: sim.earthquake_start_factor and sim.earthquake_end_factor must be > 0.\n";
+        std::exit(1);
+    }
+    if (p.sim.earthquake_start_factor <= p.sim.earthquake_end_factor) {
+        std::cerr << "Warning: sim.earthquake_start_factor <= sim.earthquake_end_factor; "
+                  << "hysteresis may be weak.\n";
     }
 
     // these parameters are required in mesh.meshing_elem_shape >= 1
@@ -1059,6 +1087,11 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::exit(1);
         }
 
+        if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.has_ATS) {
+            p.control.has_ATS = true;
+            std::cerr << "Warning: RSF rheology requires control.has_ATS=true. Forcing it on.\n";
+        }
+
 #ifdef THREED
         if ( p.mat.is_plane_strain ) {
             p.mat.is_plane_strain = false;
@@ -1139,6 +1172,11 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
         get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
+        if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
+            std::cerr << "Error: mat.state_var_model must be 0, 1, or 2.\n";
+            std::exit(1);
+        }
     }
 
 }
