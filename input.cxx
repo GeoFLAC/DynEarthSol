@@ -81,6 +81,65 @@ static void declare_parameters(po::options_description &cfg,
         ;
 
     cfg.add_options()
+        ("monitor.enabled", po::value<bool>(&p.monitor.enabled)->default_value(false),
+         "Enable point-based generic monitoring output?")
+        ("monitor.step_interval", po::value<int>(&p.monitor.step_interval)->default_value(10),
+         "Monitoring output step interval.")
+        ("monitor.num_points", po::value<int>(&p.monitor.num_points)->default_value(0),
+         "Number of monitoring query points.")
+        ("monitor.points_x", po::value<std::string>()->default_value("[]"),
+         "Monitoring x coordinates array '[x0, x1, ...]'.")
+        ("monitor.points_y", po::value<std::string>()->default_value("[]"),
+         "Monitoring y coordinates array '[y0, y1, ...]'.")
+        ("monitor.points_z", po::value<std::string>()->default_value("[]"),
+         "Monitoring z coordinates array '[z0, z1, ...]' (3D only).")
+        ("monitor.points_unit", po::value<std::string>(&p.monitor.points_unit)->default_value("m"),
+         "Unit of monitor.points_x/y/z: mm, cm, m, km.")
+        ("monitor.remesh_rebind_mode", po::value<std::string>()->default_value("pre_remesh_coord"),
+         "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
+        ("monitor.output_prefix", po::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
+         "Prefix of monitoring output files.")
+        ("monitor.write_header", po::value<bool>(&p.monitor.write_header)->default_value(true),
+         "Write CSV header row for monitoring outputs?")
+        ("monitor.output_coord", po::value<bool>(&p.monitor.output_coord)->default_value(true),
+         "Output node coordinate columns.")
+        ("monitor.output_velocity", po::value<bool>(&p.monitor.output_velocity)->default_value(true),
+         "Output node velocity columns.")
+        ("monitor.output_force", po::value<bool>(&p.monitor.output_force)->default_value(false),
+         "Output node force columns.")
+        ("monitor.output_temperature", po::value<bool>(&p.monitor.output_temperature)->default_value(false),
+         "Output node temperature.")
+        ("monitor.output_pore_pressure", po::value<bool>(&p.monitor.output_pore_pressure)->default_value(false),
+         "Output node pore pressure.")
+        ("monitor.output_bcflag", po::value<bool>(&p.monitor.output_bcflag)->default_value(false),
+         "Output node boundary-flag value.")
+        ("monitor.output_stress", po::value<bool>(&p.monitor.output_stress)->default_value(false),
+         "Output element stress components.")
+        ("monitor.output_strain", po::value<bool>(&p.monitor.output_strain)->default_value(false),
+         "Output element strain components.")
+        ("monitor.output_strain_rate", po::value<bool>(&p.monitor.output_strain_rate)->default_value(false),
+         "Output element strain-rate components.")
+        ("monitor.output_plastic_strain", po::value<bool>(&p.monitor.output_plastic_strain)->default_value(false),
+         "Output element plastic strain.")
+        ("monitor.output_plastic_strain_rate", po::value<bool>(&p.monitor.output_plastic_strain_rate)->default_value(false),
+         "Output element plastic strain-rate.")
+        ("monitor.output_radiogenic_source", po::value<bool>(&p.monitor.output_radiogenic_source)->default_value(false),
+         "Output element radiogenic source.")
+        ("monitor.output_density", po::value<bool>(&p.monitor.output_density)->default_value(false),
+         "Output element density.")
+        ("monitor.output_mesh_quality", po::value<bool>(&p.monitor.output_mesh_quality)->default_value(false),
+         "Output element mesh quality.")
+        ("monitor.output_viscosity", po::value<bool>(&p.monitor.output_viscosity)->default_value(false),
+         "Output element viscosity.")
+        ("monitor.output_material", po::value<bool>(&p.monitor.output_material)->default_value(false),
+         "Output element material index.")
+        ("monitor.output_dynamic_friction", po::value<bool>(&p.monitor.output_dynamic_friction)->default_value(false),
+         "Output dynamic friction value.")
+        ("monitor.output_state_variable", po::value<bool>(&p.monitor.output_state_variable)->default_value(false),
+         "Output state variable value.")
+        ;
+
+    cfg.add_options()
         ("mesh.meshing_option", po::value<int>(&p.mesh.meshing_option)->default_value(1),
          "How to create the new mesh?\n"
          "1: rectangular box with roughly uniform resolution\n"
@@ -969,6 +1028,89 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         std::cerr << "Error: mesh.smallest_size is greater than mesh.largest_size.\n";
         std::exit(1);
+    }
+
+    //
+    // monitor
+    //
+    {
+        if (p.monitor.step_interval < 1) {
+            std::cerr << "Error: monitor.step_interval must be >= 1.\n";
+            std::exit(1);
+        }
+        if (p.monitor.num_points < 0) {
+            std::cerr << "Error: monitor.num_points must be >= 0.\n";
+            std::exit(1);
+        }
+
+        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
+#ifdef THREED
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
+#else
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, 0);
+#endif
+
+        if (p.monitor.enabled && p.monitor.num_points <= 0) {
+            std::cerr << "Error: monitor.enabled=true requires monitor.num_points > 0.\n";
+            std::exit(1);
+        }
+
+        if (p.monitor.points_unit == "mm")
+            p.monitor.points_scale_to_m = 1e-3;
+        else if (p.monitor.points_unit == "cm")
+            p.monitor.points_scale_to_m = 1e-2;
+        else if (p.monitor.points_unit == "m")
+            p.monitor.points_scale_to_m = 1.0;
+        else if (p.monitor.points_unit == "km")
+            p.monitor.points_scale_to_m = 1e3;
+        else {
+            std::cerr << "Error: monitor.points_unit must be one of mm, cm, m, km.\n";
+            std::exit(1);
+        }
+
+        for (int i = 0; i < p.monitor.num_points; ++i) {
+            p.monitor.points_x[i] *= p.monitor.points_scale_to_m;
+            p.monitor.points_y[i] *= p.monitor.points_scale_to_m;
+#ifdef THREED
+            p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
+#endif
+        }
+
+        const std::string rebind_mode = vm["monitor.remesh_rebind_mode"].as<std::string>();
+        if (rebind_mode == "initial_coord")
+            p.monitor.remesh_rebind_mode = monitor_rebind_initial_coord;
+        else if (rebind_mode == "pre_remesh_coord")
+            p.monitor.remesh_rebind_mode = monitor_rebind_pre_remesh_coord;
+        else {
+            std::cerr << "Error: monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.\n";
+            std::exit(1);
+        }
+
+        const bool any_monitor_output =
+            p.monitor.output_coord ||
+            p.monitor.output_velocity ||
+            p.monitor.output_force ||
+            p.monitor.output_temperature ||
+            p.monitor.output_pore_pressure ||
+            p.monitor.output_bcflag ||
+            p.monitor.output_stress ||
+            p.monitor.output_strain ||
+            p.monitor.output_strain_rate ||
+            p.monitor.output_plastic_strain ||
+            p.monitor.output_plastic_strain_rate ||
+            p.monitor.output_radiogenic_source ||
+            p.monitor.output_density ||
+            p.monitor.output_mesh_quality ||
+            p.monitor.output_viscosity ||
+            p.monitor.output_material ||
+            p.monitor.output_dynamic_friction ||
+            p.monitor.output_state_variable;
+
+        if (p.monitor.enabled && !any_monitor_output) {
+            std::cerr << "Error: monitor.enabled=true requires at least one monitor.output_* = true.\n";
+            std::exit(1);
+        }
     }
 
 #ifdef THREED
