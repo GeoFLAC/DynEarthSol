@@ -117,7 +117,7 @@ void phase_changes(const Param& param, Variables& var)
     MarkerSet& ms = *(var.markersets[0]);
     int is_error = 0;
 
-    #pragma acc parallel loop reduction(+:is_error) async
+    #pragma acc parallel loop gang vector reduction(+:is_error) async
     for (int e=0; e<var.nelem; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();
         #pragma acc loop seq

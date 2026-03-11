@@ -758,7 +758,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         #pragma omp for
 #else
         #pragma omp single
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
 #endif
         for (int i = 0; i < a_out.size(); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
@@ -946,10 +946,9 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
     itmp[0] = _nmarkers;
     bin.write_array(itmp, (_name + " size").c_str(), itmp.size());
 
-    array_t *mcoord = calculate_marker_coord(var); // coordinate of markers
-
-    bin.write_array(*mcoord, (_name + ".coord").c_str(), _nmarkers);
-    delete mcoord;
+    array_t mcoord(_nmarkers);
+    calculate_marker_coord(var, mcoord); // coordinate of markers
+    bin.write_array(mcoord, (_name + ".coord").c_str(), _nmarkers);
 #endif
     bin.write_array(*_eta, (_name + ".eta").c_str(), _nmarkers);
     bin.write_array(*_elem, (_name + ".elem").c_str(), _nmarkers);
@@ -985,31 +984,31 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 }
 
 
-array_t* MarkerSet::calculate_marker_coord(const Variables &var) const {
+void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) const {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // const MarkerSet &ms = *var.markersets[0];
-    const int nmarkers = get_nmarkers();
-    array_t* points = new array_t(nmarkers);
 
-    #pragma omp parallel for default(none) shared(var, points) firstprivate(nmarkers)
-    for (int n=0; n<nmarkers; n++) {
-        const int e = get_elem(n);
-        const double* eta = get_eta(n);
-        const int* conn = (*var.connectivity)[e];
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, points)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n=0; n<_nmarkers; n++) {
+        const int* conn = (*var.connectivity)[(*_elem)[n]];
 
         for(int d=0; d<NDIMS; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_ELEM; k++)
-                sum += (*var.coord)[ conn[k] ][d] * eta[k];
-            (*points)[n][d] = sum;
+                sum += (*var.coord)[ conn[k] ][d] * (*_eta)[n][k];
+            points[n][d] = sum;
         }
     }
+
+    #pragma acc wait
+
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
-    return points;
 }
 
 namespace {
@@ -1035,7 +1034,7 @@ namespace {
         printf("    Using %d blocks, markers per block: %d, total queries: %lu\n",
                nblocks, markers_per_block, (unsigned long)nmarkers*k);
 
-        array_t queries(markers_per_block, 0);
+        array_t queries(markers_per_block);
         neighbor_vec neighbors(markers_per_block * k);
 
         for (int b=0; b<nblocks; ++b) {
@@ -1044,38 +1043,32 @@ namespace {
             
             printf("      Block %3d:  marker %7d to %7d", b, start, end-1);
 
-            queries.resize(end-start);
-            std::fill_n(queries.data(), NDIMS*(end-start),0.);
-
 #ifndef ACC
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
                 old_connectivity, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 // 1. Get physical coordinates, x, of an old marker.
                 const int *conn = old_connectivity[ms.get_elem(i)];
                 const double *eta = ms.get_eta(i);
                 for (int j = 0; j < NDIMS; j++) {
+                    queries[idx_q][j] = 0.;
                     for (int l = 0; l < NODES_PER_ELEM; l++) {
                         queries[idx_q][j] += eta[l] * old_coord[ conn[l] ][j];
                     }
                 }
             }
 
-            neighbors.resize( (end - start) * k );
-
-            #pragma acc wait
-
-            kdtree.search(queries, neighbors, k, 3);
+            kdtree.search(queries, neighbors, (end - start), k, 3);
 
             // Loop over all the old markers and identify a containing element in the new mesh.
 #ifndef ACC
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
                 nmarkers, queries, neighbors, start, end) firstprivate(k)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop gang vector
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
@@ -1108,6 +1101,8 @@ namespace {
 
         int_vec removed_markers;
 
+        #pragma acc wait
+
         for (int i = 0; i < nmarkers; i++) {
             int e = ms.get_elem(i);
             if (e >= 0)
@@ -1119,7 +1114,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, ms, markers_in_elem, elemmarkers)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int e = 0; e < var.nelem; e++) {
             int_vec &markers = markers_in_elem[e];
             for (int i = 0; i < markers.size(); i++) {
@@ -1130,6 +1125,8 @@ namespace {
                 }
             }
         }
+
+        #pragma acc wait
 
         ms.remove_markers(param, var, removed_markers, markers_in_elem);
 
@@ -1257,6 +1254,44 @@ namespace {
         return v1 + t * (v2 - v1);
     }
 
+    // Interpolate deposition time and set genesis=4 for a new sediment marker placed in element e.
+    // Averages existing sediment markers in two groups (reworked: genesis 2|4 → ind=0, others → ind=1)
+    // and picks the first non-empty group for interpolation.  If no suitable reference exists,
+    // ti and ge are left unchanged.
+    void compute_sed_marker_time_genesis(
+        const Param& param, const Variables& var, const MarkerSet& ms,
+        int e, int e_local, const ElemMarkerInfo* emi_ptr,
+        double* x, double& ti, int& ge)
+    {
+        if (e_local == -1 || emi_ptr[e_local].nmarker == 0) return;
+
+        ElemMarkerInfo emi_base[2];
+        for (int m : (*var.markers_in_elem)[e]) {
+            if (ms.get_mattype(m) != param.mat.mattype_sed) continue;
+            int ind = (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) ? 0 : 1;
+            emi_base[ind].value += ms.get_time(m);
+            const double* eta = ms.get_eta(m);
+            int* conn = (*var.connectivity)[e];
+            for (int d = 0; d < NDIMS; ++d)
+                for (int kk = 0; kk < NODES_PER_ELEM; ++kk)
+                    emi_base[ind].coord[d] += (*var.coord)[conn[kk]][d] * eta[kk];
+            emi_base[ind].nmarker++;
+        }
+
+        for (int k = 0; k < 2; ++k) {
+            if (emi_base[k].nmarker == 0) continue;
+            if (emi_base[k].nmarker > 1) {
+                emi_base[k].value /= emi_base[k].nmarker;
+                for (int d = 0; d < NDIMS; ++d)
+                    emi_base[k].coord[d] /= emi_base[k].nmarker;
+            }
+            ti = std::max(interpolate_nd(emi_base[k].coord, emi_base[k].value,
+                                         emi_ptr[e_local].coord, emi_ptr[e_local].value, x), 0.0);
+            ge = 4; // sediment with interpolation
+            break;
+        }
+    }
+
     void replenish_markers_with_mattype_from_nn(const Param& param, const Variables &var,
             int_pair_vec &unplenished_elems, int genesis, bool is_surface = false, const EMI_vec& emi = EMI_vec())
     {
@@ -1265,123 +1300,125 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush(__FUNCTION__);
 #endif
-        array_t *points = var.markersets[0]->calculate_marker_coord(var); // coordinate of markers
-        PointCloud cloud(*points);
+
+        int k_neig = 1, nnew = 0;
+        int ne = unplenished_elems.size();
+        int_vec nneed_mk(ne), mk_start(ne, 0);
+        MarkerSet &ms = *var.markersets[0];
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, unplenished_elems, ne, nneed_mk)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int i=0; i<ne; ++i)
+            nneed_mk[i] = param.markers.min_num_markers_in_element - unplenished_elems[i].second;
+
+        for (int i=1; i<ne; ++i)
+            mk_start[i] = mk_start[i-1] + nneed_mk[i-1];
+        nnew = mk_start[ne-1] + nneed_mk[ne-1];
+
+        array_t queries(nnew);
+        shapefn etas(nnew);
+
+        // normal random cannot be parallelized in acc
+        #pragma omp parallel for default(none) \
+                shared(ms, unplenished_elems, nneed_mk, etas, ne, var, mk_start)
+        for (int i=0; i<ne; ++i) {
+            int e = unplenished_elems[i].first;
+            int num_marker_in_elem = unplenished_elems[i].second;
+
+            for (int j=0; j<nneed_mk[i]; ++j) {
+                double *eta = etas[mk_start[i] + j];
+                ms.random_eta_seed(eta, e + num_marker_in_elem + var.steps);
+
+                num_marker_in_elem++;
+            }
+        }
+
+#ifndef ACC
+        #pragma omp parallel for default(none) \
+                shared(var, unplenished_elems, nneed_mk, etas, queries, ne, mk_start)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<ne; ++i) {
+            int e = unplenished_elems[i].first;
+            for (int j=0; j<nneed_mk[i]; ++j) {
+                int m_idx = mk_start[i] + j;
+                double *x = queries[m_idx];
+                const int *conn = (*var.connectivity)[e];
+                for (int d=0; d<NDIMS; d++) {
+                    x[d] = 0.;
+                    for (int ii=0; ii<NODES_PER_ELEM; ii++) {
+                        x[d] += (*var.coord)[ conn[ii] ][d] * etas[m_idx][ii];
+                    }
+                }
+            }
+        }
+
+        neighbor_vec neighbors(nnew);
+        AMD_vec marker_data_all(nnew);
+        array_t points(ms.get_nmarkers());
+
+        ms.calculate_marker_coord(var, points); // coordinate of markers
+
+#ifdef ACC
+        array_t point_tmp(1);
+        PointCloud cloud(point_tmp);
+#else
+        PointCloud cloud(points);
+#endif
 
 #ifdef NPROF_DETAIL
         nvtxRangePush("create kdtree for markers");
 #endif
-        NANOKDTree kdtree(NDIMS, cloud);
-        kdtree.buildIndex();
+        NANOKDTree nano_kdtree(NDIMS, cloud);
+        KNN kdtree(param, points, nano_kdtree);
 #ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
-        MarkerSet &ms = *var.markersets[0];
-        AMD_vec marker_data_all;
-        int ne = unplenished_elems.size();
 
-        #pragma omp parallel default(none) shared(param, var, unplenished_elems, kdtree, \
-                ms, marker_data_all, ne, is_surface, emi, genesis)
-        {
-            AMD_vec marker_data_local;
+        kdtree.search(queries, neighbors, nnew, k_neig, 3.);
 
-            #pragma omp for nowait
-            for (int i=0; i<ne; ++i) {
-                int e = unplenished_elems[i].first;
-                int num_marker_in_elem = unplenished_elems[i].second;
+        #pragma acc wait
+        const ElemMarkerInfo* emi_ptr = emi.data();
+        const int* top_elems_ptr = var.top_elems->data();
+        const int ntop_elems = var.ntop_elems;
 
-                while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
-                    double eta[NODES_PER_ELEM];
-                    ms.random_eta_seed(eta, e+num_marker_in_elem+var.steps);
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
+                ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, ntop_elems, \
+                genesis, nneed_mk, mk_start, neighbors, queries, etas)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int i=0; i<ne; ++i) {
+            int e = unplenished_elems[i].first;
+            int start = mk_start[i];
 
-                    double x[NDIMS] = {0};
-                    const int *conn = (*var.connectivity)[e];
-                    for (int d=0; d<NDIMS; d++) {
-                        for (int ii=0; ii<NODES_PER_ELEM; ii++) {
-                            x[d] += (*var.coord)[ conn[ii] ][d] * eta[ii];
-                        }
-                    }
+            for (int j=0; j<nneed_mk[i]; ++j) {
+                int m_idx = start + j;
+                int m = neighbors[m_idx].idx;
+                double *x = queries[m_idx];
 
-                    const int k = 1;  // how many nearest neighbors to search?
-                    size_t_vec nn_idx(k);
-                    double_vec dd(k);
-                    KNNResultSet resultSet(k);
-                    resultSet.init(nn_idx.data(), dd.data());
+                int mt = ms.get_mattype(m);
+                double ti = ms.get_time(m);
+                int ge = genesis;
 
-                    // Look for nearest marker.
-                    kdtree.findNeighbors(resultSet, x);
-
-                    int m = nn_idx[0]; // nearest marker
-                    const int mt = ms.get_mattype(m);
-                    double ti = ms.get_time(m);
-                    int ge = genesis;
-
-                    if (is_surface && mt == param.mat.mattype_sed) {
-                        int e_local = var.arctop_elems.at(e);
-                        if (emi[e_local].nmarker > 0) {
-                            int_vec& emarker = (*var.markers_in_elem)[e];
-                            EMI_vec emi_base(2);
-                            for (const auto& m : emarker) {
-                                if (ms.get_mattype(m) == param.mat.mattype_sed) {
-                                    int ind = 1;
-                                    if (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) {
-                                        ind = 0;
-                                    }
-                                    emi_base[ind].value += ms.get_time(m);
-                                    const double* eta = ms.get_eta(m);
-                                    int *conn = (*var.connectivity)[e];
-                                    for (int d=0; d<NDIMS; ++d) {
-                                        for (int k=0; k<NODES_PER_ELEM; ++k) {
-                                            emi_base[ind].coord[d] += (*var.coord)[conn[k]][d] * eta[k];
-                                        }
-                                    }
-                                    emi_base[ind].nmarker++;
-                                }
-                            }
-                            for (int j=0; j<2; ++j) {
-                                if (emi_base[j].nmarker > 0) {
-                                    if (emi_base[j].nmarker > 1) {
-                                        emi_base[j].value /= emi_base[j].nmarker;
-                                        for (int d=0; d<NDIMS; ++d) {
-                                            emi_base[j].coord[d] /= emi_base[j].nmarker;
-                                        }
-                                    }
-                                    ti = interpolate_nd(emi_base[j].coord, emi_base[j].value,
-                                        emi[e_local].coord, emi[e_local].value, x);
-                                    ti = std::max(ti, 0.0);
-                                    ge = 4; // sediment with interpolation
-                                    // printf("replenishing with %d\n",j);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    marker_data_local.emplace_back(eta, e, mt, ti, 0., 0., 0.,ge);
-
-                    ++(*var.elemmarkers)[e][mt];
-                    ++num_marker_in_elem;
+                if (is_surface && mt == param.mat.mattype_sed) {
+                    int e_local = binary_search_index(top_elems_ptr, ntop_elems, e);
+                    compute_sed_marker_time_genesis(param, var, ms, e, e_local, emi_ptr, x, ti, ge);
                 }
+
+                marker_data_all[m_idx] = AppendMarkerData(etas[m_idx], e, mt, ti, 0., 0., 0., ge);
+                ++(*var.elemmarkers)[e][mt];
             }
-
-            #pragma omp critical
-            marker_data_all.insert(marker_data_all.end(), marker_data_local.begin(), marker_data_local.end());
         }
-
-        std::stable_sort(marker_data_all.begin(), marker_data_all.end(),
-            [](const AppendMarkerData& a, const AppendMarkerData& b) {
-                return a.elem < b.elem;
-            });
 
         // Append new markers to the end of the marker set.
         ms.append_markers(marker_data_all);
 
-        int nnew = marker_data_all.size();
         int nmarkers = ms.get_nmarkers();
         for (int i=0; i<nnew; ++i)
             (*var.markers_in_elem)[marker_data_all[i].elem].push_back(nmarkers-nnew+i);
-
-        delete points;
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -1401,7 +1438,7 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #ifndef ACC
     #pragma omp parallel for reduction(+:ncount,is_error) default(none) shared(var,std::cerr)
 #endif
-    #pragma acc parallel loop reduction(+:ncount,is_error)
+    #pragma acc parallel loop gang vector reduction(+:ncount,is_error)
     for (int e=0; e<var.nelem; ++e) {
         int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
         int elenmarkers = (*var.markers_in_elem)[e].size();
@@ -1455,7 +1492,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0;i<var.ntop_elems;i++) {
         int* tnodes = (*var.connectivity)[(*var.top_elems)[i]];
 
@@ -1488,7 +1525,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
 #endif
-    #pragma acc parallel loop reduction(+:nchange) async
+    #pragma acc parallel loop gang vector reduction(+:nchange) async
     for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
@@ -1596,8 +1633,6 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         // delete recorded marker
         remove_markers(param, var, delete_marker, markers_in_elem);
 
-        #pragma acc wait
-
         int_pair_vec unplenished_elems;
         for (int i=0; i<var.ntop_elems; i++) {
             int e = (*var.top_elems)[i];
@@ -1631,17 +1666,17 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             std::exit(1);
         }
 
-        for (int i=0; i<var.ntop_elems; i++) {
-            int e = (*var.top_elems)[i];
-            int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
-            int  nmarkers = (*var.markers_in_elem)[e].size();
-            if (nemarker0 != nmarkers) {
-                std::cerr << "Error: number of markers in element " << e
-                        << " does not match number of elemmarkers: "
-                        << nmarkers << " vs. " << nemarker0 << '\n';
-                std::exit(1);
-            }
-        }
+        // for (int i=0; i<var.ntop_elems; i++) {
+        //     int e = (*var.top_elems)[i];
+        //     int nemarker0 = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
+        //     int  nmarkers = (*var.markers_in_elem)[e].size();
+        //     if (nemarker0 != nmarkers) {
+        //         std::cerr << "Error: number of markers in element " << e
+        //                 << " does not match number of elemmarkers: "
+        //                 << nmarkers << " vs. " << nemarker0 << '\n';
+        //         std::exit(1);
+        //     }
+        // }
     }
 
 #ifdef NPROF_DETAIL
@@ -1713,7 +1748,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifndef ACC
     #pragma omp parallel default(none) shared(param, var) reduction(+:nunplenished)
 #endif
-    #pragma acc parallel loop reduction(+:nunplenished)
+    #pragma acc parallel loop gang vector reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {
         int num_marker_in_elem = (*var.markers_in_elem)[e].size();
         if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
