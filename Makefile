@@ -160,6 +160,11 @@ ifneq (, $(findstring clang++, $(CXX)))
 	ifeq ($(openmp), 1)
 		# path to OpenMP library directory (for clang++ on macOS)
 		OPENMP_ROOT_DIR = external/openmp-install
+		ifeq ($(filter /%,$(OPENMP_ROOT_DIR)),$(OPENMP_ROOT_DIR))
+			OPENMP_RPATH := $(OPENMP_ROOT_DIR)/lib
+		else
+			OPENMP_RPATH := @executable_path/$(OPENMP_ROOT_DIR)/lib
+		endif
 		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
 		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
 	endif
@@ -404,8 +409,8 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
 		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
 ifeq ($(openmp), 1)
-		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_ROOT_DIR)/lib" ]; then \
-			install_name_tool -add_rpath $(OPENMP_ROOT_DIR)/lib $@; \
+		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_RPATH)" ]; then \
+			install_name_tool -add_rpath $(OPENMP_RPATH) $@; \
 		fi
 endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
