@@ -423,6 +423,50 @@ struct Debug {
 //    bool has_two_layers_for;
 };
 
+enum MonitorRebindMode {
+    monitor_rebind_initial_coord = 0,
+    monitor_rebind_pre_remesh_coord = 1
+};
+
+struct Monitor {
+    bool enabled;
+    int step_interval;
+    int num_points;
+
+    std::string points_unit;
+    double points_scale_to_m;
+    int remesh_rebind_mode;
+
+    double_vec points_x;
+    double_vec points_y;
+    double_vec points_z;
+
+    std::string output_prefix;
+    bool write_header;
+
+    bool output_coord;
+    bool output_velocity;
+    bool output_force;
+    bool output_temperature;
+    bool output_pore_pressure;
+    bool output_bcflag;
+
+    bool output_stress;
+    bool output_strain;
+    bool output_strain_rate;
+    bool output_plastic_strain;
+    bool output_plastic_strain_rate;
+
+    bool output_radiogenic_source;
+    bool output_density;
+    bool output_mesh_quality;
+    bool output_viscosity;
+    bool output_material;
+
+    bool output_dynamic_friction;
+    bool output_state_variable;
+};
+
 struct PointCloud {
     const array_t &data;
 
@@ -443,6 +487,7 @@ using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adap
 
 struct Param {
     Sim sim;
+    Monitor monitor;
     Mesh mesh;
     Control control;
     BC bc;
