@@ -1,6 +1,6 @@
-# Rate-And-State Friction Examples (Replacement Set)
+# Rate-And-State Friction Examples
 
-This directory contains the replacement RSF example set for paper-style verification.
+This directory contains 2-D RSF example cases for quick verification.
 
 Included cases:
 - `ep_rsf_creep.cfg`: velocity-strengthening creep
@@ -15,14 +15,14 @@ Utility scripts:
 
 ```bash
 cd examples/rate_and_state_friction
-python3 run_rsf_examples.py
+python3 run_rsf_examples.py --exe ../../dynearthsol2d
 python3 plot_rsf_time_series.py -o rsf_time_series.png
 ```
 
 ## Requirements
 
-- DynEarthSol executable (`dynearthsol2d` or `dynearthsol3d`) in repo root,
-  or set `DYNEXE`, or pass `--exe`.
+- DynEarthSol 2-D executable (`dynearthsol2d`) in the repo root,
+  or set `DYNEXE`, or pass `--exe /path/to/dynearthsol2d`.
 - Python packages for plotting:
 
 ```bash

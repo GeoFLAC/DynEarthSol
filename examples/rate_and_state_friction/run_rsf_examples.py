@@ -7,8 +7,11 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable, List
+
+sys.dont_write_bytecode = True
 
 
 def parse_modelname(cfg_path: Path) -> str:
@@ -37,9 +40,7 @@ def ensure_output_dir(cfg_path: Path) -> None:
 def candidate_executables(script_dir: Path) -> Iterable[Path]:
     repo_root = script_dir.parent.parent
     yield repo_root / "dynearthsol2d"
-    yield repo_root / "dynearthsol3d"
     yield repo_root / "binaries" / "dynearthsol2d"
-    yield repo_root / "binaries" / "dynearthsol3d"
 
 
 def resolve_executable(script_dir: Path, explicit: str | None) -> Path:
@@ -61,7 +62,7 @@ def resolve_executable(script_dir: Path, explicit: str | None) -> Path:
             return p
 
     raise FileNotFoundError(
-        "DynEarthSol executable not found. Build in repo root or pass --exe /path/to/dynearthsol2d."
+        "DynEarthSol 2-D executable not found. Build dynearthsol2d in the repo root or pass --exe /path/to/dynearthsol2d."
     )
 
 
@@ -77,11 +78,11 @@ def cleanup_pycache(root_dir: Path) -> None:
 
 def main() -> None:
     script_dir = Path(__file__).resolve().parent
-    parser = argparse.ArgumentParser(description="Run the three RSF example CFGs sequentially.")
+    parser = argparse.ArgumentParser(description="Run the three 2-D RSF example CFGs sequentially.")
     parser.add_argument(
         "--exe",
         default=None,
-        help="Path to DynEarthSol executable. If omitted, use DYNEXE or auto-detect.",
+        help="Path to dynearthsol2d. If omitted, use DYNEXE or auto-detect.",
     )
     parser.add_argument(
         "--cfgs",
