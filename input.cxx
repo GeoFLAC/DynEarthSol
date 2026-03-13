@@ -1,4 +1,5 @@
 #include <algorithm>  // For std::is_sorted
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <limits>
@@ -1329,6 +1330,22 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             std::cerr << "Error: mat.state_var_model must be 0, 1, or 2.\n";
             std::exit(1);
+        }
+        if (p.mat.rheol_type & MatProps::rh_rsf) {
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                if (!std::isfinite(p.mat.characteristic_velocity[m]) ||
+                    p.mat.characteristic_velocity[m] <= 0.0) {
+                    std::cerr << "Error: mat.characteristic_velocity must be > 0 for RSF materials "
+                              << "(material index " << m << ").\n";
+                    std::exit(1);
+                }
+                if (!std::isfinite(p.mat.characteristic_distance[m]) ||
+                    p.mat.characteristic_distance[m] <= 0.0) {
+                    std::cerr << "Error: mat.characteristic_distance must be > 0 for RSF materials "
+                              << "(material index " << m << ").\n";
+                    std::exit(1);
+                }
+            }
         }
     }
 
