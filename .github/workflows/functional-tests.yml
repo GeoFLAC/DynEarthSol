@@ -47,6 +47,9 @@ jobs:
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
+    - name: test 2d RSF ATS benchmark subset
+      run: bash 2d-rsf-ats.sh
+
     - name: make 3d hdf5 opt=-1
       working-directory: .
       run: make cleanall && make -j ndims=3 opt=-1 openmp=1 hdf5=1 \
