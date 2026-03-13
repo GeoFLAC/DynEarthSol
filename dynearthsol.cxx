@@ -697,11 +697,11 @@ int main(int argc, const char* argv[])
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
 
-        monitor_write_if_due(param, var);
-
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain);
+
+        monitor_write_if_due(param, var);
 
         #pragma acc wait
         const int slow_updates_interval = 10;

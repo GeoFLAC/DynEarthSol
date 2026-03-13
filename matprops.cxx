@@ -423,6 +423,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
         const double log_theta = std::log((cv_eff * theta_eff) / dc_eff);
         mu_d = mu_0 + d_a_avg * log_v + e_b_avg * log_theta;
     }
+    mu_d = std::max(mu_d, 1e-6);
 
     dynamic_friction_angle = std::atan(mu_d) / DEG2RAD;
     cohesion = c / n;
