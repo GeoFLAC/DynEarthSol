@@ -16,18 +16,18 @@ constexpr double kMinEarthquakeSpeed = 1e-6; // m/s
 double compute_max_plastic_strain_rate(const Variables& var)
 {
     const double inv_dt = 1.0 / std::max(var.dt, 1e-30);
-    double max_rate = 0.0;
+    double max_depls = 0.0;
 
 #ifdef ACC
-    #pragma acc parallel loop reduction(max:max_rate)
+    #pragma acc parallel loop reduction(max:max_depls)
 #else
-    #pragma omp parallel for reduction(max:max_rate) default(none) shared(var, inv_dt)
+    #pragma omp parallel for reduction(max:max_depls) default(none) shared(var)
 #endif
     for (int e = 0; e < var.nelem; ++e) {
         const double depls = std::fabs((*var.delta_plstrain)[e]);
-        max_rate = std::max(max_rate, depls * inv_dt);
+        max_depls = std::max(max_depls, depls);
     }
-    return max_rate;
+    return max_depls * inv_dt;
 }
 
 double compute_max_global_velocity_magnitude(const Variables& var)

@@ -297,17 +297,16 @@ def process_single_frame(args):
         except NameError:
             pass
 
-        # Optional RSF cell fields. Keep aliases for compatibility across branches.
-        for aliases in (
-            ('dynamic friction coefficient', 'dyn_fric_coeff'),
-            ('friction state variable', 'state_variable'),
-        ):
-            for field_name in aliases:
-                try:
-                    convert_field(des, frame, field_name, fvtu)
-                    break
-                except (KeyError, NameError):
-                    continue
+        # Optional RSF cell fields.
+        try:
+            convert_field(des, frame, 'dynamic friction coefficient', fvtu)
+        except (KeyError, NameError):
+            pass
+
+        try:
+            convert_field(des, frame, 'friction state variable', fvtu)
+        except (KeyError, NameError):
+            pass
 
         # Write Cell Data
         for name, (data, comps) in cell_data.items():

@@ -16,10 +16,6 @@ void handle_ats_output(const Param& param,
                        double starting_step,
                        int& next_regular_frame)
 {
-    if (!param.control.has_ATS) {
-        return;
-    }
-
     // (1) Earthquake-triggered output first.
     if (state.in_earthquake_mode &&
         state.allow_earthquake_output &&
