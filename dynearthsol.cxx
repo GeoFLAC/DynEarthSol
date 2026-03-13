@@ -504,9 +504,10 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
     if (param.control.has_PT)
     {   
         // var.dt = compute_dt_PT(param, var);
+        param.control.PT_jump = true;
         for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
         {
-            apply_vbcs_PT(param, var, *var.vel);
+            apply_vbcs(param, var, *var.vel);
             if (param.control.has_moving_mesh)
                 update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
@@ -527,6 +528,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             }
             residual_old = var.l2_residual;
         }
+        param.control.PT_jump = false;
     }
 
 #ifdef NPROF_DETAIL
@@ -648,7 +650,7 @@ int main(int argc, const char* argv[])
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
-                apply_vbcs_PT(param, var, *var.vel);
+                apply_vbcs(param, var, *var.vel);
                 if (param.control.has_moving_mesh)
                     update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
