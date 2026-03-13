@@ -2657,7 +2657,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
      */
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var, sizefactor)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; e++) {
@@ -3020,5 +3020,4 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePop();
 #endif
 }
-
 
