@@ -353,11 +353,24 @@ void restart(const Param& param, Variables& var)
         initial_weak_zone(param, var, *var.plstrain);
     }
 
-    // Restart currently initializes RSF state from material parameters.
-    // This keeps legacy checkpoints compatible even without RSF state datasets.
+    // Restore the RSF state variable when available, then rebuild the derived
+    // dynamic friction coefficient from the restored state and current fields.
     if (param.mat.rheol_type & MatProps::rh_rsf) {
-        initial_friction_coeff(param, var, *var.dyn_fric_coeff);
-        initial_state_variable(param, var, *var.state_variable);
+        bool restored_state_variable = false;
+        if (bin_chkpt.has_array("friction state variable")) {
+            bin_chkpt.read_array(*var.state_variable, "friction state variable");
+            restored_state_variable = true;
+        } else if (bin_save.has_array("friction state variable")) {
+            bin_save.read_array(*var.state_variable, "friction state variable");
+            restored_state_variable = true;
+        } else {
+            initial_state_variable(param, var, *var.state_variable);
+        }
+
+        if (!restored_state_variable) {
+            std::cout << "  RSF restart fallback applied for missing state variable dataset.\n";
+        }
+        refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
     // For some reason, the following is added by Denis

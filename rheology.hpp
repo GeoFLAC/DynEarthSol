@@ -6,6 +6,9 @@ void update_stress(const Param& param , Variables& var, tensor_t& stress, double
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel,
                    double_vec& dyn_fric_coeff, double_vec& state_variable);
+void refresh_rsf_friction(const Param& param, Variables& var,
+                          double_vec& dyn_fric_coeff,
+                          const double_vec& state_variable);
 
 void update_old_mean_stress(const Param& param ,const Variables& var, tensor_t& stress, double_vec& old_mean_stress);
 #endif

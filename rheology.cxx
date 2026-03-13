@@ -191,6 +191,46 @@ static void compute_slip_rate3(const double* s, double vx, double vy, double vz,
     slip_rate = std::sqrt(slip_magnitude_1 * slip_magnitude_1 + slip_magnitude_2 * slip_magnitude_2);
 }
 
+void refresh_rsf_friction(const Param& param, Variables& var,
+                          double_vec& dyn_fric_coeff,
+                          const double_vec& state_variable)
+{
+    if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
+
+    const array_t& vel = *var.vel;
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, vel, dyn_fric_coeff, state_variable)
+#endif
+    for (int e = 0; e < var.nelem; ++e) {
+        const int *conn = (*var.connectivity)[e];
+        double vx = 0.0;
+        double vy = 0.0;
+        const double weight = 1.0 / NODES_PER_ELEM;
+#ifdef THREED
+        double vz = 0.0;
+#endif
+
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            vx += vel[conn[j]][0] * weight;
+            vy += vel[conn[j]][1] * weight;
+#ifdef THREED
+            vz += vel[conn[j]][2] * weight;
+#endif
+        }
+
+        double slip_rate = 0.0;
+#ifdef THREED
+        compute_slip_rate3((*var.stress)[e], vx, vy, vz, slip_rate);
+#else
+        compute_slip_rate2((*var.stress)[e], vx, vy, slip_rate);
+#endif
+        var.mat->rsf_friction_from_state(e, (*var.plstrain)[e], slip_rate,
+                                         state_variable[e], dyn_fric_coeff[e],
+                                         param.mat.state_var_model);
+    }
+}
+
 #pragma acc routine seq
 static void elastic(double bulkm, double shearm, const double* de, double* s)
 {

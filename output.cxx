@@ -354,6 +354,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
 #ifdef HDF5

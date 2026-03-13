@@ -547,6 +547,16 @@ void MatProps::plastic_props_rsf(int e, double pls,
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
 }
 
+void MatProps::rsf_friction_from_state(int e, double pls, double slip_rate,
+                                       double state_variable, double& dyn_fric_coeff,
+                                       int state_model) const
+{
+    double cohesion, phi, psi, hardn;
+    double theta = state_variable;
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
+                          dyn_fric_coeff, theta, state_model, 0.0);
+}
+
 
 double MatProps::rho(int e) const
 {

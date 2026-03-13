@@ -69,6 +69,10 @@ public:
                        double& hardn, double& ten_max, double& slip_rate,
                        double& dyn_fric_coeff, double& state_variable,
                        double dt, int state_model) const;
+    #pragma acc routine seq
+    void rsf_friction_from_state(int e, double pls, double slip_rate,
+                                 double state_variable, double& dyn_fric_coeff,
+                                 int state_model) const;
 
     const bool is_plane_strain;
     const double visc_min;
