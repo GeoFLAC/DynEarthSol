@@ -327,6 +327,7 @@ SRCS =	\
 	phasechanges.cxx \
 	remeshing.cxx \
 	rheology.cxx \
+	runtime_info.cxx \
 	markerset.cxx \
 	knn.cxx
 

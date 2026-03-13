@@ -20,6 +20,7 @@
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
+#include "runtime_info.hpp"
 #include "utils.hpp"
 
 #ifdef WIN32
@@ -204,6 +205,8 @@ void init(const Param& param, Variables& var)
         initial_state_variable(param, var, *var.state_variable);
     }
 
+    report_mesh_info(var, "initial");
+
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -381,6 +384,8 @@ void restart(const Param& param, Variables& var)
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
+    report_mesh_info(var, "restart");
+
 }
 
 
@@ -549,6 +554,9 @@ int main(int argc, const char* argv[])
 
     Param param;
     get_input_parameters(argv[1], param);
+
+    report_cpu_runtime_status();
+    report_openacc_runtime_status();
 
     //
     // run simulation
