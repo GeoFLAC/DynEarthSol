@@ -294,6 +294,19 @@ def process_single_frame(args):
             convert_field(des, frame, 'radiogenic source', fvtu)
         except KeyError:
             pass
+        except NameError:
+            pass
+
+        # Optional RSF cell fields.
+        try:
+            convert_field(des, frame, 'dynamic friction coefficient', fvtu)
+        except (KeyError, NameError):
+            pass
+
+        try:
+            convert_field(des, frame, 'friction state variable', fvtu)
+        except (KeyError, NameError):
+            pass
 
         # Write Cell Data
         for name, (data, comps) in cell_data.items():

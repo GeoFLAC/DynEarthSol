@@ -173,6 +173,12 @@ BinaryInput::~BinaryInput()
 }
 
 
+bool BinaryInput::has_array(const char *name) const
+{
+    return offset.find(name) != offset.end();
+}
+
+
 void BinaryInput::read_header()
 {
     /* Read into header buffer */
@@ -869,6 +875,12 @@ HDF5Input::~HDF5Input()
         H5Fclose(file_id);
         file_id = -1;
     }
+}
+
+
+bool HDF5Input::has_array(const char *name) const
+{
+    return H5Lexists(file_id, name, H5P_DEFAULT) > 0;
 }
 
 template <typename T>

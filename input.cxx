@@ -1,4 +1,5 @@
 #include <algorithm>  // For std::is_sorted
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <limits>
@@ -66,9 +67,77 @@ static void declare_parameters(po::options_description &cfg,
          "Output time-averaged (smoothed) field variables or not. These fields are: velocity, strain rate, and stress.\n"
          "no: output instantaneous fields. The velocity and strain-rate might oscillate temporally.\n"
          "yes: output field variables averaged over mesh.quality_check_step_interval time steps.\n")
+        // For rate-and-state + ATS output control
+        ("sim.earthquake_output_step_interval", po::value<int>(&p.sim.earthquake_output_step_interval)->default_value(50),
+         "Output step interval while earthquake mode is active.")
+        ("sim.earthquake_start_factor", po::value<double>(&p.sim.earthquake_start_factor)->default_value(5.0),
+         "Earthquake start threshold factor: vmax > factor * max_vbc_val.")
+        ("sim.earthquake_end_factor", po::value<double>(&p.sim.earthquake_end_factor)->default_value(2.0),
+         "Earthquake end threshold factor: vmax < factor * max_vbc_val.")
+        ("sim.seismic_moment_calculate_output", po::value<bool>(&p.sim.seismic_moment_calculate_output)->default_value(false),
+         "If true, seismic moment and magnitude are accumulated during earthquake mode.")
         ("sim.hdf5_compression_level", po::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
             "HDF5 compression level (0-9). 0: no compression; 9: max. compression. \n"
             "A higher compression level could slow down the output speed.")
+        ;
+
+    cfg.add_options()
+        ("monitor.enabled", po::value<bool>(&p.monitor.enabled)->default_value(false),
+         "Enable point-based generic monitoring output?")
+        ("monitor.step_interval", po::value<int>(&p.monitor.step_interval)->default_value(10),
+         "Monitoring output step interval.")
+        ("monitor.num_points", po::value<int>(&p.monitor.num_points)->default_value(0),
+         "Number of monitoring query points.")
+        ("monitor.points_x", po::value<std::string>()->default_value("[]"),
+         "Monitoring x coordinates array '[x0, x1, ...]'.")
+        ("monitor.points_y", po::value<std::string>()->default_value("[]"),
+         "Monitoring y coordinates array '[y0, y1, ...]'.")
+        ("monitor.points_z", po::value<std::string>()->default_value("[]"),
+         "Monitoring z coordinates array '[z0, z1, ...]' (3D only).")
+        ("monitor.points_unit", po::value<std::string>(&p.monitor.points_unit)->default_value("m"),
+         "Unit of monitor.points_x/y/z: mm, cm, m, km.")
+        ("monitor.remesh_rebind_mode", po::value<std::string>()->default_value("pre_remesh_coord"),
+         "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
+        ("monitor.output_prefix", po::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
+         "Prefix of monitoring output files.")
+        ("monitor.write_header", po::value<bool>(&p.monitor.write_header)->default_value(true),
+         "Write CSV header row for monitoring outputs?")
+        ("monitor.output_coord", po::value<bool>(&p.monitor.output_coord)->default_value(true),
+         "Output node coordinate columns.")
+        ("monitor.output_velocity", po::value<bool>(&p.monitor.output_velocity)->default_value(true),
+         "Output node velocity columns.")
+        ("monitor.output_force", po::value<bool>(&p.monitor.output_force)->default_value(false),
+         "Output node force columns.")
+        ("monitor.output_temperature", po::value<bool>(&p.monitor.output_temperature)->default_value(false),
+         "Output node temperature.")
+        ("monitor.output_pore_pressure", po::value<bool>(&p.monitor.output_pore_pressure)->default_value(false),
+         "Output node pore pressure.")
+        ("monitor.output_bcflag", po::value<bool>(&p.monitor.output_bcflag)->default_value(false),
+         "Output node boundary-flag value.")
+        ("monitor.output_stress", po::value<bool>(&p.monitor.output_stress)->default_value(false),
+         "Output element stress components.")
+        ("monitor.output_strain", po::value<bool>(&p.monitor.output_strain)->default_value(false),
+         "Output element strain components.")
+        ("monitor.output_strain_rate", po::value<bool>(&p.monitor.output_strain_rate)->default_value(false),
+         "Output element strain-rate components.")
+        ("monitor.output_plastic_strain", po::value<bool>(&p.monitor.output_plastic_strain)->default_value(false),
+         "Output element plastic strain.")
+        ("monitor.output_plastic_strain_rate", po::value<bool>(&p.monitor.output_plastic_strain_rate)->default_value(false),
+         "Output element plastic strain-rate.")
+        ("monitor.output_radiogenic_source", po::value<bool>(&p.monitor.output_radiogenic_source)->default_value(false),
+         "Output element radiogenic source.")
+        ("monitor.output_density", po::value<bool>(&p.monitor.output_density)->default_value(false),
+         "Output element density.")
+        ("monitor.output_mesh_quality", po::value<bool>(&p.monitor.output_mesh_quality)->default_value(false),
+         "Output element mesh quality.")
+        ("monitor.output_viscosity", po::value<bool>(&p.monitor.output_viscosity)->default_value(false),
+         "Output element viscosity.")
+        ("monitor.output_material", po::value<bool>(&p.monitor.output_material)->default_value(false),
+         "Output element material index.")
+        ("monitor.output_dynamic_friction", po::value<bool>(&p.monitor.output_dynamic_friction)->default_value(false),
+         "Output dynamic friction value.")
+        ("monitor.output_state_variable", po::value<bool>(&p.monitor.output_state_variable)->default_value(false),
+         "Output state variable value.")
         ;
 
     cfg.add_options()
@@ -702,6 +771,13 @@ static void declare_parameters(po::options_description &cfg,
          "rate-and-state friction parameter b '[d0, d1, d2, ...]' (-)")
         ("mat.characteristic_velocity", po::value<std::string>()->default_value("[1e-6]"),
          "rate-and-state friction parameter V0 '[d0, d1, d2, ...]' (-)")
+        ("mat.characteristic_distance", po::value<std::string>()->default_value("[4e-3]"),
+         "rate-and-state friction parameter Dc '[d0, d1, d2, ...]' (-)")
+        ("mat.state_var_model", po::value<int>(&p.mat.state_var_model)->default_value(0),
+         "State variable evolution model for rate-and-state friction.\n"
+         "0: steady-state friction (no state evolution),\n"
+         "1: aging law,\n"
+         "2: slip law.")
         ;
     /*
     Example of bulk modulus of rock-forming minerals
@@ -871,6 +947,18 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << q << ")\n";
         std::exit(1);
     }
+    if (p.sim.earthquake_output_step_interval < 1) {
+        std::cerr << "Error: sim.earthquake_output_step_interval must be >= 1.\n";
+        std::exit(1);
+    }
+    if (p.sim.earthquake_start_factor <= 0 || p.sim.earthquake_end_factor <= 0) {
+        std::cerr << "Error: sim.earthquake_start_factor and sim.earthquake_end_factor must be > 0.\n";
+        std::exit(1);
+    }
+    if (p.sim.earthquake_start_factor <= p.sim.earthquake_end_factor) {
+        std::cerr << "Warning: sim.earthquake_start_factor <= sim.earthquake_end_factor; "
+                  << "hysteresis may be weak.\n";
+    }
 
     // these parameters are required in mesh.meshing_elem_shape >= 1
 #ifdef THREED
@@ -943,6 +1031,89 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         std::exit(1);
     }
 
+    //
+    // monitor
+    //
+    {
+        if (p.monitor.step_interval < 1) {
+            std::cerr << "Error: monitor.step_interval must be >= 1.\n";
+            std::exit(1);
+        }
+        if (p.monitor.num_points < 0) {
+            std::cerr << "Error: monitor.num_points must be >= 0.\n";
+            std::exit(1);
+        }
+
+        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
+#ifdef THREED
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
+#else
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, 0);
+#endif
+
+        if (p.monitor.enabled && p.monitor.num_points <= 0) {
+            std::cerr << "Error: monitor.enabled=true requires monitor.num_points > 0.\n";
+            std::exit(1);
+        }
+
+        if (p.monitor.points_unit == "mm")
+            p.monitor.points_scale_to_m = 1e-3;
+        else if (p.monitor.points_unit == "cm")
+            p.monitor.points_scale_to_m = 1e-2;
+        else if (p.monitor.points_unit == "m")
+            p.monitor.points_scale_to_m = 1.0;
+        else if (p.monitor.points_unit == "km")
+            p.monitor.points_scale_to_m = 1e3;
+        else {
+            std::cerr << "Error: monitor.points_unit must be one of mm, cm, m, km.\n";
+            std::exit(1);
+        }
+
+        for (int i = 0; i < p.monitor.num_points; ++i) {
+            p.monitor.points_x[i] *= p.monitor.points_scale_to_m;
+            p.monitor.points_y[i] *= p.monitor.points_scale_to_m;
+#ifdef THREED
+            p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
+#endif
+        }
+
+        const std::string rebind_mode = vm["monitor.remesh_rebind_mode"].as<std::string>();
+        if (rebind_mode == "initial_coord")
+            p.monitor.remesh_rebind_mode = monitor_rebind_initial_coord;
+        else if (rebind_mode == "pre_remesh_coord")
+            p.monitor.remesh_rebind_mode = monitor_rebind_pre_remesh_coord;
+        else {
+            std::cerr << "Error: monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.\n";
+            std::exit(1);
+        }
+
+        const bool any_monitor_output =
+            p.monitor.output_coord ||
+            p.monitor.output_velocity ||
+            p.monitor.output_force ||
+            p.monitor.output_temperature ||
+            p.monitor.output_pore_pressure ||
+            p.monitor.output_bcflag ||
+            p.monitor.output_stress ||
+            p.monitor.output_strain ||
+            p.monitor.output_strain_rate ||
+            p.monitor.output_plastic_strain ||
+            p.monitor.output_plastic_strain_rate ||
+            p.monitor.output_radiogenic_source ||
+            p.monitor.output_density ||
+            p.monitor.output_mesh_quality ||
+            p.monitor.output_viscosity ||
+            p.monitor.output_material ||
+            p.monitor.output_dynamic_friction ||
+            p.monitor.output_state_variable;
+
+        if (p.monitor.enabled && !any_monitor_output) {
+            std::cerr << "Error: monitor.enabled=true requires at least one monitor.output_* = true.\n";
+            std::exit(1);
+        }
+    }
+
 #ifdef THREED
     if (p.mesh.remeshing_option == 2) {
         std::cerr << "Error: mesh.remeshing_option=2 is not available in 3D.\n";
@@ -971,14 +1142,25 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Warning: water loading is turned on, setting bc.vbc_z1 to 0.\n";
         }
 
+#ifdef THREED
         if ( p.bc.vbc_z0 > 3) {
             std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, or 3.\n";
             std::exit(1);
         }
-        if ( p.bc.vbc_z1 > 4) {
+        if ( p.bc.vbc_z1 > 3) {
+            std::cerr << "Error: bc.vbc_z1 is not 0, 1, 2, or 3.\n";
+            std::exit(1);
+        }
+#else
+        if ( p.bc.vbc_z0 > 4) {
             std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, 3, or 4.\n";
             std::exit(1);
         }
+        if ( p.bc.vbc_z1 > 4) {
+            std::cerr << "Error: bc.vbc_z1 is not 0, 1, 2, 3, or 4.\n";
+            std::exit(1);
+        }
+#endif
         if ( p.bc.vbc_n0 != 1 && p.bc.vbc_n0 != 3 && p.bc.vbc_n0 != 11 && p.bc.vbc_n0 != 13 ) {
             std::cerr << "Error: bc.vbc_n0 is not 1, 3, 11, or 13.\n";
             std::exit(1);
@@ -1057,6 +1239,11 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         else {
             std::cerr << "Error: unknown rheology: '" << str << "'\n";
             std::exit(1);
+        }
+
+        if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.has_ATS) {
+            p.control.has_ATS = true;
+            std::cerr << "Warning: RSF rheology requires control.has_ATS=true. Forcing it on.\n";
         }
 
 #ifdef THREED
@@ -1139,6 +1326,27 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
         get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
+        if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
+            std::cerr << "Error: mat.state_var_model must be 0, 1, or 2.\n";
+            std::exit(1);
+        }
+        if (p.mat.rheol_type & MatProps::rh_rsf) {
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                if (!std::isfinite(p.mat.characteristic_velocity[m]) ||
+                    p.mat.characteristic_velocity[m] <= 0.0) {
+                    std::cerr << "Error: mat.characteristic_velocity must be > 0 for RSF materials "
+                              << "(material index " << m << ").\n";
+                    std::exit(1);
+                }
+                if (!std::isfinite(p.mat.characteristic_distance[m]) ||
+                    p.mat.characteristic_distance[m] <= 0.0) {
+                    std::cerr << "Error: mat.characteristic_distance must be > 0 for RSF materials "
+                              << "(material index " << m << ").\n";
+                    std::exit(1);
+                }
+            }
+        }
     }
 
 }

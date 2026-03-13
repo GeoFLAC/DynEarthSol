@@ -100,6 +100,17 @@ namespace {
         return pressure;
     }
 
+    #pragma acc routine seq
+    static inline double param_at(const double_vec &v, int m)
+    {
+        const std::size_t n = v.size();
+        if (n == 0) return 0.0;
+        if (n == 1) return v[0];
+        std::size_t idx = static_cast<std::size_t>(m);
+        if (idx >= n) idx = n - 1;
+        return v[idx];
+    }
+
 
     double arithmetic_mean(const double_vec &s, const int_vec &n)
     {
@@ -208,6 +219,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     direct_a = p.mat.direct_a;
     evolution_b = p.mat.evolution_b;
     characteristic_velocity = p.mat.characteristic_velocity;
+    characteristic_distance = p.mat.characteristic_distance;
     // static_friction_coefficient = p.mat.static_friction_coefficient;
 }
 
@@ -222,7 +234,7 @@ MatProps::~MatProps()
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
     // Deleting rate-and-state friction properties
-    #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity)
+    #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity,characteristic_distance)
     // #pragma acc exit data delete(static_friction_coefficient)
 }
 
@@ -325,61 +337,172 @@ void MatProps::plastic_weakening(int e, double pls,
 }
 
 void MatProps::plastic_weakening_rsf(int e, double pls,
-                                 double &cohesion, double &friction_angle,
-                                 double &dilation_angle, double &hardening, double &slip_rate) const
+                                 double &cohesion, double &dynamic_friction_angle,
+                                 double &dilation_angle, double &hardening, double &slip_rate,
+                                 double& dyn_fric_coeff, double& state_variable,
+                                 int state_model, double dt) const
 {
-    double c, f, d, h;
-    c = f = d = h = 0;
+    (void) dt;
 
-    double d_a, e_b, c_v, mu_0, mu_d;
-    d_a = e_b = c_v = mu_0 = mu_d = 0;
-
-    double static_friction_angle = 0;
-
+    double c = 0.0;
+    double f = 0.0;
+    double d = 0.0;
+    double h = 0.0;
+    double d_a_avg = 0.0;
+    double e_b_avg = 0.0;
+    double c_v_avg = 0.0;
+    double d_c_avg = 0.0;
     int n = 0;
-    for (int m=0; m<nmat; m++) {
-        int k = elemmarkers[e][m];
+
+    for (int m = 0; m < nmat; ++m) {
+        const int k = elemmarkers[e][m];
         if (k == 0) continue;
         n += k;
-        if (pls < pls0[m]) {
-            // no weakening yet
-            c += cohesion0[m] * k;
-            f += friction_angle0[m] * k;
-            d += dilation_angle0[m] * k;
-            h += 0;
+
+        const double pls0_m = param_at(pls0, m);
+        const double pls1_m = param_at(pls1, m);
+        const double cohesion0_m = param_at(cohesion0, m);
+        const double cohesion1_m = param_at(cohesion1, m);
+        const double friction0_m = param_at(friction_angle0, m);
+        const double friction1_m = param_at(friction_angle1, m);
+        const double dilation0_m = param_at(dilation_angle0, m);
+        const double dilation1_m = param_at(dilation_angle1, m);
+
+        if (pls < pls0_m) {
+            c += cohesion0_m * k;
+            f += friction0_m * k;
+            d += dilation0_m * k;
         }
-        else if (pls < pls1[m]) {
-            // linear weakening
-            double p = (pls - pls0[m]) / (pls1[m] - pls0[m]);
-            c += (cohesion0[m] + p * (cohesion1[m] - cohesion0[m])) * k;
-            f += (friction_angle0[m] + p * (friction_angle1[m] - friction_angle0[m])) * k;
-            d += (dilation_angle0[m] + p * (dilation_angle1[m] - dilation_angle0[m])) * k;
-            h += (cohesion1[m] - cohesion0[m]) / (pls1[m] - pls0[m]) * k;
+        else if (pls < pls1_m) {
+            const double denom = std::max(pls1_m - pls0_m, 1e-30);
+            const double p = (pls - pls0_m) / denom;
+            c += (cohesion0_m + p * (cohesion1_m - cohesion0_m)) * k;
+            f += (friction0_m + p * (friction1_m - friction0_m)) * k;
+            d += (dilation0_m + p * (dilation1_m - dilation0_m)) * k;
+            h += (cohesion1_m - cohesion0_m) / denom * k;
         }
         else {
-            // saturated weakening
-            c += cohesion1[m] * k;
-            f += friction_angle1[m] * k;
-            d += dilation_angle1[m] * k;
-            h += 0;
+            c += cohesion1_m * k;
+            f += friction1_m * k;
+            d += dilation1_m * k;
         }
 
-        // Rate-and-state friction parameters
-        d_a += direct_a[m] * k;
-        e_b += evolution_b[m] * k;
-        c_v += characteristic_velocity[m] * k;
+        d_a_avg += param_at(direct_a, m) * k;
+        e_b_avg += param_at(evolution_b, m) * k;
+        c_v_avg += param_at(characteristic_velocity, m) * k;
+        d_c_avg += param_at(characteristic_distance, m) * k;
     }
 
-    d_a /= n; // direct effect parameter
-    e_b /= n; // evolution effect parameter   
-    c_v /= n; // characteristic velocity
-    static_friction_angle = f / n; // friction angle
-    mu_0 = std::tan(DEG2RAD * static_friction_angle); // static friction coefficient
-    mu_d = mu_0 + (d_a - e_b) * log_safe(log_table,slip_rate / c_v); // dynamic friction angle
-    friction_angle = std::atan(mu_d) / DEG2RAD;
+    if (n == 0) {
+        cohesion = 0.0;
+        dynamic_friction_angle = 0.0;
+        dilation_angle = 0.0;
+        hardening = 0.0;
+        dyn_fric_coeff = 0.0;
+        return;
+    }
+
+    d_a_avg /= n;
+    e_b_avg /= n;
+    c_v_avg /= n;
+    d_c_avg /= n;
+
+    const double static_friction_angle = f / n;
+    const double mu_0 = std::tan(DEG2RAD * static_friction_angle);
+
+    const double v_eff = std::max(slip_rate, 1e-30);
+    const double cv_eff = std::max(c_v_avg, 1e-30);
+    const double dc_eff = std::max(d_c_avg, 1e-30);
+    const double theta_eff = std::max(state_variable, 1e-30);
+
+    double mu_d;
+    if (state_model == 0) {
+        mu_d = mu_0 + (d_a_avg - e_b_avg) * std::log(v_eff / cv_eff);
+    } else {
+        const double log_v = std::log(v_eff / cv_eff);
+        const double log_theta = std::log((cv_eff * theta_eff) / dc_eff);
+        mu_d = mu_0 + d_a_avg * log_v + e_b_avg * log_theta;
+    }
+    mu_d = std::max(mu_d, 1e-6);
+
+    dynamic_friction_angle = std::atan(mu_d) / DEG2RAD;
     cohesion = c / n;
     dilation_angle = d / n;
     hardening = h / n;
+    dyn_fric_coeff = mu_d;
+}
+
+void MatProps::update_state_variable(int e, double slip_rate, double& state_variable,
+                                     double dt, int state_model) const
+{
+    const double theta_min = 1e-12;
+    const double theta_max = 1e12;
+    const double ratio_min = 1e-10;
+
+    switch (state_model) {
+    case 0:
+        // Steady-state model: keep theta fixed.
+        break;
+    case 1:
+        {
+            double d = 0.0;
+            int n = 0;
+            for (int m = 0; m < nmat; ++m) {
+                const int k = elemmarkers[e][m];
+                if (k == 0) continue;
+                d += param_at(characteristic_distance, m) * k;
+                n += k;
+            }
+            d = (n > 0) ? (d / n) : 0.0;
+            if (d < 1e-12) return;
+
+            const double dtheta = (1.0 - (slip_rate * state_variable / d)) * dt;
+            if (!std::isfinite(dtheta)) return;
+
+            double new_theta = state_variable + dtheta;
+            if (new_theta < theta_min) new_theta = theta_min;
+            if (new_theta > theta_max) new_theta = theta_max;
+            state_variable = new_theta;
+        }
+        break;
+    case 2:
+        {
+            double d = 0.0;
+            int n = 0;
+            for (int m = 0; m < nmat; ++m) {
+                const int k = elemmarkers[e][m];
+                if (k == 0) continue;
+                d += param_at(characteristic_distance, m) * k;
+                n += k;
+            }
+            d = (n > 0) ? (d / n) : 0.0;
+            if (d < 1e-12) return;
+
+            double theta = state_variable;
+            if (theta < theta_min) theta = theta_min;
+            if (theta > theta_max) theta = theta_max;
+
+            double ratio = slip_rate * theta / d;
+            if (ratio < ratio_min) ratio = ratio_min;
+
+            const double dtheta = -ratio * std::log(ratio) * dt;
+            if (std::isfinite(dtheta)) {
+                double new_theta = theta + dtheta;
+                if (!std::isfinite(new_theta) || new_theta <= 0.0) {
+                    state_variable = d / std::max(slip_rate, 1e-30);
+                } else {
+                    if (new_theta < theta_min) new_theta = theta_min;
+                    if (new_theta > theta_max) new_theta = theta_max;
+                    state_variable = new_theta;
+                }
+            } else {
+                state_variable = d / std::max(slip_rate, 1e-30);
+            }
+        }
+        break;
+    default:
+        break;
+    }
 }
 
 void MatProps::plastic_props(int e, double pls,
@@ -403,11 +526,15 @@ void MatProps::plastic_props(int e, double pls,
 
 void MatProps::plastic_props_rsf(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max, double& slip_rate) const
+                             double& hardn, double& ten_max, double& slip_rate,
+                             double& dyn_fric_coeff, double& state_variable,
+                             double dt, int state_model) const
 {
     double cohesion, phi, psi;
 
-    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate);
+    update_state_variable(e, slip_rate, state_variable, dt, state_model);
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
+                          dyn_fric_coeff, state_variable, state_model, dt);
 
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);
@@ -418,6 +545,16 @@ void MatProps::plastic_props_rsf(int e, double pls,
     amc = 2 * cohesion * std::sqrt(anphi);
 
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+}
+
+void MatProps::rsf_friction_from_state(int e, double pls, double slip_rate,
+                                       double state_variable, double& dyn_fric_coeff,
+                                       int state_model) const
+{
+    double cohesion, phi, psi, hardn;
+    double theta = state_variable;
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
+                          dyn_fric_coeff, theta, state_model, 0.0);
 }
 
 
@@ -546,4 +683,9 @@ double MatProps::e_b(int e) const
 double MatProps::c_v(int e) const
 {
     return arithmetic_mean(characteristic_velocity, elemmarkers[e]);
+}
+
+double MatProps::d_c(int e) const
+{
+    return arithmetic_mean(characteristic_distance, elemmarkers[e]);
 }
