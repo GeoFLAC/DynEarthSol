@@ -97,64 +97,40 @@ If you prefer manual control or the wrapper doesn't work:
    - Note: The config format may differ from standard GoSPL configs
    - Use `examples/gospl_config_example.yml` as a starting template, but verify compatibility
 
-**Note**: The integration automatically uses the `EnhancedModel.run_one_step()` method internally to synchronize GoSPL time steps with DynEarthSol's geodynamic time stepping, ensuring precise coupling between surface and deep processes.
-
 ## Integration Details
 
-The GoSPL integration works by:
-1. Initializing the GoSPL model with a YAML configuration file
-2. At each time step, passing surface velocities from DynEarthSol to GoSPL
-3. Running GoSPL landscape evolution for the time step
-4. Updating DynEarthSol surface elevations with changes from GoSPL
+The GoSPL integration works as follows:
 
-This allows for two-way coupling between geodynamic processes (DynEarthSol) and surface processes (GoSPL).
+1. **Initialization**: GoSPL is initialized once from the YAML config file. Its elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
+2. **Each coupling event** (every `gospl_coupling_frequency` DES steps):
+   - DES surface velocities (vx, vy, vz) are IDW-interpolated onto the GoSPL mesh via `set_surface_velocity()`.
+   - `run_and_get_erosion(dt)` advances GoSPL by one step of length `dt` (the accumulated DES time since the last coupling), applies DES-derived horizontal advection and vertical uplift, runs SPL erosion and hillslope diffusion, and returns net elevation change `delta_h` at each DES surface node.
+   - DES adds `delta_h` to its surface node z-coordinates.
+3. GoSPL **owns** the topography between coupling events and accumulates its drainage network state continuously.
 
-## Enhanced Model Features
+### Coupling API (`EnhancedModel` in `gospl_extensions`)
 
-The integration uses an **EnhancedModel** class that extends the standard GoSPL Model with additional methods for granular control over simulation time steps:
+| Method | Purpose |
+|---|---|
+| `set_surface_velocity(pts, vx, vy, vz)` | IDW-interpolate DES velocities onto GoSPL mesh |
+| `run_and_get_erosion(dt, query_pts)` | Advance GoSPL one step; return `delta_h` at query points |
+| `apply_elevation_data(elevdata)` | Reset `hGlobal` from external elevation data (init / post-remesh) |
+| `interpolate_elevation_to_points(pts)` | Query current `hGlobal` at arbitrary coordinates |
+| `apply_drift_correction(pts, elev, alpha)` | Gently blend `hGlobal` toward DES elevation |
 
-### run_one_step Method
+## Known Limitations / Caveats
 
-The `EnhancedModel` class includes a `run_one_step` method that allows executing exactly one simulation time step instead of running the full simulation loop. This provides fine-grained control needed for coupling with external models like DynEarthSol.
+### GoSPL elevation reset after DES remeshing
 
-**Key Features:**
-- **Single Time Step Execution**: Runs exactly one simulation time step
-- **Parameter Control**: Accepts optional `dt` parameter to override default time step
-- **State Management**: Properly saves/restores original time step values
-- **Full Process Coverage**: Includes all surface processes (flow accumulation, erosion, deposition, tectonics, etc.)
+**Every time DES remeshes, GoSPL's elevation field is completely reset from the DES surface** (`needs_elevation_reset = true` is set in `dynearthsol.cxx` after each call to `remesh()`). This causes:
 
-**Usage Example (Python):**
-```python
-from gospl_model_ext.enhanced_model import EnhancedModel
+- GoSPL's accumulated erosion/deposition patterns are discarded.
+- GoSPL's implicit drainage network state (flow accumulation, chi, pit-filling history) is wiped and must rebuild from scratch.
+- If DES remeshes frequently (governed by `quality_check_step_interval` and `min_quality`), GoSPL may never accumulate enough time to develop stable stream incision before being reset again.
 
-# Create enhanced model
-model = EnhancedModel('gospl_config.yml')
+This reset is necessary because DES node positions change after remeshing, so GoSPL's elevation must re-sync with DES. However, it is a hard discontinuity. A gentler post-remesh correction (e.g., `apply_drift_correction` with `alpha=1.0`) is equivalent in effect but could in principle be tuned. GoSPL's own mesh is fixed and independent of DES's mesh, so only the elevation field — not the connectivity — needs updating after remeshing.
 
-# Run one step with default dt
-model.run_one_step()
-
-# Run one step with custom dt (1000 years)
-model.run_one_step(dt=1000)
-
-# Use the higher-level wrapper with timing info
-elapsed_time = model.runProcessesForDt(dt=500, verbose=True)
-```
-
-**What happens in one time step:**
-1. Output and visualization updates
-2. Stratigraphy management (new stratal layers when needed)
-3. Tectonics (advection and tectonic forces)
-4. Surface processes (if not in fast mode):
-   - Flow accumulation computation
-   - River incision (Stream Power Law)
-   - Sediment deposition (inland and marine)
-   - Hillslope diffusion
-5. Stratigraphic compaction (when needed)
-6. Flexural isostasy (if enabled)
-7. External force updates
-8. Time advancement by `dt`
-
-This granular control enables precise synchronization between DynEarthSol's geodynamic time steps and GoSPL's surface process evolution.
+**Practical implication**: To give GoSPL time to develop a stable drainage network, prefer infrequent remeshing (larger `quality_check_step_interval`, looser `min_quality`) during the phase when surface processes are most important.
 
 ## Troubleshooting
 
