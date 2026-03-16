@@ -2657,7 +2657,13 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
      */
 
 #ifndef ACC
+#ifdef GPP1X
+    // for Apple clang version 17.0.0
+    // future version of clang might fix this problem
     #pragma omp parallel for default(none) shared(var, sizefactor)
+#else
+    #pragma omp parallel for default(none) shared(var)
+#endif
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; e++) {
@@ -3020,4 +3026,3 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePop();
 #endif
 }
-
