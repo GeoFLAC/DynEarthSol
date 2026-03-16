@@ -180,8 +180,8 @@ void init(const Param& param, Variables& var)
     #pragma acc wait
 
     *var.volume_old = *var.volume;
-    apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
-    var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
+    apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
+    var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     initialize_elem_size_n(var, *var.init_elem_size_n);
@@ -378,7 +378,7 @@ void restart(const Param& param, Variables& var)
 
     // For some reason, the following is added by Denis
     // However, it is not clear why this is needed.
-    if (param.control.has_ATS) {
+    if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
@@ -433,7 +433,7 @@ void update_mesh(const Param& param, Variables& var)
 
     compute_volume(var, *var.volume);
 
-    if (param.control.has_ATS) {
+    if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
     }
 
@@ -747,7 +747,7 @@ int main(int argc, const char* argv[])
 
         update_earthquake_tracking(param, var, earthquake);
 
-        if (param.control.has_ATS) {
+        if (param.control.use_global_velocity_scaling) {
             handle_ats_output(param, var, *var.output, earthquake,
                               starting_time, starting_step, next_regular_frame);
         } else {

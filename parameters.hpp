@@ -203,7 +203,7 @@ struct Control {
     double PT_relative_tolerance;
 
     bool has_moving_mesh;
-    bool has_ATS;
+    bool use_global_velocity_scaling;
 
 };
 

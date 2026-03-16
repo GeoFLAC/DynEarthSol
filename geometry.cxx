@@ -514,7 +514,7 @@ double compute_dt(const Param& param, Variables& var)
     var.global_dt_min = global_dt_min;
 
     // Calculate dt_advection and dt_elastic 
-    if(param.control.has_ATS)
+    if(param.control.use_global_velocity_scaling)
     {
         dt_advection = 0.5 * minl / global_max_vem;
         dt_elastic = (param.control.is_quasi_static) ?
@@ -710,7 +710,7 @@ void compute_mass(const Param &param, const Variables &var,
             double *tr = tmp_result[e];
             double rho;
 
-            if(param.control.has_ATS)
+            if(param.control.use_global_velocity_scaling)
             {
                 double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
 
@@ -920,5 +920,4 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
-
 

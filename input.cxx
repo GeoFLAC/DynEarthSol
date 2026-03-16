@@ -67,7 +67,7 @@ static void declare_parameters(po::options_description &cfg,
          "Output time-averaged (smoothed) field variables or not. These fields are: velocity, strain rate, and stress.\n"
          "no: output instantaneous fields. The velocity and strain-rate might oscillate temporally.\n"
          "yes: output field variables averaged over mesh.quality_check_step_interval time steps.\n")
-        // For rate-and-state + ATS output control
+        // For rate-and-state + earthquake output control
         ("sim.earthquake_output_step_interval", po::value<int>(&p.sim.earthquake_output_step_interval)->default_value(50),
          "Output step interval while earthquake mode is active.")
         ("sim.earthquake_start_factor", po::value<double>(&p.sim.earthquake_start_factor)->default_value(5.0),
@@ -367,8 +367,9 @@ static void declare_parameters(po::options_description &cfg,
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
-         ("control.has_ATS", po::value<bool>(&p.control.has_ATS)->default_value(false),
-         "Does the model consider adaptive time stepping?\n")
+         ("control.use_global_velocity_scaling",
+          po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
+          "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
         ;
 
     cfg.add_options()
@@ -662,7 +663,9 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("mat.rheology_type", po::value<std::string>()->required(),
          "Type of rheology, either 'elastic', 'viscous' (experimental), 'maxwell', "
-         "'elasto-plastic', 'elasto-visco-plastic', 'elasto-plastic-rsf', or 'elasto-visco-plastic-rsf'")
+         "'elasto-plastic', 'elasto-visco-plastic', "
+         "'elasto-plastic-rate-state-friction', or 'elasto-visco-plastic-rate-state-friction' "
+         "(short '-rsf' aliases are also accepted)")
         ("mat.is_plane_strain", po::value<bool>(&p.mat.is_plane_strain)->default_value(false),
          "Is the rheology formulation in plane strain (2D elasto-plastic case only)?\n")
 
@@ -1232,18 +1235,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             p.mat.rheol_type = MatProps::rh_ep;
         else if (str == std::string("elasto-visco-plastic"))
             p.mat.rheol_type = MatProps::rh_evp;
-        else if (str == std::string("elasto-plastic-rsf"))
+        else if (str == std::string("elasto-plastic-rate-state-friction") ||
+                 str == std::string("elasto-plastic-rsf"))
             p.mat.rheol_type = MatProps::rh_ep_rsf;
-        else if (str == std::string("elasto-visco-plastic-rsf"))
+        else if (str == std::string("elasto-visco-plastic-rate-state-friction") ||
+                 str == std::string("elasto-visco-plastic-rsf"))
             p.mat.rheol_type = MatProps::rh_evp_rsf;
         else {
             std::cerr << "Error: unknown rheology: '" << str << "'\n";
             std::exit(1);
         }
 
-        if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.has_ATS) {
-            p.control.has_ATS = true;
-            std::cerr << "Warning: RSF rheology requires control.has_ATS=true. Forcing it on.\n";
+        if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.use_global_velocity_scaling) {
+            p.control.use_global_velocity_scaling = true;
+            std::cerr << "Warning: RSF rheology requires control.use_global_velocity_scaling=true. Forcing it on.\n";
         }
 
 #ifdef THREED
