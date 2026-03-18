@@ -6,6 +6,9 @@
 #include "matprops.hpp"
 #include "fields.hpp"
 #include "utils.hpp"
+#ifdef METAL
+#  include "metal_dispatch.hpp"
+#endif
 
 void allocate_variables(const Param &param, Variables& var)
 {
@@ -365,6 +368,24 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
     nvtxRangePush(__FUNCTION__);
 #endif
 
+#ifdef METAL
+    if (metal_gpu_available()) {
+        const double *shpdy_ptr = nullptr;
+#ifdef THREED
+        shpdy_ptr = var.shpdy->data();
+#endif
+        metal_update_strain_rate(
+            NDIMS, var.nelem, var.nnode,
+            var.vel->data(), var.connectivity->data(),
+            var.shpdx->data(), shpdy_ptr, var.shpdz->data(),
+            strain_rate.data());
+#  ifdef NPROF
+        nvtxRangePop();
+#  endif
+        return;
+    }
+#endif
+
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, strain_rate)
 #endif
@@ -684,6 +705,19 @@ void update_velocity(const Variables& var, array_t& vel)
     nvtxRangePush(__FUNCTION__);
 #endif
 
+#ifdef METAL
+    if (metal_gpu_available()) {
+        metal_update_velocity(
+            NDIMS, var.nnode,
+            vel.data(), var.force->data(), var.mass->data(),
+            var.dt);
+#  ifdef NPROF
+        nvtxRangePop();
+#  endif
+        return;
+    }
+#endif
+
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, vel)
 #endif
@@ -719,10 +753,21 @@ void update_coordinate(const Variables& var, array_t& coord)
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // double* x = var.coord->data();
-    // const double* v = var.vel->data();
 
-    // for gpu parallelization dt and bound need to be sent to 
+#ifdef METAL
+    if (metal_gpu_available()) {
+        metal_update_coordinate(
+            NDIMS, var.nnode,
+            coord.data(), var.vel->data(),
+            var.dt);
+#  ifdef NPROF_DETAIL
+        nvtxRangePop();
+#  endif
+        return;
+    }
+#endif
+
+    // for gpu parallelization, dt and coord bounds are handled inside the kernel
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)

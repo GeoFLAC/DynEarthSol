@@ -36,6 +36,7 @@ use_R_S = 0
 useexo = 0
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
+metal = 0   # enable Apple Silicon Metal GPU (macOS only; requires M2 / A16 or later for double precision)
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -304,6 +305,24 @@ ifeq ($(hdf5), 1)
 	endif
 endif
 
+## Metal GPU support (macOS only)
+## Requires Apple GPU Family 8 (M2 / A16 Bionic or later) for double precision.
+## On M1 / older hardware the backend is disabled at runtime and the code falls
+## back to the CPU / OpenMP path automatically.
+ifeq ($(metal), 1)
+ifneq ($(OSNAME), Darwin)
+$(error metal=1 is only supported on macOS (Darwin))
+endif
+ifeq ($(openacc), 1)
+$(error metal=1 and openacc=1 cannot be used together)
+endif
+	CXXFLAGS += -DMETAL
+	LDFLAGS  += -framework Metal -framework Foundation
+	METAL_SRCS = metal_dispatch.mm
+	METAL_OBJS = metal_dispatch.$(ndims)d.metal.o
+	suffix = .metal
+endif
+
 ## Is git in the path?
 HAS_GIT := $(shell git --version 2>/dev/null)
 ifneq ($(HAS_GIT),)
@@ -401,8 +420,8 @@ CXXFLAGS += -I$(ANN_DIR)/include
 
 all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
-		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
+$(EXE): $(M_OBJS) $(OBJS) $(METAL_OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
+		$(CXX) $(M_OBJS) $(OBJS) $(METAL_OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
@@ -461,6 +480,18 @@ endif
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
+## Objective-C++ compilation rule for Metal dispatch (macOS / metal=1 only).
+## metal_kernels_src.h is auto-generated from metal_kernels.metal so that the
+## shader source embedded in metal_dispatch.mm is always identical to the .metal
+## reference file.
+ifeq ($(metal), 1)
+metal_kernels_src.h: metal_kernels.metal
+	@python3 -c "import sys; print('R\"MSL(' + open('metal_kernels.metal').read() + ')MSL\"')" > $@
+
+$(METAL_OBJS): metal_dispatch.mm metal_dispatch.hpp metal_kernels_src.h
+	$(CXX) $(CXXFLAGS) -x objective-c++ -c $< -o $@
+endif
+
 $(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
@@ -484,12 +515,12 @@ $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
 
 deepclean: 
-	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(METAL_OBJS) metal_kernels_src.h $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 	
 cleanall: clean
-	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(METAL_OBJS) metal_kernels_src.h $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 
 clean:
-	@rm -f $(OBJS) $(EXE)
+	@rm -f $(OBJS) $(METAL_OBJS) metal_kernels_src.h $(EXE)
