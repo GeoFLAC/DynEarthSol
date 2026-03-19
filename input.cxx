@@ -264,7 +264,7 @@ static void declare_parameters(po::options_description &cfg,
         ("control.gospl_mesh_resolution", po::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
          "GoSPL mesh node spacing in meters (default: -1 = auto-size based on DES surface nodes). Set to desired resolution for control over GoSPL grid density.")
         ("control.gospl_initial_topo_amplitude", po::value<double>(&p.control.gospl_initial_topo_amplitude)->default_value(0.0),
-         "Amplitude of random initial topography for GoSPL mesh in meters (default: 100). Set to 0 for flat initial surface.")
+         "Amplitude of random initial topography for GoSPL mesh in meters (default: 0.0). Set to 0 for flat initial surface.")
         ("control.gospl_mesh_perturbation", po::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
          "Fraction of grid spacing to randomly perturb node positions (0-1). 0 = regular grid, 0.3 = moderate perturbation to avoid grid artifacts.")
         ("control.gospl_mesh_padding", po::value<double>(&p.control.gospl_mesh_padding)->default_value(0.1),

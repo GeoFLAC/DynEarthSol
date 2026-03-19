@@ -7,7 +7,7 @@ domain:
     bc: '1000'
 
 output:
-    dir: 'velcoupled-buffer-newKs/K3e-5Ka0.02'
+    dir: 'velcoupled-test/K3e-5Ka0.02'
 
 time:
     start: 0.
