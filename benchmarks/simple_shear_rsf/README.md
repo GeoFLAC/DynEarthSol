@@ -1,5 +1,12 @@
 # Simple-Shear RSF Benchmark
 
+## Maintainer
+
+This benchmark workflow was prepared by Sungho Lee.
+
+- Affiliation: Korea Institute of Geoscience and Mineral Resources (KIGAM)
+- Email: `slee91@kigam.re.kr`
+
 ## Files
 
 - `simple_shear_base.cfg`: base CFG template
