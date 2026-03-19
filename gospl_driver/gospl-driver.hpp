@@ -48,9 +48,9 @@ public:
     bool mesh_bounds_valid;
     
     // Coupling frequency control
-    bool   coupling_by_time;     // if true, use coupling_interval; if false, use coupling_frequency
+    bool   coupling_by_time;     // if true, use coupling_interval_in_yr; if false, use coupling_frequency
     int    coupling_frequency;   // Run GoSPL every N steps (used when coupling_by_time=false)
-    double coupling_interval;    // Run GoSPL every T years  (used when coupling_by_time=true)
+    double coupling_interval_in_yr;    // Run GoSPL every T years  (used when coupling_by_time=true)
     int    step_counter;         // Steps accumulated since last coupling
     double accumulated_dt;       // Time (yr) accumulated since last coupling
 

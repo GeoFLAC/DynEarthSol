@@ -609,10 +609,10 @@ int main(int argc, const char* argv[])
             // Set coupling frequency from config (default: 1 = every step)
             var.gospl_driver->coupling_by_time   = (param.control.gospl_coupling_mode == "time");
             var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
-            var.gospl_driver->coupling_interval  = param.control.gospl_coupling_interval;
+            var.gospl_driver->coupling_interval_in_yr  = param.control.gospl_coupling_interval_in_yr;
             var.gospl_driver->velocity_coupling  = param.control.gospl_velocity_coupling;
             if (var.gospl_driver->coupling_by_time)
-                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_interval << " yr"
+                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_interval_in_yr << " yr"
                           << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
             else
                 std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_frequency << " step(s)"

@@ -182,7 +182,7 @@ struct Control {
     double surf_base_level;
     std::string surface_process_gospl_config_file;
     int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
-    double gospl_coupling_interval;   // Run GoSPL every T years (default: 0)
+    double gospl_coupling_interval_in_yr;   // Run GoSPL every T years (default: 1000)
     std::string gospl_coupling_mode;  // "steps" (default) or "time"
     bool gospl_velocity_coupling;  // Send all 3 DES velocity components to GoSPL (default: false)
     double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)

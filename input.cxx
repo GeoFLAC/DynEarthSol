@@ -258,10 +258,10 @@ static void declare_parameters(po::options_description &cfg,
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
          "Run GoSPL coupling every N DES steps (used when gospl_coupling_mode = steps).")
-        ("control.gospl_coupling_interval", po::value<double>(&p.control.gospl_coupling_interval)->default_value(1000.0),
+        ("control.gospl_coupling_interval_in_yr", po::value<double>(&p.control.gospl_coupling_interval_in_yr)->default_value(1000.0),
          "Run GoSPL coupling every T years (used when gospl_coupling_mode = time). E.g. 1000 = couple once per 1000 yr.")
         ("control.gospl_coupling_mode", po::value<std::string>(&p.control.gospl_coupling_mode)->default_value("steps"),
-         "Coupling frequency mode: 'steps' (use gospl_coupling_frequency) or 'time' (use gospl_coupling_interval).")
+         "Coupling frequency mode: 'steps' (use gospl_coupling_frequency) or 'time' (use gospl_coupling_interval_in_yr).")
         ("control.gospl_velocity_coupling", po::value<bool>(&p.control.gospl_velocity_coupling)->default_value(false),
          "Send all three DES surface velocity components (vx, vy, vz) to GoSPL each coupling step. "
          "vz drives uplift/subsidence; vx/vy drive semi-Lagrangian horizontal advection of GoSPL topography.")

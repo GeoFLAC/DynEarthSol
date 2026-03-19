@@ -1604,7 +1604,7 @@ namespace {
         // Check whether it's time to couple
         bool do_couple;
         if (var.gospl_driver->coupling_by_time)
-            do_couple = (var.gospl_driver->accumulated_dt >= var.gospl_driver->coupling_interval);
+            do_couple = (var.gospl_driver->accumulated_dt >= var.gospl_driver->coupling_interval_in_yr);
         else
             do_couple = (var.gospl_driver->step_counter >= var.gospl_driver->coupling_frequency);
 
