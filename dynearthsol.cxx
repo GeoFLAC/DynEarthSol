@@ -607,10 +607,16 @@ int main(int argc, const char* argv[])
             // Suppress verbose output from GoSPL
             var.gospl_driver->set_verbose(false);
             // Set coupling frequency from config (default: 1 = every step)
+            var.gospl_driver->coupling_by_time   = (param.control.gospl_coupling_mode == "time");
             var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
+            var.gospl_driver->coupling_interval  = param.control.gospl_coupling_interval;
             var.gospl_driver->velocity_coupling  = param.control.gospl_velocity_coupling;
-            std::cout << "GoSPL coupling frequency: every " << var.gospl_driver->coupling_frequency << " step(s)"
-                      << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
+            if (var.gospl_driver->coupling_by_time)
+                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_interval << " yr"
+                          << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
+            else
+                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_frequency << " step(s)"
+                          << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
         } else {
             std::cerr << "Failed to initialize GoSPL driver with config: " 
                       << param.control.surface_process_gospl_config_file << std::endl;

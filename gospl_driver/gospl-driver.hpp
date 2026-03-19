@@ -47,10 +47,12 @@ public:
     double mesh_bounds[4];
     bool mesh_bounds_valid;
     
-    // Coupling frequency control: couple every N DES steps
-    int coupling_frequency;      // Run GoSPL every N steps (default: 1)
-    int step_counter;            // Current step count since last coupling
-    double accumulated_dt;       // Accumulated time since last coupling (in years)
+    // Coupling frequency control
+    bool   coupling_by_time;     // if true, use coupling_interval; if false, use coupling_frequency
+    int    coupling_frequency;   // Run GoSPL every N steps (used when coupling_by_time=false)
+    double coupling_interval;    // Run GoSPL every T years  (used when coupling_by_time=true)
+    int    step_counter;         // Steps accumulated since last coupling
+    double accumulated_dt;       // Time (yr) accumulated since last coupling
 
     // Simple coupling scheme (ASPECT–FastScape style)
     bool needs_elevation_reset;  // true at init and after remeshing; GoSPL re-inits from DES

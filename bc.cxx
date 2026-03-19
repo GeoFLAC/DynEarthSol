@@ -1595,13 +1595,20 @@ namespace {
             return;
         }
 
-        // Accumulate time; only couple every N steps
+        // Accumulate time and steps since last coupling
         const double SEC_PER_YR = 3.1536e7;
         double dt_years = var.dt / SEC_PER_YR;
         var.gospl_driver->accumulated_dt += dt_years;
         var.gospl_driver->step_counter++;
 
-        if (var.gospl_driver->step_counter < var.gospl_driver->coupling_frequency)
+        // Check whether it's time to couple
+        bool do_couple;
+        if (var.gospl_driver->coupling_by_time)
+            do_couple = (var.gospl_driver->accumulated_dt >= var.gospl_driver->coupling_interval);
+        else
+            do_couple = (var.gospl_driver->step_counter >= var.gospl_driver->coupling_frequency);
+
+        if (!do_couple)
             return;  // GoSPL idle this step
 
         // ===== COUPLING STEP =====
