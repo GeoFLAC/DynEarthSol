@@ -291,19 +291,6 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vz0 = bc.vbc_val_z0;
     double bc_vz1 = bc.vbc_val_z1;
 
-    if (param.control.PT_jump) {
-        bc_vx0 = 0.0;
-        bc_vx1 = 0.0;
-        bc_vy0 = 0.0;
-        bc_vy1 = 0.0;
-        bc_vz0 = 0.0;
-        bc_vz1 = 0.0;
-#ifndef THREED
-        vbc_applied_x0 = 0.0;
-        vbc_applied_x1 = 0.0;
-#endif
-    }
-
     if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
 
     double bc_vx0min = bc.vbc_val_division_x0_min;

@@ -325,6 +325,7 @@ SRCS =	\
 	nn-interpolation.cxx \
 	output.cxx \
 	phasechanges.cxx \
+	pseudo_transient.cxx \
 	remeshing.cxx \
 	rheology.cxx \
 	runtime_info.cxx \
@@ -346,7 +347,8 @@ INCS =	\
 	mesh.hpp \
 	markerset.hpp \
 	output.hpp \
-	knn.hpp
+	knn.hpp \
+	pseudo_transient.hpp
 
 OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 

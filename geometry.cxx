@@ -11,6 +11,77 @@
 #include "mesh.hpp"
 #include "output.hpp"
 
+namespace {
+
+constexpr double kHydromechanicalTimescaleSeparation = 3.0;
+
+double imposed_velocity_scale(const Param& param, double reference_velocity)
+{
+    double velocity_scale = reference_velocity;
+    if (param.control.characteristic_speed > 0)
+        velocity_scale = std::max(velocity_scale, param.control.characteristic_speed);
+    return std::max(velocity_scale, 1e-30);
+}
+
+double max_velocity_scale(const Param& param, const Variables& var, double reference_velocity)
+{
+    double vscale = std::max(reference_velocity, var.max_global_vel_mag);
+    if (param.control.characteristic_speed > 0)
+        vscale = std::max(vscale, param.control.characteristic_speed);
+    return std::max(vscale, 1e-30);
+}
+
+double reference_length_scale(const Param& param, const Variables& var)
+{
+    if (!std::isfinite(var.global_dt_min) || var.global_dt_min <= 0)
+        return std::numeric_limits<double>::quiet_NaN();
+
+    const int ref = param.mat.mattype_ref;
+    const double shear_wave_speed = std::sqrt(var.mat->shearm(ref) / var.mat->rho(ref));
+    if (!std::isfinite(shear_wave_speed) || shear_wave_speed <= 0)
+        return std::numeric_limits<double>::quiet_NaN();
+
+    return 5.0 * var.global_dt_min * shear_wave_speed;
+}
+
+double hydraulic_diffusivity(const Param& param, const Variables& var)
+{
+    const int ref = param.mat.mattype_ref;
+    const double perm = var.mat->perm(ref);
+    const double mu_fluid = var.mat->mu_fluid(ref);
+    const double alpha_biot = var.mat->alpha_biot(ref);
+    const double phi = var.mat->phi(ref);
+    const double beta_fluid = var.mat->beta_fluid(ref);
+    const double bulk_modulus = var.mat->bulkm(ref);
+    const double shear_modulus = var.mat->shearm(ref);
+
+    const double matrix_compressibility = 1.0 / (bulk_modulus + 4.0 * shear_modulus / 3.0);
+    const double gamma_w = 1000.0 * param.control.gravity;
+    const double hydraulic_conductivity = perm * gamma_w / mu_fluid;
+
+    return hydraulic_conductivity /
+           (phi * beta_fluid + alpha_biot * matrix_compressibility) /
+           gamma_w;
+}
+
+double hydromechanical_inertial_scaling_floor(const Param& param, const Variables& var,
+                                              double reference_velocity)
+{
+    if (!param.control.has_hydraulic_diffusion || !param.control.is_quasi_static)
+        return 0;
+
+    const double length_scale = reference_length_scale(param, var);
+    if (!std::isfinite(length_scale) || length_scale <= 0)
+        return 0;
+
+    const double vscale = imposed_velocity_scale(param, reference_velocity);
+    const double diff = hydraulic_diffusivity(param, var);
+    const double hydraulic_speed_scale = diff / length_scale;
+    return kHydromechanicalTimescaleSeparation * hydraulic_speed_scale / vscale;
+}
+
+} // namespace
+
 /* Given two points, returns the distance^2 */
 double dist2(const double* a, const double* b)
 {
@@ -512,13 +583,19 @@ double compute_dt(const Param& param, Variables& var)
     global_max_vem = std::max(global_max_vem, var.max_vbc_val);
     var.max_global_vel_mag = global_max_vem;
     var.global_dt_min = global_dt_min;
+    const double inertial_scaling_floor =
+        hydromechanical_inertial_scaling_floor(param, var, max_vbc_val);
+    double inertial_scaling = std::max(param.control.inertial_scaling, inertial_scaling_floor);
+    const double speed_scale = param.control.use_global_velocity_scaling ?
+        max_velocity_scale(param, var, max_vbc_val) :
+        imposed_velocity_scale(param, max_vbc_val);
 
     // Calculate dt_advection and dt_elastic 
     if(param.control.use_global_velocity_scaling)
     {
         dt_advection = 0.5 * minl / global_max_vem;
         dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (global_max_vem * param.control.inertial_scaling) :
+        0.5 * minl / (speed_scale * inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
         dt_elastic = std::max(dt_elastic, global_dt_min); // Ensure dt_elastic is not smaller than global_dt_min
     }
@@ -526,7 +603,7 @@ double compute_dt(const Param& param, Variables& var)
     {
         dt_advection = 0.5 * minl / max_vbc_val;
         dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
+        0.5 * minl / (speed_scale * inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
     }
 
@@ -550,101 +627,6 @@ double compute_dt(const Param& param, Variables& var)
     return dt;
 }
 
-double compute_dt_PT(const Param& param, const Variables& var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    // constant dt
-    if (param.control.fixed_dt != 0) return param.control.fixed_dt;
-
-    // dynamic dt
-    double dt_maxwell = std::numeric_limits<double>::max();
-    double dt_diffusion = std::numeric_limits<double>::max();
-    double dt_hydro_diffusion = std::numeric_limits<double>::max();
-    double minl = std::numeric_limits<double>::max();
-
-    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-        default(none) shared(param,var)
-    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
-    for (int e=0; e<var.nelem; ++e) {
-        int n0 = (*var.connectivity)[e][0];
-        int n1 = (*var.connectivity)[e][1];
-        int n2 = (*var.connectivity)[e][2];
-
-        const double *a = (*var.coord)[n0];
-        const double *b = (*var.coord)[n1];
-        const double *c = (*var.coord)[n2];
-
-        // min height of this element
-        double minh;
-#ifdef THREED
-        {
-            int n3 = (*var.connectivity)[e][3];
-            const double *d = (*var.coord)[n3];
-
-            // max facet area of this tet
-            double maxa = std::max(std::max(triangle_area(a, b, c),
-                                            triangle_area(a, b, d)),
-                                   std::max(triangle_area(c, d, a),
-                                            triangle_area(c, d, b)));
-            minh = 3 * (*var.volume)[e] / maxa;
-        }
-#else
-        {
-            // max edge length of this triangle
-            double maxl = std::sqrt(std::max(std::max(dist2(a, b),
-                                                      dist2(b, c)),
-                                             dist2(a, c)));
-            minh = 2 * (*var.volume)[e] / maxl;
-        }
-#endif
-        dt_maxwell = std::min(dt_maxwell,
-                              0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
-        // if (param.control.has_thermal_diffusion)
-        //     dt_diffusion = std::min(dt_diffusion,
-        //                             0.5 * minh * minh / var.mat->therm_diff_max);
-        
-        // // Compute dt_hydro_diffusion (hydraulic)
-        // if (var.mat->hydro_diff_max > 0) {
-        //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-        //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-        // }
-        minl = std::min(minl, minh);
-    }
-
-
-    // max_vbc_val is maximum boundary velocity
-    double max_vbc_val;
-    if (param.control.characteristic_speed == 0) {
-        max_vbc_val = var.max_vbc_val; 
-
-        if (param.control.surface_process_option > 0)
-            max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
-    }
-    else
-        max_vbc_val = param.control.characteristic_speed;
-
-    double dt_advection = 0.5 * minl / max_vbc_val;
-    double dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
-
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
-    if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
-    }
-    if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
-        std::exit(11);
-    }
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-    return dt;
-}
-
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
@@ -658,41 +640,14 @@ void compute_mass(const Param &param, const Variables &var,
     // mass.assign(mass.size(), 0);
     // tmass.assign(tmass.size(), 0);
 
-    const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
-    const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
-
-    double diff_e;
-
-    #pragma acc serial async
-    {
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(param.mat.mattype_ref);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(param.mat.mattype_ref);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(param.mat.mattype_ref);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(param.mat.mattype_ref);            // Fluid density
-        double phi_e = var.mat->phi(param.mat.mattype_ref);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(param.mat.mattype_ref);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(param.mat.mattype_ref);
-        double shearm = var.mat->shearm(param.mat.mattype_ref);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
-
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        
-        // Compute element diffusivity and update max using reduction
-        diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
-    }
-
-    #pragma acc wait
-
-    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
-    {
-        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
-        std::exit(11);
-    }
+    double inertial_scaling = param.control.inertial_scaling;
+    inertial_scaling = std::max(inertial_scaling,
+                                hydromechanical_inertial_scaling_floor(param, var, max_vbc_val));
+    const double speed_scale = param.control.use_global_velocity_scaling ?
+        max_velocity_scale(param, var, max_vbc_val) :
+        imposed_velocity_scale(param, max_vbc_val);
+    const double pseudo_speed = speed_scale * inertial_scaling;
+    const double pseudo_speed_ATP = pseudo_speed;
 
 #ifndef ACC
 #ifdef GPP1X
@@ -920,4 +875,3 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
-

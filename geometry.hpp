@@ -20,16 +20,11 @@ void NMD_stress(const Param& param, const Variables &var, double_vec &dp_nd,
                 tensor_t& stress, double_vec &etmp);
 
 double compute_dt(const Param& param, Variables& var);
-// double compute_dt(const Param& param, const Variables& var);
-
-double compute_dt_PT(const Param& param, const Variables& var);
 
 // void compute_mass(const Param &param, const Variables &var,
 //                   double max_vbc_val, double_vec &volume_n,
 //                   double_vec &mass, double_vec &tmass, double_vec &hmass,
 //                   elem_cache &tmp_result);
-
-double compute_dt_PT(const Param& param, const Variables& var);
 
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,

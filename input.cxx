@@ -655,8 +655,10 @@ static void declare_parameters(po::options_description &cfg,
         
         ("ic.excess_pore_pressure", po::value<double>(&p.ic.excess_pore_pressure)->default_value(0.0),
          "Initial excess_pore_pressure except for boundary.\n")
-         ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
-         "Conducting PT loop to get initial stress field from inital guess")
+         ("ic.has_initial_mechanical_equilibrium", po::value<bool>(&p.ic.has_initial_mechanical_equilibrium)->default_value(false),
+         "Run an initial mechanical-equilibrium PT cleanup from the initial guess before the transient solve.\n")
+         ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_initial_mechanical_equilibrium),
+         "Legacy alias for ic.has_initial_mechanical_equilibrium.\n")
 
         ;
 

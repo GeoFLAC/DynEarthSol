@@ -338,7 +338,7 @@ struct IC {
     double isostasy_adjustment_time_in_yr;
 
     double excess_pore_pressure;
-    bool has_body_force_adjustment;
+    bool has_initial_mechanical_equilibrium;
 };
 
 struct Mat {
@@ -560,7 +560,6 @@ class MarkerSet;
 struct Variables {
     double time;
     double dt;
-    double dt_PT;
     double l2_residual;
     int steps;
     int nremesh;

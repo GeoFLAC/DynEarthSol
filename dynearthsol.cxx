@@ -18,6 +18,7 @@
 #include "monitor.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
+#include "pseudo_transient.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "runtime_info.hpp"
@@ -33,9 +34,12 @@ namespace std { using ::snprintf; }
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
+    var.dt = 0;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
+    var.max_global_vel_mag = 0;
+    var.global_dt_min = std::numeric_limits<double>::quiet_NaN();
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
@@ -410,12 +414,9 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
-    if(!param.control.PT_jump)
-    {
-        surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                      *var.plstrain, *var.volume, *var.volume_n, \
-                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
-    }
+    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
+                  *var.plstrain, *var.volume, *var.volume_n, \
+                  var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
@@ -485,57 +486,11 @@ void isostasy_adjustment(const Param &param, Variables &var)
             }
         }
 
-        update_mesh(param, var);
+        if (param.control.has_moving_mesh)
+            update_mesh(param, var);
 
     }
     std::cout << "Adjusted isostasy for " << iso_steps << " steps.\n";
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
-void initial_body_force_adjustment(const Param &param, Variables &var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    
-    // pseudo transient (PT) loop
-    var.l2_residual = calculate_residual_force(var, *var.force_residual);
-    residual_old = var.l2_residual;
-    if (param.control.has_PT)
-    {   
-        // var.dt = compute_dt_PT(param, var);
-        param.control.PT_jump = true;
-        for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
-        {
-            apply_vbcs(param, var, *var.vel);
-            if (param.control.has_moving_mesh)
-                update_mesh(param, var);
-            update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.etmp);
-            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel,
-                *var.dyn_fric_coeff, *var.state_variable);
-            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-            // update_velocity_PT(var, *var.vel);
-            update_velocity(var, *var.vel);
-            var.l2_residual = calculate_residual_force(var, *var.force_residual);
-            double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-            if (relative_change < param.control.PT_relative_tolerance) {
-            break;  // Exit the loop if relative change is small enough
-            }
-            residual_old = var.l2_residual;
-        }
-        param.control.PT_jump = false;
-    }
-
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -582,7 +537,6 @@ int main(int argc, const char* argv[])
     }
 
     var.dt = compute_dt(param, var);
-    var.dt_PT = compute_dt(param, var);
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
@@ -597,19 +551,10 @@ int main(int argc, const char* argv[])
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    double dt_copy = 0.0;
-    bool hydraulic_diffusion_switch = false;
-
-    if(param.ic.has_body_force_adjustment)
+    if(param.ic.has_initial_mechanical_equilibrium)
     {
-        if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
-        // this is similar to isostasy_adjustment(param, var); so maybe should be merged to it later.
-        // Only works with PT loop
-        initial_body_force_adjustment(param, var); 
-        if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
-        param.ic.has_body_force_adjustment = false;
+        run_initial_mechanical_equilibrium(param, var); 
+        param.ic.has_initial_mechanical_equilibrium = false;
     }
 
     std::cout << "Starting simulation...\n";
@@ -623,7 +568,6 @@ int main(int argc, const char* argv[])
 #endif
         var.steps ++;
         var.time += var.dt;
-        // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
@@ -644,74 +588,9 @@ int main(int argc, const char* argv[])
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
 
-        // pseudo transient (PT) loop
-        var.l2_residual = calculate_residual_force(var, *var.force_residual);
-        residual_old = var.l2_residual;
-        if (param.control.has_PT)
-        {   
-            // var.dt = compute_dt_PT(param, var);
-            if (param.control.has_hydraulic_diffusion) {
-                param.control.has_hydraulic_diffusion = false;
-                hydraulic_diffusion_switch = true;
-            }
+        run_pseudo_transient_loop(param, var);
 
-            param.control.PT_jump = true;
-            for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
-            {
-                apply_vbcs(param, var, *var.vel);
-                if (param.control.has_moving_mesh)
-                    update_mesh(param, var);
-                update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.etmp);
-                compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-                update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                    *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                    *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel,
-                    *var.dyn_fric_coeff, *var.state_variable);
-                update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-                // update_velocity_PT(var, *var.vel);
-                update_velocity(var, *var.vel);
-                var.l2_residual = calculate_residual_force(var, *var.force_residual);
-                double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-                if (relative_change < param.control.PT_relative_tolerance) {
-                    // std::cout << "tolerance reached " << pt_step << std::endl;
-                break;  // Exit the loop if relative change is small enough
-                }
-                residual_old = var.l2_residual;
-                // var.dt = std::min({var.dt*1.01, dt_copy});
-
-                if (pt_step % param.mesh.quality_check_step_interval == 0) {
-                    if (param.control.has_moving_mesh)
-                    {
-                        int quality_is_bad, bad_quality_index;
-                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index);
-                        if (quality_is_bad) {
-
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
-                            }
-
-                            monitor_before_remesh(param, var);
-                            remesh(param, var, quality_is_bad);
-                            monitor_remesh_update(param, var);
-
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
-                            }
-                        }
-                    }
-                }
-            }
-            if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
-            // var.dt = dt_copy;
-            param.control.PT_jump = false;
-
-        }
-
-
-        // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
+        if(param.control.has_hydraulic_diffusion) {
             #pragma acc wait // following founction is not ACC parallelized
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
         }

@@ -627,7 +627,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                         for (int j=0;j<NDIMS;j++)
                         {
                             f[j] -= tr[i+NODES_PER_ELEM*j];
-                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
+                            f_residual[j] -= tr[i+NODES_PER_ELEM*j];
                         }
                         break;
                     }
@@ -637,6 +637,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     }
 
     apply_stress_bcs(param, var, force);
+    apply_stress_bcs(param, var, force_residual);
 
     // if(var.time <= 1.0)
     // {
@@ -647,7 +648,10 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     //     apply_damping(param, var, force);
     // }
 
-    if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
+    if (!param.ic.has_initial_mechanical_equilibrium) {
+        apply_stress_bcs_neumann(param, var, force);
+        apply_stress_bcs_neumann(param, var, force_residual);
+    }
     apply_damping(param, var, force);
     
 #ifdef NPROF
@@ -679,7 +683,6 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
     return std::sqrt(l2);
 }
 
-
 void update_velocity(const Variables& var, array_t& vel)
 {
 #ifdef NPROF
@@ -695,23 +698,6 @@ void update_velocity(const Variables& var, array_t& vel)
             vel[i][j] += var.dt * (*var.force)[i][j] / (*var.mass)[i];
 
 #ifdef NPROF
-    nvtxRangePop();
-#endif
-}
-
-void update_velocity_PT(const Variables& var, array_t& vel)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-    #pragma omp parallel for default(none) shared(var, vel)
-    // #pragma acc parallel loop
-    for (int i=0; i<var.nnode; ++i)
-        for (int j=0;j<NDIMS;j++)
-            vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
-
-#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
