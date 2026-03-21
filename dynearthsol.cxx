@@ -302,6 +302,7 @@ void restart(const Param& param, Variables& var)
     }
 
     allocate_variables(param, var);
+    var.init_elem_size_n->resize(var.nnode);
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
