@@ -102,10 +102,11 @@ If you prefer manual control or the wrapper doesn't work:
 The GoSPL integration works as follows:
 
 1. **Initialization**: GoSPL is initialized once from the YAML config file. Its elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
-2. **Each coupling event** (every `gospl_coupling_frequency` DES steps):
+2. **Each coupling event** (every `gospl_coupling_frequency` DES steps, or every `gospl_coupling_interval_in_yr` years when `gospl_coupling_mode = time`):
+   - **Time-averaged tectonic velocity** is computed as `Δcoord/Δt` over the coupling interval (not the instantaneous DES velocity). DES uses inertial scaling (quasi-dynamic formulation), so instantaneous velocities contain damped-wave components that are numerical artifacts. Averaging over the interval filters these out. On the first coupling event or after remeshing, instantaneous velocity is used as a fallback.
    - DES surface velocities (vx, vy, vz) are IDW-interpolated onto the GoSPL mesh via `set_surface_velocity()`.
-   - `run_and_get_erosion(dt)` advances GoSPL by one step of length `dt` (the accumulated DES time since the last coupling), applies DES-derived horizontal advection and vertical uplift, runs SPL erosion and hillslope diffusion, and returns net elevation change `delta_h` at each DES surface node.
-   - DES adds `delta_h` to its surface node z-coordinates.
+   - `run_and_get_erosion(dt)` advances GoSPL by one step of length `dt`. Internally: horizontal advection (vx, vy), vertical uplift (vz via `upsub`), SPL erosion, and hillslope diffusion are applied to GoSPL's `hGlobal`. The returned `delta_h` contains **only the erosion and diffusion component** — the uplift (`upsub * dt`) is subtracted before returning because DES already applied the same displacement through its Lagrangian mechanical solver. Returning the full delta_h would double-count the tectonic uplift.
+   - DES adds `delta_h` (erosion + diffusion only) to its surface node z-coordinates.
 3. GoSPL **owns** the topography between coupling events and accumulates its drainage network state continuously.
 
 ### Coupling API (`EnhancedModel` in `gospl_extensions`)
