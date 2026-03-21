@@ -57,12 +57,6 @@ public:
     // Simple coupling scheme (ASPECT–FastScape style)
     bool needs_elevation_reset;  // true at init and after remeshing; GoSPL re-inits from DES
     bool velocity_coupling;      // if true, send all 3 DES velocity components each coupling step
-
-    // Time-averaged tectonic velocity: DES surface coords recorded at the end of
-    // each coupling event. Used at the next event to compute dz/dt = Δz/Δt, which
-    // avoids passing inertial (quasi-dynamic) noise from instantaneous DES velocities.
-    std::vector<double> surface_coords_start;  // flat (ntop*3), ordered as top_nodes
-    bool has_surface_start;                     // true once surface_coords_start is valid
     
     /**
      * Constructor

@@ -1632,6 +1632,13 @@ namespace {
                 coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
+        // Static storage for time-averaged velocity reference.
+        // Stored as static (not in GoSPLDriver) to avoid any allocation in
+        // GoSPLDriver's memory space, which is adjacent to PETSc-managed memory
+        // that can interfere with the C++ heap.
+        static std::vector<double> surface_coords_start;
+        static bool has_surface_start = false;
+
         // Re-initialize GoSPL topography only on first step or after remeshing.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
         // Also invalidate surface_coords_start: after remeshing the node set changes,
@@ -1645,35 +1652,36 @@ namespace {
             if (r != 0)
                 std::cerr << "Warning: Failed to reset GoSPL elevation" << std::endl;
             var.gospl_driver->needs_elevation_reset = false;
-            var.gospl_driver->has_surface_start = false;  // force instantaneous vel this event
+            has_surface_start = false;  // force instantaneous vel this event
         }
 
         // Pass all three DES surface velocity components to GoSPL.
-        // Use time-averaged velocities (Δcoord/Δt over the coupling interval) when available
-        // to filter out inertial (quasi-dynamic) oscillations in the instantaneous DES velocity.
-        // Fall back to instantaneous velocity on the first coupling event or after remeshing.
+        // Use time-averaged velocities (Δcoord/Δt over the coupling interval) when
+        // available to filter out inertial (quasi-dynamic) oscillations in the
+        // instantaneous DES velocity.  Fall back to instantaneous on the first
+        // coupling event or after remeshing.
         if (var.gospl_driver->velocity_coupling) {
             std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
-            bool use_time_avg = var.gospl_driver->has_surface_start &&
-                                var.gospl_driver->surface_coords_start.size() == ntop * 3;
+            bool use_time_avg = has_surface_start &&
+                                surface_coords_start.size() == ntop * 3;
             for (std::size_t i = 0; i < ntop; ++i) {
                 int n = top_nodes[i];
                 if (use_time_avg) {
-                    vx_yr[i] = (coords[i*3+0]       - var.gospl_driver->surface_coords_start[i*3+0])       / total_dt;
+                    vx_yr[i] = (coords[i*3+0]       - surface_coords_start[i*3+0])       / total_dt;
 #ifdef THREED
-                    vy_yr[i] = (coords[i*3+1]       - var.gospl_driver->surface_coords_start[i*3+1])       / total_dt;
+                    vy_yr[i] = (coords[i*3+1]       - surface_coords_start[i*3+1])       / total_dt;
 #else
                     vy_yr[i] = 0.0;
 #endif
-                    vz_yr[i] = (coords[i*3+NDIMS-1] - var.gospl_driver->surface_coords_start[i*3+NDIMS-1]) / total_dt;
+                    vz_yr[i] = (coords[i*3+NDIMS-1] - surface_coords_start[i*3+NDIMS-1]) / total_dt;
                 } else {
-                    vx_yr[i] = (*var.vel)[n][0]      * SEC_PER_YR;
+                    vx_yr[i] = (*var.vel)[n][0]       * SEC_PER_YR;
 #ifdef THREED
-                    vy_yr[i] = (*var.vel)[n][1]       * SEC_PER_YR;
+                    vy_yr[i] = (*var.vel)[n][1]        * SEC_PER_YR;
 #else
                     vy_yr[i] = 0.0;
 #endif
-                    vz_yr[i] = (*var.vel)[n][NDIMS-1] * SEC_PER_YR;
+                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * SEC_PER_YR;
                 }
             }
             int r = var.gospl_driver->set_surface_velocity(
@@ -1722,11 +1730,11 @@ namespace {
             coords[i*3+NDIMS-1]      += dh;  // keep coords in sync for recording below
         }
 
-        // Record current surface coords as the reference for the next coupling interval.
-        // Time-averaged velocity at the next event = (coord_next - coord_now) / dt_next,
-        // which captures only the DES mechanical displacement (no inertial noise).
-        var.gospl_driver->surface_coords_start = coords;
-        var.gospl_driver->has_surface_start    = true;
+        // Record end-of-coupling surface coords for next interval's time-averaged velocity.
+        // Done after GoSPL returns; surface_coords_start is a static vector allocated in
+        // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
+        surface_coords_start = coords;
+        has_surface_start = true;
 
         std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
                   << " mean=" << sum_dh / ntop << std::endl;
