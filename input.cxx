@@ -91,11 +91,11 @@ static void declare_parameters(po::options_description &cfg,
         ("monitor.points_x", po::value<std::string>()->default_value("[]"),
          "Monitoring x coordinates array '[x0, x1, ...]'.")
         ("monitor.points_y", po::value<std::string>()->default_value("[]"),
-         "Monitoring y coordinates array '[y0, y1, ...]'.")
+         "Monitoring y coordinates array '[y0, y1, ...]' (3D only; 2D legacy alias for monitor.points_z).")
         ("monitor.points_z", po::value<std::string>()->default_value("[]"),
-         "Monitoring z coordinates array '[z0, z1, ...]' (3D only).")
+         "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
         ("monitor.points_unit", po::value<std::string>(&p.monitor.points_unit)->default_value("m"),
-         "Unit of monitor.points_x/y/z: mm, cm, m, km.")
+         "Unit of monitor.points_x/z in 2D, or monitor.points_x/y/z in 3D: mm, cm, m, km.")
         ("monitor.remesh_rebind_mode", po::value<std::string>()->default_value("pre_remesh_coord"),
          "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
         ("monitor.output_prefix", po::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
@@ -1048,11 +1048,19 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
 
         get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
 #ifdef THREED
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
         get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
 #else
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z, 0);
+        const std::string points_y_raw = vm["monitor.points_y"].as<std::string>();
+        const std::string points_z_raw = vm["monitor.points_z"].as<std::string>();
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y,
+                    (points_y_raw == "[]") ? 0 : p.monitor.num_points);
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z,
+                    (points_z_raw == "[]") ? 0 : p.monitor.num_points);
+        if (points_z_raw == "[]") {
+            p.monitor.points_z = p.monitor.points_y; // 2D legacy alias: points_y means z
+        }
 #endif
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
@@ -1075,8 +1083,10 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
         for (int i = 0; i < p.monitor.num_points; ++i) {
             p.monitor.points_x[i] *= p.monitor.points_scale_to_m;
-            p.monitor.points_y[i] *= p.monitor.points_scale_to_m;
 #ifdef THREED
+            p.monitor.points_y[i] *= p.monitor.points_scale_to_m;
+            p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
+#else
             p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
 #endif
         }

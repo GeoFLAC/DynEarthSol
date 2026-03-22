@@ -34,7 +34,11 @@ MonitorManager g_monitor;
 
 inline const char* axis_name(const int d)
 {
+#ifdef THREED
     static const char* kAxis[3] = {"x", "y", "z"};
+#else
+    static const char* kAxis[2] = {"x", "z"};
+#endif
     return kAxis[d];
 }
 
@@ -398,7 +402,7 @@ void monitor_initialize(const Param& param, Variables& var)
         MonitorPointState& p = g_monitor.points[i];
         p.id = i;
         p.query_coord_initial[0] = param.monitor.points_x[i];
-        p.query_coord_initial[1] = param.monitor.points_y[i];
+        p.query_coord_initial[1] = param.monitor.points_z[i];
 #ifdef THREED
         p.query_coord_initial[2] = param.monitor.points_z[i];
 #endif
