@@ -167,6 +167,7 @@ void initial_stress_state(const Param &param, const Variables &var,
     double rho = var.mat->rho(0);
     double ks = var.mat->bulkm(0);
 
+    #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         double zcenter = 0;
@@ -392,6 +393,7 @@ void initial_weak_zone(const Param &param, const Variables &var,
         std::exit(1);
     }
 
+    #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
         const int *conn = (*var.connectivity)[e];
         // the coordinate of the center of this element
