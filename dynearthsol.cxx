@@ -19,6 +19,9 @@
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
+#ifdef METAL
+#  include "metal_dispatch.hpp"
+#endif
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -521,6 +524,10 @@ int main(int argc, const char* argv[])
     }
 #endif
 
+#ifdef METAL
+    metal_init();  // no-op on M1 / older; falls back to CPU/OpenMP automatically
+#endif
+
     //
     // read command line
     //
@@ -848,5 +855,8 @@ int main(int argc, const char* argv[])
             << 100.*var.func_time.output_time/duration_ns << "%)/ " << var.noutput
             << " = " << std::setprecision(2) << output_time_avg << " s/output\n";
     }
+#ifdef METAL
+    metal_cleanup();
+#endif
     return 0;
 }

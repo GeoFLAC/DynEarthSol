@@ -10,6 +10,9 @@
 #include "bc.hpp"
 #include "mesh.hpp"
 #include "output.hpp"
+#ifdef METAL
+#  include "metal_dispatch.hpp"
+#endif
 
 /* Given two points, returns the distance^2 */
 double dist2(const double* a, const double* b)
@@ -133,6 +136,19 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     nvtxRangePush(__FUNCTION__);
 #endif
 
+#ifdef METAL
+    if (metal_gpu_available()) {
+        metal_compute_volume(
+            NDIMS, (int)volume.size(), (int)coord.size(),
+            coord.data(), connectivity.data(),
+            volume.data());
+#  ifdef NPROF_DETAIL
+        nvtxRangePop();
+#  endif
+        return;
+    }
+#endif
+
 #ifndef ACC
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
@@ -165,6 +181,19 @@ void compute_volume(const Variables &var,
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
+#endif
+
+#ifdef METAL
+    if (metal_gpu_available()) {
+        metal_compute_volume(
+            NDIMS, var.nelem, var.nnode,
+            var.coord->data(), var.connectivity->data(),
+            volume.data());
+#  ifdef NPROF_DETAIL
+        nvtxRangePop();
+#  endif
+        return;
+    }
 #endif
 
 #ifndef ACC

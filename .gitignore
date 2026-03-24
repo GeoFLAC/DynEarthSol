@@ -28,3 +28,5 @@ test
 *.log
 *.tsm
 external
+metal_kernels_src.h
+dynearthsol[23]d.metal
