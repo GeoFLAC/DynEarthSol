@@ -26,7 +26,6 @@ surface_process_gospl_config_file = gospl_config.yml
 | `surface_process_gospl_config_file` | "" | Path to GoSPL YAML configuration file |
 | `gospl_coupling_frequency` | 1 | Run GoSPL every N DES steps (higher values reduce overhead) |
 | `gospl_mesh_resolution` | -1 | Mesh node spacing in meters (-1 = auto-sized based on DES surface nodes) |
-| `gospl_initial_topo_amplitude` | 0.0 | Amplitude of random initial topography in meters (0 = flat) |
 | `gospl_mesh_perturbation` | 0.3 | Fraction of grid spacing to randomly perturb node positions (0-1) |
 
 ### Example Configuration
@@ -37,7 +36,6 @@ surface_process_option = 11
 surface_process_gospl_config_file = ./gospl_config.yml
 gospl_coupling_frequency = 200
 gospl_mesh_resolution = 500
-gospl_initial_topo_amplitude = 0.0
 gospl_mesh_perturbation = 0.3
 ```
 
@@ -53,8 +51,7 @@ DynEarthSol automatically generates a compatible mesh for GoSPL at the start of 
    - **Auto-sizing** (when `gospl_mesh_resolution = -1`): `N x N` grid where `N = sqrt(num_surface_nodes)`
    - **User-specified resolution**: Grid nodes calculated from domain extent / resolution
 4. If `gospl_mesh_perturbation > 0`, interior node positions are randomly offset to reduce grid artifacts.
-5. If `gospl_initial_topo_amplitude > 0`, random initial elevations are applied (±amplitude).
-6. A Delaunay triangulation is performed and saved as `gospl_mesh.npz`.
+5. A Delaunay triangulation is performed and saved as `gospl_mesh.npz`.
 
 ### Output
 

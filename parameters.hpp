@@ -186,7 +186,6 @@ struct Control {
     std::string gospl_coupling_mode;  // "steps" (default) or "time"
     bool gospl_velocity_coupling;  // Send all 3 DES velocity components to GoSPL (default: false)
     double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)
-    double gospl_initial_topo_amplitude;  // Initial random topo amplitude (default: 100m, 0=flat)
     double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
     double gospl_mesh_padding;       // Fractional padding beyond DES domain on each side (default: 0.1)
     double terrig_sediment_volume;

@@ -466,7 +466,6 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
                                 const std::vector<double>& y_coords,
                                 const std::string& output_file,
                                 double resolution,
-                                double initial_topo_amplitude,
                                 double mesh_perturbation,
                                 double padding) {
     if (x_coords.size() != y_coords.size() || x_coords.empty()) {
@@ -525,9 +524,6 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
     if (mesh_perturbation > 0) {
         std::cout << " (perturbation: " << mesh_perturbation * 100 << "%)";
     }
-    if (initial_topo_amplitude > 0) {
-        std::cout << " (initial topo: ±" << initial_topo_amplitude << "m)";
-    }
     std::cout << std::endl;
     
     // Build Python code to generate the mesh
@@ -542,7 +538,6 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
        << "nx, ny = " << nx << ", " << ny << "\n"
        << "dx, dy = " << dx << ", " << dy << "\n"
        << "mesh_perturbation = " << mesh_perturbation << "\n"
-       << "initial_topo_amplitude = " << initial_topo_amplitude << "\n"
        << "\n"
        << "# Create regular grid\n"
        << "x_reg = np.linspace(x_min, x_max, nx)\n"
@@ -565,10 +560,7 @@ int GoSPLDriver::generate_mesh(const std::vector<double>& x_coords,
        << "    y_flat[is_interior] += perturbation_y[is_interior]\n"
        << "\n"
        << "# Initialize elevation\n"
-       << "if initial_topo_amplitude > 0:\n"
-       << "    z_flat = np.random.uniform(-initial_topo_amplitude, initial_topo_amplitude, len(x_flat))\n"
-       << "else:\n"
-       << "    z_flat = np.zeros(len(x_flat))\n"
+       << "z_flat = np.zeros(len(x_flat))\n"
        << "\n"
        << "# Create vertices array (n_vertices, 3)\n"
        << "vertices = np.column_stack([x_flat, y_flat, z_flat])\n"

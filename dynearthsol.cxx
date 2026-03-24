@@ -594,7 +594,6 @@ int main(int argc, const char* argv[])
             if (!x_coords.empty()) {
                 var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file,
                                                 param.control.gospl_mesh_resolution,
-                                                param.control.gospl_initial_topo_amplitude,
                                                 param.control.gospl_mesh_perturbation,
                                                 param.control.gospl_mesh_padding);
             }
