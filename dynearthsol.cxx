@@ -733,7 +733,6 @@ int main(int argc, const char* argv[])
                             }
 
                             remesh(param, var, quality_is_bad);
-                            if (var.gospl_driver) var.gospl_driver->needs_elevation_reset = true;
 
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
@@ -859,7 +858,6 @@ int main(int argc, const char* argv[])
                     }
 
                     remesh(param, var, quality_is_bad);
-                    if (var.gospl_driver) var.gospl_driver->needs_elevation_reset = true;
 
                     if (param.sim.has_output_during_remeshing) {
                         var.output->write_exact(var);

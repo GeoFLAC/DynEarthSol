@@ -184,7 +184,7 @@ struct Control {
     int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
     double gospl_coupling_interval_in_yr;   // Run GoSPL every T years (default: 1000)
     std::string gospl_coupling_mode;  // "steps" (default) or "time"
-    bool gospl_velocity_coupling;  // Send all 3 DES velocity components to GoSPL (default: false)
+    bool gospl_velocity_coupling;  // Send all 3 DES velocity components to GoSPL (default: true)
     double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)
     double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
     double gospl_mesh_padding;       // Fractional padding beyond DES domain on each side (default: 0.1)

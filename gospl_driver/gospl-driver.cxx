@@ -15,7 +15,7 @@ GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initia
                              mesh_bounds_valid(false),
                              coupling_by_time(false), coupling_frequency(1), coupling_interval_in_yr(0.0),
                              step_counter(0), accumulated_dt(0.0),
-                             needs_elevation_reset(true), velocity_coupling(false) {
+                             needs_elevation_reset(true), velocity_coupling(true) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
 }
 
