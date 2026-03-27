@@ -307,6 +307,7 @@ def process_single_frame(args):
         try:
             convert_field(des, frame, 'dynamic friction coefficient', fvtu)
         except (KeyError, NameError):
+            # Optional RSF field not present or not defined in this dataset; skip it.
             pass
 
         try:
