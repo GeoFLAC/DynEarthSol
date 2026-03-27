@@ -293,9 +293,15 @@ def process_single_frame(args):
         try:
             convert_field(des, frame, 'radiogenic source', fvtu)
         except KeyError:
+            # Field not present in this dataset; skip it.
             pass
         except NameError:
-            pass
+            # Optional field or missing symbol; report and continue without radiogenic source.
+            print(
+                "Warning: 'radiogenic source' field not written for frame {} "
+                "because required name is not defined.".format(frame),
+                file=sys.stderr,
+            )
 
         # Optional RSF cell fields.
         try:
