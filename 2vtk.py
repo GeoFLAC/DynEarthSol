@@ -293,7 +293,32 @@ def process_single_frame(args):
         try:
             convert_field(des, frame, 'radiogenic source', fvtu)
         except KeyError:
+            # Field not present in this dataset; skip it.
             pass
+        except NameError:
+            # Optional field or missing symbol; report and continue without radiogenic source.
+            print(
+                "Warning: 'radiogenic source' field not written for frame {} "
+                "because required name is not defined.".format(frame),
+                file=sys.stderr,
+            )
+
+        # Optional RSF cell fields.
+        try:
+            convert_field(des, frame, 'dynamic friction coefficient', fvtu)
+        except (KeyError, NameError):
+            # Optional RSF field not present or not defined in this dataset; skip it.
+            pass
+
+        try:
+            convert_field(des, frame, 'friction state variable', fvtu)
+        except (KeyError, NameError):
+            # Optional RSF friction state variable field not present; skip it.
+            print(
+                "Info: 'friction state variable' field not written for frame {} "
+                "because it is not available in this dataset.".format(frame),
+                file=sys.stderr,
+            )
 
         # Write Cell Data
         for name, (data, comps) in cell_data.items():
