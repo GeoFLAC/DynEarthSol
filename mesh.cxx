@@ -1956,10 +1956,18 @@ void create_equilateral_segments(const Variables& var, int *&segments, int *&seg
         flag_idx++;
     }
     // bottom
-    int nbot = var.nx-var.nz%2;
-    for (int i = 0; i<nbot; ++i) {
-        segments[seg_idx*2] = var.nnode - nbot - 1 + i;
-        segments[seg_idx*2+1] = var.nnode - nbot + i;
+    int nbot = var.nx - var.nz%2;
+    int bot_node0;
+    if (var.nz % 2 == 0) {
+        // last odd row: tail of node array
+        bot_node0 = var.nnode - nbot - 1;
+    } else {
+        // last even row: middle of node array
+        bot_node0 = int(var.nz/2) * var.nx;
+    }
+    for (int i = 0; i < nbot; ++i) {
+        segments[seg_idx*2]   = bot_node0 + i;
+        segments[seg_idx*2+1] = bot_node0 + i + 1;
         seg_idx++;
         segflags[flag_idx] = 16;
         flag_idx++;

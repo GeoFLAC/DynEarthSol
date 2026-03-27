@@ -1662,8 +1662,16 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     outx_bot[nx_new-nz_new%2][0] = old_coord[side_bottom[var.nx-var.nz%2]][0];
 
     interpolate_curve(param, inx_bot, outx_bot, 0);
-    for (int i = 0; i < nx_new+1-nz_new%2; ++i) {
-        ArrayAccessor p = (*var.coord)[nnode_new - nbot + i];
+    int bot_node0;
+    if (nz_new % 2 == 0) {
+        // last odd row
+        bot_node0 = nnode_new - nbot;
+    } else {
+        // last even row
+        bot_node0 = int(nz_new/2) * nx_new;
+    }
+    for (int i = 0; i < nbot; ++i) {
+        ArrayAccessor p = (*var.coord)[bot_node0 + i];
         p[0] = outx_bot[i][0];
         p[1] = outx_bot[i][1];
     }
@@ -1675,7 +1683,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         for (int i = 1; i < nx_new-1; ++i)
             (*var.coord)[i + j*nx_new][0] = xi + bdy_dx + i * dx;
     }
-    for (int j = 0; j < int(nz_new/2)-1; ++j) {
+    for (int j = 0; j < int(nz_new/2)-1+nz_new%2; ++j) {
         double xi = (*var.coord)[istart_n2+j*(nx_new+1)][0];
         double xe = (*var.coord)[istart_n2+(j+1)*(nx_new+1)-1][0];
         for (int i = 1; i < nx_new; ++i)
