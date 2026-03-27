@@ -43,7 +43,8 @@ def set_plot_style() -> None:
             if os.path.isfile(path):
                 font_manager.fontManager.addfont(path)
     except Exception:
-        pass
+        # Font configuration is optional; ignore any errors so plotting still works
+        print("Warning: failed to configure Nimbus Sans fonts; using default matplotlib fonts.", file=sys.stderr)
 
     plt.rcParams.update(
         {
