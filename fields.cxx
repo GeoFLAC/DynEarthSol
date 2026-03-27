@@ -664,7 +664,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, force_residual, num) reduction(+:l2)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop reduction(+:l2) async
     for (int i = 0; i < var.nnode; ++i)
         for (int j = 0; j < NDIMS; ++j)
             l2 += std::pow(force_residual[i][j], 2) / num;

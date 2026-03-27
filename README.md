@@ -1,6 +1,7 @@
 [![Basic build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml)
 [![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
 [![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
+[![macOS build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/macos-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/macos-build.yml)
 
 # Overview
 
@@ -53,31 +54,48 @@ alike.
 
 * [LLVM](https://github.com/llvm/llvm-project) OpenMP library for macOS requires special setup due to Apple Clang lacking built-in OpenMP. 
   * Suggested building procedure
-    * Download LLVM CMake Modules and OpenMP. (LLVM OpenMP 15.0.7 or newer version will suffice.)
+    * Download LLVM CMake Modules and OpenMP. (LLVM OpenMP 19.1.7 or newer version will suffice.)
       ```BASH
       mkdir -p external && cd external
       # Download CMake modules
-      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/cmake-15.0.7.src.tar.xz -o cmake-15.0.7.src.tar.xz
-      tar xf cmake-15.0.7.src.tar.xz
+      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/cmake-19.1.7.src.tar.xz -o cmake-19.1.7.src.tar.xz
+      tar xf cmake-19.1.7.src.tar.xz
 
       # Download OpenMP source
-      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/openmp-15.0.7.src.tar.xz -o openmp-15.0.7.src.tar.xz
-      tar xf openmp-15.0.7.src.tar.xz
+      curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/openmp-19.1.7.src.tar.xz -o openmp-19.1.7.src.tar.xz
+      tar xf openmp-19.1.7.src.tar.xz
       ```
     * Build OpenMP
       ```BASH
       # Configure and build for ARM64 (Apple Silicon) or x86_64 (Intel Mac)
-      mkdir -p openmp-15.0.7.src/build && cd openmp-15.0.7.src/build
+      mkdir -p openmp-19.1.7.src/build && cd openmp-19.1.7.src/build
       cmake -DCMAKE_INSTALL_PREFIX=$(pwd)/../../openmp-install \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-15.0.7.src/Modules \
+            -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-19.1.7.src/Modules \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DLIBOMP_INSTALL_ALIASES=OFF \
             ..
       make -j4 && make install && cd ../../
       ```
     * Installed LLVM OpenMP will be in `external/openmp-install`.
+
+  * macOS / Apple Silicon — OpenMP thread-wait performance
+
+    LLVM `libomp` hardcodes hybrid-CPU detection for all Apple Silicon, setting
+    thread *blocktime* to **0 µs**. Threads yield immediately after each parallel
+    region instead of spin-waiting, reducing CPU utilisation to ~250% on a 6-core
+    Mac vs. ~600% on Linux. DES3D automatically sets `OMP_WAIT_POLICY=active` at startup on macOS (unless
+    `OMP_WAIT_POLICY` or `KMP_BLOCKTIME` is already set), restoring near-Linux
+    throughput. A notice is printed at startup confirming this.
+
+    To override:
+    ```bash
+    export OMP_WAIT_POLICY=passive   # yield immediately, lower power
+    export KMP_BLOCKTIME=20          # fine-grained control (ms, libomp only)
+    ```
+
 ## Or, using docker
+
 * Build docker image
   ```bash
   ./build.sh

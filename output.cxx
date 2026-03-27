@@ -97,7 +97,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
 #endif
 
-    bin.write_array(*var.vel, "velocity", var.vel->size());
+    bin.write_nodal_vec_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {
         // average_velocity = displacement / delta_t
         double *c0 = coord0.data();
@@ -105,7 +105,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (int i=0; i<coord0.num_elements(); ++i) {
             c0[i] = (c[i] - c0[i]) * inv_dt;
         }
-        bin.write_array(coord0, "velocity averaged", coord0.size());
+        bin.write_nodal_vec_array(coord0, "velocity averaged", coord0.size());
     }
     
     bin.write_array(*var.temperature, "temperature", var.temperature->size());
@@ -186,7 +186,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
     bin.write_array(tmp, "material", tmp.size());
 
-    bin.write_array(*var.force, "force", var.force->size());
+    bin.write_nodal_vec_array(*var.force, "force", var.force->size());
 
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 
@@ -243,7 +243,6 @@ void Output::write(Variables& var)
     var.noutput += 1;
     int64_t now_ns = get_nanoseconds();
     var.func_time.output_time += now_ns - time_tmp;
-    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 
@@ -259,7 +258,6 @@ void Output::write_exact(Variables& var)
     var.noutput += 1;
     int64_t now_ns = get_nanoseconds();
     var.func_time.output_time += now_ns - time_tmp;
-    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
 }
 
 void Output::write_exact_error(const Variables& var)

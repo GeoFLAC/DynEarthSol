@@ -117,7 +117,7 @@ struct Sim {
     int checkpoint_frame_interval;
     int restarting_from_frame;
     int hdf5_compression_level;
-    int info_display_interval;
+    int info_display_step_interval;
     bool is_outputting_averaged_fields;
     bool is_restarting;
     bool has_initial_checkpoint;
@@ -415,8 +415,6 @@ struct Time {
     int64_t remesh_time;
     int64_t output_time;
     int64_t start_time;
-    int64_t show_information_next;
-    int64_t show_information_interval_in_ns;
 };
 
 struct Markers {

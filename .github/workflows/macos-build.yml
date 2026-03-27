@@ -1,0 +1,53 @@
+name: macOS build
+
+on:
+  push:
+    branches: [ "master", "*macOS*" ]
+    paths-ignore:
+      - '**/README.md'
+  pull_request:
+    branches: [ "master" ]
+    paths-ignore:
+      - '**/README.md'
+
+jobs:
+  build:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: install dependencies
+      run: brew install boost cmake hdf5
+
+    - name: build LLVM OpenMP
+      run: |
+        mkdir -p external && cd external
+        curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/cmake-19.1.7.src.tar.xz -o cmake-19.1.7.src.tar.xz
+        tar xf cmake-19.1.7.src.tar.xz
+        curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/openmp-19.1.7.src.tar.xz -o openmp-19.1.7.src.tar.xz
+        tar xf openmp-19.1.7.src.tar.xz
+
+        mkdir -p openmp-19.1.7.src/build && cd openmp-19.1.7.src/build
+        cmake -DCMAKE_INSTALL_PREFIX=$(pwd)/../../openmp-install \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-19.1.7.src/Modules \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DLIBOMP_INSTALL_ALIASES=OFF \
+              ..
+        make -j4 && make install && cd ../../
+
+    - name: make debug 2d
+      run: make clean; make ndims=2 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+    - name: make debug 3d
+      run: make clean; make ndims=3 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+    - name: make 2d
+      run: make clean; make ndims=2 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+    - name: make 3d
+      run: make clean; make ndims=3 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+    - name: make 3d hdf5
+      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=1
+            BOOST_ROOT_DIR=$(brew --prefix boost)
+            HDF5_INCLUDE_DIR=$(brew --prefix hdf5)/include
+            HDF5_LIB_DIR=$(brew --prefix hdf5)/lib

@@ -2702,8 +2702,8 @@ void create_neighbor(Variables& var)
                     const int *conn2 = (*var.connectivity)[neigh];
                     for (int k=0; k<NODES_PER_ELEM; ++k) {
                         bool match = true;
-                        for (int j=0; j<NDIMS; ++j)
-                            n2[j] = conn2[NODE_OF_FACET[k][j]];
+                        for (int l=0; l<NDIMS; ++l)
+                            n2[l] = conn2[NODE_OF_FACET[k][l]];
 
                         // sort the nodes in n2
                         for (int l=0; l<NDIMS-1; ++l) {

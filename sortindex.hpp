@@ -5,9 +5,9 @@
 
 template< typename T, typename index_t >
 class idx_lt {
-    const std::vector<T>& _x;
+    const T* const _x;
 public:
-    idx_lt( const std::vector<T>& x ) : _x(x) {}
+    idx_lt( const std::vector<T>& x ) : _x(x.data()) {}
     bool operator()( index_t left, index_t right ) const { return _x[left] < _x[right]; }
 };
 

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 #include <fstream>
 
 
@@ -37,8 +38,6 @@ void init_var(const Param& param, Variables& var)
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
-    var.func_time.show_information_interval_in_ns =
-        static_cast<int64_t>(param.sim.info_display_interval) * 1e9;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -511,6 +510,19 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 
 int main(int argc, const char* argv[])
 {
+#if defined(__APPLE__) && defined(_OPENMP)
+    // macOS/LLVM libomp sets blocktime=0 on Apple Silicon (hybrid CPU detection),
+    // causing threads to immediately yield between parallel regions. This hurts
+    // throughput in tight time loops with many short parallel regions.
+    // OMP_WAIT_POLICY=active restores spin-wait behavior. No-op if already set.
+    if (!getenv("OMP_WAIT_POLICY") && !getenv("KMP_BLOCKTIME")) {
+        setenv("OMP_WAIT_POLICY", "active", 0);
+        std::cout << "[OpenMP] macOS: OMP_WAIT_POLICY=active set to avoid libomp "
+                     "zero-blocktime regression on Apple Silicon.\n"
+                     "         Override: export OMP_WAIT_POLICY=passive | KMP_BLOCKTIME=<ms>\n";
+    }
+#endif
+
     //
     // read command line
     //
@@ -655,10 +667,10 @@ int main(int argc, const char* argv[])
     }
 
     std::cout << "Starting simulation...\n";
-    if (param.sim.info_display_interval > 0)
-        std::cout << "  Showing model progress every ~"
-                << param.sim.info_display_interval
-                << " seconds.\n";
+    std::cout << "  Showing model progress every "
+              << param.sim.info_display_step_interval
+              << " steps.\n";
+    int info_display_next_step = param.sim.info_display_step_interval;
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
@@ -865,17 +877,16 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            if (param.sim.info_display_interval > 0 ) {
+            if (var.steps >= info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
-                if (now_ns > var.func_time.show_information_next) {
-                    std::cout << "              Step = " << var.steps
-                        << ", time = " << std::scientific << std::setprecision(5)
-                        << var.time / YEAR2SEC << " yr" << ", wt = ";
-                    print_time_ns(now_ns - var.func_time.start_time);
-                    std::cout << "\n";
+                std::cout << "              Step = " << var.steps
+                    << ", time = " << std::scientific << std::setprecision(5)
+                    << var.time / YEAR2SEC << " yr" << ", wt = ";
+                print_time_ns(now_ns - var.func_time.start_time);
+                std::cout << "\n";
 
-                    var.func_time.show_information_next = now_ns + var.func_time.show_information_interval_in_ns;
-                }
+
+                info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }
         }
 #ifdef NPROF_DETAIL
