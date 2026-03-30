@@ -227,6 +227,8 @@ void divide_hexahedron_to_tetrahedra_index(const int *cell, int order, int n, in
 void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*NODES_PER_ELEM];
 #ifndef THREED
+
+    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             int idx = i * (var.nz - 1) + j;
@@ -281,6 +283,7 @@ void create_rect_node(const Param& param, const Variables& var, double *&points)
 #endif
 
 #ifndef THREED
+    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
             points[(j + i * var.nz)*2] = i * dx;
@@ -2261,10 +2264,6 @@ void create_top_elems(Variables& var)
     for (std::size_t i=0; i<var.ntop_elems; i++)
         (*var.top_elems)[i] = telems[i];
 
-    var.arctop_elems.clear();
-    for (int i=0; i<var.ntop_elems; i++)
-        var.arctop_elems[(*var.top_elems)[i]] = i;
-
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -2571,7 +2570,7 @@ void create_boundary_facets(Variables& var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
 #endif
-    #pragma acc parallel loop
+    #pragma acc parallel loop gang vector
     for (int i=0; i<etop; ++i) {
         int e = (*var.bfacets[iboundz1])[i].first;
         int f = (*var.bfacets[iboundz1])[i].second;
@@ -2747,24 +2746,6 @@ void create_neighbor(Variables& var)
     var.ncontact = ncontact;
     var.ctmp = new double_vec(ncontact);
 
-    // printf("Total number of contacts: %d\n", ncontact);
-    // printf("Total number of neighbors: %d\n", var.nelem*2);
-    // //print all neighbors
-    // for (int e=0; e<var.nelem; ++e) {
-    //     std::cout << "Element " << e << ": ";
-    //     for (int i=0; i<NODES_PER_ELEM; ++i) {
-    //         if ((*var.neighbor)[e][i] != -1) {
-    //             int n = (*var.neighbor)[e][i];
-    //             int neigh_e = (*var.contact)[n].first;
-    //             int nself = n + (n%2)*-1 + (n+1)%2;
-    //             int facet = (*var.contact)[nself].second;
-
-    //             printf("(%d,%d) ", neigh_e, (*var.contact)[nself].first);
-    //         }
-    //     }
-    //     std::cout << '\n';
-    // }
-
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -2858,13 +2839,13 @@ void elem_center(const array_t &coord, const conn_t &connectivity, array_t& cent
     #pragma omp parallel for default(none)          \
         shared(nelem, coord, connectivity, center)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector collapse(2) async
     for(int e=0; e<nelem; e++) {
-        const int* conn = connectivity[e];
+        // const int* conn = connectivity[e];
         for(int d=0; d<NDIMS; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_ELEM; k++) {
-                sum += coord[conn[k]][d];
+                sum += coord[connectivity[e][k]][d];
             }
             center[e][d] = sum / NODES_PER_ELEM;
         }
@@ -2888,18 +2869,23 @@ void facet_center(const array_t &coord, const conn_t &connectivity, array_t& cen
     #pragma omp parallel for default(none)          \
         shared(nelem, coord, connectivity, center)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector collapse(2) async
     for(int e=0; e<nelem; e++) {
-        const int* conn = connectivity[e];
         for(int d=0; d<NDIMS-1; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_FACET; k++) {
-                sum += coord[conn[k]][d];
+                sum += coord[connectivity[e][k]][d];
             }
             center[e][d] = sum / NODES_PER_FACET;
         }
-        center[e][NDIMS-1] = 0.;
     }
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(nelem, center)
+#endif
+    #pragma acc parallel loop gang vector async
+    for(int e=0; e<nelem; e++)
+        center[e][NDIMS-1] = 0.;
 
     #pragma acc wait
 
