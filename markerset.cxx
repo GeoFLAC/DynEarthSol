@@ -1383,13 +1383,14 @@ namespace {
         const ElemMarkerInfo* emi_ptr = emi.data();
         const int* top_elems_ptr = var.top_elems->data();
         const int ntop_elems = var.ntop_elems;
+        bool is_no_nn = false;
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, unplenished_elems, \
                 ms, marker_data_all, ne, is_surface, emi_ptr, top_elems_ptr, ntop_elems, \
-                genesis, nneed_mk, mk_start, neighbors, queries, etas)
+                genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop gang vector reduction(||:is_no_nn)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             int start = mk_start[i];
@@ -1397,6 +1398,11 @@ namespace {
             for (int j=0; j<nneed_mk[i]; ++j) {
                 int m_idx = start + j;
                 int m = neighbors[m_idx].idx;
+                if (m < 0) {
+                    is_no_nn = true;
+                    break;
+                }
+
                 double *x = queries[m_idx];
 
                 int mt = ms.get_mattype(m);
@@ -1411,6 +1417,11 @@ namespace {
                 marker_data_all[m_idx] = AppendMarkerData(etas[m_idx], e, mt, ti, 0., 0., 0., ge);
                 ++(*var.elemmarkers)[e][mt];
             }
+        }
+
+        if (is_no_nn) {
+            std::cerr << "Error: no nearest neighbor found for some new markers.\n";
+            std::exit(168);
         }
 
         // Append new markers to the end of the marker set.
