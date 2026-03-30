@@ -300,11 +300,29 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 
 #ifndef THREED
     double zmin = 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
+#endif
+    #pragma acc parallel loop gang vector async reduction(min:zmin)
     for (int k=0; k<var.nnode; ++k) {
         double* tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
+#endif
+#ifndef ACC
+#ifdef THREED
+    #pragma omp parallel for default(none) \
+        shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
+        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1)
+#else
+    #pragma omp parallel for default(none) \
+        shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
+        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, zmin, \
+        vbc_applied_x0, vbc_applied_x1, \
+        vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
+        vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
+#endif
 #endif
     #pragma acc parallel loop gang vector async
     for (int i=0; i<var.nnode; ++i) {
