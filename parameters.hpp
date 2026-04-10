@@ -118,6 +118,10 @@ struct Sim {
     bool has_initial_checkpoint;
     bool has_output_during_remeshing;
     bool has_marker_output;
+    int earthquake_output_step_interval;
+    bool seismic_moment_calculate_output;
+    double earthquake_start_factor;
+    double earthquake_end_factor;
 
     std::string modelname;
     std::string restarting_from_modelname;
@@ -199,7 +203,7 @@ struct Control {
     double PT_relative_tolerance;
 
     bool has_moving_mesh;
-    bool has_ATS;
+    bool use_global_velocity_scaling;
 
 };
 
@@ -393,6 +397,8 @@ struct Mat {
     double_vec direct_a;
     double_vec evolution_b;
     double_vec characteristic_velocity;
+    double_vec characteristic_distance;
+    int state_var_model;
     // double_vec static_friction_coefficient;
 
 };
@@ -417,6 +423,50 @@ struct Debug {
 //    bool has_two_layers_for;
 };
 
+enum MonitorRebindMode {
+    monitor_rebind_initial_coord = 0,
+    monitor_rebind_pre_remesh_coord = 1
+};
+
+struct Monitor {
+    bool enabled;
+    int step_interval;
+    int num_points;
+
+    std::string points_unit;
+    double points_scale_to_m;
+    int remesh_rebind_mode;
+
+    double_vec points_x;
+    double_vec points_y;
+    double_vec points_z;
+
+    std::string output_prefix;
+    bool write_header;
+
+    bool output_coord;
+    bool output_velocity;
+    bool output_force;
+    bool output_temperature;
+    bool output_pore_pressure;
+    bool output_bcflag;
+
+    bool output_stress;
+    bool output_strain;
+    bool output_strain_rate;
+    bool output_plastic_strain;
+    bool output_plastic_strain_rate;
+
+    bool output_radiogenic_source;
+    bool output_density;
+    bool output_mesh_quality;
+    bool output_viscosity;
+    bool output_material;
+
+    bool output_dynamic_friction;
+    bool output_state_variable;
+};
+
 struct PointCloud {
     const array_t &data;
 
@@ -437,6 +487,7 @@ using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adap
 
 struct Param {
     Sim sim;
+    Monitor monitor;
     Mesh mesh;
     Control control;
     BC bc;
@@ -599,6 +650,10 @@ struct Variables {
     double_vec *dppressure; // delta pore pressure
     double_vec *dppressure_zero; // delta pore pressure
     double_vec *fluid_source; // injection and pumping of pore water
+
+    // For rate-and-state friction
+    double_vec *dyn_fric_coeff;
+    double_vec *state_variable;
     
     // For surface processes
     SurfaceInfo surfinfo;
