@@ -418,6 +418,73 @@ void initial_weak_zone(const Param &param, const Variables &var,
     delete weakvalue;
 }
 
+void initial_friction_coeff(const Param &param, const Variables &var,
+                            double_vec &friction_coeff)
+{
+    const auto get_param_value = [](const double_vec& values, int m) -> double {
+        if (values.empty()) return 0.0;
+        if (values.size() == 1) return values[0];
+        const int idx = std::min<int>(m, static_cast<int>(values.size()) - 1);
+        return values[idx];
+    };
+
+    for (int e = 0; e < var.nelem; ++e) {
+        double friction_angle_sum = 0.0;
+        int nsum = 0;
+        const int_vec& mk = (*var.elemmarkers)[e];
+        for (int m = 0; m < param.mat.nmat; ++m) {
+            const int k = mk[m];
+            if (k == 0) continue;
+            friction_angle_sum += get_param_value(param.mat.friction_angle0, m) * k;
+            nsum += k;
+        }
+
+        double avg_angle = 0.0;
+        if (nsum > 0) {
+            avg_angle = friction_angle_sum / nsum;
+        }
+        friction_coeff[e] = std::tan(DEG2RAD * avg_angle);
+    }
+}
+
+void initial_state_variable(const Param &param, const Variables &var,
+                            double_vec &state_variable)
+{
+    const auto get_param_value = [](const double_vec& values, int m) -> double {
+        if (values.empty()) return 0.0;
+        if (values.size() == 1) return values[0];
+        const int idx = std::min<int>(m, static_cast<int>(values.size()) - 1);
+        return values[idx];
+    };
+
+    for (int e = 0; e < var.nelem; ++e) {
+        double c_sum = 0.0;
+        double d_sum = 0.0;
+        int nsum = 0;
+        const int_vec& mk = (*var.elemmarkers)[e];
+        for (int m = 0; m < param.mat.nmat; ++m) {
+            const int k = mk[m];
+            if (k == 0) continue;
+            c_sum += get_param_value(param.mat.characteristic_velocity, m) * k;
+            d_sum += get_param_value(param.mat.characteristic_distance, m) * k;
+            nsum += k;
+        }
+
+        if (nsum == 0) {
+            state_variable[e] = 1e9;
+            continue;
+        }
+
+        const double c_avg = c_sum / nsum;
+        const double d_avg = d_sum / nsum;
+        if (c_avg <= 0.0) {
+            state_variable[e] = 1e9;
+        } else {
+            state_variable[e] = d_avg / c_avg;
+        }
+    }
+}
+
 
 void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, double_vec &temperature,
                                  double_vec &radiogenic_source, MarkerSet &ms, int_vec2D &elemmarkers, int_vec2D& markers_in_elem)
@@ -699,5 +766,4 @@ void initial_temperature(const Param &param, const Variables &var,
         if (temperature[i] > max_temp) max_temp = temperature[i];
     bottom_temperature = max_temp;
 }
-
 

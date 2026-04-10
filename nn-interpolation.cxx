@@ -551,6 +551,12 @@ namespace {
             double_vec *new_radiogenic_source = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
 
+            double_vec *new_dyn_fric_coeff = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
+
+            double_vec *new_state_variable = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
+
             delete var.stress;
             var.stress = new_stress;
 
@@ -564,6 +570,12 @@ namespace {
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
+
+            delete var.dyn_fric_coeff;
+            var.dyn_fric_coeff = new_dyn_fric_coeff;
+
+            delete var.state_variable;
+            var.state_variable = new_state_variable;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);

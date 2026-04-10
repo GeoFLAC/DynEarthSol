@@ -191,6 +191,46 @@ static void compute_slip_rate3(const double* s, double vx, double vy, double vz,
     slip_rate = std::sqrt(slip_magnitude_1 * slip_magnitude_1 + slip_magnitude_2 * slip_magnitude_2);
 }
 
+void refresh_rsf_friction(const Param& param, Variables& var,
+                          double_vec& dyn_fric_coeff,
+                          const double_vec& state_variable)
+{
+    if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
+
+    const array_t& vel = *var.vel;
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, vel, dyn_fric_coeff, state_variable)
+#endif
+    for (int e = 0; e < var.nelem; ++e) {
+        const int *conn = (*var.connectivity)[e];
+        double vx = 0.0;
+        double vy = 0.0;
+        const double weight = 1.0 / NODES_PER_ELEM;
+#ifdef THREED
+        double vz = 0.0;
+#endif
+
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            vx += vel[conn[j]][0] * weight;
+            vy += vel[conn[j]][1] * weight;
+#ifdef THREED
+            vz += vel[conn[j]][2] * weight;
+#endif
+        }
+
+        double slip_rate = 0.0;
+#ifdef THREED
+        compute_slip_rate3((*var.stress)[e], vx, vy, vz, slip_rate);
+#else
+        compute_slip_rate2((*var.stress)[e], vx, vy, slip_rate);
+#endif
+        var.mat->rsf_friction_from_state(e, (*var.plstrain)[e], slip_rate,
+                                         state_variable[e], dyn_fric_coeff[e],
+                                         param.mat.state_var_model);
+    }
+}
+
 #pragma acc routine seq
 static void elastic(double bulkm, double shearm, const double* de, double* s)
 {
@@ -632,7 +672,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& stressyy, double_vec& dpressure, double_vec& viscosity,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
-                   double_vec& ppressure, double_vec& dppressure, array_t& vel)
+                   double_vec& ppressure, double_vec& dppressure, array_t& vel,
+                   double_vec& dyn_fric_coeff, double_vec& state_variable)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -641,7 +682,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
-        strain_rate)
+        strain_rate, dyn_fric_coeff, state_variable)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -850,7 +891,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate,
+                                       dyn_fric_coeff[e], state_variable[e],
+                                       var.dt, param.mat.state_var_model);
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -891,7 +934,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate);
+                                       amc, anphi, anpsi, hardn, ten_max, slip_rate,
+                                       dyn_fric_coeff[e], state_variable[e],
+                                       var.dt, param.mat.state_var_model);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq

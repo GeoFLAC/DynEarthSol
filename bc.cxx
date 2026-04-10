@@ -62,17 +62,17 @@ bool is_on_boundary(const uint_vec &bcflag, int node)
 double find_max_vbc(const BC &bc)
 {
     double max_vbc_val = 1e-12; // equal to 0.03 mm/yr
-    if (bc.vbc_x0 % 2 == 1) // odd number indicates fixed velocity component
+    if (bc.vbc_x0 % 2 == 1 || bc.vbc_x0 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_x0));
-    if (bc.vbc_x1 % 2 == 1)
+    if (bc.vbc_x1 % 2 == 1 || bc.vbc_x1 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_x1));
-    if (bc.vbc_y0 % 2 == 1)
+    if (bc.vbc_y0 % 2 == 1 || bc.vbc_y0 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_y0));
-    if (bc.vbc_y1 % 2 == 1)
+    if (bc.vbc_y1 % 2 == 1 || bc.vbc_y1 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_y1));
-    if (bc.vbc_z0 % 2 == 1)
+    if (bc.vbc_z0 % 2 == 1 || bc.vbc_z0 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_z0));
-    if (bc.vbc_z1 % 2 == 1)
+    if (bc.vbc_z1 % 2 == 1 || bc.vbc_z1 == 4)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_z1));
     if (bc.vbc_n0 % 2 == 1)
         max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_n0));
@@ -202,7 +202,9 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     // 1: normal component fixed, shear components free
     // 2: normal component free, shear components fixed at 0
     // 3: normal component fixed, shear components fixed at 0
-    // 4: normal component free, shear component (not z) fixed, only in 3D
+    // 4: special tangential loading mode. In 2D, prescribe the tangential
+    //    component and set the boundary-normal component to zero. In 3D on
+    //    x/y boundaries, fix one tangential component and set vz=0.
     // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
 
     const BC &bc = param.bc;
@@ -288,6 +290,19 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vy1 = bc.vbc_val_y1;
     double bc_vz0 = bc.vbc_val_z0;
     double bc_vz1 = bc.vbc_val_z1;
+
+    if (param.control.PT_jump) {
+        bc_vx0 = 0.0;
+        bc_vx1 = 0.0;
+        bc_vy0 = 0.0;
+        bc_vy1 = 0.0;
+        bc_vz0 = 0.0;
+        bc_vz1 = 0.0;
+#ifndef THREED
+        vbc_applied_x0 = 0.0;
+        vbc_applied_x1 = 0.0;
+#endif
+    }
 
     if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
 
@@ -376,7 +391,12 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 v[2] = 0;
 #endif
                 break;
-#ifdef THREED
+#ifndef THREED
+            case 4:
+                v[0] = 0;
+                v[1] = bc_vx0;
+                break;
+#else
             case 4:
                 v[1] = bc_vx0;
                 v[2] = 0;
@@ -421,7 +441,12 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 v[2] = 0;
 #endif
                 break;
-#ifdef THREED
+#ifndef THREED
+            case 4:
+                v[0] = 0;
+                v[1] = bc_vx1;
+                break;
+#else
             case 4:
                 v[1] = bc_vx1;
                 v[2] = 0;
@@ -636,6 +661,12 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
                 v[NDIMS-1] = bc_vz0;
                 break;
+#ifndef THREED
+            case 4:
+                v[0] = bc_vz0;
+                v[NDIMS-1] = 0;
+                break;
+#endif
             }
         }
         if (flag & BOUNDZ1) {
@@ -669,464 +700,6 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         }
     }
 #ifdef NPROF
-    nvtxRangePop();
-#endif
-}
-
-void apply_vbcs_PT(const Param &param, const Variables &var, array_t &vel)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    // meaning of vbc flags (odd: free; even: fixed) --
-    // 0: all components free
-    // 1: normal component fixed, shear components free
-    // 2: normal component free, shear components fixed at 0
-    // 3: normal component fixed, shear components fixed at 0
-    // 4: normal component free, shear component (not z) fixed, only in 3D
-    // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
-
-    const BC &bc = param.bc;
-#ifdef THREED
-    // vel period is not ready for 3D
-
-#else
-
-    // new way to find vbc_applied_x
-    double t_now = var.time / YEAR2SEC;
-    double vbc_applied_x0 = bc.vbc_val_x0 * interp1(bc.vbc_period_x0_time_in_yr,bc.vbc_period_x0_ratio, t_now);
-    double vbc_applied_x1 = bc.vbc_val_x1 * interp1(bc.vbc_period_x1_time_in_yr,bc.vbc_period_x1_ratio, t_now);
-
-    // find max and min coordinate for BOUNDX0
-    double BOUNDX0_max = 0.;
-    double BOUNDX0_min = 0.;
-    double BOUNDX1_max = 0.;
-    double BOUNDX1_min = 0.;
-    bool if_init0 = false;
-    bool if_init1 = false;
-    for (int i=0; i<var.nnode; ++i) {
-        if (! is_on_boundary(*var.bcflag, i)) continue;
-
-        uint flag = (*var.bcflag)[i];
-        if (flag & BOUNDX0) {
-            const double *x = (*var.coord)[i];
-            if (!if_init0) {
-               BOUNDX0_max = x[1];
-               BOUNDX0_min = x[1];
-               if_init0 = true;
-            } else {
-                if (x[1]>BOUNDX0_max) {
-                    BOUNDX0_max = x[1];
-                }
-                if (x[1]<BOUNDX0_min) {
-                    BOUNDX0_min = x[1];
-                }
-            }
-        } else if (flag & BOUNDX1) {
-            const double *x = (*var.coord)[i];
-            if (!if_init1) {
-               BOUNDX1_max = x[1];
-               BOUNDX1_min = x[1];
-               if_init1 = true;
-            } else {
-                if (x[1]>BOUNDX1_max) {
-                    BOUNDX1_max = x[1];
-                }
-                if (x[1]<BOUNDX1_min) {
-                    BOUNDX1_min = x[1];
-                }
-            }            
-        }
-    }
-    double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
-    double BOUNDX1_width = BOUNDX1_max - BOUNDX1_min;
-
-    const double_vec& vbc_vertical_ratios_x0 = var.vbc_vertical_ratio_x0;
-    const double_vec& vbc_vertical_ratios_x1 = var.vbc_vertical_ratio_x1;
-
-    double_vec vbc_vertical_divisions_x0(4,0.);
-    double_vec vbc_vertical_divisions_x1(4,0.);
-    for (int i=0;i<4;i++) {
-        vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
-        vbc_vertical_divisions_x1[i] = - (BOUNDX0_max - var.vbc_vertical_div_x1[i] * BOUNDX0_width);
-    }
-#endif
-
-    // diverging x-boundary
-    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
-
-
-    int bc_x0 = bc.vbc_x0;
-    int bc_x1 = bc.vbc_x1;
-    int bc_y0 = bc.vbc_y0;
-    int bc_y1 = bc.vbc_y1;
-    int bc_z0 = bc.vbc_z0;
-    int bc_z1 = bc.vbc_z1;
-
-    double bc_vx0 = 0.0;
-    double bc_vx1 = 0.0;
-    double bc_vy0 = 0.0;
-    double bc_vy1 = 0.0;
-    double bc_vz0 = 0.0;
-    double bc_vz1 = 0.0;
-
-    if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
-
-    double bc_vx0min = bc.vbc_val_division_x0_min;
-    double bc_vx0max = bc.vbc_val_division_x0_max;
-
-    double bc_vx0r0 = bc.vbc_val_x0_ratio0;
-    double bc_vx0r1 = bc.vbc_val_x0_ratio1;
-    double bc_vx0r2 = bc.vbc_val_x0_ratio2;
-
-#ifndef THREED
-    double zmin = 0;
-    for (int k=0; k<var.nnode; ++k) {
-        double* tmpx = (*var.coord)[k];
-        if ( tmpx[NDIMS-1] < zmin )
-            zmin = tmpx[NDIMS-1];
-    }
-#endif
-    #pragma acc parallel loop gang vector async
-    for (int i=0; i<var.nnode; ++i) {
-
-        // fast path: skip nodes not on boundary
-        if (! is_on_boundary(*var.bcflag, i)) continue;
-
-        uint flag = (*var.bcflag)[i];
-        double *v = vel[i];
-
-#ifdef THREED
-#else
-        const double *x = (*var.coord)[i];
-        double ratio, rr, dvr;
-        double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]) * 0.0;
-        double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]) * 0.0;
-
-#endif
-        //
-        // X
-        //
-        if (flag & BOUNDX0) {
-            switch (bc_x0) {
-            case 0:
-                break;
-            case 1:
-#ifdef THREED
-                v[0] = bc_vx0;
-#else
-                v[0] = vbc_exact_x0;
-#endif
-                break;
-            case 2:
-                v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
-                break;
-            case 3:
-#ifdef THREED
-                v[0] = bc_vx0;
-#else
-                v[0] = vbc_exact_x0;
-                if (bc.bottom_shear_zone_thickness > 0.) {
-                    double dz = x[NDIMS-1] - zmin;
-                    if (dz < bc.bottom_shear_zone_thickness)
-                        v[0] = v[0] * dz / bc.bottom_shear_zone_thickness;
-                }
-#endif
-                v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
-                break;
-#ifdef THREED
-            case 4:
-                v[1] = bc_vx0;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = 0;
-                v[1] = bc_vx0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = bc_vx0;
-                v[1] = 0;
-                break;
-#endif
-            }
-        }
-        if (flag & BOUNDX1) {
-            switch (bc_x1) {
-            case 0:
-                break;
-            case 1:
-#ifdef THREED
-                v[0] = bc_vx1;
-#else
-                v[0] = vbc_exact_x1;
-#endif
-                break;
-            case 2:
-                v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
-                break;
-            case 3:
-#ifdef THREED
-                v[0] = bc_vx1;
-#else
-                v[0] = vbc_exact_x1;
-#endif
-                v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
-                break;
-#ifdef THREED
-            case 4:
-                v[1] = bc_vx1;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = 0;
-                v[1] = bc_vx1;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = bc_vx1;
-                v[1] = 0;
-                break;
-#endif
-            }
-        }
-#ifdef THREED
-        //
-        // Y
-        //
-        if (flag & BOUNDY0) {
-            switch (bc_y0) {
-            case 0:
-                break;
-            case 1:
-                v[1] = bc_vy0;
-                break;
-            case 2:
-                v[0] = 0;
-                v[2] = 0;
-                break;
-            case 3:
-                v[0] = 0;
-                v[1] = bc_vy0;
-                v[2] = 0;
-                break;
-            case 4:
-                v[0] = bc_vy0;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = bc_vy0;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = 0;
-                v[1] = bc_vy0;
-                break;
-            }
-        }
-        if (flag & BOUNDY1) {
-            switch (bc_y1) {
-            case 0:
-                break;
-            case 1:
-                v[1] = bc_vy1;
-                break;
-            case 2:
-                v[0] = 0;
-                v[2] = 0;
-                break;
-            case 3:
-                v[0] = bc_vy1;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 4:
-                v[0] = bc_vy1;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = bc_vy1;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = 0;
-                v[1] = bc_vy1;
-                break;
-            }
-        }
-#endif
-
-        //
-        // N
-        //
-        for (int ib=iboundn0; ib<=iboundn3; ib++) {
-            const double eps = 1e-15;
-            const double *n = (*var.bnormals)[ib]; // unit normal vector
-
-            if (flag & (1 << ib)) {
-                double fac = 0;
-                switch (var.vbc_types[ib]) {
-                case 1:
-                    if (flag == (1U << ib)) {  // ordinary boundary
-                        double vn = 0;
-                        for (int d=0; d<NDIMS; d++)
-                            vn += v[d] * n[d];  // normal velocity
-
-			for (int d=0; d<NDIMS; d++)
-                            v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
-                    }
-                    else {  // intersection with another boundary
-                        for (int ic=iboundx0; ic<ib; ic++) {
-                            if (flag & (1 << ic)) {
-                                if (var.vbc_types[ic] == 0) {
-                                    double vn = 0;
-                                    for (int d=0; d<NDIMS; d++)
-                                        vn += v[d] * n[d];  // normal velocity
-
-				    for (int d=0; d<NDIMS; d++)
-                                        v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
-                                }
-                                else if (var.vbc_types[ic] == 1) {
-                                    const double *edge;
-                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
-                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
-                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
-                                        if (ei == ic && ej == ib)
-                                            edge = &var.edge_vec[j*NDIMS];
-                                    }
-                                    // auto edge = edgevec->at(std::make_pair(ic, ib));
-                                    double ve = 0;
-                                    for (int d=0; d<NDIMS; d++)
-                                        ve += v[d] * edge[d];
-
-                                    for (int d=0; d<NDIMS; d++)
-                                        v[d] = ve * edge[d];  // v must be parallel to edge
-                                }
-                            }
-                        }
-                    }
-                    break;
-                case 3:
-                    for (int d=0; d<NDIMS; d++)
-                        v[d] = var.vbc_values[ib] * n[d];  // v must be normal to n
-                    break;
-                case 11:
-                    fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
-                    if (flag == (1U << ib)) {  // ordinary boundary
-                        double vn = 0;
-                        for (int d=0; d<NDIMS-1; d++)
-                            vn += v[d] * n[d];  // normal velocity
-
-			for (int d=0; d<NDIMS-1; d++)
-                            v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
-                    }
-                    else {  // intersection with another boundary
-                        for (int ic=iboundx0; ic<ib; ic++) {
-                            if (flag & (1 << ic)) {
-                                if (var.vbc_types[ic] == 0) {
-                                    double vn = 0;
-                                    for (int d=0; d<NDIMS-1; d++)
-                                        vn += v[d] * n[d];  // normal velocity
-
-				    for (int d=0; d<NDIMS-1; d++)
-                                        v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
-                                }
-                                else if (var.vbc_types[ic] == 1) {
-                                    const double *edge;
-                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
-                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
-                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
-                                        if (ei == ic && ej == ib)
-                                            edge = &var.edge_vec[j*NDIMS];
-                                    }
-                                    double ve = 0;
-                                    for (int d=0; d<NDIMS; d++)
-                                        ve += v[d] * edge[d];
-
-                                    for (int d=0; d<NDIMS; d++)
-                                        v[d] = ve * edge[d];  // v must be parallel to edge
-                                }
-                            }
-                        }
-                    }
-                    break;
-                case 13:
-                    fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
-                    for (int d=0; d<NDIMS-1; d++)
-                        v[d] = var.vbc_values[ib] * fac * n[d];
-                    v[NDIMS-1] = 0;
-                    break;
-                }
-            }
-        }
-
-        //
-        // Z, must be dealt last
-        //
-
-        // fast path: vz is usually free in the models
-        if (bc_z0==0 && bc_z1==0) continue;
-
-        if (flag & BOUNDZ0) {
-            switch (bc_z0) {
-            case 0:
-                break;
-            case 1:
-                v[NDIMS-1] = bc_vz0;
-                break;
-            case 2:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                break;
-            case 3:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                v[NDIMS-1] = bc_vz0;
-                break;
-            }
-        }
-        if (flag & BOUNDZ1) {
-            switch (bc_z1) {
-            case 0:
-                break;
-            case 1:
-                v[NDIMS-1] = bc_vz1;
-                break;
-            case 2:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                break;
-            case 3:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                v[NDIMS-1] = bc_vz1;
-                break;
-            }
-        }
-    }
-#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }

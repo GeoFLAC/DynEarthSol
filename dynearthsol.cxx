@@ -5,8 +5,10 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "ats_output_scheduler.hpp"
 #include "bc.hpp"
 #include "binaryio.hpp"
+#include "earthquake_state.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
 #include "ic.hpp"
@@ -14,10 +16,12 @@
 #include "matprops.hpp"
 #include "markerset.hpp"
 #include "mesh.hpp"
+#include "monitor.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
+#include "runtime_info.hpp"
 #include "utils.hpp"
 
 #ifdef WIN32
@@ -177,8 +181,8 @@ void init(const Param& param, Variables& var)
     #pragma acc wait
 
     *var.volume_old = *var.volume;
-    apply_vbcs(param, var, *var.vel); // Due to ATS, this should be called before compute_mass  
-    var.dt = compute_dt(param, var);  // Due to ATS, this should be called before compute_mass
+    apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
+    var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     initialize_elem_size_n(var, *var.init_elem_size_n);
@@ -197,6 +201,12 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        initial_friction_coeff(param, var, *var.dyn_fric_coeff);
+        initial_state_variable(param, var, *var.state_variable);
+    }
+
+    report_mesh_info(var, "initial");
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -347,13 +357,35 @@ void restart(const Param& param, Variables& var)
         initial_weak_zone(param, var, *var.plstrain);
     }
 
+    // Restore the RSF state variable when available, then rebuild the derived
+    // dynamic friction coefficient from the restored state and current fields.
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        bool restored_state_variable = false;
+        if (bin_chkpt.has_array("friction state variable")) {
+            bin_chkpt.read_array(*var.state_variable, "friction state variable");
+            restored_state_variable = true;
+        } else if (bin_save.has_array("friction state variable")) {
+            bin_save.read_array(*var.state_variable, "friction state variable");
+            restored_state_variable = true;
+        } else {
+            initial_state_variable(param, var, *var.state_variable);
+        }
+
+        if (!restored_state_variable) {
+            std::cout << "  RSF restart fallback applied for missing state variable dataset.\n";
+        }
+        refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
+    }
+
     // For some reason, the following is added by Denis
     // However, it is not clear why this is needed.
-    if (param.control.has_ATS) {
+    if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
         compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
+
+    report_mesh_info(var, "restart");
 
 }
 
@@ -402,7 +434,7 @@ void update_mesh(const Param& param, Variables& var)
 
     compute_volume(var, *var.volume);
 
-    if (param.control.has_ATS) {
+    if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
     }
 
@@ -435,7 +467,8 @@ void isostasy_adjustment(const Param &param, Variables &var)
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel,
+            *var.dyn_fric_coeff, *var.state_variable);
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -482,9 +515,10 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
     if (param.control.has_PT)
     {   
         // var.dt = compute_dt_PT(param, var);
+        param.control.PT_jump = true;
         for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
         {
-            apply_vbcs_PT(param, var, *var.vel);
+            apply_vbcs(param, var, *var.vel);
             if (param.control.has_moving_mesh)
                 update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
@@ -493,7 +527,8 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel);
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -504,6 +539,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             }
             residual_old = var.l2_residual;
         }
+        param.control.PT_jump = false;
     }
 
 #ifdef NPROF_DETAIL
@@ -538,6 +574,9 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
+    report_cpu_runtime_status();
+    report_openacc_runtime_status();
+
     //
     // run simulation
     //
@@ -567,12 +606,15 @@ int main(int argc, const char* argv[])
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
+    monitor_initialize(param, var);
 
     // int rheol_type_old = param.mat.rheol_type;
 
     double starting_time = var.time; // var.time & var.steps might be set in restart()
     double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+    EarthquakeState earthquake;
+    init_earthquake_state(param, earthquake);
 
     double residual_old = std::numeric_limits<double>::max();
     double relative_change = 1.0;
@@ -612,7 +654,8 @@ int main(int argc, const char* argv[])
         update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel);
+            *var.ppressure, *var.dppressure, *var.vel,
+            *var.dyn_fric_coeff, *var.state_variable);
 
 	// Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -635,7 +678,7 @@ int main(int argc, const char* argv[])
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
-                apply_vbcs_PT(param, var, *var.vel);
+                apply_vbcs(param, var, *var.vel);
                 if (param.control.has_moving_mesh)
                     update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
@@ -644,7 +687,8 @@ int main(int argc, const char* argv[])
                 update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                     *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel);
+                    *var.ppressure, *var.dppressure, *var.vel,
+                    *var.dyn_fric_coeff, *var.state_variable);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);
@@ -668,7 +712,9 @@ int main(int argc, const char* argv[])
                                 var.output->write_exact(var);
                             }
 
+                            monitor_before_remesh(param, var);
                             remesh(param, var, quality_is_bad);
+                            monitor_remesh_update(param, var);
 
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
@@ -698,6 +744,8 @@ int main(int argc, const char* argv[])
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain);
 
+        monitor_write_if_due(param, var);
+
         #pragma acc wait
         const int slow_updates_interval = 10;
         if (var.steps % slow_updates_interval == 0) {
@@ -720,48 +768,12 @@ int main(int argc, const char* argv[])
 
         if (param.sim.is_outputting_averaged_fields)
             var.output->average_fields(var);
-        
-        int r = 1;
-        if (param.control.has_ATS) {
-            // r = std::pow(2, log10(var.dt) + 9);
-            // r = std::max(r, 1);
-            // if ((! param.sim.is_outputting_averaged_fields || (var.steps % param.sim.is_outputting_averaged_fields == 0)) &&
-            // // When output_averaged_fields in turned on, the output cannot be
-            // // done at arbitrary time steps.
-            // (((var.steps - starting_step) >= r * param.sim.output_step_interval) ||
-            // ((var.time - starting_time) > param.sim.output_time_interval_in_yr * YEAR2SEC)) ) {
-            //     if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-            //     output.write_checkpoint(param, var);
 
-            // output.write(var);
+        update_earthquake_tracking(param, var, earthquake);
 
-            // next_regular_frame ++;
-            // starting_step = var.steps; starting_time = var.time;
-            // }
-
-            if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-               (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
-              ||
-              (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
-               (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
-              ||
-              (var.max_global_vel_mag > 1e-8)  // **New condition for high velocity**
-             )
-            // time or step output requirements are met
-            &&
-            ((! param.sim.is_outputting_averaged_fields) ||
-                (param.sim.is_outputting_averaged_fields &&
-                    (var.steps % param.mesh.quality_check_step_interval == 0)))
-            // When is_outputting_averaged_fields is turned on, the output cannot be
-            // done at arbitrary time steps.
-            ) {
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
-                    var.output->write_checkpoint(param, var);
-
-                var.output->write(var);
-
-                next_regular_frame ++;
-            }
+        if (param.control.use_global_velocity_scaling) {
+            handle_ats_output(param, var, *var.output, earthquake,
+                              starting_time, starting_step, next_regular_frame);
         } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
                (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
@@ -797,7 +809,9 @@ int main(int argc, const char* argv[])
                         var.output->write_exact(var);
                     }
 
+                    monitor_before_remesh(param, var);
                     remesh(param, var, quality_is_bad);
+                    monitor_remesh_update(param, var);
 
                     if (param.sim.has_output_during_remeshing) {
                         var.output->write_exact(var);
@@ -822,6 +836,8 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+
+    monitor_finalize(var);
 
     // at end of code, clean up lost memory reported by valgrind
     end(var);

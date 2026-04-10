@@ -2982,7 +2982,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e];
 
-    if(param.control.has_ATS)
+    if(param.control.use_global_velocity_scaling)
         var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
@@ -3032,5 +3032,3 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePop();
 #endif
 }
-
-
