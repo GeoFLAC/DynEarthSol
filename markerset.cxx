@@ -1240,18 +1240,18 @@ namespace {
         double dir[NDIMS], rel[NDIMS];
         double len2 = 0.0;
 
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < NDIMS; ++i) {
             dir[i] = p2[i] - p1[i];
             rel[i] = pq[i] - p1[i];
             len2 += dir[i] * dir[i];
         }
 
-        if (len2 == 0.0) {
-            return (v1 + v2) / 2.;
-        }
+        if (len2 == 0.0) return (v1 + v2) / 2.;
 
-        double t = (dir[0]*rel[0] + dir[1]*rel[1] + dir[2]*rel[2]) / len2;
-        return v1 + t * (v2 - v1);
+        double t = 0.;
+        for (int i = 0; i < NDIMS; ++i) t += dir[i]*rel[i];
+
+        return v1 + (v2 - v1) * t / len2;
     }
 
     // Interpolate deposition time and set genesis=4 for a new sediment marker placed in element e.
