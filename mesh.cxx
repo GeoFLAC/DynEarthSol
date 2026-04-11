@@ -1705,9 +1705,9 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // assign node coordinates to var.coord.
     var.coord = new array_t(var.nnode);
     for(int i=0; i<var.nnode; i++) {
-        coord[i][0]   = static_cast<double>(x[i]);
-        coord[i][1] = static_cast<double>(y[i]);
-        coord[i][2] = static_cast<double>(z[i]);
+        (*var.coord)[i][0] = static_cast<double>(x[i]);
+        (*var.coord)[i][1] = static_cast<double>(y[i]);
+        (*var.coord)[i][2] = static_cast<double>(z[i]);
     }
     free(x);
     free(y);
@@ -1760,11 +1760,10 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // One way is to provide a map from block names to mat id. TBD.
     //
     var.regattr = new regattr_t(var.nelem);
-    double *attr = var.regattr->data();
     int start = 0;
     for (int i=0; i<num_elem_blk; i++) {
         for(int j=0; j<num_elem_in_block[i]; j++)
-            attr[start+j] = static_cast<double>(ids[i]-1);
+            (*var.regattr)[start+j][0] = static_cast<double>(ids[i]-1);
         start += num_elem_in_block[i];
     }
 
@@ -1782,13 +1781,12 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
     { // To render 'int *conn' local to this block.
         var.connectivity = new conn_t(var.nelem);
-        int *conn = var.connectivity->data();
         start = 0;
         for (int i=0; i<num_elem_blk; i++) {
             for(int j=0; j<num_elem_in_block[i]; j++) {
                 const int elem_num = start + j;
                 for(int k=0; k < NODES_PER_ELEM; k++ )
-                    conn[ NODES_PER_ELEM*elem_num + k ] = connect[i][ NODES_PER_ELEM*j + k ]-1;
+                    (*var.connectivity)[elem_num][k] = connect[i][ NODES_PER_ELEM*j + k ]-1;
             }
             // can the j and k loops be replaced with memcpy?
             // std::memcpy( &(conn[NODES_PER_ELEM*start]), &(connect[i]), num_elem_in_block[i]*NODES_PER_ELEM*sizeof(int) );
@@ -1866,11 +1864,9 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
     // Assign memory to segments (boundary facets)
     var.segment = new segment_t(var.nseg, 0);
-    int *segments = var.segment->data();
 
     // Assign memory to segment flags (which boundary a segments belong to).
     var.segflag = new segflag_t(var.nseg, 0);
-    int *segflags = var.segflag->data();
 
     // Populate segment and segflag arrays
     // For sideset node ordering,
@@ -1878,16 +1874,15 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // Retrieved on 2019/09/28 from gsjaardema.github.io/seacas/exodusII-new.pdf.
     int_vec2D local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
     start = 0;
-    const int *conn = var.connectivity->data();
     for (int i=0; i<num_side_sets; i++) {
         for (int j=0; j<num_sides_in_set[i]; j++) {
             const int elem_num = elem_list[i][j] - 1;
             const int side_num = side_list[i][j] - 1;
             for (int k=0; k<NODES_PER_FACET; k++) { // 3 nodes per triangular facet
                 const int local_node_number = local_node_list[side_num][k] - 1;
-                segments[ (start + j)*NODES_PER_FACET + k] = conn[ elem_num*NODES_PER_ELEM + local_node_number ];
+                (*var.segment)[ start + j][k] = (*var.connectivity)[elem_num][local_node_number] - 1;
             }
-            segflags[start + j] = ids[i];
+            (*var.segflag)[start + j][0] = ids[i];
         }
         start += num_sides_in_set[i];
     }
