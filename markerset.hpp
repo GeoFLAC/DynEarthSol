@@ -49,7 +49,7 @@ public:
     void read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt);
     template <class T>
     void write_save_file(const Variables &var, T &bin) const;
-    array_t* calculate_marker_coord(const Variables &var) const;
+    void calculate_marker_coord(const Variables &var, array_t& points) const;
 
     inline std::string get_name() const { return _name; }
 

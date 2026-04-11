@@ -40,12 +40,12 @@ namespace {
 
         neighbor_vec neighbors(nqueries);
 
-        kdtree.search(queries, neighbors, 1, 3.);
+        kdtree.search(queries, neighbors, nqueries, 1, 3.);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop gang vector
         for (int i=0; i<nqueries; i++) {
             idx[i] = int(neighbors[i].idx);
             is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
@@ -142,8 +142,6 @@ namespace {
         // number of neighbors exceeding computational limit
         int queries_max = 1024 * 1024 * 16;
 
-        neighbor_vec neighbors;
-
         int elems_per_block = queries_max / nsample;
         if (elems_per_block < 1) elems_per_block = 1;
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
@@ -151,6 +149,7 @@ namespace {
                nblocks, elems_per_block, (unsigned long)nchanged * nsample);
 
         array_t queries(elems_per_block*nsample);
+        neighbor_vec neighbors(elems_per_block * nsample * max_el);
 
         conn_t *ptr_conn;
         int nnode_cell;
@@ -169,13 +168,11 @@ namespace {
 
             printf("      Block %3d: element %7d to %7d", b, start, end-1);
 
-            queries.resize((end-start) * nsample);
-
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop gang vector
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
@@ -191,17 +188,15 @@ namespace {
                 }
             }
 
-            neighbors.resize((end-start) * nsample * max_el);
-
             // find the nearest point nn in old_center
-            kdtree.search(queries, neighbors, max_el, 3.);
+            kdtree.search(queries, neighbors, (end-start)*nsample, max_el, 3.);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];
@@ -215,15 +210,15 @@ namespace {
                 *      volume weighting for the mapping.
                 */
                 for (int j=0; j<nsample; j++) {
-                    double *x = queries.data() + (query_start + j) * NDIMS;
-                    neighbor *nn = neighbors.data() + (query_start + j) * max_el;
-
                     // find the old element that is enclosing x
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        old_e = nn[jj].idx;
-                        bary.transform(x, old_e, r);
+                        old_e = neighbors[(query_start + j) * max_el + jj].idx;
+
+                        if (old_e < 0) break; // occurs when cuda knn cannot find enough neighbors
+
+                        bary.transform(queries[query_start + j], old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
                             for (int ei = 0; ei < elem_size; ++ei) {
@@ -281,6 +276,8 @@ namespace {
                 }
             }
         } // end of for (int b=0; b<nblocks; b++)
+
+        #pragma acc wait
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -355,7 +352,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -379,7 +376,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -414,7 +411,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 target[i] = source[n];
@@ -423,7 +420,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -463,7 +460,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 for (int d=0; d<NSTR; d++) {
@@ -474,7 +471,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -529,6 +526,8 @@ namespace {
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
+            #pragma acc wait
+
             tensor_t *new_stress = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
@@ -537,17 +536,6 @@ namespace {
 
             double_vec *new_old_mean_stress = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
-
-            double_vec *new_radiogenic_source = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
-
-            double_vec *new_dyn_fric_coeff = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
-
-            double_vec *new_state_variable = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
-
-            #pragma acc wait
 
             delete var.plstrain;
             var.plstrain = new_plstrain;
@@ -558,6 +546,17 @@ namespace {
             delete var.strain;
             var.strain = new_strain;
 
+            #pragma acc wait
+
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
+
+            double_vec *new_dyn_fric_coeff = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
+
+            double_vec *new_state_variable = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
+
             delete var.stress;
             var.stress = new_stress;
 
@@ -566,6 +565,8 @@ namespace {
 
             delete var.old_mean_stress;
             var.old_mean_stress = new_old_mean_stress;
+
+            #pragma acc wait
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;

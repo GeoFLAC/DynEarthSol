@@ -112,12 +112,14 @@ namespace {
     }
 
 
+    #pragma acc routine seq
     double arithmetic_mean(const double_vec &s, const int_vec &n)
     {
         if (s.size() == 1) return s[0];
 
         double result = 0;
         int m = 0;
+        #pragma acc loop seq
         for (std::size_t i=0; i<s.size(); i++) {
             result += n[i] * s[i];
             m += n[i];
@@ -126,12 +128,14 @@ namespace {
     }
 
 
+    #pragma acc routine seq
     double harmonic_mean(const double_vec &s, const int_vec &n)
     {
         if (s.size() == 1) return s[0];
 
         double result = 0;
         int m = 0;
+        #pragma acc loop seq
         for (std::size_t i=0; i<s.size(); i++) {
             result += n[i] / s[i];
             m += n[i];
@@ -624,6 +628,7 @@ double MatProps::rho_fluid(int e) const
     // Average temperature of this element
     double T = 0;
     const int *conn = connectivity[e];
+    #pragma acc loop seq
     for (int i = 0; i < NODES_PER_ELEM; ++i) {
         T += temperature[conn[i]];
     }
@@ -631,6 +636,7 @@ double MatProps::rho_fluid(int e) const
 
     // Average pore pressure of this element
     double p = 0;
+    #pragma acc loop seq
     for (int i = 0; i < NODES_PER_ELEM; ++i) {
         p += ppressure[conn[i]];
     }
@@ -643,6 +649,7 @@ double MatProps::rho_fluid(int e) const
     // Calculate fluid density based on thermal expansivity and compressibility
     double result = 0;
     int n = 0;
+    #pragma acc loop seq
     for (int m = 0; m < nmat; m++) {
         double rho_f = (fluid_rho0)[m];  // Reference fluid density
         result += rho_f * (1 - alpha_f * (T - T0) + beta_f * (p - p0)) * elemmarkers[e][m];
