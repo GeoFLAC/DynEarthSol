@@ -134,10 +134,10 @@ void write_csv_header(std::FILE* fp, const Param& param)
 bool compute_elem_centroid(const Variables& var, int e, double c[NDIMS])
 {
     if (e < 0 || e >= var.nelem) return false;
-    const int* conn = (*var.connectivity)[e];
+    ConstConnAccessor conn = (*var.connectivity)[e];
     for (int d = 0; d < NDIMS; ++d) c[d] = 0.0;
     for (int k = 0; k < NODES_PER_ELEM; ++k) {
-        const double* x = (*var.coord)[conn[k]];
+        ConstArrayAccessor x = (*var.coord)[conn[k]];
         for (int d = 0; d < NDIMS; ++d) c[d] += x[d];
     }
     const double inv_n = 1.0 / static_cast<double>(NODES_PER_ELEM);
@@ -145,7 +145,8 @@ bool compute_elem_centroid(const Variables& var, int e, double c[NDIMS])
     return true;
 }
 
-double distance2_nd(const double* a, const double* b)
+template <typename T>
+double distance2_nd(T a, const double* b)
 {
     double d2 = 0.0;
     for (int d = 0; d < NDIMS; ++d) {

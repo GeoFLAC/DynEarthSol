@@ -70,7 +70,7 @@ std::vector<double> compute_seismic_moment_rate_by_material(const Variables& var
     }
 
     for (int e = 0; e < var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
 
         double vx = 0.0, vy = 0.0, vz = 0.0;
         for (int j = 0; j < NODES_PER_ELEM; ++j) {

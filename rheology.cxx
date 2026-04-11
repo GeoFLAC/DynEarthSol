@@ -205,7 +205,7 @@ void refresh_rsf_friction(const Param& param, Variables& var,
     #pragma omp parallel for default(none) shared(param, var, vel, dyn_fric_coeff, state_variable)
 #endif
     for (int e = 0; e < var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double vx = 0.0;
         double vy = 0.0;
         const double weight = 1.0 / NODES_PER_ELEM;
