@@ -12,8 +12,6 @@ class Array2D {
     int n_;
 
 public:
-    struct Accessor;
-    struct ConstAccessor;
     // 
     // Accessor
     // 
@@ -94,10 +92,9 @@ public:
         }
     };
 
-    // 
+    //
     // View
-    // 
-
+    //
     struct ConstIndirectAccessor {
         const Array2D<T, N>* source_array;
         const int* index_ptr;
@@ -155,8 +152,6 @@ public:
         return ConstIndirectAccessor{ this, indices_acc.ptr_, indices_acc.stride_ };
     }
 
-
-
     //
     // I/O and Transition Helpers
     //
@@ -177,17 +172,17 @@ public:
         }
     }
 
-    void copy_all_to(T* buffer) const {
-        if (!a_) return;
-#ifndef ACC
-        #pragma omp parallel for  collapse(2) if(n_ > 10000)
-#endif
-        #pragma acc parallel loop gang vector collapse(2)
-        for(int i=0; i<n_; ++i) {
-            for(int d=0; d<N; ++d)
-                buffer[i*N + d] = (*this)[i][d];
-        }
-    }
+//     void copy_all_to(T* buffer) const {
+//         if (!a_) return;
+// #ifndef ACC
+//         #pragma omp parallel for collapse(2) if(n_ > 10000)
+// #endif
+//         #pragma acc parallel loop gang vector collapse(2)
+//         for(int i=0; i<n_; ++i) {
+//             for(int d=0; d<N; ++d)
+//                 buffer[i*N + d] = (*this)[i][d];
+//         }
+//     }
 
     void pack_to(std::vector<T>& buffer, std::size_t limit_size = 0) const {
         std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
@@ -228,14 +223,14 @@ public:
     }
 
     // AoS to SoA constructor
-    Array2D(const T* aos_data, int size, bool is_aos = true) {
+    Array2D(const T* aos_data, int size) {
         n_ = size;
         if (n_ > 0) {
             a_ = new T[N * n_];
             if (aos_data != nullptr) {
 #ifdef SOA
 #ifndef ACC
-                #pragma omp parallel for collapse(2)
+                #pragma omp parallel for collapse(2) if(n_ > 10000)
 #endif
                 #pragma acc parallel loop gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
@@ -355,7 +350,6 @@ public:
     }
 
     Accessor at(std::size_t i) {
-        // if (i >= n_) throw std::out_of_range("Index out of range");
 #ifdef SOA
         return Accessor{ a_ + i, n_ };
 #else
@@ -364,7 +358,6 @@ public:
     }
 
     ConstAccessor at(std::size_t i) const {
-        // if (i >= n_) throw std::out_of_range("Index out of range");
 #ifdef SOA
         return ConstAccessor{ a_ + i, n_ };
 #else
