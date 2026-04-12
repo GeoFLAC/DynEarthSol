@@ -27,7 +27,13 @@ __global__ static void knn_hashgrid_kernel(
 {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= numQueries) return;
-    const double *query = queries + tid*NDIMS;
+#ifdef SOA
+    double query[NDIMS];
+    for (int i = 0; i < NDIMS; ++i)
+        query[i] = queries[tid + i*numQueries];
+#else
+    const double *query = &queries[tid*NDIMS];
+#endif
     // Find which cell query is in
     int c[NDIMS];
     for (int i = 0; i < NDIMS; ++i) {
@@ -67,7 +73,14 @@ __global__ static void knn_hashgrid_kernel(
         int end = grid.cell_starts[cell_idx+1];
         for (int i = start; i < end; ++i) {
             int pi = grid.point_indices[i];
-            double d2 = distance2_cuda(points+pi*NDIMS, query);
+#ifdef SOA
+            double p[NDIMS];
+            for (int j = 0; j < NDIMS; ++j)
+                p[j] = points[pi +j*numPoints];
+#else
+            const double *p = &points[pi*NDIMS];
+#endif
+            double d2 = distance2_cuda(p, query);
 
             if (d2 <= radius2) {
                 if (n_cand >= k && results[k - 1].dist2 < d2)
@@ -100,10 +113,10 @@ __global__ static void knn_hashgrid_kernel(
 
 #endif
 
-KNN::KNN(const Param& param, const array_t& points_vec, NANOKDTree& nano_kdtree_,
+KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_,
             double resoTimes_) : 
-    resolution(param.mesh.resolution),
-    points(points_vec.data()), numPoints(points_vec.size()),
+    resolution(param.mesh.resolution), points_vec(points_vec_),
+    numPoints(points_vec_.size()),
     nano_kdtree(nano_kdtree_),
     resoTimes(resoTimes_)
 {
@@ -143,14 +156,13 @@ void KNN::build_hash_grid(double cell_size) {
     // Compute bounds
     double minp[NDIMS], maxp[NDIMS];
     for (int i = 0; i < NDIMS; ++i) {
-        minp[i] = points[i];
-        maxp[i] = points[i];
+        minp[i] = points_vec[0][i];
+        maxp[i] = points_vec[0][i];
     }
     for (int i = 1; i < numPoints; ++i) {
-        int idx = i*NDIMS;
         for (int j = 0; j < NDIMS; ++j) {
-            minp[j] = std::min(minp[j], points[idx + j]);
-            maxp[j] = std::max(maxp[j], points[idx + j]);
+            minp[j] = std::min(minp[j], points_vec[i][j]);
+            maxp[j] = std::max(maxp[j], points_vec[i][j]);
         }
     }
     // Small margin
@@ -172,10 +184,9 @@ void KNN::build_hash_grid(double cell_size) {
     std::vector<unsigned int> cell_codes(numPoints);
     #pragma omp parallel for
     for (int i = 0; i < numPoints; ++i) {
-        int idx = i * NDIMS;
         int c[NDIMS];
         for (int j = 0; j < NDIMS; ++j) {
-            c[j] = int((points[idx + j] - minp[j]) / cell_size);
+            c[j] = int((points_vec[i][j] - minp[j]) / cell_size);
             if (c[j] < 0) c[j] = 0;
             if (c[j] >= dim[j]) c[j] = dim[j] - 1;
         }
@@ -261,10 +272,12 @@ void KNN::knnSearchCuda_hashgrid(const double *queries, const int numQueries,
     // neighbor* d_results;
     // cudaMallocManaged(&results, numQueries * k * sizeof(neighbor));
 
+    const double* point_ptr = points_vec.data();
+
     int threadsPerBlock = 256;
     int numBlocks = (numQueries + threadsPerBlock - 1) / threadsPerBlock;
     knn_hashgrid_kernel<<<numBlocks, threadsPerBlock>>>(
-        points, numPoints, queries, numQueries, results, k, nheap, radius2, grid
+        point_ptr, numPoints, queries, numQueries, results, k, nheap, radius2, grid
     );
 
     // use managed memory
@@ -298,7 +311,9 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors, const int nque
     double maxDist = resoTimes * resolution;
     double cell_size = maxDist;
 
-    knnSearchCuda_hashgrid(queries.data(), nquery,
+    const double* query_ptr = queries.data();
+
+    knnSearchCuda_hashgrid(query_ptr, nquery,
         neighbors.data(), k, heapSize, maxDist * maxDist, cell_size);
 
     // long max_size = 1024 * 1024 * 256;
@@ -338,7 +353,9 @@ void KNN::search(const array_t& queries, neighbor_vec& neighbors, const int nque
         KNNResultSet resultSet(k);
         resultSet.init(nn_idx.data(), out_dists_sqr.data());
 
-        nano_kdtree.findNeighbors(resultSet, queries.data() + i * NDIMS);
+        double q[NDIMS];
+        queries[i].copy_to(q);
+        nano_kdtree.findNeighbors(resultSet, q);
 
         for (int j = 0; j < k; ++j) {
             result[j].idx = nn_idx[j];

@@ -144,7 +144,7 @@ void create_quadrilateral_cells(Variables &var, int *&cells) {
 #endif
 }
 
-void divide_hexahedron_to_tetrahedra_index(const int *cell, int order, int n, int *conn) {
+void divide_hexahedron_to_tetrahedra_index(ConstRegularAccessor cell, int order, int n, int *conn) {
 
     if (order == 0) {
         switch (n)
@@ -349,47 +349,51 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
     }
 #else
     int idx_elem, idx_cell;
-    int *conn;
     // top and bottom
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.ny - 1; ++j) {
             // top
             int k = 0;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
-            idx_elem = idx_cell*5;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[1];
-            segflags[seg_idx] = BOUNDZ1;
-            seg_idx++;
-
-            idx_elem = idx_cell*5 + 1;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[1];
-            segflags[seg_idx] = BOUNDZ1;
-            seg_idx++;
-
+            {
+                idx_elem = idx_cell*5;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[1];
+                segflags[seg_idx] = BOUNDZ1;
+                seg_idx++;
+            }
+            {
+                idx_elem = idx_cell*5 + 1;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[1];
+                segflags[seg_idx] = BOUNDZ1;
+                seg_idx++;
+            }
             // bottom
-            k = var.nz - 2;
-            idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
-            idx_elem = idx_cell*5 + 2;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[1];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[3];
-            segflags[seg_idx] = BOUNDZ0;
-            seg_idx++;
-
-            idx_elem = idx_cell*5 + 3;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[1];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[3];
-            segflags[seg_idx] = BOUNDZ0;
-            seg_idx++;
+            {
+                k = var.nz - 2;
+                idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
+                idx_elem = idx_cell*5 + 2;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[1];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[3];
+                segflags[seg_idx] = BOUNDZ0;
+                seg_idx++;
+            }
+            {
+                idx_elem = idx_cell*5 + 3;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[1];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[3];
+                segflags[seg_idx] = BOUNDZ0;
+                seg_idx++;
+            }
         }
     }
 
@@ -405,20 +409,23 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
                 idx_elem = idx_cell*5 + 1;
             else
                 idx_elem = idx_cell*5;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[1];
-            segments[seg_idx*3+2] = conn[3];
-            segflags[seg_idx] = BOUNDX0;
-            seg_idx++;
-
-            idx_elem = idx_cell*5 + 2;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[1];
-            segflags[seg_idx] = BOUNDX0;
-            seg_idx++;
+            {
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[1];
+                segments[seg_idx*3+2] = conn[3];
+                segflags[seg_idx] = BOUNDX0;
+                seg_idx++;
+            }
+            {
+                idx_elem = idx_cell*5 + 2;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[1];
+                segflags[seg_idx] = BOUNDX0;
+                seg_idx++;
+            }
 
             // right
             i = var.nx - 2;
@@ -428,20 +435,23 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
                 idx_elem = idx_cell*5;
             else
                 idx_elem = idx_cell*5 + 1;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[1];
-            segments[seg_idx*3+1] = conn[2];
-            segments[seg_idx*3+2] = conn[3];
-            segflags[seg_idx] = BOUNDX1;
-            seg_idx++;
-
-            idx_elem = idx_cell*5 + 3;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[3];
-            segments[seg_idx*3+2] = conn[2];
-            segflags[seg_idx] = BOUNDX1;
-            seg_idx++;
+            {
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[1];
+                segments[seg_idx*3+1] = conn[2];
+                segments[seg_idx*3+2] = conn[3];
+                segflags[seg_idx] = BOUNDX1;
+                seg_idx++;
+            }
+            {
+                idx_elem = idx_cell*5 + 3;
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[3];
+                segments[seg_idx*3+2] = conn[2];
+                segflags[seg_idx] = BOUNDX1;
+                seg_idx++;
+            }
         }
     }
 
@@ -453,51 +463,57 @@ void create_regular_segments(const Variables& var, int *&segments, int *&segflag
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
             int order = (i+j+k)%2;
             idx_elem = idx_cell*5 + 1;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[3];
-            segments[seg_idx*3+2] = conn[2];
-            segflags[seg_idx] = BOUNDY0;
-            seg_idx++;
+            {
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[3];
+                segments[seg_idx*3+2] = conn[2];
+                segflags[seg_idx] = BOUNDY0;
+                seg_idx++;
+            }
 
             if (order)
                 idx_elem = idx_cell*5 + 3;
             else
                 idx_elem = idx_cell*5 + 2;
-            conn = (*var.connectivity)[idx_elem];
-            segments[seg_idx*3] = conn[0];
-            segments[seg_idx*3+1] = conn[1];
-            segments[seg_idx*3+2] = conn[3];
-            segflags[seg_idx] = BOUNDY0;
-            seg_idx++;
+            {
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                segments[seg_idx*3] = conn[0];
+                segments[seg_idx*3+1] = conn[1];
+                segments[seg_idx*3+2] = conn[3];
+                segflags[seg_idx] = BOUNDY0;
+                seg_idx++;
+            }
  
             // back
             j = var.ny - 2;
             order = (i+j+k)%2;
             idx_cell = i * (var.ny - 1) * (var.nz - 1) + j * (var.nz - 1) + k;
             idx_elem = idx_cell*5;
-            conn = (*var.connectivity)[idx_elem];
-            if (order) {
-                segments[seg_idx*3] = conn[0];
-                segments[seg_idx*3+1] = conn[1];
-                segments[seg_idx*3+2] = conn[3];
-            } else {
-                segments[seg_idx*3] = conn[1];
-                segments[seg_idx*3+1] = conn[2];
-                segments[seg_idx*3+2] = conn[3];
+            {
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
+                if (order) {
+                    segments[seg_idx*3] = conn[0];
+                    segments[seg_idx*3+1] = conn[1];
+                    segments[seg_idx*3+2] = conn[3];
+                } else {
+                    segments[seg_idx*3] = conn[1];
+                    segments[seg_idx*3+1] = conn[2];
+                    segments[seg_idx*3+2] = conn[3];
+                }
+                segflags[seg_idx] = BOUNDY1;
+                seg_idx++;
             }
-            segflags[seg_idx] = BOUNDY1;
-            seg_idx++;
 
             if (order) {
                 idx_elem = idx_cell*5 + 2;
-                conn = (*var.connectivity)[idx_elem];
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
                 segments[seg_idx*3] = conn[0];
                 segments[seg_idx*3+1] = conn[3];
                 segments[seg_idx*3+2] = conn[2];
             } else {
                 idx_elem = idx_cell*5 + 3;
-                conn = (*var.connectivity)[idx_elem];
+                ConstConnAccessor conn = (*var.connectivity)[idx_elem];
                 segments[seg_idx*3] = conn[0];
                 segments[seg_idx*3+1] = conn[2];
                 segments[seg_idx*3+2] = conn[1];
@@ -619,6 +635,11 @@ void new_mesh_regular_equilateral(const Param& param, Variables& var)
     create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
 
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
+    delete [] pregattr;
 }
 
 
@@ -851,6 +872,12 @@ void points_to_mesh(const Param &param, Variables &var,
     var.segment = new segment_t(psegment, var.nseg);
     var.segflag = new segflag_t(psegflag, var.nseg);
     var.regattr = new regattr_t(pregattr, var.nelem);
+
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
+    delete [] pregattr;
 }
 
 void new_mesh_regular(const Param& param, Variables& var)
@@ -873,6 +900,13 @@ void new_mesh_regular(const Param& param, Variables& var)
 
     create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
+
+    delete [] pcell;
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
+    delete [] pregattr;
 }
 
 
@@ -1581,6 +1615,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     var.segment = new segment_t(psegment, var.nseg);
     var.segflag = new segflag_t(psegflag, var.nseg);
     var.regattr = new regattr_t(pregattr, var.nelem);
+
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
+    delete [] pregattr;
 #else
     points_to_mesh(param, var, npoints, points,
                    n_init_segments, init_segments, init_segflags, nregions, regattr,
@@ -1664,11 +1704,10 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
     // assign node coordinates to var.coord.
     var.coord = new array_t(var.nnode);
-    double* coord = var.coord->data();
     for(int i=0; i<var.nnode; i++) {
-        coord[i*NDIMS]   = static_cast<double>(x[i]);
-        coord[i*NDIMS+1] = static_cast<double>(y[i]);
-        coord[i*NDIMS+2] = static_cast<double>(z[i]);
+        (*var.coord)[i][0] = static_cast<double>(x[i]);
+        (*var.coord)[i][1] = static_cast<double>(y[i]);
+        (*var.coord)[i][2] = static_cast<double>(z[i]);
     }
     free(x);
     free(y);
@@ -1721,11 +1760,10 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // One way is to provide a map from block names to mat id. TBD.
     //
     var.regattr = new regattr_t(var.nelem);
-    double *attr = var.regattr->data();
     int start = 0;
     for (int i=0; i<num_elem_blk; i++) {
         for(int j=0; j<num_elem_in_block[i]; j++)
-            attr[start+j] = static_cast<double>(ids[i]-1);
+            (*var.regattr)[start+j][0] = static_cast<double>(ids[i]-1);
         start += num_elem_in_block[i];
     }
 
@@ -1743,13 +1781,12 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
     { // To render 'int *conn' local to this block.
         var.connectivity = new conn_t(var.nelem);
-        int *conn = var.connectivity->data();
         start = 0;
         for (int i=0; i<num_elem_blk; i++) {
             for(int j=0; j<num_elem_in_block[i]; j++) {
                 const int elem_num = start + j;
                 for(int k=0; k < NODES_PER_ELEM; k++ )
-                    conn[ NODES_PER_ELEM*elem_num + k ] = connect[i][ NODES_PER_ELEM*j + k ]-1;
+                    (*var.connectivity)[elem_num][k] = connect[i][ NODES_PER_ELEM*j + k ]-1;
             }
             // can the j and k loops be replaced with memcpy?
             // std::memcpy( &(conn[NODES_PER_ELEM*start]), &(connect[i]), num_elem_in_block[i]*NODES_PER_ELEM*sizeof(int) );
@@ -1827,11 +1864,9 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 
     // Assign memory to segments (boundary facets)
     var.segment = new segment_t(var.nseg, 0);
-    int *segments = var.segment->data();
 
     // Assign memory to segment flags (which boundary a segments belong to).
     var.segflag = new segflag_t(var.nseg, 0);
-    int *segflags = var.segflag->data();
 
     // Populate segment and segflag arrays
     // For sideset node ordering,
@@ -1839,16 +1874,15 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     // Retrieved on 2019/09/28 from gsjaardema.github.io/seacas/exodusII-new.pdf.
     int_vec2D local_node_list{{1,2,4},{2,3,4},{1,4,3},{1,3,2}};
     start = 0;
-    const int *conn = var.connectivity->data();
     for (int i=0; i<num_side_sets; i++) {
         for (int j=0; j<num_sides_in_set[i]; j++) {
             const int elem_num = elem_list[i][j] - 1;
             const int side_num = side_list[i][j] - 1;
             for (int k=0; k<NODES_PER_FACET; k++) { // 3 nodes per triangular facet
                 const int local_node_number = local_node_list[side_num][k] - 1;
-                segments[ (start + j)*NODES_PER_FACET + k] = conn[ elem_num*NODES_PER_ELEM + local_node_number ];
+                (*var.segment)[ start + j][k] = (*var.connectivity)[elem_num][local_node_number] - 1;
             }
-            segflags[start + j] = ids[i];
+            (*var.segflag)[start + j][0] = ids[i];
         }
         start += num_sides_in_set[i];
     }
@@ -2100,7 +2134,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
 
     double_vec we(nelem);
     for(int i=0; i<nelem; i++) {
-        const int *conn = connectivity[i];
+        ConstConnAccessor conn = connectivity[i];
         we[i] = wn[conn[0]] + wn[conn[1]]
 #ifdef THREED
             + wn[conn[2]]
@@ -2161,11 +2195,11 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
 
 
 void create_boundary_flags2(uint_vec &bcflag, int nseg,
-                            const int *psegment, const int *psegflag)
+                            const segment_t &segment, const segflag_t& segflag)
 {
     for (int i=0; i<nseg; ++i) {
-        uint flag = static_cast<uint>(psegflag[i]);
-        const int *n = psegment + i * NODES_PER_FACET;
+        uint flag = static_cast<uint>(segflag[i][0]);
+        ConstSegmentAccessor n = segment[i];
         for (int j=0; j<NODES_PER_FACET; ++j) {
             bcflag[n[j]] |= flag;
         }
@@ -2183,7 +2217,7 @@ void create_boundary_flags(Variables& var)
     var.bcflag = new uint_vec(var.nnode);
 
     create_boundary_flags2(*var.bcflag, var.segment->size(),
-                           var.segment->data(), var.segflag->data());
+                           *var.segment, *var.segflag);
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -2486,7 +2520,7 @@ void create_boundary_facets(Variables& var)
      */
 
     // Looping through var.segment
-    #pragma omp parallel default(none) shared(var,NODE_OF_FACET, std::cerr) // TODO: fix no deterministic behavior
+    #pragma omp parallel default(none) shared(var, NODE_OF_FACET, std::cerr) // TODO: fix no deterministic behavior
     {
         // local storage for each thread
         int_pair_vec bfacet_local[nbdrytypes];
@@ -2505,7 +2539,7 @@ void create_boundary_facets(Variables& var)
             // Finding the corresponding element and facet #
             bool found = false;
             for (int e=0; e<var.nelem && !found; ++e) {
-                const int *conn = (*var.connectivity)[e];
+                ConstConnAccessor conn = (*var.connectivity)[e];
                 for (int f=0; f<FACETS_PER_ELEM && !found; ++f) {
                     uint facet_flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]] &
                                       (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
@@ -2625,7 +2659,7 @@ void create_support(Variables& var)
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             (*var.support)[conn[i]].push_back(e);
             (*var.support_idx)[conn[i]]++;
@@ -2698,7 +2732,7 @@ void create_neighbor(Variables& var)
             for (int j=0; j<sup.size() && !found; ++j) {
                 int neigh = sup[j];
                 if (neigh > e) {
-                    const int *conn2 = (*var.connectivity)[neigh];
+                    ConstConnAccessor conn2 = (*var.connectivity)[neigh];
                     for (int k=0; k<NODES_PER_ELEM; ++k) {
                         bool match = true;
                         for (int l=0; l<NDIMS; ++l)

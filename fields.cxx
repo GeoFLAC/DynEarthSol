@@ -170,15 +170,15 @@ void update_temperature(const Param &param, const Variables &var,
         for (int e=0;e<var.nelem;e++) {
             // diffusion matrix
 
-            const int *conn = (*var.connectivity)[e];
-            double *tr = tmp_result[e];
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            ElemCacheAccessor tr = tmp_result[e];
             double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
-            const double *shpdx = (*var.shpdx)[e];
+            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            const double *shpdy = (*var.shpdy)[e];
+            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
 #endif
-            const double *shpdz = (*var.shpdz)[e];
+            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
@@ -206,8 +206,8 @@ void update_temperature(const Param &param, const Variables &var,
                 double tdot = 0;
 
                 for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                    const int *conn = (*var.connectivity)[*e];
-                    const double *tr = tmp_result[*e];
+                    ConstConnAccessor conn = (*var.connectivity)[*e];
+                    ConstElemCacheAccessor tr = tmp_result[*e];
                     bool found = false;
                     for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
                         if (n == conn[i]) {
@@ -264,8 +264,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param, diff_max_local)
     // #pragma acc parallel loop
     for (int e = 0; e < var.nelem; e++) {
-        const int *conn = (*var.connectivity)[e];
-        double *tr = tmp_result[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        ElemCacheAccessor tr = tmp_result[e];
         double current_mean_stress = trace(stress[e])/NDIMS;
         double mean_stress_change = current_mean_stress - old_mean_stress[e];
 
@@ -297,11 +297,11 @@ void update_pore_pressure(const Param &param, const Variables &var,
         // volume term (poroelastic effect)
         double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
        
-        const double *shpdx = (*var.shpdx)[e];
+        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-        const double *shpdy = (*var.shpdy)[e];
+        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
 #endif
-        const double *shpdz = (*var.shpdz)[e];
+        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             double diffusion = 0.0;
@@ -330,8 +330,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
         for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            const int *conn = (*var.connectivity)[*e];
-            const double *tr = tmp_result[*e];
+            ConstConnAccessor conn = (*var.connectivity)[*e];
+            ConstElemCacheAccessor tr = tmp_result[*e];
             for (int i = 0; i < NODES_PER_ELEM; i++) {
                 if (n == conn[i]) {
                     tdot[n] += tr[i];
@@ -372,15 +372,12 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-        double *v[NODES_PER_ELEM];
 
-        const int *conn = (*var.connectivity)[e];
-        const double *shpdx = (*var.shpdx)[e];
-        const double *shpdz = (*var.shpdz)[e];
-        double *s = strain_rate[e];
-
-        for (int i=0; i<NODES_PER_ELEM; ++i)
-            v[i] = (*var.vel)[conn[i]];
+        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
+        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+        TensorAccessor s = strain_rate[e];
+        
+        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
 
         // XX component
         int n = 0;
@@ -389,7 +386,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
             s[n] += v[i][0] * shpdx[i];
 
 #ifdef THREED
-        const double *shpdy = (*var.shpdy)[e];
+        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
         // YY component
         n = 1;
         s[n] = 0;
@@ -580,15 +577,14 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
-            const int *conn = (*var.connectivity)[e];
-            const double *shpdx = (*var.shpdx)[e];
+            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            const double *shpdy = (*var.shpdy)[e];
+            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
 #endif
-            const double *shpdz = (*var.shpdz)[e];
-            double *s = (*var.stress)[e];
+            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+            TensorAccessor s = (*var.stress)[e];
             double vol = (*var.volume)[e];
-            double *tr = tmp_result[e];
+            ElemCacheAccessor tr = tmp_result[e];
 
             double buoy = 0;
             if (param.control.gravity != 0) {
@@ -615,13 +611,13 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
         #pragma acc parallel loop gang vector async
         for (int n=0;n<var.nnode;n++) {
-            std::fill_n(force[n],NDIMS,0); 
-            double *f = force[n];
-            std::fill_n(force_residual[n],NDIMS,0); 
-            double *f_residual = force_residual[n];
+            ArrayAccessor f = force[n];
+            f = 0;
+            ArrayAccessor f_residual = force_residual[n];
+            f_residual = 0;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const int *conn = (*var.connectivity)[*e];
-                const double *tr = tmp_result[*e];
+                ConstConnAccessor conn = (*var.connectivity)[*e];
+                ConstElemCacheAccessor tr = tmp_result[*e];
                 for (int i=0;i<NODES_PER_ELEM;i++) {
                     if (n == conn[i]) {
                         for (int j=0;j<NDIMS;j++)
@@ -747,8 +743,8 @@ void update_coordinate(const Variables& var, array_t& coord)
 namespace {
 
 #ifdef THREED
-    #pragma acc routine seq 
-    void jaumann_rate_3d(double *s, double dt, double w3, double w4, double w5)
+    #pragma acc routine seq
+    void jaumann_rate_3d(TensorAccessor s, double dt, double w3, double w4, double w5)
     {
         double s_inc[NSTR];
 
@@ -766,7 +762,7 @@ namespace {
 
 #else
     #pragma acc routine seq
-    void jaumann_rate_2d(double *s, double dt, double w2)
+    void jaumann_rate_2d(TensorAccessor s, double dt, double w2)
     {
         double s_inc[NSTR];
 
@@ -810,19 +806,17 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
 
 #ifdef THREED
 
         double w3, w4, w5;
         {
-            const double *shpdx = (*var.shpdx)[e];
-            const double *shpdy = (*var.shpdy)[e];
-            const double *shpdz = (*var.shpdz)[e];
+            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
+            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
 
-            double *v[NODES_PER_ELEM];
-            for (int i=0; i<NODES_PER_ELEM; ++i)
-                v[i] = (*var.vel)[conn[i]];
+            ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 
             w3 = 0;
             for (int i=0; i<NODES_PER_ELEM; ++i)
@@ -844,12 +838,10 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
         double w2;
         {
-            const double *shpdx = (*var.shpdx)[e];
-            const double *shpdz = (*var.shpdz)[e];
+            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
+            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
 
-            double *v[NODES_PER_ELEM];
-            for (int i=0; i<NODES_PER_ELEM; ++i)
-                v[i] = (*var.vel)[conn[i]];
+            ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 
             w2 = 0;
             for (int i=0; i<NODES_PER_ELEM; ++i)

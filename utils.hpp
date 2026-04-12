@@ -169,7 +169,8 @@ static double pow_2(const double x) {
 }
 
 #pragma acc routine seq
-static double trace(const double* s)
+template <typename T>
+static double trace(T s)
 {
 #ifdef THREED
     return s[0] + s[1] + s[2];
@@ -178,8 +179,8 @@ static double trace(const double* s)
 #endif
 }
 
-
-static double second_invariant2(const double* t)
+template <typename T>
+static double second_invariant2(T t)
 {
 #ifdef THREED
     double a = (t[0] + t[1] + t[2]) / 3;
@@ -190,8 +191,8 @@ static double second_invariant2(const double* t)
 #endif
 }
 
-
-static double second_invariant(const double* t)
+template <typename T>
+static double second_invariant(T t)
 {
     /* second invariant of the deviatoric part of tensor t
      * defined as: td = deviatoric(t); sqrt( td(i,j) * td(i,j) / 2)

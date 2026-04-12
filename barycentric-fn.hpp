@@ -13,6 +13,8 @@ class Barycentric_transformation {
      * http://en.wikipedia.org/wiki/Barycentric_coordinate_system_(mathematics)
      */
     typedef Array2D<double,NODES_PER_ELEM*NDIMS> coeff_t;
+    typedef coeff_t::Accessor CoeffAccessor;
+    typedef coeff_t::ConstAccessor ConstCoeffAccessor;
     coeff_t coeff_;
     int nelem_;
     int elem_dim_;
@@ -30,13 +32,14 @@ public:
                                const conn_t&conn_surface,
                                const double_vec &volume,
                                const bool is_surface);
-    Barycentric_transformation(const double** coord,
+    Barycentric_transformation(ConstArrayIndirectAccessor coord,
                                const double volume);
     ~Barycentric_transformation();
 
     #pragma acc routine seq
-    void transform(const double *point, int e, double *result) const;
-    bool is_inside_elem(const double *point, int elem) const;
+    template <typename T>
+    void transform(T point, int e, double *result) const;
+    bool is_inside_elem(ConstArrayAccessor point, int elem) const;
     #pragma acc routine seq
     bool is_inside(const double *result) const;
 
@@ -46,24 +49,24 @@ private:
     inline int index2d(int node, int dim) const;
     inline int index3d(int node, int dim) const;
 
-    void compute_coeff2d(const double *a,
-                         const double *b,
-                         const double *c,
+    void compute_coeff2d(ConstArrayAccessor a,
+                         ConstArrayAccessor b,
+                         ConstArrayAccessor c,
                          double area,
-                         double *coeff_e);
+                         coeff_t::Accessor coeff_e);
 
 #ifdef THREED
-    void compute_coeff3d(const double *a,
-                         const double *b,
-                         const double *c,
-                         const double *d,
+    void compute_coeff3d(ConstArrayAccessor a,
+                         ConstArrayAccessor b,
+                         ConstArrayAccessor c,
+                         ConstArrayAccessor d,
                          double volume,
-                         double *coeff_e);
+                         CoeffAccessor coeff_e);
 #else
-    void compute_coeff1d(const double *a,
-                         const double *b,
+    void compute_coeff1d(ConstArrayAccessor a,
+                         ConstArrayAccessor b,
                          double length,
-                         double *coeff_e);
+                         CoeffAccessor coeff_e);
 #endif
 
 };

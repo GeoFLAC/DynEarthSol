@@ -34,7 +34,7 @@ public:
     void search(const array_t& queries, neighbor_vec& neighbors, const int nquery,
             int k, double resoTimes = 3);
 private:
-    const double* points;
+    const array_t& points_vec;
     int numPoints;
 
     const int resolution;
