@@ -461,7 +461,7 @@ template <typename T>
 static void elasto_plastic2d(double bulkm, double shearm,
                              double amc, double anphi, double anpsi,
                              double hardn, double ten_max,
-                             double* de, double& depls,
+                             const double* de, double& depls,
                              T s, double &syy,
                              int &failure_mode,
                              bool has_hydraulic_diffusion,
