@@ -519,7 +519,7 @@ void find_tiny_element(const Param &param, const double_vec &volume,
 
 void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
                               const double_vec &volume, const int_vec &tiny_elems,
-                              int npoints, const array_t old_points,
+                              int npoints, const array_t &old_points,
                               const uint_vec &old_bcflag, int_vec &points_to_delete,
                               bool excl_func(uint))
 {
