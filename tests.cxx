@@ -17,12 +17,12 @@ void test_barycentric_transformation(Variables &var)
 
     // p is the mid point of element 1
     int e = 1;
-    ConstConnAccessor conn = (*var.connectivity)[e];
+    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
     for (int d=0; d<NDIMS; d++)
-        p[d] = (*var.coord)[conn[0]][d] / NODES_PER_ELEM;
+        p[d] = coord[0][d] / NODES_PER_ELEM;
     for (int i=1; i<NODES_PER_ELEM; i++)
         for (int d=0; d<NDIMS; d++)
-            p[d] += (*var.coord)[conn[i]][d] / NODES_PER_ELEM;
+            p[d] += coord[i][d] / NODES_PER_ELEM;
 
     double q[NDIMS];
     bary.transform(p, e, q);

@@ -199,13 +199,11 @@ void refresh_rsf_friction(const Param& param, Variables& var,
 {
     if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
 
-    const array_t& vel = *var.vel;
-
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, vel, dyn_fric_coeff, state_variable)
+    #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable)
 #endif
     for (int e = 0; e < var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
         double vx = 0.0;
         double vy = 0.0;
         const double weight = 1.0 / NODES_PER_ELEM;
@@ -214,10 +212,10 @@ void refresh_rsf_friction(const Param& param, Variables& var,
 #endif
 
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            vx += vel[conn[j]][0] * weight;
-            vy += vel[conn[j]][1] * weight;
+            vx += v[j][0] * weight;
+            vy += v[j][1] * weight;
 #ifdef THREED
-            vz += vel[conn[j]][2] * weight;
+            vz += v[j][2] * weight;
 #endif
         }
 

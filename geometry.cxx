@@ -215,7 +215,6 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0;e<var.nelem;e++) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
         ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
         // dj = (volume[e] - volume_old[e]) / volume_old[e] / dt
@@ -427,15 +426,14 @@ double compute_dt(const Param& param, Variables& var)
         int n2 = (*var.connectivity)[e][2];
 
         // calculate maxium velocity in the element
-        const array_t& vel = *var.vel;
-        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
         double weight = 1.0 / NODES_PER_ELEM; 
 
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            vx_element += vel[conn[j]][0] * weight;
-            vy_element += vel[conn[j]][1] * weight;
+            vx_element += v[j][0] * weight;
+            vy_element += v[j][1] * weight;
 #ifdef THREED
-            vz_element += vel[conn[j]][2] * weight;
+            vz_element += v[j][2] * weight;
 #endif
         }
 

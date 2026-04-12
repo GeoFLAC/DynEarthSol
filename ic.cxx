@@ -169,10 +169,10 @@ void initial_stress_state(const Param &param, const Variables &var,
 
     #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            zcenter += (*var.coord)[conn[i]][NDIMS-1];
+            zcenter += coord[i][NDIMS-1];
         }
         zcenter /= NODES_PER_ELEM;
 
@@ -218,10 +218,10 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
     double loading_zz = 0.0;
 
     for (int e=0; e<var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            zcenter += (*var.coord)[conn[i]][NDIMS-1];
+            zcenter += coord[i][NDIMS-1];
         }
         zcenter /= NODES_PER_ELEM;
 
@@ -395,12 +395,12 @@ void initial_weak_zone(const Param &param, const Variables &var,
 
     #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         // the coordinate of the center of this element
         double center[NDIMS] = {0};
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             for (int d=0; d<NDIMS; ++d) {
-                center[d] += (*var.coord)[conn[i]][d];
+                center[d] += coord[i][d];
             }
         }
         for (int d=0; d<NDIMS; ++d) {
@@ -722,10 +722,10 @@ void initial_temperature(const Param &param, const Variables &var,
             }
             // init rediogenic source in element
             for (int e=0; e<var.nelem; ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
                 double zcenter = 0;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
-                    zcenter += (*var.coord)[conn[j]][NDIMS-1];
+                    zcenter += coord[j][NDIMS-1];
                 }
                 zcenter /= NODES_PER_ELEM;
 

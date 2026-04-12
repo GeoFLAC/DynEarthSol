@@ -373,12 +373,11 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
 
-        ConstConnAccessor conn = (*var.connectivity)[e];
         ConstShapefnAccessor shpdx = (*var.shpdx)[e];
         ConstShapefnAccessor shpdz = (*var.shpdz)[e];
         TensorAccessor s = strain_rate[e];
         
-        ConstArrayIndirectAccessor v = var.vel->view_const(conn);
+        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
 
         // XX component
         int n = 0;
@@ -578,7 +577,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
-            ConstConnAccessor conn = (*var.connectivity)[e];
             ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
             ConstShapefnAccessor shpdy = (*var.shpdy)[e];

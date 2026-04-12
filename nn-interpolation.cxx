@@ -183,14 +183,14 @@ namespace {
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
-                ConstConnAccessor  conn = (*ptr_conn)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*ptr_conn)[e]);
 
                 for (int j=0; j<nsample; j++) {
                     ArrayAccessor x = queries[query_start*nsample + j];
                     for (int d=0; d<NDIMS; d++) {
                         x[d] = 0;
                         for (int n=0; n<nnode_cell; n++)
-                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                            x[d] += coord[n][d] * sample_eta[j][n];
                     }
                 }
             }

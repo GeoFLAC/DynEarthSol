@@ -1000,9 +1000,11 @@ namespace {
                 int f = top[i].second;
 
                 ConstConnAccessor conn = (*var.connectivity)[e];
-                int n0 = (*var.connectivity)[e][NODE_OF_FACET[f][0]];
-                int n1 = (*var.connectivity)[e][NODE_OF_FACET[f][1]];
-                int n2 = (*var.connectivity)[e][NODE_OF_FACET[f][2]];
+                int idx[NODES_PER_FACET];
+                for (int j=0; j<NODES_PER_FACET; ++j)
+                    idx[j] = conn[NODE_OF_FACET[f][j]];
+
+                ConstArrayIndirectAccessor coord_f = var.coord->view_const(idx);
 
                 double projected_area;
                 {
@@ -1013,12 +1015,12 @@ namespace {
                     // n is the cross product of these two vectors
                     // the length of n is 2 * triangle area
                     double x01, y01, z01, x02, y02, z02;
-                    x01 = coord[n1][0] - coord[n0][0];
-                    y01 = coord[n1][1] - coord[n0][1];
-                    z01 = coord[n1][2] - coord[n0][2];
-                    x02 = coord[n2][0] - coord[n0][0];
-                    y02 = coord[n2][1] - coord[n0][1];
-                    z02 = coord[n2][2] - coord[n0][2];
+                    x01 = coord_f[1][0] - coord_f[0][0];
+                    y01 = coord_f[1][1] - coord_f[0][1];
+                    z01 = coord_f[1][2] - coord_f[0][2];
+                    x02 = coord_f[2][0] - coord_f[0][0];
+                    y02 = coord_f[2][1] - coord_f[0][1];
+                    z02 = coord_f[2][2] - coord_f[0][2];
 
                     normal[0] = y01*z02 - z01*y02;
                     normal[1] = z01*x02 - x01*z02;
@@ -1041,12 +1043,12 @@ namespace {
 
                 double shp2dx[NODES_PER_FACET], shp2dy[NODES_PER_FACET];
                 double iv = 1 / (2 * projected_area);
-                shp2dx[0] = iv * (coord[n1][1] - coord[n2][1]);
-                shp2dx[1] = iv * (coord[n2][1] - coord[n0][1]);
-                shp2dx[2] = iv * (coord[n0][1] - coord[n1][1]);
-                shp2dy[0] = iv * (coord[n2][0] - coord[n1][0]);
-                shp2dy[1] = iv * (coord[n0][0] - coord[n2][0]);
-                shp2dy[2] = iv * (coord[n1][0] - coord[n0][0]);
+                shp2dx[0] = iv * (coord_f[1][1] - coord_f[2][1]);
+                shp2dx[1] = iv * (coord_f[2][1] - coord_f[0][1]);
+                shp2dx[2] = iv * (coord_f[0][1] - coord_f[1][1]);
+                shp2dy[0] = iv * (coord_f[2][0] - coord_f[1][0]);
+                shp2dy[1] = iv * (coord_f[0][0] - coord_f[2][0]);
+                shp2dy[2] = iv * (coord_f[1][0] - coord_f[0][0]);
 
                 double D[NODES_PER_FACET][NODES_PER_FACET];
                 for (int j=0; j<NODES_PER_FACET; j++) {
@@ -1056,11 +1058,10 @@ namespace {
                     }
                 }
 
-                const int n[NODES_PER_FACET] = {n0, n1, n2};
                 for (int j=0; j<NODES_PER_FACET; j++) {
                     double slope = 0;
                     for (int k=0; k<NODES_PER_FACET; k++)
-                        slope += D[j][k] * coord[n[k]][2];
+                        slope += D[j][k] * coord_f[k][2];
                     (*var.tmp_result)[i][j] = slope * projected_area;
                 }
 #else

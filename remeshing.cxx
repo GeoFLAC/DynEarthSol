@@ -534,13 +534,12 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 
         tiny_vol[ee] = volume[e];
 
-        ConstConnAccessor conn = connectivity[e];
+        ConstArrayIndirectAccessor coord_e = coord.view_const(connectivity[e]);
         for (int j=0; j<NODES_PER_ELEM; ++j) {
-            int n = conn[j];
             tiny_conn[ee][j] = ii;
 
             for (int d=0; d<NDIMS; ++d) {
-                tiny_coord[ii][d] = coord[n][d];
+                tiny_coord[ii][d] = coord_e[j][d];
             }
             ii ++;
         }

@@ -660,10 +660,10 @@ int MarkerSet::initial_mattype( const Param& param, const Variables &var,
             std::memcpy(p, x, NDIMS*sizeof(double));
         }
         else {
-            ConstConnAccessor conn = (*var.connectivity)[elem];
+            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[elem]);
             for(int i=0; i<NDIMS; i++) {
                 for(int j=0; j<NODES_PER_ELEM; j++)
-                    p[i] += (*var.coord)[ conn[j] ][i] * eta[j];
+                    p[i] += coord[j][i] * eta[j];
             }
         }
         // modify mt according to the marker coordinate p
@@ -979,12 +979,12 @@ void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) co
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0; n<_nmarkers; n++) {
-        ConstConnAccessor conn = (*var.connectivity)[(*_elem)[n]];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[(*_elem)[n]]);
 
         for(int d=0; d<NDIMS; d++) {
             double sum = 0;
             for(int k=0; k<NODES_PER_ELEM; k++)
-                sum += (*var.coord)[ conn[k] ][d] * (*_eta)[n][k];
+                sum += coord[k][d] * (*_eta)[n][k];
             points[n][d] = sum;
         }
     }
@@ -1257,10 +1257,10 @@ namespace {
             int ind = (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) ? 0 : 1;
             emi_base[ind].value += ms.get_time(m);
             ConstShapefnAccessor eta = ms.get_eta(m);
-            ConstConnAccessor conn = (*var.connectivity)[e];
+            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
             for (int d = 0; d < NDIMS; ++d)
                 for (int kk = 0; kk < NODES_PER_ELEM; ++kk)
-                    emi_base[ind].coord[d] += (*var.coord)[conn[kk]][d] * eta[kk];
+                    emi_base[ind].coord[d] += coord[kk][d] * eta[kk];
             emi_base[ind].nmarker++;
         }
 
@@ -1331,11 +1331,11 @@ namespace {
             for (int j=0; j<nneed_mk[i]; ++j) {
                 int m_idx = mk_start[i] + j;
                 ArrayAccessor x = queries[m_idx];
-                ConstConnAccessor conn = (*var.connectivity)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
                 for (int d=0; d<NDIMS; d++) {
                     x[d] = 0.;
                     for (int ii=0; ii<NODES_PER_ELEM; ii++) {
-                        x[d] += (*var.coord)[ conn[ii] ][d] * etas[m_idx][ii];
+                        x[d] += coord[ii][d] * etas[m_idx][ii];
                     }
                 }
             }
@@ -1492,6 +1492,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
     #pragma acc parallel loop gang vector async
     for (int i=0;i<var.ntop_elems;i++) {
         ConstConnAccessor tnodes = (*var.connectivity)[(*var.top_elems)[i]];
+        ConstArrayIndirectAccessor coord = var.coord->view_const(tnodes);
 
         ArrayAccessor c00 = coord0s[i*NODES_PER_ELEM];
         ArrayAccessor c01 = coord0s[i*NODES_PER_ELEM+1];
@@ -1501,21 +1502,21 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #endif
 
         // restore the reference node locations before deposition/erosion 
-        c00[0] = (*var.coord)[tnodes[0]][0];
-        c01[0] = (*var.coord)[tnodes[1]][0];
-        c02[0] = (*var.coord)[tnodes[2]][0];
+        c00[0] = coord[0][0];
+        c01[0] = coord[1][0];
+        c02[0] = coord[2][0];
 
-        c00[NDIMS-1] = (*var.coord)[tnodes[0]][NDIMS-1] - dhacc[tnodes[0]];
-        c01[NDIMS-1] = (*var.coord)[tnodes[1]][NDIMS-1] - dhacc[tnodes[1]];
-        c02[NDIMS-1] = (*var.coord)[tnodes[2]][NDIMS-1] - dhacc[tnodes[2]];
+        c00[NDIMS-1] = coord[0][NDIMS-1] - dhacc[tnodes[0]];
+        c01[NDIMS-1] = coord[1][NDIMS-1] - dhacc[tnodes[1]];
+        c02[NDIMS-1] = coord[2][NDIMS-1] - dhacc[tnodes[2]];
 #ifdef THREED
-        c00[1] = (*var.coord)[tnodes[0]][1];
-        c01[1] = (*var.coord)[tnodes[1]][1];
-        c02[1] = (*var.coord)[tnodes[2]][1];
+        c00[1] = coord[0][1];
+        c01[1] = coord[1][1];
+        c02[1] = coord[2][1];
 
-        c03[0] = (*var.coord)[tnodes[3]][0];
-        c03[1] = (*var.coord)[tnodes[3]][1];
-        c03[2] = (*var.coord)[tnodes[3]][2] - dhacc[tnodes[3]];
+        c03[0] = coord[3][0];
+        c03[1] = coord[3][1];
+        c03[2] = coord[3][2] - dhacc[tnodes[3]];
 #endif
     }
 
@@ -1533,8 +1534,8 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             double m_coord[NDIMS], new_eta[NDIMS];
             for (int k=0; k<NDIMS; k++) {
                 m_coord[k] = 0.;
-                    for (int l=0; l<NODES_PER_ELEM; l++)
-                        m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
+                for (int l=0; l<NODES_PER_ELEM; l++)
+                    m_coord[k] += (*_eta)[m][l] * coord0s[i*NODES_PER_ELEM+l][k];
             }
             // check if the marker is still in original element
             bary.transform(m_coord,i,new_eta);
