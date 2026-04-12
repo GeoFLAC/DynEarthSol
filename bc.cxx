@@ -17,8 +17,7 @@
 namespace {
 
 #pragma acc routine seq
-template <typename T>
-void normal_vector_of_facet(T facet_coord, double *normal, double &zcenter)
+void normal_vector_of_facet(ConstArrayIndirectAccessor facet_coord, double *normal, double &zcenter)
 {
 #ifdef THREED
     // vectors: n0-n1 and n0-n2
