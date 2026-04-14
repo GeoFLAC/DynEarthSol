@@ -59,7 +59,6 @@ void allocate_variables(const Param &param, Variables& var)
     const int e = var.nelem;
 
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     var.mass = new double_vec(n);
@@ -72,6 +71,7 @@ void allocate_variables(const Param &param, Variables& var)
 
     {
         // these fields are reallocated during remeshing interpolation
+        var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
         var.dppressure = new double_vec(n);
@@ -146,10 +146,8 @@ void reallocate_variables(const Param& param, Variables& var)
     const int e = var.nelem;
 
     delete var.volume;
-    delete var.volume_old;
     delete var.volume_n;
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     delete var.mass;

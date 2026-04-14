@@ -2891,6 +2891,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
     }
 
+    // convert volume_old to dv = volume/volume_old - 1 for NN interpolation.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e)
+        (*var.volume_old)[e] = (*var.volume)[e] / (*var.volume_old)[e] - 1.0;
+
     #pragma acc wait
 
     {
@@ -3049,13 +3057,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
 
-    // TODO: using edvoldt and volume to get volume_old
+    // convert dv back to actual old volume using the new mesh volumes.
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)
-        (*var.volume_old)[e] = (*var.volume)[e];
+        (*var.volume_old)[e] = (*var.volume)[e] / (1.0 + (*var.volume_old)[e]);
 
     if(param.control.use_global_velocity_scaling)
         var.dt = compute_dt(param, var);

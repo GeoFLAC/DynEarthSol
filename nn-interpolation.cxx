@@ -579,6 +579,9 @@ namespace {
             double_vec *new_old_mean_stress = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
 
+            double_vec *new_volume_old = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
+
             delete var.plstrain;
             var.plstrain = new_plstrain;
 
@@ -618,6 +621,9 @@ namespace {
 
             delete var.state_variable;
             var.state_variable = new_state_variable;
+
+            delete var.volume_old;
+            var.volume_old = new_volume_old;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
