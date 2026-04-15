@@ -192,7 +192,6 @@ namespace {
 
         conn_t *ptr_conn;
         int nnode_cell;
-        double resoTimes;
         if (is_surface) {
             ptr_conn = var.connectivity_surface;
             nnode_cell = NODES_PER_FACET;
