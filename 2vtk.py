@@ -433,7 +433,7 @@ def process_vtkhdf_update(args):
                     del f[path]
                 dset = f.create_dataset(path, data=data, compression="gzip", compression_opts=9, shuffle=True)
                 if name_attr:
-                    dset.attrs['Name'] = np.string_(name_attr) # VTK expects string attributes? or just Name?
+                    dset.attrs['Name'] = np.bytes_(name_attr) # VTK expects string attributes? or just Name?
                 
                 # Create soft link at root
                 # e.g. /stress II -> /VTKHDF/grid/CellData/stress II
