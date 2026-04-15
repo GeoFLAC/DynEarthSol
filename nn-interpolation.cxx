@@ -70,8 +70,8 @@ namespace {
                               int_vec &is_changed,
                               KNN &kdtree,
                               int old_nelem,
-                              int_vec &elems_vec,
-                              double_vec &ratios_vec,
+                              nn_t &elems_vec,
+                              ratio_t &ratios_vec,
                               double_vec &empty_vec,
                               int_vec &changed,
                               bool is_surface)
@@ -91,9 +91,15 @@ namespace {
 
         int nchanged = changed.size();
 
-        elems_vec.resize(nchanged*32,-1);
-        ratios_vec.resize(nchanged*32);
-        empty_vec.resize(nchanged,0);
+        elems_vec.resize(nchanged, -1);
+        ratios_vec.resize(nchanged, false);
+        empty_vec.resize(nchanged, 0);
+
+        if (!nchanged) {
+            // no changed element, return directly
+            printf("      No changed element, skip ACM mapping.\n");
+            return;
+        }
 
         double_vec2D sample_eta;
         if (is_surface) {
@@ -141,9 +147,9 @@ namespace {
 
         // number of neighbors exceeding computational limit
         int queries_max = 1024 * 1024 * 16;
+        int elems_per_block_max = queries_max / nsample;
 
-        int elems_per_block = queries_max / nsample;
-        if (elems_per_block < 1) elems_per_block = 1;
+        int elems_per_block = std::min(elems_per_block_max, nchanged);
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
         printf("    Using %d blocks, elements per block: %d, total queries: %lu\n",
                nblocks, elems_per_block, (unsigned long)nchanged * nsample);
@@ -167,6 +173,7 @@ namespace {
             if (start >= end) continue;
 
             printf("      Block %3d: element %7d to %7d", b, start, end-1);
+            queries.resize((end - start) * nsample);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
@@ -176,14 +183,14 @@ namespace {
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
-                const int* conn = (*ptr_conn)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*ptr_conn)[e]);
 
                 for (int j=0; j<nsample; j++) {
-                    double *x = queries[query_start*nsample + j];
+                    ArrayAccessor x = queries[query_start*nsample + j];
                     for (int d=0; d<NDIMS; d++) {
                         x[d] = 0;
                         for (int n=0; n<nnode_cell; n++)
-                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                            x[d] += coord[n][d] * sample_eta[j][n];
                     }
                 }
             }
@@ -271,8 +278,8 @@ namespace {
 
                 const double inv = 1.0 / total_count;
                 for (int k=0; k<elem_size; ++k) {
-                    elems_vec[i*32+k] = elem_keys[k];
-                    ratios_vec[i*32+k] = elem_count_buf[k] * inv;
+                    elems_vec[i][k] = elem_keys[k];
+                    ratios_vec[i][k] = elem_count_buf[k] * inv;
                 }
             }
         } // end of for (int b=0; b<nblocks; b++)
@@ -292,8 +299,8 @@ namespace {
                                int_vec &idx,
                                int_vec &is_changed,
                                int_vec &idx_changed,
-                               int_vec &elems_vec,
-                               double_vec &ratios_vec,
+                               nn_t &elems_vec,
+                               ratio_t &ratios_vec,
                                double_vec &empty_vec,
                                bool is_surface)
     {
@@ -393,8 +400,8 @@ namespace {
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
                       const int_vec &idx_changed,
-                      const int_vec &elems_vec,
-                      const double_vec &ratios_vec,
+                      const nn_t &elems_vec,
+                      const ratio_t &ratios_vec,
                       const double_vec &source,
                       double_vec &target,
                       int ntarget)
@@ -427,8 +434,8 @@ namespace {
 
                     target[i] = 0;
                     for (int j=0; j<32; j++) {
-                        if (elems_vec[n*32+j] < 0) break;
-                        target[i] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ];
+                        if (elems_vec[n][j] < 0) break;
+                        target[i] += ratios_vec[n][j] * source[ elems_vec[n][j] ];
                     }
                 }
             }
@@ -442,8 +449,8 @@ namespace {
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
                       const int_vec &idx_changed,
-                      const int_vec &elems_vec,
-                      const double_vec &ratios_vec,
+                      const nn_t &elems_vec,
+                      const ratio_t &ratios_vec,
                       const tensor_t &source,
                       tensor_t &target,
                       int ntarget)
@@ -479,8 +486,8 @@ namespace {
                 for (int d=0; d<NSTR; d++) {
                     target[i][d] = 0;
                     for (int j=0; j<32; j++) {
-                        if (elems_vec[n*32+j] < 0) break;
-                        target[i][d] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ][d];
+                        if (elems_vec[n][j] < 0) break;
+                        target[i][d] += ratios_vec[n][j] * source[ elems_vec[n][j] ][d];
                     }
                 }
                 }
@@ -496,8 +503,8 @@ namespace {
                                     const int_vec &idx,
                                     const int_vec &is_changed,
                                     const int_vec &idx_changed,
-                                    const int_vec &elems_vec,
-                                    const double_vec &ratios_vec,
+                                    const nn_t &elems_vec,
+                                    const ratio_t &ratios_vec,
                                     const double_vec &empty_vec,
                                     bool is_surface = false)
     {
@@ -613,8 +620,8 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         int_vec is_changed(nqueries); // is the element changed during remeshing?
         int_vec idx_changed(nqueries); 
 
-        int_vec elems_vec;
-        double_vec ratios_vec;
+        nn_t elems_vec;
+        ratio_t ratios_vec;
         double_vec empty_vec; // radio between old element and boundary empty
         
         prepare_interpolation(param, var, bary, old_coord, old_connectivity, \

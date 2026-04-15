@@ -170,7 +170,7 @@ void phase_changes(const Param& param, Variables& var)
 
                 // Dehydration metamorphism, hydrous marker is released.
                 const int el = ms.get_elem(m);
-                const double *eta = ms.get_eta(m);
+                ConstShapefnAccessor eta = ms.get_eta(m);
 
                 // #pragma omp critical(phase_change_simple_subduction)
                 {

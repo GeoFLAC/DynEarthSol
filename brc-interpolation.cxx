@@ -15,14 +15,11 @@ typedef Array2D<double,NODES_PER_ELEM> brc_t;
 
 
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
-                       const double_vec &source, double_vec &target)
+                       const double_vec &source, double_vec &target, int ntarget)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-
-    #pragma acc serial async
-    int ntarget = target.size();
 
 #ifndef ACC
     #pragma omp parallel for default(none)          \
@@ -31,7 +28,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
-        const int *conn = connectivity[e];
+        ConstConnAccessor conn = connectivity[e];
         double result = 0;
         for (int j=0; j<NODES_PER_ELEM; j++) {
             result += source[conn[j]] * brc[i][j];
@@ -45,14 +42,11 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 
 
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
-                       const array_t &source, array_t &target)
+                       const array_t &source, array_t &target, int ntarget)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-
-    #pragma acc serial async
-    int ntarget = target.size();
 
 #ifndef ACC
     #pragma omp parallel for default(none)          \
@@ -61,7 +55,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
-        const int *conn = connectivity[e];
+        ConstConnAccessor conn = connectivity[e];
         for (int d=0; d<NDIMS; d++) {
             double result = 0;
             for (int j=0; j<NODES_PER_ELEM; j++) {
@@ -113,7 +107,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     #pragma omp parallel for default(none) schedule(guided) \
         shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors)
     for (int i=0; i<var.nnode; i++) {
-        double *q = (*var.coord)[i];
+        ConstArrayAccessor q = (*var.coord)[i];
 
         int nn = neighbors[i].idx;
         double dd = neighbors[i].dist2;
@@ -180,7 +174,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
             // search through elements that are neighbors of nn_elem
             for (std::size_t j=0; j<nn_elem.size(); j++) {
                 int ee = nn_elem[j];
-                const int *conn = old_connectivity[ee];
+                ConstConnAccessor conn = old_connectivity[ee];
                 for (int m=0; m<NODES_PER_ELEM; m++) {
                     // np is a node close to q
                     int np = conn[m];
@@ -266,25 +260,27 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     std::cout << "    Interpolating fields...\n";
 
-    double_vec *new_temperature = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature);
+    const int n = var.nnode;
 
-    double_vec *new_ppressure = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure);
+    double_vec *new_temperature = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
 
-    double_vec *new_dppressure = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
+    double_vec *new_ppressure = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure, n);
+
+    double_vec *new_dppressure = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure, n);
 
     double_vec *new_init_elem_size_n = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n);
+    interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n, n);
 
     #pragma acc wait
 
-    array_t *new_vel = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
+    array_t *new_vel = new array_t(n);
+    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel, n);
 
-    array_t *new_coord0 = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
+    array_t *new_coord0 = new array_t(n);
+    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -324,5 +320,5 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
     brc_t brc(var.nnode);
     prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
 
-    interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature);
+    interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
 }

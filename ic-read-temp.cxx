@@ -128,7 +128,7 @@ void read_external_temperature_from_comsol(const Param &param,
 #ifdef THREED
 	input_connectivity[m][3] = n3s[m];
 #endif
-	int *conn = (input_connectivity[m]);
+	ConstConnAccessor conn = input_connectivity[m];
 	for (size_t l=0; l<NODES_PER_ELEM; ++l) {
 	    (input_support)[conn[l]].push_back(m);
 	}

@@ -262,14 +262,14 @@ double MatProps::visc(int e) const
 
     // average temperature of this element
     double T = 0;
-    const int *conn = connectivity[e];
+    ConstConnAccessor conn = connectivity[e];
     for (int i=0; i<NODES_PER_ELEM; ++i) {
         T += temperature[conn[i]];
     }
     T /= NODES_PER_ELEM;
 
     // stress
-    const double *s = stress[e];
+    ConstTensorAccessor s = stress[e];
     double s0 = trace(s) / NDIMS;
 
     // strain-rate
@@ -568,7 +568,7 @@ double MatProps::rho(int e) const
 
     // average temperature of this element
     double T = 0;
-    const int *conn = connectivity[e];
+    ConstConnAccessor conn = connectivity[e];
     for (int i=0; i<NODES_PER_ELEM; ++i) {
         T += temperature[conn[i]];
     }
@@ -627,7 +627,7 @@ double MatProps::rho_fluid(int e) const
 
     // Average temperature of this element
     double T = 0;
-    const int *conn = connectivity[e];
+    ConstConnAccessor conn = connectivity[e];
     #pragma acc loop seq
     for (int i = 0; i < NODES_PER_ELEM; ++i) {
         T += temperature[conn[i]];

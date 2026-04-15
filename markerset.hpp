@@ -27,7 +27,7 @@ public:
     }
 
     static void random_eta( double* ); // class method
-    static void random_eta_seed(double*, int);
+    static void random_eta_seed(ShapefnAccessor, int);
     static void random_eta_seed_surface(double*, int);
     void check_marker_elem_consistency(const Variables &var) const;
     void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
@@ -36,7 +36,8 @@ public:
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt, int genesis);
     void append_random_marker_in_elem( int el, int mt, double time, int genesis);
-    void append_marker(const double *eta, int el, int mt, double time, double depth, double distance, double slope, int genesis);
+    template <typename T>
+    void append_marker(T eta, int el, int mt, double time, double depth, double distance, double slope, int genesis);
     void append_marker_at_i(AppendMarkerData &md, int idx, int last_id);
     void append_markers(AMD_vec &md);
     void remove_marker(int i);
@@ -79,7 +80,7 @@ public:
     inline double get_slope(int m) const { return (*_slope)[m]; }
     inline void set_slope(const int m, const double s) { (*_slope)[m] = s; }
 
-    inline const double *get_eta(int m) const { return (*_eta)[m]; }
+    inline ConstShapefnAccessor get_eta(int m) const { return (*_eta)[m]; }
     inline void set_eta( const int i, const double r[NDIMS] );
 
     inline double get_genesis(int m) const { return (*_genesis)[m]; }
