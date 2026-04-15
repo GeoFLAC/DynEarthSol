@@ -24,6 +24,9 @@ jobs:
         apt-get update
         apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
 
+    - name: Fix git safe directory
+      run: git config --global --add safe.directory '*'
+
     - name: Build all targets (CPU & GPU)
       run: |
         NVARCH=$(uname -s)_$(uname -m)
