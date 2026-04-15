@@ -38,7 +38,7 @@ jobs:
 
         # make cleanall && $BASE_MAKE ndims=2 nprof=1 opt=0
         # make cleanall && $BASE_MAKE ndims=3 nprof=1 opt=0
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 -j
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 -j
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 nprof=1 -j
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 nprof=1 -j
+        make cleanall && $BASE_MAKE ndims=2 openacc=1 -j SM=80
+        make cleanall && $BASE_MAKE ndims=3 openacc=1 -j SM=80
+        make cleanall && $BASE_MAKE ndims=2 openacc=1 nprof=1 -j SM=80
+        make cleanall && $BASE_MAKE ndims=3 openacc=1 nprof=1 -j SM=80
