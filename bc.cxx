@@ -293,6 +293,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vz0 = bc.vbc_val_z0;
     double bc_vz1 = bc.vbc_val_z1;
 
+    double bc_vx0_l = bc.vbc_val_x0_l;
+    double bc_vx1_l = bc.vbc_val_x1_l;
+    double bc_vy0_l = bc.vbc_val_y0_l;
+    double bc_vy1_l = bc.vbc_val_y1_l;
+
     if (param.control.PT_jump) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
@@ -315,7 +320,18 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vx0r1 = bc.vbc_val_x0_ratio1;
     double bc_vx0r2 = bc.vbc_val_x0_ratio2;
 
-#ifndef THREED
+#ifdef THREED
+    // Each lateral face is described by: boundary mask, normal component index (ni),
+    // lateral-shear component index (li), bc type, normal value (val), and lateral
+    // shear value (val_l). The vertical shear (v[2]) is always either free or fixed at 0.
+    struct LateralFace { uint mask; int ni; int li; int type; double val; double val_l; };
+    const LateralFace lateral_faces[] = {
+        {BOUNDX0, 0, 1, bc_x0, bc_vx0, bc_vx0_l},
+        {BOUNDX1, 0, 1, bc_x1, bc_vx1, bc_vx1_l},
+        {BOUNDY0, 1, 0, bc_y0, bc_vy0, bc_vy0_l},
+        {BOUNDY1, 1, 0, bc_y1, bc_vy1, bc_vy1_l},
+    };
+#else
     double zmin = 0;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
@@ -331,7 +347,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #ifdef THREED
     #pragma omp parallel for default(none) \
         shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
-        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1)
+        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, \
+        bc_vx0_l, bc_vx1_l, bc_vy0_l, bc_vy1_l, lateral_faces)
 #else
     #pragma omp parallel for default(none) \
         shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
@@ -351,68 +368,57 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         ArrayAccessor v = vel[i];
 
 #ifdef THREED
+        //
+        // X and Y (3D): unified lateral-face handler
+        //
+        for (const auto& f : lateral_faces) {
+            if (!(flag & f.mask)) continue;
+            switch (f.type) {
+            case 0: break;
+            case 1: v[f.ni] = f.val; break;
+            case 2: v[f.li] = 0; v[2] = 0; break;
+            case 3: v[f.ni] = f.val; v[f.li] = 0; v[2] = 0; break;
+            case 4: v[f.li] = f.val; v[2] = 0; break;
+            case 5: v[f.ni] = 0; v[f.li] = f.val; v[2] = 0; break;
+            case 6: v[f.ni] = f.val; v[f.li] = f.val_l; v[2] = 0; break;
+            case 7: v[f.ni] = f.val; v[f.li] = 0; break;
+            }
+        }
 #else
         ConstArrayAccessor x = (*var.coord)[i];
         double ratio, rr, dvr;
         double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
         double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
-#endif
         //
-        // X
+        // X (2D)
         //
         if (flag & BOUNDX0) {
             switch (bc_x0) {
             case 0:
                 break;
             case 1:
-#ifdef THREED
-                v[0] = bc_vx0;
-#else
                 v[0] = vbc_exact_x0;
-#endif
                 break;
             case 2:
                 v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
                 break;
             case 3:
-#ifdef THREED
-                v[0] = bc_vx0;
-#else
                 v[0] = vbc_exact_x0;
                 if (bc.bottom_shear_zone_thickness > 0.) {
                     double dz = x[NDIMS-1] - zmin;
                     if (dz < bc.bottom_shear_zone_thickness)
                         v[0] = v[0] * dz / bc.bottom_shear_zone_thickness;
                 }
-#endif
                 v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
                 break;
-#ifndef THREED
             case 4:
                 v[0] = 0;
                 v[1] = bc_vx0;
                 break;
-#else
-            case 4:
-                v[1] = bc_vx0;
-                v[2] = 0;
+            case 6:
+                v[0] = vbc_exact_x0;
+                v[1] = bc_vx0_l;
                 break;
-            case 5:
-                v[0] = 0;
-                v[1] = bc_vx0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = bc_vx0;
-                v[1] = 0;
-                break;
-#endif
             }
         }
         if (flag & BOUNDX1) {
@@ -420,114 +426,22 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             case 0:
                 break;
             case 1:
-#ifdef THREED
-                v[0] = bc_vx1;
-#else
                 v[0] = vbc_exact_x1;
-#endif
                 break;
             case 2:
                 v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
                 break;
             case 3:
-#ifdef THREED
-                v[0] = bc_vx1;
-#else
                 v[0] = vbc_exact_x1;
-#endif
                 v[1] = 0;
-#ifdef THREED
-                v[2] = 0;
-#endif
                 break;
-#ifndef THREED
             case 4:
                 v[0] = 0;
                 v[1] = bc_vx1;
                 break;
-#else
-            case 4:
-                v[1] = bc_vx1;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = 0;
-                v[1] = bc_vx1;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = bc_vx1;
-                v[1] = 0;
-                break;
-#endif
-            }
-        }
-#ifdef THREED
-        //
-        // Y
-        //
-        if (flag & BOUNDY0) {
-            switch (bc_y0) {
-            case 0:
-                break;
-            case 1:
-                v[1] = bc_vy0;
-                break;
-            case 2:
-                v[0] = 0;
-                v[2] = 0;
-                break;
-            case 3:
-                v[0] = 0;
-                v[1] = bc_vy0;
-                v[2] = 0;
-                break;
-            case 4:
-                v[0] = bc_vy0;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = bc_vy0;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = 0;
-                v[1] = bc_vy0;
-                break;
-            }
-        }
-        if (flag & BOUNDY1) {
-            switch (bc_y1) {
-            case 0:
-                break;
-            case 1:
-                v[1] = bc_vy1;
-                break;
-            case 2:
-                v[0] = 0;
-                v[2] = 0;
-                break;
-            case 3:
-                v[0] = bc_vy1;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 4:
-                v[0] = bc_vy1;
-                v[2] = 0;
-                break;
-            case 5:
-                v[0] = bc_vy1;
-                v[1] = 0;
-                v[2] = 0;
-                break;
-            case 7:
-                v[0] = 0;
-                v[1] = bc_vy1;
+            case 6:
+                v[0] = vbc_exact_x1;
+                v[1] = bc_vx1_l;
                 break;
             }
         }

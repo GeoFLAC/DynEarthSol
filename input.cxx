@@ -447,6 +447,7 @@ static void declare_parameters(po::options_description &cfg,
          "3: normal component fixed, shear components fixed at 0;\n"
          "4: normal component free, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
          "5: normal component fixed at 0, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
+         "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component fixed at 0 in 3D, shear free in 2D;\n"
          "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
          "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
          "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n")
@@ -454,6 +455,8 @@ static void declare_parameters(po::options_description &cfg,
          "Type of boundary condition for the right/eastern side")
         ("bc.vbc_val_x0", po::value<double>(&p.bc.vbc_val_x0)->default_value(-1e-9),
          "Value of boundary condition for left/western side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_x0_l", po::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
+         "Lateral shear velocity for left/western side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_division_x0_min", po::value<double>(&p.bc.vbc_val_division_x0_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
         ("bc.vbc_val_division_x0_max", po::value<double>(&p.bc.vbc_val_division_x0_max)->default_value(1.),
@@ -482,6 +485,8 @@ static void declare_parameters(po::options_description &cfg,
 
         ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_x1_l", po::value<double>(&p.bc.vbc_val_x1_l)->default_value(0),
+         "Lateral shear velocity for right/eastern side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_division_x1_min", po::value<double>(&p.bc.vbc_val_division_x1_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
         ("bc.vbc_val_division_x1_max", po::value<double>(&p.bc.vbc_val_division_x1_max)->default_value(1.),
@@ -501,8 +506,12 @@ static void declare_parameters(po::options_description &cfg,
          "Type of boundary condition for the northern side")
         ("bc.vbc_val_y0", po::value<double>(&p.bc.vbc_val_y0)->default_value(0),
          "Value of boundary condition for the southern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_y0_l", po::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
+         "Lateral shear velocity for southern side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_y1", po::value<double>(&p.bc.vbc_val_y1)->default_value(0),
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
+         "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
 
         ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")

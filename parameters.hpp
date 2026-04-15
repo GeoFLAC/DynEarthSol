@@ -271,6 +271,10 @@ struct BC {
     double vbc_val_x1;
     double vbc_val_y0;
     double vbc_val_y1;
+    double vbc_val_x0_l;  // lateral shear value for x0 face (used with bc type 6)
+    double vbc_val_x1_l;
+    double vbc_val_y0_l;
+    double vbc_val_y1_l;
     double vbc_val_z0;
     double vbc_val_z1;
     double vbc_val_n0;
