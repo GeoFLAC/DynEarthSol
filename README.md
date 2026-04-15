@@ -12,6 +12,22 @@ used to study the long-term deformation of Earth's lithosphere and problems
 alike.
 
 # Building DES3D
+
+## Getting the Source Code
+This repository uses Git submodules (e.g., `knn-bvh` for GPU version) to manage certain internal libraries. By default, the Makefile automatically prepares these submodules, fetching them via the internet before the build process begins. 
+
+For environments without internet access (such as certain HPC compute nodes), pre-downloading all dependencies is highly recommended. To ensure all necessary source files are downloaded upfront, clone the repository with its submodules using the `--recurse-submodules` flag:
+
+```bash
+git clone --recurse-submodules https://github.com/GeoFLAC/DynEarthSol.git
+```
+
+If you have already cloned the repository without the submodules, you can initialize and update them by running the following command inside the DynEarthSol directory:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Requirements
 * You will need a recent C++ compiler that supports C++11 standard. (GNU g++
   4.4 or newer version will suffice.)
@@ -23,6 +39,10 @@ alike.
      the library.
 * You will need Python 2.6+ or 3.2+ and the Numpy package.
 * **macOS users**: For OpenMP support on macOS, see the [LLVM OpenMP library build instructions](#llvm) below.
+### Submodules
+* [knn-bvh](https://github.com/GeoFLAC/knn-bvh): A library for K-Nearest Neighbors (KNN) searches utilizing Bounding Volume Hierarchies (BVH). This submodule provides GPU acceleration for intensive spatial queries (e.g., particle locating, mesh interpolation, or contact detection)
+  * Required when compiling with `openacc=1` (GPU acceleration enabled).
+
 ### Optional packages
 * [Exodus](https://github.com/gsjaardema/seacas/) for importing a mesh in the ExodusII format
   * Suggested building procedure

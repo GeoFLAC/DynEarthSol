@@ -421,9 +421,17 @@ all: prepare
 
 prepare:
 ifeq ($(openacc), 1)
-	@if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
-		echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
-		git submodule update --init --recursive $(KNN_BVH_DIR); \
+	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
+			git submodule update --init --recursive $(KNN_BVH_DIR); \
+		fi; \
+	elif [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
+		:; \
+	else \
+		echo "Error: OpenACC build requires $(KNN_BVH_DIR), but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please initialize/provide $(KNN_BVH_DIR) before building with openacc=1."; \
+		exit 1; \
 	fi
 endif
 
