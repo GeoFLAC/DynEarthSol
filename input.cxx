@@ -240,6 +240,10 @@ static void declare_parameters(po::options_description &cfg,
          "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
          ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
+         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
+         "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
+         "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
+         "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
         ;
 
     cfg.add_options()

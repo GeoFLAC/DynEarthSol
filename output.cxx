@@ -351,7 +351,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+#ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
+#endif
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
