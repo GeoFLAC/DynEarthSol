@@ -1397,7 +1397,7 @@ namespace {
             if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
             printf("    Marker replenish: knn: %10s pts (%s) for %11s q w/ %2d k%s\n",
                     format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
-                    format_with_commas((unsigned long)ne).c_str(), k_neig, mem_str);
+                    format_with_commas((unsigned long)nnew).c_str(), k_neig, mem_str);
         }
 
 #ifdef NPROF_DETAIL
