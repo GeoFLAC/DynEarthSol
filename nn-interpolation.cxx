@@ -205,7 +205,7 @@ namespace {
             int end = std::min((b + 1) * elems_per_block, nchanged);
             if (start >= end) continue;
 
-            if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
+            if (nblocks > 1) {printf(" %d", b+1); fflush(stdout);}
 
             queries.resize((end - start) * nsample);
 

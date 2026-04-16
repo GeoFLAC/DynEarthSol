@@ -133,7 +133,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
         int end = std::min((b + 1) * nodes_per_block, var.nnode);
         if (start >= end) continue;
 
-        if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
+        if (nblocks > 1) {printf(" %d", b+1); fflush(stdout);}
         
         block_queries.resize(end - start);
         #pragma omp parallel for default(none) shared(var, block_queries, start, end)

@@ -1040,7 +1040,7 @@ namespace {
             int start = b * markers_per_block;
             int end = std::min(start + markers_per_block, nmarkers);
 
-            if (nblocks > 1) printf(" %d", b+1); fflush(stdout);
+            if (nblocks > 1) {printf(" %d", b+1); fflush(stdout);}
 
             queries.resize(end - start);
 
