@@ -17,10 +17,9 @@ void KNN::backend_str(char* buf, size_t n) const
 }
 
 KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, bool is_msg_, int capacity) :
-    resolution(param.mesh.resolution), points_vec(points_vec_),
-    numPoints(points_vec_.size()),
-    nano_kdtree(nano_kdtree_),
-    is_msg(is_msg_)
+    points_vec(points_vec_), numPoints(points_vec_.size()),
+    resolution(param.mesh.resolution), is_msg(is_msg_),
+    nano_kdtree(nano_kdtree_)
 {
     h_results = nullptr;
     h_results_capacity = 0;
