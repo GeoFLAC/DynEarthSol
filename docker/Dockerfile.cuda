@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/nvhpc:25.7-devel-cuda_multi-ubuntu22.04
+FROM nvcr.io/nvidia/nvhpc:25.7-devel-cuda12.9-ubuntu24.04
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

@@ -84,8 +84,6 @@ jobs:
 
     - name: Build all targets (CPU & GPU)
       run: |
-        NVARCH=$(uname -s)_$(uname -m)
-        export NVHPC_DIR=/opt/nvidia/hpc_sdk/${NVARCH}/25.7
         export HDF5_INCLUDE_DIR=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
         export HDF5_LIB_DIR=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
 
