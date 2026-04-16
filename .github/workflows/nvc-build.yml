@@ -79,6 +79,17 @@ jobs:
     needs: [detect-changes, build-and-push-image]
     runs-on: ubuntu-latest
     
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: "2D_All_Targets"
+            ndims: 2
+          - target_name: "3D_All_Targets"
+            ndims: 3
+
+    name: Build ${{ matrix.target_name }}
+
     container:
       # need lowercase for ghcr.io
       image: ghcr.io/geoflac/dynearthsol/nvhpc-build-env:latest
@@ -89,16 +100,18 @@ jobs:
     - name: Fix git safe directory
       run: git config --global --add safe.directory '*'
 
-    - name: Build all targets (CPU & GPU)
+    - name: Build and Test Targets (${{ matrix.ndims }}D)
       run: |
         export HDF5_INCLUDE_DIR=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
         export HDF5_LIB_DIR=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
 
         BASE_MAKE="make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR"
 
-        # make cleanall && $BASE_MAKE ndims=2 nprof=1 opt=0
-        # make cleanall && $BASE_MAKE ndims=3 nprof=1 opt=0
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 -j SM=80
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 -j SM=80
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 nprof=1 -j SM=80
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 nprof=1 -j SM=80
+        echo "=== Building ${{ matrix.ndims }}D OpenACC ==="
+        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 SM=80
+
+        echo "=== Building ${{ matrix.ndims }}D OpenACC Profiler ==="
+        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80
+
+        echo "=== Building ${{ matrix.ndims }}D CPU Debug ==="
+        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} nprof=1 opt=0
