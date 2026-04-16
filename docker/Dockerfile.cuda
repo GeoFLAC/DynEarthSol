@@ -1,0 +1,12 @@
+FROM nvcr.io/nvidia/nvhpc:25.7-devel-cuda_multi-ubuntu22.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libboost-program-options-dev \
+    libhdf5-serial-dev \
+    make \
+    pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV NVARCH=Linux_x86_64
+ENV NVHPC_DIR=/opt/nvidia/hpc_sdk/${NVARCH}/25.7
