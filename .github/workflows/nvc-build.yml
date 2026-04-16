@@ -128,18 +128,20 @@ jobs:
     - name: Fix git safe directory
       run: git config --global --add safe.directory '*'
 
-    - name: Build and Test Targets (${{ matrix.ndims }}D)
+    - name: set path for nvc and hdf5 (${{ matrix.ndims }}D)
       run: |
-        export HDF5_INCLUDE_DIR=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
-        export HDF5_LIB_DIR=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
+        HDF5_INC=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
+        HDF5_LIB=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
+        
+        echo "HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
+        echo "HDF5_LIB_DIR=$HDF5_LIB" >> $GITHUB_ENV
+        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
 
-        BASE_MAKE="make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR"
+    - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 SM=80
 
-        echo "=== Building ${{ matrix.ndims }}D OpenACC ==="
-        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 SM=80
+    - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80
 
-        echo "=== Building ${{ matrix.ndims }}D OpenACC Profiler ==="
-        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80
-
-        echo "=== Building ${{ matrix.ndims }}D CPU Debug ==="
-        make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} nprof=1 opt=0
+    - name: make ndims=${{ matrix.ndims }} nprof=1 opt=0 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} nprof=1 opt=0
