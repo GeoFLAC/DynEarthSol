@@ -2,40 +2,146 @@ name: nvc build
 
 on:
   push:
-    branches: [ "master", "*gpu*" ]
+    branches:
+      - "**gpu**"
+      - "**GPU**"
+      - "**cuda**"
+      - "**CUDA**"
     paths-ignore:
       - '**/README.md'
+      - '*.md'
+      - '*.py'
+
   pull_request:
-    branches: [ "master" ]
+    branches:
+      - "master"
     paths-ignore:
       - '**/README.md'
+      - '*.md'
+      - '*.py'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  check-duplicate:
     runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # Check if there is an open PR associated with the current branch
+            PR_COUNT=$(gh pr list --repo ${{ github.repository }} --head ${{ github.ref_name }} --state open --json number | jq length)
+            
+            if [[ "$PR_COUNT" -gt 0 ]]; then
+              echo "Open PR found. Skipping this push CI."
+              echo "skip=true" >> $GITHUB_OUTPUT
+            else
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  detect-changes:
+    needs: check-duplicate
+    # Only run if the interceptor did not flag to skip
+    if: ${{ needs.check-duplicate.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      docker_changed: ${{ steps.filter.outputs.docker_changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker_changed:
+              - 'docker/Dockerfile.cuda'
+
+  build-and-push-image:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.docker_changed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase repository name
+        id: repo_name
+        run: |
+          echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.cuda
+          push: true
+          tags: ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:latest
+
+          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max
+
+  nvc-build:
+    needs: [check-duplicate, detect-changes, build-and-push-image]
+    # Skip if the interceptor flagged it (prevents downstream execution)
+    if: ${{ needs.check-duplicate.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: "2D_All_Targets"
+            ndims: 2
+          - target_name: "3D_All_Targets"
+            ndims: 3
+
+    name: Build ${{ matrix.target_name }}
+
     container:
-      image: nvcr.io/nvidia/nvhpc:25.7-devel-cuda_multi-ubuntu22.04
+      # need lowercase for ghcr.io
+      image: ghcr.io/geoflac/dynearthsol/nvhpc-build-env:latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Fix git safe directory
+      run: git config --global --add safe.directory '*'
+
+    - name: set path for nvc and hdf5 (${{ matrix.ndims }}D)
       run: |
-        apt-get update
-        apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+        HDF5_INC=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
+        HDF5_LIB=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
+        
+        echo "HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
+        echo "HDF5_LIB_DIR=$HDF5_LIB" >> $GITHUB_ENV
+        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
 
-    - name: Build all targets (CPU & GPU)
-      run: |
-        NVARCH=$(uname -s)_$(uname -m)
-        export NVHPC_DIR=/opt/nvidia/hpc_sdk/${NVARCH}/25.7
-        export HDF5_INCLUDE_DIR=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
-        export HDF5_LIB_DIR=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
+    - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 SM=80
 
-        BASE_MAKE="make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR"
+    - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80
 
-        # make cleanall && $BASE_MAKE ndims=2 nprof=1 opt=0
-        # make cleanall && $BASE_MAKE ndims=3 nprof=1 opt=0
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 -j
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 -j
-        make cleanall && $BASE_MAKE ndims=2 openacc=1 nprof=1 -j
-        make cleanall && $BASE_MAKE ndims=3 openacc=1 nprof=1 -j
+    - name: make ndims=${{ matrix.ndims }} nprof=1 opt=0 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} nprof=1 opt=0

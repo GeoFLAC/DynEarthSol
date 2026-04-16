@@ -29,6 +29,10 @@
 #endif
 #endif
 
+#ifdef ACC
+#include "knn_bvh.hpp"
+#endif
+
 namespace { // anonymous namespace
 
 
@@ -2840,6 +2844,15 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing starts...\n";
 
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] remesh start: free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
+
     double_vec old_surface_area(var.surfinfo.etop);
 
 #ifndef ACC
@@ -2912,6 +2925,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             std::exit(1);
         }        
 #endif
+        // Drain all async GPU work before freeing/reallocating temporary arrays.
+        // This gives CUDA a sync point to reclaim migrated managed-memory pages.
+        #pragma acc wait
+#ifdef ACC
+        {
+            size_t free_bytes, total_bytes;
+            knn_bvh_mem_info(&free_bytes, &total_bytes);
+            std::cout << "  [GPU mem] before reallocate_tmp: free="
+                      << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+        }
+#endif
         reallocate_tmp(param, var);
 
         if (param.mesh.meshing_elem_shape == 0) {
@@ -2926,7 +2950,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         create_boundary_facets(var);
 
         {
-            // std::cout << "    Interpolating fields.\n";
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
 
             // interpolating fields defined on elements
@@ -2945,17 +2968,29 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.support_arr;
         delete var.support_idx;
         create_support(var);
-        delete var.neighbor;
-        delete var.contact;
-        delete var.ctmp;
-        create_neighbor(var);
+        // delete var.neighbor;
+        // delete var.contact;
+        // delete var.ctmp;
+        // create_neighbor(var);
 
-        std::cout << "    Remapping markers.\n";
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
   
         // old_coord et al. are destroyed before exiting this block
     }
+
+    // Drain GPU queue before freeing old field arrays and reallocating new ones.
+    // Interpolation functions above may have launched async GPU work; syncing here
+    // gives CUDA a chance to reclaim managed-memory pages before new allocations.
+    #pragma acc wait
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] before reallocate_variables: free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
 
     // memory for new fields
     reallocate_variables(param, var);
@@ -3046,6 +3081,15 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     }
 
     #pragma acc wait
+
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] remesh end:   free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
 
     std::cout << "  Remeshing finished.\n";
 
