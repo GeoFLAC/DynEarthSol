@@ -25,7 +25,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-duplicate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # Check if there is an open PR associated with the current branch
+            PR_COUNT=$(gh pr list --repo ${{ github.repository }} --head ${{ github.ref_name }} --state open --json number | jq length)
+            
+            if [[ "$PR_COUNT" -gt 0 ]]; then
+              echo "Open PR found. Skipping this push CI."
+              echo "skip=true" >> $GITHUB_OUTPUT
+            else
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
   detect-changes:
+    needs: check-duplicate
+    # Only run if the interceptor did not flag to skip
+    if: ${{ needs.check-duplicate.outputs.should_skip != 'true' }}
     runs-on: ubuntu-latest
     outputs:
       docker_changed: ${{ steps.filter.outputs.docker_changed }}
@@ -76,9 +102,11 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max
 
   nvc-build:
-    needs: [detect-changes, build-and-push-image]
+    needs: [check-duplicate, detect-changes, build-and-push-image]
+    # Skip if the interceptor flagged it (prevents downstream execution)
+    if: ${{ needs.check-duplicate.outputs.should_skip != 'true' }}
     runs-on: ubuntu-latest
-    
+
     strategy:
       fail-fast: false
       matrix:
