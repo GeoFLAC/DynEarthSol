@@ -393,11 +393,6 @@ void restart(const Param& param, Variables& var)
 void end(Variables& var) {
     delete var.output;
 
-    for (int i=0; i<nbdrytypes; i++) {
-        if (var.bfacets[i]->size() == 0) continue;
-        for (int j=i+1; j<nbdrytypes; j++)
-            delete[] var.edge_vectors[std::make_pair(i, j)];
-    }
     for (size_t i=0; i<var.markersets.size(); i++)
         delete var.markersets[i];
 }

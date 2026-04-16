@@ -643,7 +643,7 @@ struct Variables {
     double stress_bc_values[nbdrytypes];
     double vbc_val_z1_loading_period;
 
-    std::map<std::pair<int,int>, double*> edge_vectors;
+    std::map<std::pair<int,int>, double_vec> edge_vectors;
     double_vec edge_vec;
     int_vec edge_vec_idx;
     double_vec vbc_vertical_div_x0;
