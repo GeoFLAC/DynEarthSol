@@ -402,16 +402,42 @@ C3X3_LIBNAME = 3x3$(suffix)
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
+KNN_BVH_DIR = knn-bvh
+ifeq ($(openacc), 1)
+	CXXFLAGS += -I$(KNN_BVH_DIR)/include
+	KNN_BVH_LIB = $(KNN_BVH_DIR)/lib/libknn_bvh.$(ndims)d.a
+	LDFLAGS += $(KNN_BVH_LIB)
+endif
+
 # Enable Array2D structure of Array
 CXXFLAGS += -DSOA
 
 ## Action
 
-.PHONY: all clean take-snapshot
+.PHONY: all clean take-snapshot prepare build
 
-all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
+all: prepare
+	$(MAKE) build
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
+prepare:
+ifeq ($(openacc), 1)
+	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
+			git submodule update --init --recursive $(KNN_BVH_DIR); \
+		fi; \
+	elif [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
+		:; \
+	else \
+		echo "Error: OpenACC build requires $(KNN_BVH_DIR), but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please initialize/provide $(KNN_BVH_DIR) before building with openacc=1."; \
+		exit 1; \
+	fi
+endif
+
+build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
+
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -471,6 +497,9 @@ endif
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
+$(KNN_BVH_LIB):
+	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
+
 $(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
@@ -500,6 +529,9 @@ deepclean:
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
+ifeq ($(openacc), 1)
+	@+$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims)
+endif
 
 clean:
 	@rm -f $(OBJS) $(EXE)

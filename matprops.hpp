@@ -102,9 +102,6 @@ private:
     const tensor_t &stress;
     const tensor_t &strain_rate;
     const int_vec2D &elemmarkers;
-    const double_vec &log_table;
-    const double_vec &tan_table;
-    const double_vec &sin_table;
 
     double_vec rho0, alpha;
     double_vec bulk_modulus, shear_modulus;
@@ -119,6 +116,11 @@ private:
     // hydraulic process
     const double_vec &ppressure;
     const double_vec &dppressure;
+
+    const double_vec &log_table;
+    const double_vec &tan_table;
+    const double_vec &sin_table;
+
     double_vec porosity, hydraulic_perm, fluid_rho0;
     double_vec fluid_alpha, fluid_bulk_modulus, fluid_visc;
     double_vec biot_coeff, bulk_modulus_s;

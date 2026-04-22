@@ -1,371 +1,185 @@
+#include <algorithm>
 #include <iostream>
+#include <vector>
+#include <cstdlib>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "parameters.hpp"
 #include "knn.hpp"
+#include "utils.hpp"
+
+
+void KNN::backend_str(char* buf, size_t n) const
+{
+    snprintf(buf, n, "%s", backend_name());
+}
+
+KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, bool is_msg_, int capacity) :
+    points_vec(points_vec_), numPoints(points_vec_.size()),
+    resolution(param.mesh.resolution), is_msg(is_msg_),
+    nano_kdtree(nano_kdtree_)
+{
+    h_results = nullptr;
+    h_results_capacity = 0;
 
 #ifdef ACC
+    m_bvh_state = nullptr;
 
-__device__ static double distance2_cuda(const double *a, const double *b) {
-    double sum = 0.0;
-    for (int i = 0; i < NDIMS; ++i) {
-        double diff = a[i] - b[i];
-        sum += diff * diff;
-    }
-    return sum;
-}
-
-__device__ static inline int clampi(int v, int a, int b) {
-    return v < a ? a : (v > b ? b : v);
-}
-
-// CUDA kernel using spatial hash grid for KNN
-__global__ static void knn_hashgrid_kernel(
-    const double *points, int numPoints,
-    const double *queries, int numQueries,
-    neighbor *out_results, int k, int nheap, double radius2,
-    const HashGrid grid)
-{
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= numQueries) return;
-#ifdef SOA
-    double query[NDIMS];
-    for (int i = 0; i < NDIMS; ++i)
-        query[i] = queries[tid + i*numQueries];
-#else
-    const double *query = &queries[tid*NDIMS];
-#endif
-    // Find which cell query is in
-    int c[NDIMS];
-    for (int i = 0; i < NDIMS; ++i) {
-        c[i] = int((query[i] - grid.params.origin[i]) / grid.params.cell_size);
-        c[i] = clampi(c[i], 0, grid.params.grid_dim[i] - 1);
+    std::vector<float3> h_points(numPoints);
+    points_vec_.pack_to_xyz_float(h_points);
+    if (capacity > numPoints) {
+        m_bvh_state = knn_bvh_create_padded(
+            reinterpret_cast<const float*>(h_points.data()), numPoints, capacity);
+    } else {
+        m_bvh_state = knn_bvh_create(
+            reinterpret_cast<const float*>(h_points.data()), numPoints);
     }
 
-    neighbor *results = out_results + tid * k;
-    for (int i = 0; i < k; ++i) {
-        results[i].idx = -1;
-        results[i].dist2 = std::numeric_limits<double>::infinity(); // max distance
-    }
-
-    // Determine if on boundary
-    bool is_on_boundary = (c[0] == 0 || c[1] == 0 ||
-                           c[0] == grid.params.grid_dim[0] - 1 ||
-                           c[1] == grid.params.grid_dim[1] - 1);
-
-#ifdef THREED
-    is_on_boundary = (is_on_boundary || c[2] == 0 || c[2] == grid.params.grid_dim[2] - 1);
-#endif
-
-    const int *DC = is_on_boundary ? grid.params.D5 : grid.params.D3;
-    int range = is_on_boundary ? grid.params.ND5 : grid.params.ND3;
-
-    int n_cand = 0;
-    for (int di = 0; di < range; ++di) {
-        int nc[NDIMS];
-        for (int i = 0; i < NDIMS; ++i)
-            nc[i] = clampi(c[i] + DC[di*NDIMS + i], 0, grid.params.grid_dim[i] - 1);
-#ifdef THREED
-        int cell_idx = (nc[2] * grid.params.grid_dim[1] + nc[1]) * grid.params.grid_dim[0] + nc[0];
-#else
-        int cell_idx = nc[1] * grid.params.grid_dim[0] + nc[0];
-#endif
-        int start = grid.cell_starts[cell_idx];
-        int end = grid.cell_starts[cell_idx+1];
-        for (int i = start; i < end; ++i) {
-            int pi = grid.point_indices[i];
-#ifdef SOA
-            double p[NDIMS];
-            for (int j = 0; j < NDIMS; ++j)
-                p[j] = points[pi +j*numPoints];
-#else
-            const double *p = &points[pi*NDIMS];
-#endif
-            double d2 = distance2_cuda(p, query);
-
-            if (d2 <= radius2) {
-                if (n_cand >= k && results[k - 1].dist2 < d2)
-                    continue; // No need to add if we already have k results with smaller distances
-                bool is_duplicate = false;
-                for (int j = 0; j < k; ++j) {
-                    if (results[j].idx == pi) {
-                        is_duplicate = true;
-                        break;
-                    }
-                }
-                if (is_duplicate) continue;
-
-                for (int ii = 0; ii < k; ++ii) {
-                    if (d2 < results[ii].dist2) {
-                        // Shift the rest of the result down
-                        for (int j = k - 1; j > ii; --j) {
-                            results[j] = results[j - 1];
-                        }
-                        results[ii].idx = pi;
-                        results[ii].dist2 = d2;
-                        n_cand++;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-#endif
-
-KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_,
-            double resoTimes_) : 
-    resolution(param.mesh.resolution), points_vec(points_vec_),
-    numPoints(points_vec_.size()),
-    nano_kdtree(nano_kdtree_),
-    resoTimes(resoTimes_)
-{
-#ifdef ACC
-    build_hash_grid(resolution * 2.5);
 #else
     nano_kdtree.buildIndex();
 #endif
-    // use managed memory
-    // cudaMallocManaged(&d_grid, sizeof(HashGrid));
-    // *d_grid = grid;
-
-    // cudaMallocManaged(&d_points, numPoints * sizeof(double3));
-    // cudaMemcpy(d_points, points, numPoints * sizeof(double3), cudaMemcpyHostToDevice);
-
-    // cudaDeviceSynchronize();
 }
 
 KNN::~KNN()
 {
+    if (h_results_capacity > 0) {
+        delete[] h_results;
+        h_results = nullptr;
+    }
 #ifdef ACC
-    delete [] grid.params.D3;
-    delete [] grid.params.D5;
+    knn_bvh_destroy(static_cast<KNNBVHState*>(m_bvh_state));
 #endif
-    // use managed memory
-    // cudaFree(grid.cell_starts);
-    // cudaFree(grid.point_indices);
-    // cudaFree(d_grid);
+}
 
-    // cudaFree(d_points);
-};
-
+int KNN::max_batch_size(int k_neig) const
+{
 #ifdef ACC
-
-// Host: build hash grid (for simplicity, on host then copy to device)
-void KNN::build_hash_grid(double cell_size) {
-    // Compute bounds
-    double minp[NDIMS], maxp[NDIMS];
-    for (int i = 0; i < NDIMS; ++i) {
-        minp[i] = points_vec[0][i];
-        maxp[i] = points_vec[0][i];
+    int batch_size = knn_bvh_max_batch(static_cast<KNNBVHState*>(m_bvh_state), k_neig);
+    if (batch_size <= 0) {
+        throw std::runtime_error("Insufficient GPU memory to process even a single query batch.");
     }
-    for (int i = 1; i < numPoints; ++i) {
-        for (int j = 0; j < NDIMS; ++j) {
-            minp[j] = std::min(minp[j], points_vec[i][j]);
-            maxp[j] = std::max(maxp[j], points_vec[i][j]);
-        }
-    }
-    // Small margin
-    double eps = 1e-8;
-    int dim[3];
-    for (int i = 0; i < NDIMS; ++i) {
-        minp[i] -= eps;
-        maxp[i] += eps;
-        dim[i] = int((maxp[i] - minp[i]) / cell_size) + 1;
-        grid.params.origin[i] = minp[i];
-        grid.params.grid_dim[i] = dim[i];
-    }
-    int num_cells = dim[0] * dim[1] * dim[2];
-    grid.params.cell_size = cell_size;
-    grid.num_cells = num_cells;
-
-    // First, count points in each cell
-    int_vec cell_counts(num_cells, 0);
-    std::vector<unsigned int> cell_codes(numPoints);
-    #pragma omp parallel for
-    for (int i = 0; i < numPoints; ++i) {
-        int c[NDIMS];
-        for (int j = 0; j < NDIMS; ++j) {
-            c[j] = int((points_vec[i][j] - minp[j]) / cell_size);
-            if (c[j] < 0) c[j] = 0;
-            if (c[j] >= dim[j]) c[j] = dim[j] - 1;
-        }
-#ifdef THREED
-        unsigned int code = (c[2] * dim[1] + c[1]) * dim[0] + c[0];
+    return batch_size;
 #else
-        unsigned int code = c[1] * dim[0] + c[0];
-#endif
-        cell_codes[i] = code;
-        #pragma omp atomic update
-        cell_counts[code]++;
-    }
-    // Prefix sum for cell_starts
-    int_vec cell_starts(num_cells + 1, 0);
-    for (int i = 0; i < num_cells; ++i) {
-        cell_starts[i + 1] = cell_starts[i] + cell_counts[i];
-    }
-    // Fill point_indices (bucket sort)
-    int_vec next_indices(num_cells, 0);
-    int_vec point_indices(numPoints);
-    for (int i = 0; i < num_cells; ++i) next_indices[i] = cell_starts[i];
-    for (int i = 0; i < numPoints; ++i) {
-        int c = cell_codes[i];
-        point_indices[next_indices[c]++] = i;
-    }
-    // Allocate & copy to device
-    cudaMallocManaged(&grid.cell_starts, sizeof(int) * (num_cells + 1));
-    cudaMemcpy(grid.cell_starts, cell_starts.data(), sizeof(int) * (num_cells + 1), cudaMemcpyHostToDevice);
-    cudaMallocManaged(&grid.point_indices, sizeof(int) * numPoints);
-    cudaMemcpy(grid.point_indices, point_indices.data(), sizeof(int) * numPoints, cudaMemcpyHostToDevice);
-
-    grid.params.D3 = new int[grid.params.ND3*NDIMS];
-    grid.params.D5 = new int[grid.params.ND5*NDIMS];
-
-    // Neighbor offsets for 3x3x3 and 5x5x5
-    int idx = 0;
-#ifdef THREED
-    for (int dz = -1; dz <= 1; ++dz)
-#endif
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx) {
-                grid.params.D3[idx*NDIMS] = dx;
-                grid.params.D3[idx*NDIMS+1] = dy;
-#ifdef THREED
-                grid.params.D3[idx*NDIMS+2] = dz;
-#endif
-                idx++;
-            }
-
-    // 5x5x5 neighbor offsets: from -2 to +2
-    idx = 0;
-#ifdef THREED
-    for (int dz = -2; dz <= 2; ++dz)
-#endif
-        for (int dy = -2; dy <= 2; ++dy)
-            for (int dx = -2; dx <= 2; ++dx) {
-                grid.params.D5[idx*NDIMS] = dx;
-                grid.params.D5[idx*NDIMS+1] = dy;
-#ifdef THREED
-                grid.params.D5[idx*NDIMS+2] = dz;
-#endif
-                idx++;
-            }
-
-}
-
-void KNN::knnSearchCuda_hashgrid(const double *queries, const int numQueries,
-                      neighbor* results, int k, int nheap, 
-                      double radius2, double cell_size) {
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-    // use managed memory
-    // points and queries already on device or managed
-    // double3* d_points;
-    // cudaMallocManaged(&d_points, numPoints * sizeof(double3));
-    // cudaMemcpy(d_points, points, numPoints * sizeof(double3), cudaMemcpyHostToDevice);
-
-    // double3* d_queries;
-    // cudaMallocManaged(&d_queries, numQueries * sizeof(double3));
-    // cudaMemcpy(d_queries, queries, numQueries * sizeof(double3), cudaMemcpyHostToDevice);
-    // neighbor* d_results;
-    // cudaMallocManaged(&results, numQueries * k * sizeof(neighbor));
-
-    const double* point_ptr = points_vec.data();
-
-    int threadsPerBlock = 256;
-    int numBlocks = (numQueries + threadsPerBlock - 1) / threadsPerBlock;
-    knn_hashgrid_kernel<<<numBlocks, threadsPerBlock>>>(
-        point_ptr, numPoints, queries, numQueries, results, k, nheap, radius2, grid
-    );
-
-    // use managed memory
-    // cudaCheckSync("knn_hashgrid_kernel");
-
-    // cudaMemcpy(results, d_results, numQueries * k * sizeof(neighbor), cudaMemcpyDeviceToHost);
-    // Cleanup
-    // cudaFree(d_points);
-    // cudaFree(d_queries);
-    // cudaFree(d_results);
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
+    (void)k_neig;
+    return 16 * 1024 * 1024;
 #endif
 }
 
-#endif // ACC
-
-void KNN::search(const array_t& queries, neighbor_vec& neighbors, const int nquery,
-        int k, double resoTimes)
+neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
+        bool is_sync_to_host, const float* d_guess_radii_sq)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    printf("      Running knn query on %d points ", numPoints);
+
+    if (is_msg) printf("      knn: %d pts ", numPoints);
+
+    const size_t required_size = (size_t)nquery * k_neig;
 
 #ifdef ACC
-    printf("(cuda spatial hash grid)\n");
+    if (is_msg) printf("(lbvh GPU)\n");
 
-    int heapSize = k * 100;
-    double maxDist = resoTimes * resolution;
-    double cell_size = maxDist;
+    if (is_sync_to_host && required_size > h_results_capacity) {
+        if (h_results) delete[] h_results;
+        h_results = new neighbor[required_size];
+        h_results_capacity = required_size;
+    }
 
-    const double* query_ptr = queries.data();
+    if (is_sync_to_host) {
+        // CPU-built queries (brc-interpolation). Keep existing H2D-copy path.
+        std::vector<float3> h_queries_v(nquery);
+        queries.pack_to_xyz_float(h_queries_v, nquery);
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
+        return static_cast<neighbor*>(
+            knn_bvh_search(
+                static_cast<KNNBVHState*>(m_bvh_state),
+                reinterpret_cast<const float*>(h_queries_v.data()),
+                nquery, k_neig, h_results, is_sync_to_host,
+                d_guess_radii_sq));
+    }
 
-    knnSearchCuda_hashgrid(query_ptr, nquery,
-        neighbors.data(), k, heapSize, maxDist * maxDist, cell_size);
+    // GPU-direct path: queries are GPU-resident (managed memory).
+    float3* d_qptr =
+        knn_bvh_ensure_queries(static_cast<KNNBVHState*>(m_bvh_state), nquery);
+    {
+        #pragma acc parallel loop gang vector deviceptr(d_qptr)
+        for (int i = 0; i < nquery; i++) {
+            d_qptr[i].x = (float)queries[i][0];
+            d_qptr[i].y = (float)queries[i][1];
+#ifdef THREED
+            d_qptr[i].z = (float)queries[i][2];
+#else
+            d_qptr[i].z = 0.0f;
+#endif
+        }
+    }
+    // Synchronous acc parallel above already flushes the default queue,
+    // but explicit wait makes the OpenACC->CUDA handoff unambiguous.
+    #pragma acc wait
 
-    // long max_size = 1024 * 1024 * 256;
-    // int nqueries = queries.size();
-
-    // int nblocks = (double)nqueries * k / (double)max_size;
-    // if (nblocks < 1) nblocks = 1;
-    // printf("        nqueries: %d, k: %d, npoints: %d, max_size: %d, nblocks: %d\n", nqueries, k, numPoints, max_size, nblocks);
-
-    // int block_size = (nqueries + nblocks - 1) / nblocks;
-    // for (int b=0; b<nblocks; b++) {
-    //     int start = b * block_size;
-    //     int end = std::min(start + block_size, nqueries);
-    //     if (start >= end) continue;
-
-    //     size_t free_mem, total_mem;
-    //     cudaMemGetInfo(&free_mem, &total_mem);
-    //     printf("          Block %3d: %10d to %10d\n", b, start, end);
-    //     printf("            GPU memory: free = %zu MB, total = %zu MB\n", free_mem / (1024 * 1024), total_mem / (1024 * 1024));
-
-    //     knnSearchCuda_hashgrid(queries.data() + start, end - start,
-    //         neighbors.data() + start*k, k, heapSize, maxDist * maxDist, cell_size);
-    // }
-
-    cudaDeviceSynchronize();
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+    return static_cast<neighbor*>(
+        knn_bvh_search_prepared(
+            static_cast<KNNBVHState*>(m_bvh_state),
+            nquery, k_neig,
+            h_results,       // ignored when is_sync_to_host=false
+            is_sync_to_host,
+            d_guess_radii_sq));
 
 #else
-    printf("(nano-kdtree)\n");
+    if (is_msg) printf("(nano-kdtree)\n");
+
+    if (required_size > h_results_capacity) {
+        if (h_results) delete[] h_results;
+        h_results = new neighbor[required_size];
+        h_results_capacity = required_size;
+    }
+
+    // Pre-allocate per-thread scratch buffers to avoid heap contention in the loop.
+#ifdef _OPENMP
+    const int nthreads = omp_get_max_threads();
+#else
+    const int nthreads = 1;
+#endif
+    std::vector<size_t> nn_idx_buf(nthreads * k_neig);
+    std::vector<double> dist_buf(nthreads * k_neig);
 
     #pragma omp parallel for default(none) \
-        shared(queries, neighbors, k, nano_kdtree, nquery)
+        shared(queries, h_results, k_neig, nano_kdtree, nquery, nn_idx_buf, dist_buf)
     for (int i = 0; i < nquery; ++i) {
-        neighbor *result = neighbors.data() + i * k;
+        neighbor *result = h_results + (size_t)i * k_neig;
 
-        size_t_vec nn_idx(k);
-        double_vec out_dists_sqr(k);
-        KNNResultSet resultSet(k);
-        resultSet.init(nn_idx.data(), out_dists_sqr.data());
+#ifdef _OPENMP
+        const int tid = omp_get_thread_num();
+#else
+        const int tid = 0;
+#endif
+        size_t* nn_idx        = nn_idx_buf.data() + tid * k_neig;
+        double* out_dists_sqr = dist_buf.data()   + tid * k_neig;
+
+        KNNResultSet resultSet(k_neig);
+        resultSet.init(nn_idx, out_dists_sqr);
 
         double q[NDIMS];
         queries[i].copy_to(q);
         nano_kdtree.findNeighbors(resultSet, q);
 
-        for (int j = 0; j < k; ++j) {
-            result[j].idx = nn_idx[j];
+        for (int j = 0; j < k_neig; ++j) {
+            result[j].idx   = nn_idx[j];
             result[j].dist2 = out_dists_sqr[j];
         }
     }
 
-#endif
-
 #ifdef NPROF_DETAIL
     nvtxRangePop();
+#endif
+    return h_results;
+
 #endif
 }

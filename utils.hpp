@@ -364,5 +364,15 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #endif
 }
 
+static std::string format_with_commas(unsigned long value) {
+    std::string s = std::to_string(value);
+
+    int insert_position = s.length() - 3;
+    while (insert_position > 0) {
+        s.insert(insert_position, ",");
+        insert_position -= 3;
+    }
+    return s;
+}
 
 #endif // DYNEARTHSOL3D_UTILS_HPP

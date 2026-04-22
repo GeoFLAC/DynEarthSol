@@ -1,0 +1,4 @@
+[submodule "knn-bvh"]
+	path = knn-bvh
+	url = https://github.com/GeoFLAC/knn-bvh.git
+	ignore = dirty
