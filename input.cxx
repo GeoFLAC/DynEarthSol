@@ -567,7 +567,8 @@ static void declare_parameters(po::options_description &cfg,
          "0: no weak zone.\n"
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
          "2: ellipsoidal weak zone with specified center location and semi-axes.\n"
-         "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n")
+         "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n"
+         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n")
         ("ic.is_restarting_weakzone", po::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
         ("ic.weakzone_plstrain", po::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
@@ -600,6 +601,34 @@ static void declare_parameters(po::options_description &cfg,
          "Length of weak zone semi-axis in z direction (in meters)\n")
         ("ic.weakzone_standard_deviation", po::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
          "Standard deviation of Gussian distribution point weak zone (in meters)\n")
+
+        // multi-segment planar weak zone (weakzone_option == 4)
+        ("ic.weakzone_num_segments", po::value<int>(&p.ic.weakzone_num_segments)->default_value(1),
+         "Number of planar segments for multi-segment weak zone (weakzone_option=4)")
+        ("ic.weakzone_segments_xcenter", po::value<std::string>()->default_value("[0.5]"),
+         "X centers of each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_ycenter", po::value<std::string>()->default_value("[0.5]"),
+         "Y centers of each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
+        ("ic.weakzone_segments_zcenter", po::value<std::string>()->default_value("[0.5]"),
+         "Z centers of each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_azimuth", po::value<std::string>()->default_value("[0]"),
+         "Azimuth angles for each segment (in degrees), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_inclination", po::value<std::string>()->default_value("[90]"),
+         "Inclination angles for each segment (in degrees), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_halfwidth", po::value<std::string>()->default_value("[1.5]"),
+         "Half-widths for each segment (true perpendicular distance, in unit of mesh.resolution), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_x_min", po::value<std::string>()->default_value("[0]"),
+         "X lower bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_x_max", po::value<std::string>()->default_value("[1]"),
+         "X upper bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_depth_min", po::value<std::string>()->default_value("[0]"),
+         "Depth upper (shallower) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_depth_max", po::value<std::string>()->default_value("[1]"),
+         "Depth lower (deeper) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_y_min", po::value<std::string>()->default_value("[0]"),
+         "Y lower bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
+        ("ic.weakzone_segments_y_max", po::value<std::string>()->default_value("[1]"),
+         "Y upper bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)\n")
 
         ("ic.temperature_option", po::value<int>(&p.ic.temperature_option)->default_value(0),
          "How to set the initial temperature?\n"
@@ -1220,6 +1249,24 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // ic
     //
     {
+        if ( p.ic.weakzone_option == 4 ) {
+            int n = p.ic.weakzone_num_segments;
+            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, -1);
+            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, -1);
+            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, -1);
+            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, -1);
+#ifdef THREED
+            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, -1);
+#endif
+        }
+
         if ( p.ic.mattype_option == 1) {
             get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers);
             get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1);

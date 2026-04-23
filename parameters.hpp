@@ -357,6 +357,21 @@ struct IC {
     double weakzone_zsemi_axis;
     double weakzone_standard_deviation;
 
+    // multi-segment planar weak zone (weakzone_option == 4)
+    int weakzone_num_segments;
+    double_vec weakzone_segments_xcenter;
+    double_vec weakzone_segments_ycenter;
+    double_vec weakzone_segments_zcenter;
+    double_vec weakzone_segments_azimuth;
+    double_vec weakzone_segments_inclination;
+    double_vec weakzone_segments_halfwidth;
+    double_vec weakzone_segments_x_min;
+    double_vec weakzone_segments_x_max;
+    double_vec weakzone_segments_depth_min;
+    double_vec weakzone_segments_depth_max;
+    double_vec weakzone_segments_y_min;
+    double_vec weakzone_segments_y_max;
+
     int temperature_option;
     std::string Temp_filename;
     std::string Nodes_filename;
