@@ -88,7 +88,7 @@ double find_max_vbc(const BC &bc)
 
 
 void create_boundary_normals(const Variables &var, array_t &bnormals,
-                             std::map<std::pair<int,int>, double*>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx)
+                             std::map<std::pair<int,int>, double_vec>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx)
 {
     /* This subroutine finds the outward normal unit vectors of boundaries.
      * There are two types of boundaries: ibound{x,y,z}? and iboundn?.
@@ -162,7 +162,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
         const double eps = 1e-15;
         for (int j=i+1; j<nbdrytypes; j++) {
             if (var.bfacets[j]->size() == 0) continue;
-            double *s = new double[NDIMS];  // intersection of two boundaries
+            double_vec s (NDIMS);  // intersection of two boundaries
                                             // whole-application lifetime, no need to delete manually
 #ifdef THREED
             // quick path: both walls are vertical
