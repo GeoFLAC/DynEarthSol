@@ -1,36 +1,39 @@
 {
-    "description": "DynEarthSol for sedimentology.",
+    "description": "DynEarthSol (DES) is a finite element code that solves the momentum balance and heat transfer in Lagrangian form using unstructured meshes. It is designed to study the long-term deformation of Earth's lithosphere and similar geodynamic problems. The software features GPU acceleration and supports optional integrations with Exodus, MMG for mesh optimization, and HDF5 for advanced output visualization.",
     "license": "MIT",
     "title": "DynEarthSol",
     "upload_type": "software",
     "keywords": [
-        "DynEarthSol",
-        "Sedimentology"
+        "Geodynamics","Lithosphere",
+        "FLAC","Finite Element Method","Lagrangian",
+        "OpenMP","OpenACC","HDF5","MMG","Exodus"
     ],
     "creators": [
         {
-            "orcid": "0000-0002-7144-1394",
-            "affiliation": "Taiwan International Graduate Program (TIGP) - Earth System Science Program, Academia Sinica and National Central University, Academia Sinica, Taiwan",
-            "name": "Shyu, Chase J."
+            "orcid": "0000-0001-7839-4263",
+            "affiliation": "Institute for Geophysics, Jackson School of Geosciences, University of Texas at Austin, Texas 78758, United States",
+            "name": "Lavier, Luc L."
         },
         {
             "orcid": "0000-0002-1815-9613",
-            "affiliation": "Institute of Earth Sciences, Academia Sinica, Taiwan",
+            "affiliation": "Institute of Earth Sciences, Academia Sinica, Taipei 11529, Taiwan",
             "name": "Tan, Eh"
         },
         {
             "orcid": "0000-0002-8857-6092",
-            "affiliation": "Center for Earthquake Research and Information, University of Memphis, Memphis, TN, USA",
+            "affiliation": "Center for Earthquake Research and Information, The University of Memphis, Tennessee 38152, United States",
             "name": "Choi, Eunseo"
+        },
+        {
+            "orcid": "0000-0002-7144-1394",
+            "affiliation": "Institute for Geophysics, Jackson School of Geosciences, University of Texas at Austin, Texas 78758, United States",
+            "name": "Shyu, Chase J."
+        },
+        {
+            "orcid": "0000-0001-5287-9959",
+            "affiliation": "Earthquake Research Center, Korea Institute of Geoscience and Mineral Resources, 124 Gwahak-ro, Yuseong-gu, Daejeon 34132, Republic of Korea",
+            "name": "Lee, Sungho"
         }
     ],
-    "access_right": "open",
-    "related_identifiers": [
-        {
-            "scheme": "doi", 
-            "identifier": "10.5281/zenodo.7455730", 
-            "relation": "isVersionOf"
-        }
-    ]
-
+    "access_right": "open"
 }
