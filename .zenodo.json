@@ -1,5 +1,5 @@
 {
-    "description": "DynEarthSol (DES) is a finite element code that solves the momentum balance and heat transfer in Lagrangian form using unstructured meshes. It is designed to study the long-term deformation of Earth's lithosphere and similar geodynamic problems. The software features GPU acceleration and supports optional integrations with Exodus, MMG for mesh optimization, and HDF5 for advanced output visualization.",
+    "description": "DynEarthSol (DES) is a finite element code that solves the momentum balance and heat equations in Lagrangian form using unstructured meshes. It is designed to study the long-term deformation of Earth's lithosphere and similar geodynamic problems, with the option to couple with an external surface process modeling code (goSPL). It can also simulate on- and off-fault deformation over multiple earthquake cycles. The software features GPU acceleration and supports optional integration with Exodus for importing externally generated meshes, MMG for mesh optimization, and HDF5 for high-performance output visualization.",
     "license": "MIT",
     "title": "DynEarthSol",
     "upload_type": "software",
