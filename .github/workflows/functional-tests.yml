@@ -5,10 +5,20 @@ on:
     branches: [ "master", "bugfix*" ]
     paths-ignore:
       - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
+      - '*.md'
+      - '*.py'
   pull_request:
     branches: [ "master" ]
     paths-ignore:
       - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
+      - '*.md'
+      - '*.py'
 
 jobs:
   build:

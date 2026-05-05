@@ -9,6 +9,9 @@ on:
       - "**CUDA**"
     paths-ignore:
       - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
       - '*.md'
       - '*.py'
 
@@ -17,6 +20,9 @@ on:
       - "master"
     paths-ignore:
       - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
       - '*.md'
       - '*.py'
 
