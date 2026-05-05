@@ -1,0 +1,56 @@
+name: GoSPL build
+
+on:
+  push:
+    branches: [ "master" ]
+    paths-ignore:
+      - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
+      - '*.md'
+      - '*.py'
+  pull_request:
+    branches: [ "master" ]
+    paths-ignore:
+      - '**/README.md'
+      - 'LICENSE'
+      - '.zenodo.json'
+      - 'CITATION.cff'
+      - '*.md'
+      - '*.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install system dependencies
+      run: |
+        sudo add-apt-repository ppa:deadsnakes/ppa -y
+        sudo apt-get update
+        sudo apt-get install -y libboost-program-options-dev \
+          python3.11 python3.11-dev libpython3.11-dev python3.11-venv
+
+    - name: Install GoSPL via pip
+      run: |
+        python3.11 -m ensurepip --upgrade
+        python3.11 -m pip install --upgrade pip
+        python3.11 -m pip install gospl
+
+    - name: Build gospl_extensions
+      run: |
+        git clone https://github.com/GeoFLAC/gospl_extensions.git $HOME/opt/gospl_extensions
+        cd $HOME/opt/gospl_extensions/cpp_interface
+        make install-local
+
+    - name: Build DES with GoSPL (3D)
+      run: |
+        PYTHON_INCLUDE_DIR=$(python3.11 -c "import sysconfig; print(sysconfig.get_path('include'))")
+        PYTHON_LIB_DIR=$(python3.11 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+        make clean
+        make ndims=3 use_gospl=1 opt=0 openmp=0 \
+          PYTHON_INCLUDE_DIR=$PYTHON_INCLUDE_DIR \
+          PYTHON_LIB_DIR=$PYTHON_LIB_DIR
