@@ -101,7 +101,9 @@ namespace {
     private:
         const double az, incl;
         const double halfwidth;
+#ifdef THREED
         const double ymin, ymax;
+#endif
         const double zmin, zmax;
         const double *x0;
         const double gaussian_amplitude; // x-shift at y=y0, in meters
@@ -110,13 +112,17 @@ namespace {
     public:
         Gaussian_planar_zone(const double center[NDIMS], double azimuth, double inclination,
                              double halfwidth_,
+#ifdef THREED
                              double ymin_, double ymax_,
+#endif
                              double zmin_, double zmax_,
                              double amplitude, double sigma) :
             az(std::tan(azimuth * DEG2RAD)),
             incl(1 / std::tan(inclination * DEG2RAD)),
             halfwidth(halfwidth_),
+#ifdef THREED
             ymin(ymin_), ymax(ymax_),
+#endif
             zmin(zmin_), zmax(zmax_),
             x0(center),
             gaussian_amplitude(amplitude),
