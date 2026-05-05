@@ -1,6 +1,6 @@
 # GoSPL configuration equivalent to gaussian_weakzone_3D.prm (ASPECT-FastScape)
 #
-# ASPECT domain : 100km (x) x 80km (y) x 20km (z)
+# DES domain    : 100km (x) x 80km (y) x 10km (z)
 # Extension     : +/-1.5 cm/yr in x-direction (DES handles; GoSPL receives velocities)
 # FastScape K_f : 1e-5  -> spl.K
 # FastScape m   : 0.4   -> spl.m

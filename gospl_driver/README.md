@@ -12,15 +12,10 @@ This directory contains the integration code for GoSPL (Geomorphological Landsca
 
 **GoSPL Extensions Library**: You need to clone and build the gospl_extensions repository:
    ```bash
-   git clone https://github.com/GeoFLAC/gospl_extensions.git
-   cd gospl_extensions/cpp_interface
-   
-   # Activate gospl environment for building
+   git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
+   cd ~/opt/gospl_extensions/cpp_interface
    conda activate gospl
-   
-   # Build and install locally for DynEarthSol integration
    make install-local
-   cd ../..
    ```
 
    This creates:
@@ -42,7 +37,7 @@ The Makefile automatically creates a wrapper script that handles all environment
 
 1. **Build DynEarthSol with GoSPL support**:
    ```bash
-   # Make sure use_gospl = 1 in the Makefile (should already be set)
+   # Set use_gospl = 1 in the Makefile, then:
    make clean
    make -j4
    ```
@@ -87,10 +82,10 @@ If you prefer manual control or the wrapper doesn't work:
 ### Configuration
 3. In your DynEarthSol configuration file, set:
    ```
-   control.surface_process_option = 11
-   control.surface_process_gospl_config_file = "/absolute/path/to/gospl_config.yml"
+   surface_process_option = 11
+   surface_process_gospl_config_file = ./gospl_config.yml
    ```
-   **Important**: Use absolute paths to avoid file access issues.
+   Run DynEarthSol from the directory containing the GoSPL config file so that relative paths resolve correctly.
 
 4. Create a GoSPL configuration file compatible with gospl_extensions:
    - See working examples in `~/opt/gospl_extensions/examples/`
@@ -142,31 +137,8 @@ If setting PYTHONPATH manually:
 
 #### General GoSPL Issues
 - **GoSPL initialization fails**: Check that your GoSPL configuration file path is correct and the file is valid YAML.
-- **"The input file is not found" / "Unable to open file" error**: This occurs in the gospl_extensions C++ code when creating the EnhancedModel. **Solutions** (try in order):
-  
-  1. **Run from the gospl_extensions directory**: The C++ code may expect specific working directory
-     ```bash
-     cd ~/opt/gospl_extensions/examples
-     /path/to/DynEarthSol/dynearthsol-gospl /path/to/your/dynearthsol_config.cfg
-     ```
-  
-  2. **Use a working gospl_extensions config file**: Copy and modify an existing working config
-     ```bash
-     cp ~/opt/gospl_extensions/examples/input-escarpment.yml ./my_gospl_config.yml
-     # Edit my_gospl_config.yml for your simulation parameters
-     # Update DynEarthSol config to point to this file
-     ```
-  
-  3. **Check file format compatibility**: The EnhancedModel expects specific YAML structure
-     - Standard GoSPL configs may not work with gospl_extensions
-     - Required sections may include: `domain`, `time`, `spl`, `diffusion`, `output`
-     - See working examples in `~/opt/gospl_extensions/examples/`
-  
-  4. **Verify file permissions and absolute paths**:
-     ```bash
-     ls -la /absolute/path/to/gospl_config.yml
-     # Ensure file is readable and use absolute paths in DynEarthSol config
-     ```
+- **"The input file is not found" / "Unable to open file" error**: The GoSPL config path is resolved relative to the working directory. Run DynEarthSol from the directory containing the GoSPL config file, or use an absolute path in `surface_process_gospl_config_file`.
+  - The EnhancedModel expects specific YAML structure; standard GoSPL configs may not work with gospl_extensions. Required sections: `domain`, `time`, `spl`, `diffusion`, `output`. Use `gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml` as a template.
 
 ### Verification
 - Check if GoSPL options appear in help: `./dynearthsol3d --help | grep gospl`
