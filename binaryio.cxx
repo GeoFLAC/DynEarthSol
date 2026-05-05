@@ -121,8 +121,18 @@ template <typename T, int N>
 void BinaryOutput::write_array(const Array2D<T,N>& A, const char *name, std::size_t size)
 {
     write_header(name);
-    std::size_t n = std::fwrite(A.data(), sizeof(T), size*N, f);
-    eof_pos += n * sizeof(T);
+
+    std::size_t written_elements = 0;
+    static std::vector<T> buffer; 
+    A.pack_to(buffer, size);
+
+    written_elements = std::fwrite(buffer.data(), sizeof(T), size * N, f);
+
+    if (written_elements != size * N) {
+        std::cerr << "Error: cannot write array: " << name << '\n';
+    }
+
+    eof_pos += written_elements * sizeof(T);
 }
 
 
@@ -170,6 +180,12 @@ BinaryInput::BinaryInput(const char *filename)
 BinaryInput::~BinaryInput()
 {
     std::fclose(f);
+}
+
+
+bool BinaryInput::has_array(const char *name) const
+{
+    return offset.find(name) != offset.end();
 }
 
 
@@ -264,12 +280,19 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     }
 
     seek_to_array(name);
-    int n = std::fread(A.data(), sizeof(T), size*N, f);
 
-    if (n != N*size) {
-        std::cerr << "Error: cannot read array: " << name << '\n';
+    static std::vector<T> buffer;
+    std::size_t total_elements = size * N;
+    if (buffer.size() < total_elements)
+        buffer.resize(total_elements);
+
+    int n = std::fread(buffer.data(), sizeof(T), size * N, f);
+    if (n != N * size) {
+        std::cerr << "Error: cannot read array (buffered path): " << name << '\n';
         std::exit(1);
     }
+
+    A.load_from_buffer(buffer.data(), size);
 }
 
 
@@ -411,7 +434,9 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         if (!is_checkpoint) {
             write_nodal_vec_array(*var.coord, "Points", nnode);
 
-            int* conn_ptr = var.connectivity->data();
+            int_vec buffer;
+            var.connectivity->pack_to(buffer);
+            int* conn_ptr = buffer.data();
             int_vec int_tmp(conn_ptr, conn_ptr + nelem*nnode_cell);
             write_array(int_tmp, "Connectivity",  nelem*nnode_cell);
         } else {
@@ -428,9 +453,9 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         nelem = nnode;
 
         if (!is_checkpoint) {
-            array_t *mcoord = ms->calculate_marker_coord(var); // coordinate of markers
-            write_nodal_vec_array(*mcoord, "Points", nnode);
-            delete mcoord;
+            array_t mcoord(nnode);
+            ms->calculate_marker_coord(var, mcoord); // coordinate of markers
+            write_nodal_vec_array(mcoord, "Points", nnode);
 
             int_vec int_tmp(nelem);
             for (int i=0; i<nelem; i++) int_tmp[i] = i;
@@ -679,7 +704,11 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
 
     hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
-    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
+
+    static std::vector<T> buffer;
+    A.pack_to(buffer, len);
+
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data());
 
     std::string vis_name = name;
     if (std::string(name) == "Points") {
@@ -871,6 +900,12 @@ HDF5Input::~HDF5Input()
     }
 }
 
+
+bool HDF5Input::has_array(const char *name) const
+{
+    return H5Lexists(file_id, name, H5P_DEFAULT) > 0;
+}
+
 template <typename T>
 void HDF5Input::read_scaler(T& A, const std::string& name)
 {
@@ -1014,11 +1049,18 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
     hid_t mspace_id = H5Screate_simple(2, dims, nullptr);
     hid_t dtype_id = H5Native<T>::id();
 
-    if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, A.data()) < 0) {
+    static std::vector<T> buffer;
+    std::size_t total_elements = size * N;
+    if (buffer.size() < total_elements)
+        buffer.resize(total_elements);
+
+    if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, buffer.data()) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
         std::exit(1);
     }
+
+    A.load_from_buffer(buffer.data(), size);
 
     H5Sclose(mspace_id);
     H5Sclose(space_id);

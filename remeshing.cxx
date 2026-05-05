@@ -29,6 +29,10 @@
 #endif
 #endif
 
+#ifdef ACC
+#include "knn_bvh.hpp"
+#endif
+
 namespace { // anonymous namespace
 
 
@@ -408,7 +412,7 @@ void assemble_bdry_polygons(const Variables &var, const array_t &old_coord,
             const auto &facet = (*(var.bfacets[ibound]))[i];
             int e = facet.first;
             int f = facet.second;
-            const int *conn = old_connectivity[e];
+            ConstConnAccessor conn = old_connectivity[e];
 
             for (int j=0; j<edges_per_facet; j++) {
                 int n0 = conn[ NODE_OF_FACET[f][ edgenodes[j][0] ] ];
@@ -519,7 +523,7 @@ void find_tiny_element(const Param &param, const double_vec &volume,
 
 void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
                               const double_vec &volume, const int_vec &tiny_elems,
-                              int npoints, const double *old_points,
+                              int npoints, const array_t &old_points,
                               const uint_vec &old_bcflag, int_vec &points_to_delete,
                               bool excl_func(uint))
 {
@@ -534,13 +538,12 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 
         tiny_vol[ee] = volume[e];
 
-        const int *conn = connectivity[e];
+        ConstArrayIndirectAccessor coord_e = coord.view_const(connectivity[e]);
         for (int j=0; j<NODES_PER_ELEM; ++j) {
-            int n = conn[j];
             tiny_conn[ee][j] = ii;
 
             for (int d=0; d<NDIMS; ++d) {
-                tiny_coord[ii][d] = coord[n][d];
+                tiny_coord[ii][d] = coord_e[j][d];
             }
             ii ++;
         }
@@ -548,13 +551,15 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 
     Barycentric_transformation bary(tiny_coord, tiny_conn, tiny_vol);
 
+    #pragma acc wait
+
     // find old nodes that are connected to tiny elements and are not excluded
     // (most of the nodes of tiny elements are newly inserted by the remeshing library)
     for (int i=0; i<npoints; ++i) {
         // excluded nodes
         if (excl_func(old_bcflag[i])) continue;
 
-        const double *p = old_points + i*NDIMS;
+        ConstArrayAccessor p = old_points[i];
         for (int ee=0; ee<tiny_nelem; ++ee) {
             if (bary.is_inside_elem(p, ee)) {
                 points_to_delete.push_back(i);
@@ -860,7 +865,12 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
             Mesh mesh;
             mesh.min_angle = 0;
             mesh.meshing_verbosity = 0;
-            points_to_new_surface(mesh, coord2d.size(), coord2d.data(),
+
+            double_vec coord2d_vec;
+            coord2d.pack_to(coord2d_vec);
+            double* coord2d_ptr = coord2d_vec.data();
+
+            points_to_new_surface(mesh, coord2d.size(), coord2d_ptr,
                                   new_polygon_size, surf_segment.data(), surf_segflag.data(),
                                   0, NULL,
                                   0, 3,
@@ -1054,14 +1064,14 @@ void refine_surface_elem(const Param &param, const Variables &var,
 
         if (old_volume[e] < surface_vol) continue;
 
-        const int *conn = old_connectivity[e];
+        ConstConnAccessor conn = old_connectivity[e];
         int_vec n(NDIMS);
 
 //        if (DEBUG)
             std::printf("      Surface node added (%4d %.1e %.1e)\n",e, old_volume[e], surface_vol);
         // get the nodes of the element on surface
         for (int j=0; j<NDIMS; j++)
-            n[j] = (*var.surfinfo.top_nodes)[(*var.surfinfo.elem_and_nodes)[i][j]];
+            n[j] = (*var.connectivity_surface)[e][j];
 
         int nsub_node = -1;
         for (int j=0;j<NODES_PER_ELEM; j++)
@@ -1112,11 +1122,19 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     segment_t old_segment(original_segment);
     segflag_t old_segflag(original_segflag);
 
+    double_vec qcoord_vec;
+    int_vec qconn_vec, qsegment_vec, qsegflag_vec;
+
+    old_coord.pack_to(qcoord_vec);
+    old_connectivity.pack_to(qconn_vec);
+    old_segment.pack_to(qsegment_vec);
+    old_segflag.pack_to(qsegflag_vec);
+
     // raw pointers to old mesh
-    double *qcoord = old_coord.data();
-    int *qconn = old_connectivity.data();
-    int *qsegment = old_segment.data();
-    int *qsegflag = old_segflag.data();
+    double *qcoord = qcoord_vec.data();
+    int *qconn = qconn_vec.data();
+    int *qsegment = qsegment_vec.data();
+    int *qsegflag = qsegflag_vec.data();
 
     // size of old mesh
     int old_nnode = old_coord.size();
@@ -1183,6 +1201,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     }
 
+    array_t array_t_qcoord(qcoord, old_nnode);
+
     if (bad_quality == 3) { // there is a tiny element
         // Marking (non-boundary) points of small elements, which will be deleted later
         int_vec tiny_elems;
@@ -1190,7 +1210,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
         if (tiny_elems.size() > 0) {
             find_points_of_tiny_elem(old_coord, old_connectivity, old_volume,
-                                     tiny_elems, old_nnode, qcoord, old_bcflag, points_to_delete,
+                                     tiny_elems, old_nnode, array_t_qcoord, old_bcflag, points_to_delete,
                                      excl_func);
         }
     }
@@ -1304,8 +1324,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
             bad_quality = 1;
         }
 
-        new_coord.nullify();
-        new_connectivity.nullify();
+        // new_coord.nullify();
+        // new_connectivity.nullify();
         if (! bad_quality) break;
 
         nloops ++;
@@ -1324,10 +1344,15 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     var.nnode = new_nnode;
     var.nelem = new_nelem;
     var.nseg = new_nseg;
-    var.coord->reset(pcoord, new_nnode);
-    var.connectivity->reset(pconnectivity, new_nelem);
-    var.segment->reset(psegment, var.nseg);
-    var.segflag->reset(psegflag, var.nseg);
+    var.coord->load_from_buffer(pcoord, new_nnode);
+    var.connectivity->load_from_buffer(pconnectivity, new_nelem);
+    var.segment->load_from_buffer(psegment, var.nseg);
+    var.segflag->load_from_buffer(psegflag, var.nseg);
+
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
 
     if (param.mesh.meshing_sediment)
         delete [] qcoord;
@@ -1531,7 +1556,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
 
     // interpolate left side
     for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[side_left[j]];
+        ConstArrayAccessor p = old_coord[side_left[j]];
         inz[j][0] = p[0];
         inz[j][1] = p[1];
     }
@@ -1549,19 +1574,20 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     interpolate_curve(param, inz, outz, 1);
     for (int j = 0; j < nz_new; ++j) {
         int inc = j%2;
-        double* p;
+        int idx;
         if (inc) {
-            p = (*var.coord)[(istart_n2 + int(j/2)*(nx_new+1))];
+            idx = istart_n2 + int(j/2)*(nx_new+1);
         } else {
-            p = (*var.coord)[(int(j/2)*nx_new)];
-        }        
+            idx = int(j/2)*nx_new;
+        }
+        ArrayAccessor p = (*var.coord)[idx];
         p[0] = outz[j][0];
         p[1] = outz[j][1];
     }
 
     // interpolate right side
     for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[side_right[j]];
+        ConstArrayAccessor p = old_coord[side_right[j]];
         inz[j][0] = p[0];
         inz[j][1] = p[1];
     }
@@ -1578,12 +1604,13 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     interpolate_curve(param, inz, outz, 1);
     for (int j = 0; j < nz_new; ++j) {
         int inc = j%2;
-        double* p;
+        int idx;
         if (inc) {
-            p = (*var.coord)[(istart_n2 + (int(j/2)+1)*(nx_new+1)-1)];
+            idx = istart_n2 + (int(j/2)+1)*(nx_new+1)-1;
         } else {
-            p = (*var.coord)[((int(j/2)+1)*nx_new)-1];
-        }        
+            idx = (int(j/2)+1)*nx_new-1;
+        }
+        ArrayAccessor p = (*var.coord)[idx];
         p[0] = outz[j][0];
         p[1] = outz[j][1];
     }
@@ -1593,7 +1620,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
 
     // interpolate top side
     for (int i = 0; i < var.nx; ++i) {
-        const double* p = old_coord[side_top[i]];
+        ConstArrayAccessor p = old_coord[side_top[i]];
         inx_top[i][0] = p[0];
         inx_top[i][1] = p[1];
     }
@@ -1608,7 +1635,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
 
     interpolate_curve(param, inx_top, outx_top, 0);
     for (int i = 0; i <nx_new; ++i) {
-        double* p = (*var.coord)[i];
+        ArrayAccessor p = (*var.coord)[i];
         p[0] = outx_top[i][0];
         p[1] = outx_top[i][1];
     }
@@ -1618,7 +1645,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
 
     // interpolate top side
     for (int i = 0; i < var.nx+1-var.nz%2; ++i) {
-        const double* p = old_coord[side_bottom[i]];
+        ConstArrayAccessor p = old_coord[side_bottom[i]];
         inx_bot[i][0] = p[0];
         switch (param.mesh.remeshing_option) {
         case 1:
@@ -1639,8 +1666,16 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     outx_bot[nx_new-nz_new%2][0] = old_coord[side_bottom[var.nx-var.nz%2]][0];
 
     interpolate_curve(param, inx_bot, outx_bot, 0);
-    for (int i = 0; i < nx_new+1-nz_new%2; ++i) {
-        double* p = (*var.coord)[nnode_new - nbot + i];
+    int bot_node0;
+    if (nz_new % 2 == 0) {
+        // last odd row
+        bot_node0 = nnode_new - nbot;
+    } else {
+        // last even row
+        bot_node0 = int(nz_new/2) * nx_new;
+    }
+    for (int i = 0; i < nbot; ++i) {
+        ArrayAccessor p = (*var.coord)[bot_node0 + i];
         p[0] = outx_bot[i][0];
         p[1] = outx_bot[i][1];
     }
@@ -1652,7 +1687,7 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         for (int i = 1; i < nx_new-1; ++i)
             (*var.coord)[i + j*nx_new][0] = xi + bdy_dx + i * dx;
     }
-    for (int j = 0; j < int(nz_new/2)-1; ++j) {
+    for (int j = 0; j < int(nz_new/2)-1+nz_new%2; ++j) {
         double xi = (*var.coord)[istart_n2+j*(nx_new+1)][0];
         double xe = (*var.coord)[istart_n2+(j+1)*(nx_new+1)-1][0];
         for (int i = 1; i < nx_new; ++i)
@@ -1736,7 +1771,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
     #pragma omp parallel for default(none) shared(var,old_conn)
     for (int i = 0; i < var.nelem; ++i) {
-        int* p = (*var.connectivity)[i];
+        ConnAccessor  p = (*var.connectivity)[i];
         p[0] = old_conn[i][0];
         p[1] = old_conn[i][1];
         p[2] = old_conn[i][2];
@@ -1746,7 +1781,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
     #pragma omp parallel for default(none) shared(var,old_segment,old_segflag)
     for (int i = 0; i < var.nseg; ++i) {
-        int* p = (*var.segment)[i];
+        SegmentAccessor  p = (*var.segment)[i];
         p[0] = old_segment[i][0];
         p[1] = old_segment[i][1];
 #ifdef THREED
@@ -1776,7 +1811,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
                     for (int kk=0; kk<nxyz[n2]; kk++) {
                         idx[n2] = kk;
-                        const double* p = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor p = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         in[kk][0] = p[0];
                         in[kk][1] = p[1];
                         in[kk][2] = p[2];
@@ -1819,7 +1854,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 
                     for (int kk=0; kk<nxyz[n2]; kk++) {
                         idx[n2] = kk;
-                        double* p = (*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ArrayAccessor p = (*var.coord)[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         p[0] = out[kk][0];
                         p[1] = out[kk][1];
                         p[2] = out[kk][2];
@@ -1957,25 +1992,25 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         }
                         idx[n0] = ind_x0;
                         idx[n1] = ind_y0;
-                        const double *x0y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x0y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y1;
-                        const double *x0y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x0y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y2;
-                        const double *x0y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x0y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n0] = ind_x1;
                         idx[n1] = ind_y0;
-                        const double *x1y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x1y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y1;
-                        const double *x1y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x1y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y2;
-                        const double *x1y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x1y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n0] = ind_x2;
                         idx[n1] = ind_y0;
-                        const double *x2y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x2y0 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y1;
-                        const double *x2y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x2y1 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
                         idx[n1] = ind_y2;
-                        const double *x2y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
+                        ConstArrayAccessor x2y2 = old_coord[idx[0]*nxyz[1]*nxyz[2] + idx[1]*nxyz[2] + idx[2]];
 
                         double interp0 = quadraticInterpolation(p1,
                             x0y0[n1], x0y1[n1], x0y2[n1], x0y0[n2], x0y1[n2], x0y2[n2]);
@@ -2024,7 +2059,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     array_t outx(var.nx);
     // interpolate left side
     for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[j];
+        ConstArrayAccessor p = old_coord[j];
         inz[j][1] = p[1];
 
         switch (param.mesh.remeshing_option) {
@@ -2037,14 +2072,14 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
     interpolate_uniform_curve(param, inz, outz, 1);
     for (int j = 0; j < var.nz; ++j) {
-        double* p = (*var.coord)[j];
+        ArrayAccessor p = (*var.coord)[j];
         p[0] = outz[j][0];
         p[1] = outz[j][1];
     }
 
     // interpolate right side
     for (int j = 0; j < var.nz; ++j) {
-        const double* p = old_coord[(var.nx - 1) * var.nz + j];
+        ConstArrayAccessor p = old_coord[(var.nx - 1) * var.nz + j];
         inz[j][1] = p[1];
 
         switch (param.mesh.remeshing_option) {
@@ -2057,13 +2092,13 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
     interpolate_uniform_curve(param, inz, outz, 1);
     for (int j = 0; j < var.nz; ++j) {
-        double* p = (*var.coord)[(var.nx - 1) * var.nz + j];
+        ArrayAccessor p = (*var.coord)[(var.nx - 1) * var.nz + j];
         p[0] = outz[j][0];
         p[1] = outz[j][1];
     }
     // interpolate botton side
     for (int i = 0; i < var.nx; ++i) {
-        const double* p = old_coord[var.nz * i];
+        ConstArrayAccessor p = old_coord[var.nz * i];
         inx[i][0] = p[0];
         switch (param.mesh.remeshing_option) {
         case 1:
@@ -2077,19 +2112,19 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     }
     interpolate_uniform_curve(param, inx, outx, 0);
     for (int i = 0; i < var.nx; ++i) {
-        double* p = (*var.coord)[var.nz * i];
+        ArrayAccessor p = (*var.coord)[var.nz * i];
         p[0] = outx[i][0];
         p[1] = outx[i][1];
     }
     // interpolate top side
     for (int i = 0; i < var.nx; ++i) {
-        const double* p = old_coord[var.nz * (i + 1) - 1];
+        ConstArrayAccessor p = old_coord[var.nz * (i + 1) - 1];
         inx[i][0] = p[0];
         inx[i][1] = p[1];
     }
     interpolate_uniform_curve(param, inx, outx, 0);
     for (int i = 0; i < var.nx; ++i) {
-        double* p = (*var.coord)[var.nz * (i + 1) - 1];
+        ArrayAccessor p = (*var.coord)[var.nz * (i + 1) - 1];
         p[0] = outx[i][0];
         p[1] = outx[i][1];
     }
@@ -2152,28 +2187,31 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
-    int_vec bdry_polygons[nbdrytypes];    
+    int_vec bdry_polygons[nbdrytypes];
     assemble_bdry_polygons(var, original_coord, original_connectivity,
                            bdry_polygons);
 
     // create a copy of original_coord and original_segment
-    array_t old_coord(original_coord);
-    conn_t old_connectivity(original_connectivity);
-    conn_t old_connectivity_from_1(original_connectivity);
-    segment_t old_segment(original_segment);
-    segment_t old_segment_from_1(original_segment);
-    segflag_t old_segflag(original_segflag);
+    double_vec qcoord_vec;
+    int_vec qconn_vec, qsegment_vec, qconn_from_1_vec, qsegment_from_1_vec, qsegflag_vec;
 
-    double *qcoord = old_coord.data();
-    int *qconn = old_connectivity.data();
-    int *qsegment = old_segment.data();
-    int *qconn_from_1 = old_connectivity_from_1.data();
-    int *qsegment_from_1 = old_segment_from_1.data();
-    int *qsegflag = old_segflag.data();
+    original_coord.pack_to(qcoord_vec);
+    original_connectivity.pack_to(qconn_vec);
+    original_segment.pack_to(qsegment_vec);
+    original_connectivity.pack_to(qconn_from_1_vec);
+    original_segment.pack_to(qsegment_from_1_vec);
+    original_segflag.pack_to(qsegflag_vec);
 
-    int old_nnode = old_coord.size();
-    int old_nelem = old_connectivity.size();
-    int old_nseg = old_segment.size();
+    double *qcoord = qcoord_vec.data();
+    int *qconn = qconn_vec.data();
+    int *qsegment = qsegment_vec.data();
+    int *qconn_from_1 = qconn_from_1_vec.data();
+    int *qsegment_from_1 = qsegment_from_1_vec.data();
+    int *qsegflag = qsegflag_vec.data();
+
+    int old_nnode = original_coord.size();
+    int old_nelem = original_connectivity.size();
+    int old_nseg = original_segment.size();
 
     // copy
     double_vec old_volume(*var.volume);
@@ -2406,28 +2444,31 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
-    int_vec bdry_polygons[nbdrytypes];    
+    int_vec bdry_polygons[nbdrytypes];
     assemble_bdry_polygons(var, original_coord, original_connectivity,
                            bdry_polygons);
 
     // create a copy of original_coord and original_segment
-    array_t old_coord(original_coord);
-    conn_t old_connectivity(original_connectivity);
-    conn_t old_connectivity_from_1(original_connectivity);
-    segment_t old_segment(original_segment);
-    segment_t old_segment_from_1(original_segment);
-    segflag_t old_segflag(original_segflag);
+    double_vec qcoord_vec;
+    int_vec qconn_vec, qsegment_vec, qconn_from_1_vec, qsegment_from_1_vec, qsegflag_vec;
 
-    double *qcoord = old_coord.data();
-    int *qconn = old_connectivity.data();
-    int *qsegment = old_segment.data();
-    int *qconn_from_1 = old_connectivity_from_1.data();
-    int *qsegment_from_1 = old_segment_from_1.data();
-    int *qsegflag = old_segflag.data();
+    original_coord.pack_to(qcoord_vec);
+    original_connectivity.pack_to(qconn_vec);
+    original_segment.pack_to(qsegment_vec);
+    original_connectivity.pack_to(qconn_from_1_vec);
+    original_segment.pack_to(qsegment_from_1_vec);
+    original_segflag.pack_to(qsegflag_vec);
 
-    int old_nnode = old_coord.size();
-    int old_nelem = old_connectivity.size();
-    int old_nseg = old_segment.size();
+    double *qcoord = qcoord_vec.data();
+    int *qconn = qconn_vec.data();
+    int *qsegment = qsegment_vec.data();
+    int *qconn_from_1 = qconn_from_1_vec.data();
+    int *qsegment_from_1 = qsegment_from_1_vec.data();
+    int *qsegflag = qsegflag_vec.data();
+
+    int old_nnode = original_coord.size();
+    int old_nelem = original_connectivity.size();
+    int old_nseg = original_segment.size();
 
     // copy
     double_vec old_volume(*var.volume);
@@ -2811,16 +2852,23 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing starts...\n";
 
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] remesh start: free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
+
     double_vec old_surface_area(var.surfinfo.etop);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
-        const double *coord[NODES_PER_FACET];
-        for (int j=0; j<NODES_PER_FACET; ++j)
-            coord[j] = (*var.coord)[(*var.connectivity_surface)[i][j]];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity_surface)[i]);
         old_surface_area[i] = compute_area_facet(coord);
     }
 
@@ -2828,7 +2876,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         double inv_volume = 1.0 / old_surface_area[i];
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
@@ -2885,6 +2933,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             std::exit(1);
         }        
 #endif
+        // Drain all async GPU work before freeing/reallocating temporary arrays.
+        // This gives CUDA a sync point to reclaim migrated managed-memory pages.
+        #pragma acc wait
+#ifdef ACC
+        {
+            size_t free_bytes, total_bytes;
+            knn_bvh_mem_info(&free_bytes, &total_bytes);
+            std::cout << "  [GPU mem] before reallocate_tmp: free="
+                      << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+        }
+#endif
         reallocate_tmp(param, var);
 
         if (param.mesh.meshing_elem_shape == 0) {
@@ -2899,7 +2958,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         create_boundary_facets(var);
 
         {
-            // std::cout << "    Interpolating fields.\n";
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
 
             // interpolating fields defined on elements
@@ -2918,17 +2976,29 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.support_arr;
         delete var.support_idx;
         create_support(var);
-        delete var.neighbor;
-        delete var.contact;
-        delete var.ctmp;
-        create_neighbor(var);
+        // delete var.neighbor;
+        // delete var.contact;
+        // delete var.ctmp;
+        // create_neighbor(var);
 
-        std::cout << "    Remapping markers.\n";
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
   
         // old_coord et al. are destroyed before exiting this block
     }
+
+    // Drain GPU queue before freeing old field arrays and reallocating new ones.
+    // Interpolation functions above may have launched async GPU work; syncing here
+    // gives CUDA a chance to reclaim managed-memory pages before new allocations.
+    #pragma acc wait
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] before reallocate_variables: free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
 
     // memory for new fields
     reallocate_variables(param, var);
@@ -2955,11 +3025,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
-        const double *coord[NODES_PER_FACET];
-        for (int j=0; j<NODES_PER_FACET; ++j)
-            coord[j] = (*var.coord)[(*var.connectivity_surface)[i][j]];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity_surface)[i]);
         surface_area[i] = compute_area_facet(coord);
     }
 
@@ -2967,7 +3035,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
@@ -2976,15 +3044,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e];
 
-    if(param.control.has_ATS)
+    if(param.control.use_global_velocity_scaling)
         var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+
+    #pragma acc wait
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("reset bounrdary condition");
@@ -2999,7 +3069,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, nbot)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<nbot; ++i) {
             int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;
@@ -3018,6 +3088,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     }
 
+    #pragma acc wait
+
+#ifdef ACC
+    {
+        size_t free_bytes, total_bytes;
+        knn_bvh_mem_info(&free_bytes, &total_bytes);
+        std::cout << "  [GPU mem] remesh end:   free="
+                  << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
+    }
+#endif
+
     std::cout << "  Remeshing finished.\n";
 
     var.nremesh += 1;
@@ -3026,5 +3107,3 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePop();
 #endif
 }
-
-

@@ -15,23 +15,20 @@ typedef Array2D<double,NODES_PER_ELEM> brc_t;
 
 
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
-                       const double_vec &source, double_vec &target)
+                       const double_vec &source, double_vec &target, int ntarget)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma acc serial async
-    int ntarget = target.size();
-
 #ifndef ACC
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
-        const int *conn = connectivity[e];
+        ConstConnAccessor conn = connectivity[e];
         double result = 0;
         for (int j=0; j<NODES_PER_ELEM; j++) {
             result += source[conn[j]] * brc[i][j];
@@ -45,23 +42,20 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 
 
 void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
-                       const array_t &source, array_t &target)
+                       const array_t &source, array_t &target, int ntarget)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma acc serial async
-    int ntarget = target.size();
-
 #ifndef ACC
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop async
+    #pragma acc parallel loop gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
-        const int *conn = connectivity[e];
+        ConstConnAccessor conn = connectivity[e];
         for (int d=0; d<NDIMS; d++) {
             double result = 0;
             for (int j=0; j<NODES_PER_ELEM; j++) {
@@ -100,60 +94,106 @@ void prepare_interpolation(const Param& param, const Variables &var,
 #endif
 
     NANOKDTree nano_kdtree(NDIMS, cloud);
-    KNN kdtree(param, old_coord, nano_kdtree);
-    neighbor_vec neighbors(var.nnode);
-
-    printf("    Finding knn for barycentric node interpolation...\n");
-    kdtree.search(*var.coord, neighbors, 1, 3.0);
+    KNN kdtree(param, old_coord, nano_kdtree, false);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 
-    #pragma omp parallel for default(none) schedule(guided) \
-        shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors)
-    for (int i=0; i<var.nnode; i++) {
-        double *q = (*var.coord)[i];
+    int max_el = 1;
+    int nodes_per_block_max = std::max(kdtree.max_batch_size(max_el), 1);
 
-        int nn = neighbors[i].idx;
-        double dd = neighbors[i].dist2;
+    int nodes_per_block = std::min(nodes_per_block_max, var.nnode);
+    int nblocks = (var.nnode + nodes_per_block - 1) / nodes_per_block;
 
-        // elements surrounding nn
-        const int_vec &nn_elem = old_support[nn];
+    {
+        char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+        char mem_str[32] = "";
+        size_t qm = KNN::query_mem_bytes(nodes_per_block, max_el);
+        if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+        printf("    Node:             knn: %10s pts (%s) for %11s q w/ %2d k%s",
+                format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                format_with_commas((unsigned long)var.nnode).c_str(), max_el, mem_str
+                ); fflush(stdout);
+
+        if (nblocks > 1) {
+            printf("/blk (%d x %sq)", nblocks,
+                    format_with_commas((unsigned long)nodes_per_block).c_str());
+            fflush(stdout);
+        } else {
+            printf("\n");
+        }
+    }
+
+    array_t block_queries;
+
+    for (int b = 0; b < nblocks; b++) {
+        int start = b * nodes_per_block;
+        int end = std::min((b + 1) * nodes_per_block, var.nnode);
+        if (start >= end) continue;
+
+        if (nblocks > 1) {printf(" %d", b+1); fflush(stdout);}
+        
+        block_queries.resize(end - start);
+        #pragma omp parallel for default(none) shared(var, block_queries, start, end)
+        for (int i = start; i < end; i++) {
+            ArrayAccessor q_dst = block_queries[i - start];
+            ConstArrayAccessor q_src = (*var.coord)[i];
+            for (int d = 0; d < NDIMS; d++) {
+                q_dst[d] = q_src[d];
+            }
+        }
+
+        neighbor* neighbors = kdtree.search(block_queries, (end - start), max_el);
+
+        #pragma omp parallel for default(none) schedule(guided) \
+            shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors, start, end)
+        for (int i = start; i < end; i++) {
+            
+            int local_i = i - start;
+            
+            ConstArrayAccessor q = (*var.coord)[i];
+
+            int nn = neighbors[local_i].idx;
+            double dd = neighbors[local_i].dist2;
+
+            // elements surrounding nn
+            const int_vec &nn_elem = old_support[nn];
 
         // std::cout << i << " ";
         // print(std::cout, q, NDIMS);
         // std::cout << " " << nn << " " << dd[0] << '\n';
 
-        double r[NDIMS];
-        int e;
+            double r[NDIMS];
+            int e;
 
-        // shortcut: q is exactly the same as nn
-        if (dd == 0) {
-            e = nn_elem[0];
-            bary.transform(q, e, r);
-            // r should be a permutation of [1, 0, 0]
-            // normalize r to remove round-off error
-            for (int d=0; d<NDIMS; d++)
-                r[d] = (r[d] > 0.9) ? 1 : 0;
+            // shortcut: q is exactly the same as nn
+            if (dd == 0) {
+                e = nn_elem[0];
+                bary.transform(q, e, r);
+                // r should be a permutation of [1, 0, 0]
+                // normalize r to remove round-off error
+                for (int d=0; d<NDIMS; d++)
+                    r[d] = (r[d] > 0.9) ? 1 : 0;
 
-            goto found;
-        }
+                goto found;
+            }
 
-        // loop over (old) elements surrounding nn to find
-        // the element that is enclosing q
-        for (std::size_t j=0; j<nn_elem.size(); j++) {
-            e = nn_elem[j];
-            bary.transform(q, e, r);
-            if (bary.is_inside(r)) {
+            // loop over (old) elements surrounding nn to find
+            // the element that is enclosing q
+            for (std::size_t j=0; j<nn_elem.size(); j++) {
+                e = nn_elem[j];
+                bary.transform(q, e, r);
+                if (bary.is_inside(r)) {
                 // std::cout << e << " ";
                 // print(std::cout, r, NDIMS);
                 // std::cout << '\n';
-                goto found;
+                    goto found;
+                }
             }
-        }
 
-        /* not_found */
+            /* not_found */
 
         {
             /* Situation: q is in the upper element, but its nearest point is o!
@@ -166,78 +206,81 @@ void prepare_interpolation(const Param& param, const Variables &var,
              */
 
             // this array contains the elements that have been searched so far
-            const int MAX_SEARCH = 256;
-            int searched[MAX_SEARCH];
-            int n_searched = 0;
+                const int MAX_SEARCH = 256;
+                int searched[MAX_SEARCH];
+                int n_searched = 0;
 
-            // Initialize searched with nn_elem
-            for (std::size_t k=0; k<nn_elem.size(); ++k) {
-                if (n_searched < MAX_SEARCH) {
-                    searched[n_searched++] = nn_elem[k];
+                // Initialize searched with nn_elem
+                for (std::size_t k=0; k<nn_elem.size(); ++k) {
+                    if (n_searched < MAX_SEARCH) {
+                        searched[n_searched++] = nn_elem[k];
+                    }
                 }
-            }
 
-            // search through elements that are neighbors of nn_elem
-            for (std::size_t j=0; j<nn_elem.size(); j++) {
-                int ee = nn_elem[j];
-                const int *conn = old_connectivity[ee];
-                for (int m=0; m<NODES_PER_ELEM; m++) {
-                    // np is a node close to q
-                    int np = conn[m];
-                    const int_vec &np_elem = old_support[np];
-                    for (std::size_t jj=0; jj<np_elem.size(); jj++) {
-                        e = np_elem[jj];
+                // search through elements that are neighbors of nn_elem
+                for (std::size_t j=0; j<nn_elem.size(); j++) {
+                    int ee = nn_elem[j];
+                    ConstConnAccessor conn = old_connectivity[ee];
+                    for (int m=0; m<NODES_PER_ELEM; m++) {
+                        // np is a node close to q
+                        int np = conn[m];
+                        const int_vec &np_elem = old_support[np];
+                        for (std::size_t jj=0; jj<np_elem.size(); jj++) {
+                            e = np_elem[jj];
 
-                        // Check if e is already in searched
-                        bool found_in_searched = false;
-                        for (int k=0; k<n_searched; ++k) {
-                            if (searched[k] == e) {
-                                found_in_searched = true;
-                                break;
+                            // Check if e is already in searched
+                            bool found_in_searched = false;
+                            for (int k=0; k<n_searched; ++k) {
+                                if (searched[k] == e) {
+                                    found_in_searched = true;
+                                    break;
+                                }
                             }
-                        }
 
-                        if (found_in_searched) {
+                            if (found_in_searched) {
                             // this element has been searched before
-                            continue;
-                        }
+                                continue;
+                            }
 
-                        if (n_searched < MAX_SEARCH) {
-                            searched[n_searched++] = e;
-                        } else {
-                            printf("Error: barycentric_node_interpolation prepare_interpolation: ");
-                            printf("MAX_SEARCH (%d) exceeded for node %d.\n", MAX_SEARCH, i);
-                            std::exit(11);
-                        }
+                            if (n_searched < MAX_SEARCH) {
+                                searched[n_searched++] = e;
+                            } else {
+                                printf("Error: barycentric_node_interpolation prepare_interpolation: ");
+                                printf("MAX_SEARCH (%d) exceeded for node %d.\n", MAX_SEARCH, i);
+                                std::exit(11);
+                            }
 
-                        bary.transform(q, e, r);
+                            bary.transform(q, e, r);
                         // std::cout << e << " ";
                         // print(std::cout, r, NDIMS);
                         // std::cout << " ... \n";
-                        if (bary.is_inside(r)) {
-                            goto found;
+                            if (bary.is_inside(r)) {
+                                goto found;
+                            }
                         }
                     }
                 }
             }
-        }
-        {
+            {
             //std::cout << "New node is outside of the old domain. \n";
 
-            // Situation: q must be outside the old domain
-            // using nearest old_coord instead
-            e = nn_elem[0];
-            bary.transform(old_coord[nn], e, r);
+                // Situation: q must be outside the old domain
+                // using nearest old_coord instead
+                e = nn_elem[0];
+                bary.transform(old_coord[nn], e, r);
+            }
+        found:
+            el[i] = e;
+            double sum = 0;
+            for (int d=0; d<NDIMS; d++) {
+                brc[i][d] = r[d];
+                sum += r[d];
+            }
+            brc[i][NODES_PER_ELEM-1] = 1 - sum;
         }
-    found:
-        el[i] = e;
-        double sum = 0;
-        for (int d=0; d<NDIMS; d++) {
-            brc[i][d] = r[d];
-            sum += r[d];
-        }
-        brc[i][NODES_PER_ELEM-1] = 1 - sum;
     }
+
+    if (nblocks > 1) printf("\n");
 
     // print(std::cout, *var.coord);
     // std::cout << '\n';
@@ -264,27 +307,27 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     brc_t brc(var.nnode);
     prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
 
-    std::cout << "    Interpolating fields...\n";
+    const int n = var.nnode;
 
-    double_vec *new_temperature = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature);
+    double_vec *new_temperature = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
 
-    double_vec *new_ppressure = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure);
+    double_vec *new_ppressure = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.ppressure, *new_ppressure, n);
 
-    double_vec *new_dppressure = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure);
+    double_vec *new_dppressure = new double_vec(n);
+    interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure, n);
 
     double_vec *new_init_elem_size_n = new double_vec(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n);
-
-    array_t *new_vel = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel);
-
-    array_t *new_coord0 = new array_t(var.nnode);
-    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0);
+    interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n, n);
 
     #pragma acc wait
+
+    array_t *new_vel = new array_t(n);
+    interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel, n);
+
+    array_t *new_coord0 = new array_t(n);
+    interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -297,6 +340,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.init_elem_size_n;
     var.init_elem_size_n = new_init_elem_size_n;
+
+    #pragma acc wait
 
     delete var.vel;
     var.vel = new_vel;
@@ -322,5 +367,5 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
     brc_t brc(var.nnode);
     prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
 
-    interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature);
+    interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
 }

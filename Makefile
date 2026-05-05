@@ -366,10 +366,12 @@ endif
 
 SRCS =	\
 	barycentric-fn.cxx \
+	ats_output_scheduler.cxx \
 	brc-interpolation.cxx \
 	bc.cxx \
 	binaryio.cxx \
 	dynearthsol.cxx \
+	earthquake_state.cxx \
 	fields.cxx \
 	geometry.cxx \
 	ic.cxx \
@@ -377,11 +379,13 @@ SRCS =	\
 	input.cxx \
 	matprops.cxx \
 	mesh.cxx \
+	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
 	phasechanges.cxx \
 	remeshing.cxx \
 	rheology.cxx \
+	runtime_info.cxx \
 	markerset.cxx \
 	knn.cxx
 
@@ -391,9 +395,12 @@ endif
 
 INCS =	\
 	array2d.hpp \
+	ats_output_scheduler.hpp \
 	barycentric-fn.hpp \
 	binaryio.hpp \
 	constants.hpp \
+	earthquake_state.hpp \
+	monitor.hpp \
 	parameters.hpp \
 	matprops.hpp \
 	sortindex.hpp \
@@ -460,11 +467,22 @@ CXXFLAGS += -I$(ANN_DIR)/include
 GOSPL_DIR = gospl_driver
 CXXFLAGS += -I$(GOSPL_DIR)
 
+KNN_BVH_DIR = knn-bvh
+ifeq ($(openacc), 1)
+	CXXFLAGS += -I$(KNN_BVH_DIR)/include
+	KNN_BVH_LIB = $(KNN_BVH_DIR)/lib/libknn_bvh.$(ndims)d.a
+	LDFLAGS += $(KNN_BVH_LIB)
+endif
+
+# Enable Array2D structure of Array
+CXXFLAGS += -DSOA
+
 ## Action
 
-.PHONY: all clean take-snapshot
+.PHONY: all clean take-snapshot prepare build
 
-all: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
+all: prepare
+	$(MAKE) build
 
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
@@ -476,10 +494,29 @@ install-gospl-wrapper:
 	@chmod +x dynearthsol-gospl
 endif
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a
+prepare:
+ifeq ($(openacc), 1)
+	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
+			git submodule update --init --recursive $(KNN_BVH_DIR); \
+		fi; \
+	elif [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
+		:; \
+	else \
+		echo "Error: OpenACC build requires $(KNN_BVH_DIR), but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please initialize/provide $(KNN_BVH_DIR) before building with openacc=1."; \
+		exit 1; \
+	fi
+endif
+
+build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
+
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
+
 ifeq ($(use_gospl), 1)
 	@+$(MAKE) install-gospl-wrapper
 	@echo ""
@@ -552,6 +589,9 @@ endif
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
+$(KNN_BVH_LIB):
+	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
+
 $(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
@@ -589,9 +629,9 @@ ifeq ($(use_gospl), 1)
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 	@+$(MAKE) -C $(ANN_DIR) realclean
+ifeq ($(openacc), 1)
+	@+$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims)
+endif
 
 clean:
 	@rm -f $(OBJS) $(EXE)
-ifeq ($(use_gospl), 1)
-	@rm -f dynearthsol-gospl
-endif

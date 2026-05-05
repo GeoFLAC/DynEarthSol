@@ -18,7 +18,7 @@ void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
 void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                       segment_t &segment, regattr_t *regattr);
 void create_boundary_flags2(uint_vec &bcflag, int nseg,
-                            const int *psegment, const int *psegflag);
+                            const segment_t& segment, const segflag_t& segflag);
 void create_boundary_flags(Variables& var);
 void create_boundary_nodes(Variables& var);
 void create_boundary_facets(Variables& var);

@@ -38,14 +38,25 @@ namespace {
             elem_center(*var.coord, *var.connectivity, queries);
         }
 
-        neighbor_vec neighbors(nqueries);
+        {
+            printf(is_surface ? "    Top surface:      "
+                              : "    Element:          ");  fflush(stdout);
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(nqueries, 1);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
 
-        kdtree.search(queries, neighbors, 1, 3.);
+            printf("knn: %10s pts (%s) for %11s q w/  1 k%s\n",
+                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be, 
+                    format_with_commas((unsigned long)nqueries).c_str(), mem_str);
+        }
+
+        neighbor* neighbors = kdtree.search(queries, nqueries, 1, false);
 
 #ifndef ACC
         #pragma omp parallel for default(none) shared(neighbors,idx,is_changed,nqueries,eps)
 #endif
-        #pragma acc parallel loop
+        #pragma acc parallel loop gang vector deviceptr(neighbors)
         for (int i=0; i<nqueries; i++) {
             idx[i] = int(neighbors[i].idx);
             is_changed[i] = (neighbors[i].dist2 < eps) ? 0 : 1;
@@ -70,8 +81,8 @@ namespace {
                               int_vec &is_changed,
                               KNN &kdtree,
                               int old_nelem,
-                              int_vec &elems_vec,
-                              double_vec &ratios_vec,
+                              nn_t &elems_vec,
+                              ratio_t &ratios_vec,
                               double_vec &empty_vec,
                               int_vec &changed,
                               bool is_surface)
@@ -91,9 +102,18 @@ namespace {
 
         int nchanged = changed.size();
 
-        elems_vec.resize(nchanged*32,-1);
-        ratios_vec.resize(nchanged*32);
-        empty_vec.resize(nchanged,0);
+        elems_vec.resize(nchanged, -1);
+        ratios_vec.resize(nchanged, false);
+        empty_vec.resize(nchanged, 0);
+
+        printf(is_surface ? "    Top surface ACM:  "
+                          : "    Element ACM:      ");  fflush(stdout);
+
+        if (!nchanged) {
+            // no changed element, return directly
+            printf("no changes\n");
+            return;
+        }
 
         double_vec2D sample_eta;
         if (is_surface) {
@@ -139,16 +159,34 @@ namespace {
         }
         int nsample = sample_eta.size();
 
-        // number of neighbors exceeding computational limit
-        int queries_max = 1024 * 1024 * 16;
+        int queries_max = std::max(kdtree.max_batch_size(max_el), nsample);
+        int elems_per_block_max = queries_max / nsample;
 
-        neighbor_vec neighbors;
-
-        int elems_per_block = queries_max / nsample;
-        if (elems_per_block < 1) elems_per_block = 1;
+        int elems_per_block = std::min(elems_per_block_max, nchanged);
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
-        printf("    Using %d blocks, elements per block: %d, total queries: %lu\n",
-               nblocks, elems_per_block, (unsigned long)nchanged * nsample);
+
+        {
+            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
+            int nq_nn = is_surface ? (int)(*var.bfacets[iboundz1]).size() : var.nelem;
+            char mem_str[32] = "";
+            size_t qm = KNN::query_mem_bytes(elems_per_block * nsample, max_el);
+            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
+
+            printf("knn: %10s pts (%s) for %11s q w/ %2d k%s",
+                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
+                    format_with_commas((unsigned long)nchanged * nsample).c_str(),
+                    max_el, mem_str
+                    ); fflush(stdout);
+
+            if (nblocks > 1) {
+                printf("/blk (%d x %sq|%se)", nblocks,
+                        format_with_commas((unsigned long)elems_per_block * nsample).c_str(),
+                        format_with_commas((unsigned long)elems_per_block).c_str());
+                fflush(stdout);
+            } else {
+                printf(" (%s elem)\n", format_with_commas((unsigned long)nchanged).c_str());
+            }
+        }
 
         array_t queries(elems_per_block*nsample);
 
@@ -167,41 +205,39 @@ namespace {
             int end = std::min((b + 1) * elems_per_block, nchanged);
             if (start >= end) continue;
 
-            printf("      Block %3d: element %7d to %7d", b, start, end-1);
+            if (nblocks > 1) {printf(" %d", b+1); fflush(stdout);}
 
-            queries.resize((end-start) * nsample);
+            queries.resize((end - start) * nsample);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, ptr_conn, nnode_cell, start, end, \
                 sample_eta, nsample, queries, changed)
 #endif
-            #pragma acc parallel loop
+            #pragma acc parallel loop gang vector
             for (int i=start; i<end; i++) {
                 int e = changed[i];
                 int query_start = i - start;
-                const int* conn = (*ptr_conn)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*ptr_conn)[e]);
 
                 for (int j=0; j<nsample; j++) {
-                    double *x = queries[query_start*nsample + j];
+                    ArrayAccessor x = queries[query_start*nsample + j];
                     for (int d=0; d<NDIMS; d++) {
                         x[d] = 0;
                         for (int n=0; n<nnode_cell; n++)
-                            x[d] += (*var.coord)[ conn[n] ][d] * sample_eta[j][n];
+                            x[d] += coord[n][d] * sample_eta[j][n];
                     }
                 }
             }
 
-            neighbors.resize((end-start) * nsample * max_el);
-
             // find the nearest point nn in old_center
-            kdtree.search(queries, neighbors, max_el, 3.);
+            neighbor* neighbors = kdtree.search(queries, (end-start)*nsample, max_el, false);
 
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var, bary, is_changed, \
                 elems_vec, ratios_vec, empty_vec, sample_eta, \
                 nsample, nchanged, changed, queries, neighbors, start, end) firstprivate(max_el)
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector deviceptr(neighbors)
             for (int i=start; i<end; i++) {
                 int query_start = (i - start) * nsample;
                 int e = changed[i];
@@ -215,15 +251,15 @@ namespace {
                 *      volume weighting for the mapping.
                 */
                 for (int j=0; j<nsample; j++) {
-                    double *x = queries.data() + (query_start + j) * NDIMS;
-                    neighbor *nn = neighbors.data() + (query_start + j) * max_el;
-
                     // find the old element that is enclosing x
                     double r[NDIMS];
                     int old_e;
                     for (int jj=0; jj<max_el; jj++) {
-                        old_e = nn[jj].idx;
-                        bary.transform(x, old_e, r);
+                        old_e = neighbors[(query_start + j) * max_el + jj].idx;
+
+                        if (old_e < 0) break; // occurs when cuda knn cannot find enough neighbors
+
+                        bary.transform(queries[query_start + j], old_e, r);
                         if (bary.is_inside(r)) {
                             bool found = false;
                             for (int ei = 0; ei < elem_size; ++ei) {
@@ -276,11 +312,15 @@ namespace {
 
                 const double inv = 1.0 / total_count;
                 for (int k=0; k<elem_size; ++k) {
-                    elems_vec[i*32+k] = elem_keys[k];
-                    ratios_vec[i*32+k] = elem_count_buf[k] * inv;
+                    elems_vec[i][k] = elem_keys[k];
+                    ratios_vec[i][k] = elem_count_buf[k] * inv;
                 }
             }
         } // end of for (int b=0; b<nblocks; b++)
+
+        #pragma acc wait
+        
+        if (nblocks > 1) printf("\n");
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -295,8 +335,8 @@ namespace {
                                int_vec &idx,
                                int_vec &is_changed,
                                int_vec &idx_changed,
-                               int_vec &elems_vec,
-                               double_vec &ratios_vec,
+                               nn_t &elems_vec,
+                               ratio_t &ratios_vec,
                                double_vec &empty_vec,
                                bool is_surface)
     {
@@ -326,15 +366,14 @@ namespace {
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree);
+        KNN kdtree(param, points, nano_kdtree, false);
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
-        printf("    Finding nearest neighbor...\n");
+
         find_nearest_neighbor(var, kdtree, idx, is_changed, idx_changed, changed, is_surface);
 
-        printf("    Finding acm element ratios...\n");
         find_acm_elem_ratios(var, bary, is_changed, kdtree, old_npoint, elems_vec, ratios_vec, empty_vec, changed, is_surface);
 
 #ifdef NPROF_DETAIL
@@ -355,7 +394,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -379,7 +418,7 @@ namespace {
         #pragma omp parallel for default(none) shared(target, is_changed, \
             idx_changed, empty_vec, value, ntarget, eps)
 #endif
-        #pragma acc parallel loop async
+        #pragma acc parallel loop gang vector async
         for (int i=0; i<ntarget; i++) {
             if (is_changed[i] != 0) {
                 int n = idx_changed[i];
@@ -396,8 +435,8 @@ namespace {
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
                       const int_vec &idx_changed,
-                      const int_vec &elems_vec,
-                      const double_vec &ratios_vec,
+                      const nn_t &elems_vec,
+                      const ratio_t &ratios_vec,
                       const double_vec &source,
                       double_vec &target,
                       int ntarget)
@@ -414,7 +453,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 target[i] = source[n];
@@ -423,15 +462,15 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
 
                     target[i] = 0;
                     for (int j=0; j<32; j++) {
-                        if (elems_vec[n*32+j] < 0) break;
-                        target[i] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ];
+                        if (elems_vec[n][j] < 0) break;
+                        target[i] += ratios_vec[n][j] * source[ elems_vec[n][j] ];
                     }
                 }
             }
@@ -445,8 +484,8 @@ namespace {
     void inject_field(const int_vec &idx,
                       const int_vec &is_changed,
                       const int_vec &idx_changed,
-                      const int_vec &elems_vec,
-                      const double_vec &ratios_vec,
+                      const nn_t &elems_vec,
+                      const ratio_t &ratios_vec,
                       const tensor_t &source,
                       tensor_t &target,
                       int ntarget)
@@ -463,7 +502,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 int n = idx[i];
                 for (int d=0; d<NSTR; d++) {
@@ -474,7 +513,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop async
+            #pragma acc parallel loop gang vector async
             for (int i=0; i<ntarget; i++) {
                 if (is_changed[i]>0) {
                     int n = idx_changed[i];
@@ -482,8 +521,8 @@ namespace {
                 for (int d=0; d<NSTR; d++) {
                     target[i][d] = 0;
                     for (int j=0; j<32; j++) {
-                        if (elems_vec[n*32+j] < 0) break;
-                        target[i][d] += ratios_vec[n*32+j] * source[ elems_vec[n*32+j] ][d];
+                        if (elems_vec[n][j] < 0) break;
+                        target[i][d] += ratios_vec[n][j] * source[ elems_vec[n][j] ][d];
                     }
                 }
                 }
@@ -499,8 +538,8 @@ namespace {
                                     const int_vec &idx,
                                     const int_vec &is_changed,
                                     const int_vec &idx_changed,
-                                    const int_vec &elems_vec,
-                                    const double_vec &ratios_vec,
+                                    const nn_t &elems_vec,
+                                    const ratio_t &ratios_vec,
                                     const double_vec &empty_vec,
                                     bool is_surface = false)
     {
@@ -529,6 +568,8 @@ namespace {
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
+            #pragma acc wait
+
             tensor_t *new_stress = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
@@ -537,11 +578,6 @@ namespace {
 
             double_vec *new_old_mean_stress = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
-
-            double_vec *new_radiogenic_source = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
-
-            #pragma acc wait
 
             delete var.plstrain;
             var.plstrain = new_plstrain;
@@ -552,6 +588,17 @@ namespace {
             delete var.strain;
             var.strain = new_strain;
 
+            #pragma acc wait
+
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
+
+            double_vec *new_dyn_fric_coeff = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
+
+            double_vec *new_state_variable = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
+
             delete var.stress;
             var.stress = new_stress;
 
@@ -561,8 +608,16 @@ namespace {
             delete var.old_mean_stress;
             var.old_mean_stress = new_old_mean_stress;
 
+            #pragma acc wait
+
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
+
+            delete var.dyn_fric_coeff;
+            var.dyn_fric_coeff = new_dyn_fric_coeff;
+
+            delete var.state_variable;
+            var.state_variable = new_state_variable;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
@@ -598,20 +653,15 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
 
         int_vec idx(nqueries); // nearest element
         int_vec is_changed(nqueries); // is the element changed during remeshing?
-        int_vec idx_changed(nqueries); 
+        int_vec idx_changed(nqueries);
 
-        int_vec elems_vec;
-        double_vec ratios_vec;
+        nn_t elems_vec;
+        ratio_t ratios_vec;
         double_vec empty_vec; // radio between old element and boundary empty
-        
+
         prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
-        if (is_surface) {
-            printf("  Interpolating surface fields...\n");
-        } else {
-            printf("  Interpolating element fields...\n");
-        }
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 

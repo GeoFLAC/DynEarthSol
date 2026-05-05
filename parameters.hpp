@@ -15,6 +15,9 @@
 
 #include "constants.hpp"
 #include "array2d.hpp"
+#ifdef ACC
+#include "knn_bvh.hpp"
+#endif
 
 // Forward declarations
 #ifdef HAS_GOSPL_CPP_INTERFACE
@@ -48,14 +51,44 @@ typedef Array2D<int,1> segflag_t;
 typedef Array2D<int,NODES_PER_CELL> regular_t;
 typedef nanoflann::KNNResultSet<double> KNNResultSet;
 
+typedef array_t::Accessor ArrayAccessor;
+typedef tensor_t::Accessor TensorAccessor;
+typedef shapefn::Accessor ShapefnAccessor;
+// typedef regattr_t::Accessor RegattrAccessor;
+typedef elem_cache::Accessor ElemCacheAccessor;
+
+typedef conn_t::Accessor ConnAccessor;
+typedef segment_t::Accessor SegmentAccessor;
+// typedef segflag_t::Accessor SegflagAccessor;
+// typedef regular_t::Accessor RegularAccessor;
+
+typedef array_t::ConstAccessor ConstArrayAccessor;
+typedef tensor_t::ConstAccessor ConstTensorAccessor;
+typedef shapefn::ConstAccessor ConstShapefnAccessor;
+// typedef regattr_t::ConstAccessor ConstRegattrAccessor;
+typedef elem_cache::ConstAccessor ConstElemCacheAccessor;
+
+typedef conn_t::ConstAccessor ConstConnAccessor;
+typedef segment_t::ConstAccessor ConstSegmentAccessor;
+// typedef segflag_t::ConstAccessor ConstSegflagAccessor;
+typedef regular_t::ConstAccessor ConstRegularAccessor;
+
+typedef array_t::ConstIndirectAccessor ConstArrayIndirectAccessor;
+// typedef tensor_t::ConstIndirectAccessor ConstTensorIndirectAccessor;
+// typedef shapefn::ConstIndirectAccessor ConstShapefnIndirectAccessor;
+// typedef regattr_t::ConstIndirectAccessor ConstRegattrIndirectAccessor;
+// typedef elem_cache::ConstIndirectAccessor ConstElemCacheIndirectAccessor;
+
 class Output;
 
+#ifndef ACC
 struct neighbor {
     int idx;
     double dist2;
     neighbor() : idx(-1), dist2(0.0) {}
     neighbor(int e, double a) : idx(e), dist2(a) {}
 };
+#endif
 
 // Update markers in surface elements
 struct MarkerUpdate {
@@ -81,7 +114,11 @@ struct AppendMarkerData {
     AppendMarkerData() : elem(-1), mattype(-1), time(0.0), depth(0.0), distance(0.0), slope(0.0), genesis(0) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = 0.0;
     }
-    AppendMarkerData(const double e[NODES_PER_ELEM], int el, int mt, double t, double d, double dis, double s, int g)
+    AppendMarkerData(ConstShapefnAccessor e, int el, int mt, double t, double d, double dis, double s, int g)
+        : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s), genesis(g) {
+        for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
+    }
+    AppendMarkerData(ConstElemCacheAccessor e, int el, int mt, double t, double d, double dis, double s, int g)
         : elem(el), mattype(mt), time(t), depth(d), distance(dis), slope(s), genesis(g) {
         for (int i = 0; i < NODES_PER_ELEM; i++) eta[i] = e[i];
     }
@@ -123,6 +160,10 @@ struct Sim {
     bool has_initial_checkpoint;
     bool has_output_during_remeshing;
     bool has_marker_output;
+    int earthquake_output_step_interval;
+    bool seismic_moment_calculate_output;
+    double earthquake_start_factor;
+    double earthquake_end_factor;
 
     std::string modelname;
     std::string restarting_from_modelname;
@@ -212,7 +253,7 @@ struct Control {
     double PT_relative_tolerance;
 
     bool has_moving_mesh;
-    bool has_ATS;
+    bool use_global_velocity_scaling;
 
 };
 
@@ -407,6 +448,8 @@ struct Mat {
     double_vec direct_a;
     double_vec evolution_b;
     double_vec characteristic_velocity;
+    double_vec characteristic_distance;
+    int state_var_model;
     // double_vec static_friction_coefficient;
 
 };
@@ -431,6 +474,50 @@ struct Debug {
 //    bool has_two_layers_for;
 };
 
+enum MonitorRebindMode {
+    monitor_rebind_initial_coord = 0,
+    monitor_rebind_pre_remesh_coord = 1
+};
+
+struct Monitor {
+    bool enabled;
+    int step_interval;
+    int num_points;
+
+    std::string points_unit;
+    double points_scale_to_m;
+    int remesh_rebind_mode;
+
+    double_vec points_x;
+    double_vec points_y;
+    double_vec points_z;
+
+    std::string output_prefix;
+    bool write_header;
+
+    bool output_coord;
+    bool output_velocity;
+    bool output_force;
+    bool output_temperature;
+    bool output_pore_pressure;
+    bool output_bcflag;
+
+    bool output_stress;
+    bool output_strain;
+    bool output_strain_rate;
+    bool output_plastic_strain;
+    bool output_plastic_strain_rate;
+
+    bool output_radiogenic_source;
+    bool output_density;
+    bool output_mesh_quality;
+    bool output_viscosity;
+    bool output_material;
+
+    bool output_dynamic_friction;
+    bool output_state_variable;
+};
+
 struct PointCloud {
     const array_t &data;
 
@@ -451,6 +538,7 @@ using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adap
 
 struct Param {
     Sim sim;
+    Monitor monitor;
     Mesh mesh;
     Control control;
     BC bc;
@@ -574,7 +662,7 @@ struct Variables {
     double stress_bc_values[nbdrytypes];
     double vbc_val_z1_loading_period;
 
-    std::map<std::pair<int,int>, double*> edge_vectors;
+    std::map<std::pair<int,int>, double_vec> edge_vectors;
     double_vec edge_vec;
     int_vec edge_vec_idx;
     double_vec vbc_vertical_div_x0;
@@ -583,7 +671,6 @@ struct Variables {
     double_vec vbc_vertical_ratio_x1;
 
     int_vec *top_elems;
-    int_map arctop_elems;
     int ntop_elems;
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;
@@ -613,6 +700,10 @@ struct Variables {
     double_vec *dppressure; // delta pore pressure
     double_vec *dppressure_zero; // delta pore pressure
     double_vec *fluid_source; // injection and pumping of pore water
+
+    // For rate-and-state friction
+    double_vec *dyn_fric_coeff;
+    double_vec *state_variable;
     
     // For surface processes
     SurfaceInfo surfinfo;

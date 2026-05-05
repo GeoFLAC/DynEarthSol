@@ -215,11 +215,12 @@ void initial_stress_state(const Param &param, const Variables &var,
     double rho = var.mat->rho(0);
     double ks = var.mat->bulkm(0);
 
+    #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            zcenter += (*var.coord)[conn[i]][NDIMS-1];
+            zcenter += coord[i][NDIMS-1];
         }
         zcenter /= NODES_PER_ELEM;
 
@@ -265,10 +266,10 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
     double loading_zz = 0.0;
 
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            zcenter += (*var.coord)[conn[i]][NDIMS-1];
+            zcenter += coord[i][NDIMS-1];
         }
         zcenter /= NODES_PER_ELEM;
 
@@ -354,7 +355,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
     // Loop over all nodes
     for (int i = 0; i < var.nnode; ++i) {
         // Get the z-coordinate (depth) of the current node
-        const double *coord = (*var.coord)[i];
+        ConstArrayAccessor coord = (*var.coord)[i];
         double z = coord[NDIMS - 1];
 
         // Calculate hydrostatic pressure at the node: p = rho * g * z 
@@ -464,13 +465,14 @@ void initial_weak_zone(const Param &param, const Variables &var,
         std::exit(1);
     }
 
+    #pragma acc parallel loop gang vector
     for (int e=0; e<var.nelem; ++e) {
-        const int *conn = (*var.connectivity)[e];
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         // the coordinate of the center of this element
         double center[NDIMS] = {0};
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             for (int d=0; d<NDIMS; ++d) {
-                center[d] += (*var.coord)[conn[i]][d];
+                center[d] += coord[i][d];
             }
         }
         for (int d=0; d<NDIMS; ++d) {
@@ -486,6 +488,73 @@ void initial_weak_zone(const Param &param, const Variables &var,
 
     delete weakzone;
     delete weakvalue;
+}
+
+void initial_friction_coeff(const Param &param, const Variables &var,
+                            double_vec &friction_coeff)
+{
+    const auto get_param_value = [](const double_vec& values, int m) -> double {
+        if (values.empty()) return 0.0;
+        if (values.size() == 1) return values[0];
+        const int idx = std::min<int>(m, static_cast<int>(values.size()) - 1);
+        return values[idx];
+    };
+
+    for (int e = 0; e < var.nelem; ++e) {
+        double friction_angle_sum = 0.0;
+        int nsum = 0;
+        const int_vec& mk = (*var.elemmarkers)[e];
+        for (int m = 0; m < param.mat.nmat; ++m) {
+            const int k = mk[m];
+            if (k == 0) continue;
+            friction_angle_sum += get_param_value(param.mat.friction_angle0, m) * k;
+            nsum += k;
+        }
+
+        double avg_angle = 0.0;
+        if (nsum > 0) {
+            avg_angle = friction_angle_sum / nsum;
+        }
+        friction_coeff[e] = std::tan(DEG2RAD * avg_angle);
+    }
+}
+
+void initial_state_variable(const Param &param, const Variables &var,
+                            double_vec &state_variable)
+{
+    const auto get_param_value = [](const double_vec& values, int m) -> double {
+        if (values.empty()) return 0.0;
+        if (values.size() == 1) return values[0];
+        const int idx = std::min<int>(m, static_cast<int>(values.size()) - 1);
+        return values[idx];
+    };
+
+    for (int e = 0; e < var.nelem; ++e) {
+        double c_sum = 0.0;
+        double d_sum = 0.0;
+        int nsum = 0;
+        const int_vec& mk = (*var.elemmarkers)[e];
+        for (int m = 0; m < param.mat.nmat; ++m) {
+            const int k = mk[m];
+            if (k == 0) continue;
+            c_sum += get_param_value(param.mat.characteristic_velocity, m) * k;
+            d_sum += get_param_value(param.mat.characteristic_distance, m) * k;
+            nsum += k;
+        }
+
+        if (nsum == 0) {
+            state_variable[e] = 1e9;
+            continue;
+        }
+
+        const double c_avg = c_sum / nsum;
+        const double d_avg = d_sum / nsum;
+        if (c_avg <= 0.0) {
+            state_variable[e] = 1e9;
+        } else {
+            state_variable[e] = d_avg / c_avg;
+        }
+    }
 }
 
 
@@ -514,7 +583,7 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
     }
 
     for (int n=0;n<var.nnode;n++) {
-        const double *p = (*var.coord)[n];
+        ConstArrayAccessor p = (*var.coord)[n];
         const double z = -p[NDIMS-1];
         const double zPotT = param.bc.mantle_temperature * exp(param.control.gravity * z * 4e-8);
 
@@ -562,12 +631,12 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
 
     for (int m=0; m<ms.get_nmarkers(); ++m) {
         int e = ms.get_elem(m);
-        const double* eta = ms.get_eta(m);
+        ConstShapefnAccessor eta = ms.get_eta(m);
         int current_mt = ms.get_mattype(m);
-        const int *conn = (*var.connectivity)[e];
+        ConstConnAccessor conn = (*var.connectivity)[e];
         double t = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i)
-            t += in_asth[conn[i]]*eta[i];
+            t += in_asth[conn[i]] * eta[i];
 
         if (t >= 0.5 && current_mt != param.mat.mattype_asthenosphere) {
             ms.set_mattype(m, param.mat.mattype_asthenosphere);
@@ -725,10 +794,10 @@ void initial_temperature(const Param &param, const Variables &var,
             }
             // init rediogenic source in element
             for (int e=0; e<var.nelem; ++e) {
-                const int *conn = (*var.connectivity)[e];
+                ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
                 double zcenter = 0;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
-                    zcenter += (*var.coord)[conn[j]][NDIMS-1];
+                    zcenter += coord[j][NDIMS-1];
                 }
                 zcenter /= NODES_PER_ELEM;
 
@@ -769,5 +838,4 @@ void initial_temperature(const Param &param, const Variables &var,
         if (temperature[i] > max_temp) max_temp = temperature[i];
     bottom_temperature = max_temp;
 }
-
 

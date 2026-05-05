@@ -54,6 +54,8 @@ public:
     BinaryInput(const char *filename);
     ~BinaryInput();
 
+    bool has_array(const char *name) const;
+
     template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
@@ -120,6 +122,8 @@ private:
 public:
     HDF5Input(const char *filename);
     ~HDF5Input();
+
+    bool has_array(const char *name) const;
 
     template <typename T>
     void read_scaler(T& A, const std::string& name);

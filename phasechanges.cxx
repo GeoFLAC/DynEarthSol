@@ -117,7 +117,7 @@ void phase_changes(const Param& param, Variables& var)
     MarkerSet& ms = *(var.markersets[0]);
     int is_error = 0;
 
-    #pragma acc parallel loop reduction(+:is_error) async
+    #pragma acc parallel loop gang vector reduction(+:is_error) async
     for (int e=0; e<var.nelem; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();
         #pragma acc loop seq
@@ -170,7 +170,7 @@ void phase_changes(const Param& param, Variables& var)
 
                 // Dehydration metamorphism, hydrous marker is released.
                 const int el = ms.get_elem(m);
-                const double *eta = ms.get_eta(m);
+                ConstShapefnAccessor eta = ms.get_eta(m);
 
                 // #pragma omp critical(phase_change_simple_subduction)
                 {

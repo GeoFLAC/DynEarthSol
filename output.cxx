@@ -172,6 +172,11 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
     bin.write_array(tmp, "viscosity", tmp.size());
 
+    if (var.mat->rheol_type & MatProps::rh_rsf) {
+        bin.write_array(*var.dyn_fric_coeff, "dynamic friction coefficient", var.dyn_fric_coeff->size());
+        bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
+
     // bin.write_array(*var.mass, "mass", var.mass->size());
     // bin.write_array(*var.tmass, "tmass", var.tmass->size());
     // bin.write_array(*var.volume_n, "volume_n", var.volume_n->size());
@@ -349,6 +354,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
+    if (param.mat.rheol_type & MatProps::rh_rsf) {
+        bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
 #ifdef HDF5
@@ -360,4 +368,3 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePop();
 #endif
 }
-

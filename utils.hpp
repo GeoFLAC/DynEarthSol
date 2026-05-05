@@ -169,7 +169,8 @@ static double pow_2(const double x) {
 }
 
 #pragma acc routine seq
-static double trace(const double* s)
+template <typename T>
+static double trace(T s)
 {
 #ifdef THREED
     return s[0] + s[1] + s[2];
@@ -178,8 +179,8 @@ static double trace(const double* s)
 #endif
 }
 
-
-static double second_invariant2(const double* t)
+template <typename T>
+static double second_invariant2(T t)
 {
 #ifdef THREED
     double a = (t[0] + t[1] + t[2]) / 3;
@@ -190,13 +191,26 @@ static double second_invariant2(const double* t)
 #endif
 }
 
-
-static double second_invariant(const double* t)
+template <typename T>
+static double second_invariant(T t)
 {
     /* second invariant of the deviatoric part of tensor t
      * defined as: td = deviatoric(t); sqrt( td(i,j) * td(i,j) / 2)
      */
     return std::sqrt(second_invariant2(t));
+}
+
+
+#pragma acc routine seq
+static inline int binary_search_index(const int* arr, int size, int target) {
+    int low = 0, high = size - 1;
+    while (low <= high) {
+        int mid = low + (high - low) / 2;
+        if (arr[mid] == target) return mid;
+        if (arr[mid] < target) low = mid + 1;
+        else high = mid - 1;
+    }
+    return -1;
 }
 
 
@@ -281,7 +295,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int e=0; e<var.nelem;e++) {
             if (std::isnan((*var.volume)[e]))
                 is_nan += out_nan_error("volume", e);
@@ -316,7 +330,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for reduction(+:is_nan)
 #endif
-        #pragma acc parallel loop reduction(+:is_nan)
+        #pragma acc parallel loop gang vector reduction(+:is_nan)
         for (int n=0; n<var.nnode; n++) {
             if (std::isnan((*var.temperature)[n]))
                 is_nan += out_nan_error("temperature", n);
@@ -350,5 +364,15 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #endif
 }
 
+static std::string format_with_commas(unsigned long value) {
+    std::string s = std::to_string(value);
+
+    int insert_position = s.length() - 3;
+    while (insert_position > 0) {
+        s.insert(insert_position, ",");
+        insert_position -= 3;
+    }
+    return s;
+}
 
 #endif // DYNEARTHSOL3D_UTILS_HPP
