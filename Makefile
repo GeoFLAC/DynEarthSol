@@ -628,7 +628,6 @@ ifeq ($(use_gospl), 1)
 	@rm -f dynearthsol-gospl
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
-	@+$(MAKE) -C $(ANN_DIR) realclean
 ifeq ($(openacc), 1)
 	@+$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims)
 endif
