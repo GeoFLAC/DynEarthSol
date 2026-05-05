@@ -1,39 +1,52 @@
-# GoSPL Configuration Examples
+# GoSPL Coupling Example: Gaussian Weak Zone 3D Rift
 
-This directory contains example configuration files for GoSPL when used with DynEarthSol.
+This directory contains example input files for running a 3D Gaussian weak zone
+rift model with DynEarthSol coupled to GoSPL for surface processes.
 
-## Files
+## Input Files
 
-- `gospl_config_example.yml` - Basic example configuration showing typical parameters
+### `gaussian-weakzone-3d-with-gospl.cfg`
 
-## Configuration Parameters
+DynEarthSol configuration file for the Gaussian weak zone 3D rift model.
 
-The GoSPL configuration file uses YAML format with the following main sections:
+Key settings:
+- **Domain**: 100 km (x) × 80 km (y) × 10 km (z), 1 km base resolution
+- **Run time**: 1 Myr with 20 kyr output interval
+- **Boundary conditions**: ±1.5 cm/yr extension in x-direction
+- **GoSPL coupling**: enabled via `surface_process_option = 11`
+  - Config file: `gospl_config_gaussian_weakzone_3D.yml`
+  - Coupling frequency: every 200 steps
+  - GoSPL mesh resolution: 500 m
+  - Velocity coupling: all 3 DES velocity components passed to GoSPL
 
-### Domain
-- `npx`, `npy`: Number of processors (usually 1 for DynEarthSol coupling)
-- `minX`, `maxX`, `minY`, `maxY`: Domain bounds (km)
-- `dx`, `dy`: Grid spacing (km)
+### `gospl_config_gaussian_weakzone_3D.yml`
 
-### Time
-- `start`, `end`: Start and end times (years)
-- `dt`: Time step size (years)
+GoSPL configuration file paired with the DynEarthSol `.cfg` above. Parameters
+are chosen to match the ASPECT + FastScape reference model
+(`gaussian_weakzone_3D.prm`).
 
-### Surface Processes (`sp`)
-- `hillslopeKa`: Hillslope diffusion coefficient (m²/yr)
-- `streamPowerLaw`: Enable stream power law erosion
-- `Kf`: Fluvial erosion coefficient
-- `m`, `n`: Stream power law exponents
-- `seaLevel`: Sea level (m)
-- `marineKa`: Marine diffusion coefficient (m²/yr)
+Key settings:
+- **Flow direction**: multi-flow (`flowdir: 6`, equivalent to FastScape `p=-1`)
+- **Boundary conditions**: east and west boundaries open, north and south closed (`bc: '1010'`)
+- **Stream power law**: K = 1×10⁻⁵ m^(1-2m)/yr, m = 0.4, n = 1
+- **Hillslope diffusion**: Ka = 1×10⁻² m²/yr
+- **Sea level**: −2000 m (prevents marine flooding of the initial surface)
+- **Output**: `output_gaussian_weakzone_3D/` every 20 kyr
 
-### Output
-- `dir`: Output directory name
-- `interval`: Output interval (years)
+## Usage
 
-## Usage Notes
+1. `dynearthsol3d-gospl` should be built first in the root direcotry.
+2. Run from the directory containing both input files: e.g., in the current directory,
 
-1. The domain bounds should match or encompass your DynEarthSol model domain
-2. Time parameters are usually controlled by DynEarthSol, but need to be specified
-3. Adjust erosion coefficients based on your geological setting
-4. Output directory will be created relative to your DynEarthSol working directory
+```bash
+../../dynearthsol3d-gospl gaussian-weakzone-3d-with-gospl.cfg
+```
+
+GoSPL is driven automatically by the coupling layer; no separate GoSPL invocation
+is needed.
+
+## Scripts
+
+The `scripts/` subdirectory contains helper utilities (`umeshFcts.py`) used by
+the GoSPL driver to build and manipulate the unstructured mesh. They are imported
+at runtime and do not need to be invoked manually.
