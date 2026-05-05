@@ -29,10 +29,9 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo add-apt-repository ppa:deadsnakes/ppa -y
         sudo apt-get update
         sudo apt-get install -y libboost-program-options-dev \
-          python3.11 python3.11-dev libpython3.11-dev
+          python3-dev python3-numpy
 
     - name: Build gospl_extensions
       run: |
@@ -42,9 +41,11 @@ jobs:
 
     - name: Build DES with GoSPL (3D)
       run: |
-        PYTHON_INCLUDE_DIR=$(python3.11 -c "import sysconfig; print(sysconfig.get_path('include'))")
-        PYTHON_LIB_DIR=$(python3.11 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+        PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        PYTHON_INCLUDE_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))")
+        PYTHON_LIB_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
         make clean
         make ndims=3 use_gospl=1 opt=0 openmp=0 \
+          PYTHON_VERSION=$PYTHON_VERSION \
           PYTHON_INCLUDE_DIR=$PYTHON_INCLUDE_DIR \
           PYTHON_LIB_DIR=$PYTHON_LIB_DIR

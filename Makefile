@@ -175,14 +175,15 @@ ifeq ($(use_gospl), 1)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
 	endif
 	
-	# Python 3.11 include/lib dirs — override on the command line for non-conda builds:
-	#   make use_gospl=1 PYTHON_INCLUDE_DIR=/usr/include/python3.11 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
+	# Python include/lib dirs — override on the command line for non-conda builds:
+	#   make use_gospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
 	CONDA_ENV_PATH = $(HOME)/miniconda3/envs/gospl
-	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python3.11
+	PYTHON_VERSION     ?= 3.11
+	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
 	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
 
 	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
-	GOSPL_LDFLAGS += -lpython3.11 -L$(PYTHON_LIB_DIR)
+	GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
 	ifneq ($(OSNAME), Darwin)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
 	endif
