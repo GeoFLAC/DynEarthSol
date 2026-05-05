@@ -93,6 +93,9 @@ endif
 BOOST_LDFLAGS = -lboost_program_options
 # Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other
 MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
+ifeq ($(MULTIARCH),)
+	MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+endif
 ifdef BOOST_ROOT_DIR
 	# check existence of stage/ directory
 	has_stage_dir = $(wildcard $(BOOST_ROOT_DIR)/stage)

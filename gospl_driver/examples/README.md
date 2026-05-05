@@ -35,18 +35,13 @@ Key settings:
 
 ## Usage
 
-1. `dynearthsol3d-gospl` should be built first in the root direcotry.
-2. Run from the directory containing both input files: e.g., in the current directory,
+1. Build `dynearthsol-gospl` first in the root directory (see `gospl_driver/README.md`).
+2. Run from this directory so the relative path to the GoSPL config resolves correctly:
 
 ```bash
-../../dynearthsol3d-gospl gaussian-weakzone-3d-with-gospl.cfg
+conda activate gospl
+../../dynearthsol-gospl gaussian-weakzone-3d-with-gospl.cfg
 ```
 
 GoSPL is driven automatically by the coupling layer; no separate GoSPL invocation
 is needed.
-
-## Scripts
-
-The `scripts/` subdirectory contains helper utilities (`umeshFcts.py`) used by
-the GoSPL driver to build and manipulate the unstructured mesh. They are imported
-at runtime and do not need to be invoked manually.

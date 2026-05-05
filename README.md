@@ -52,6 +52,19 @@ alike.
 
 <div id="llvm"></div>
 
+* [GoSPL](https://gospl.readthedocs.io/) (Global Scalable Paleo Landscape Evolution) for two-way coupling with a surface process model
+  * GoSPL handles erosion, deposition, and hillslope diffusion; DES handles tectonics. At each coupling event DES surface velocities are passed to GoSPL, and GoSPL returns the erosion/deposition increment, which is applied to DES surface nodes.
+  * Requires the [gospl_extensions](https://github.com/GeoFLAC/gospl_extensions) C++ interface library:
+    ```bash
+    git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
+    cd ~/opt/gospl_extensions/cpp_interface
+    conda activate gospl
+    make install-local
+    ```
+  * Also requires a GoSPL conda environment. Follow [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html).
+  * Set `use_gospl = 1` in the Makefile and run `make`. A `dynearthsol-gospl` wrapper script is generated automatically.
+  * See `gospl_driver/README.md` for full build, runtime, and coupling details, and `gospl_driver/examples/` for example configs.
+
 * [LLVM](https://github.com/llvm/llvm-project) OpenMP library for macOS requires special setup due to Apple Clang lacking built-in OpenMP. 
   * Suggested building procedure
     * Download LLVM CMake Modules and OpenMP. (LLVM OpenMP 19.1.7 or newer version will suffice.)
@@ -117,6 +130,9 @@ alike.
   * If mesh optimization with mmg is desired for remeshing:
     * Set `usemmg = 1`.
     * Set `MMG_INCLUDE` and `MMG_LIB_DIR` paths if it differs from the default values.
+  * If coupling with GoSPL surface processes:
+    * Set `use_gospl = 1`.
+    * Set `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` if they differ from the defaults (`~/opt/gospl_extensions` and `~/miniconda3/envs/gospl`).
   * If outputing in HDF5-based vtkhdf format:
     * set `hdf5 = 1`.
     * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory.
@@ -153,6 +169,9 @@ make useexo=1
 # enable HDF5-based vtkhdf output support (requires HDF5)
 make hdf5=1
 
+# enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
+make use_gospl=1
+
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
 
@@ -171,6 +190,12 @@ make openacc=1
   directory.
 * Execute the executable with `-h` flag to see the available input parameters
   and their descriptions.
+* **Running with GoSPL**: Use the auto-generated wrapper script and set `surface_process_option = 11` in your config file:
+  ```bash
+  conda activate gospl
+  ./dynearthsol-gospl your_input.cfg
+  ```
+  See `gospl_driver/README.md` and `gospl_driver/examples/` for configuration details.
 
 # Visualizing DES3D outputs
 * Run `2vtk.py [modelname: 'results' by default]` to convert the binary output to VTK files.

@@ -93,45 +93,29 @@ If you prefer manual control or the wrapper doesn't work:
    **Important**: Use absolute paths to avoid file access issues.
 
 4. Create a GoSPL configuration file compatible with gospl_extensions:
-   - See working examples in `/home/echoi2/opt/gospl_extensions/examples/`
-   - Note: The config format may differ from standard GoSPL configs
-   - Use `examples/gospl_config_example.yml` as a starting template, but verify compatibility
+   - See working examples in `~/opt/gospl_extensions/examples/`
+   - Use `gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml` as a starting template
 
 ## Integration Details
 
 The GoSPL integration works as follows:
 
-1. **Initialization**: GoSPL is initialized once from the YAML config file. Its elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
+1. **Initialization**: GoSPL is initialized once from the YAML config file. At the first coupling event, GoSPL's elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
 2. **Each coupling event** (every `gospl_coupling_frequency` DES steps, or every `gospl_coupling_interval_in_yr` years when `gospl_coupling_mode = time`):
-   - **Time-averaged tectonic velocity** is computed as `Δcoord/Δt` over the coupling interval (not the instantaneous DES velocity). DES uses inertial scaling (quasi-dynamic formulation), so instantaneous velocities contain damped-wave components that are numerical artifacts. Averaging over the interval filters these out. On the first coupling event or after remeshing, instantaneous velocity is used as a fallback.
+   - **Time-averaged tectonic velocity** is computed as `Δcoord/Δt` over the coupling interval (not the instantaneous DES velocity). DES uses inertial scaling (quasi-dynamic formulation), so instantaneous velocities contain damped-wave components that are numerical artifacts. Averaging over the interval filters these out. On the first coupling event, instantaneous velocity is used as a fallback.
    - DES surface velocities (vx, vy, vz) are IDW-interpolated onto the GoSPL mesh via `set_surface_velocity()`.
    - `run_and_get_erosion(dt)` advances GoSPL by one step of length `dt`. Internally: horizontal advection (vx, vy), vertical uplift (vz via `upsub`), SPL erosion, and hillslope diffusion are applied to GoSPL's `hGlobal`. The returned `delta_h` contains **only the erosion and diffusion component** — the uplift (`upsub * dt`) is subtracted before returning because DES already applied the same displacement through its Lagrangian mechanical solver. Returning the full delta_h would double-count the tectonic uplift.
    - DES adds `delta_h` (erosion + diffusion only) to its surface node z-coordinates.
-3. GoSPL **owns** the topography between coupling events and accumulates its drainage network state continuously.
+3. GoSPL **owns** the topography between coupling events and accumulates its drainage network state continuously. DES remeshing does **not** reset GoSPL's elevation or drainage state.
 
-### Coupling API (`EnhancedModel` in `gospl_extensions`)
+### Coupling API (`GoSPLDriver` C++ class)
 
 | Method | Purpose |
 |---|---|
-| `set_surface_velocity(pts, vx, vy, vz)` | IDW-interpolate DES velocities onto GoSPL mesh |
-| `run_and_get_erosion(dt, query_pts)` | Advance GoSPL one step; return `delta_h` at query points |
-| `apply_elevation_data(elevdata)` | Reset `hGlobal` from external elevation data (init / post-remesh) |
-| `interpolate_elevation_to_points(pts)` | Query current `hGlobal` at arbitrary coordinates |
-| `apply_drift_correction(pts, elev, alpha)` | Gently blend `hGlobal` toward DES elevation |
-
-## Known Limitations / Caveats
-
-### GoSPL elevation reset after DES remeshing
-
-**Every time DES remeshes, GoSPL's elevation field is completely reset from the DES surface** (`needs_elevation_reset = true` is set in `dynearthsol.cxx` after each call to `remesh()`). This causes:
-
-- GoSPL's accumulated erosion/deposition patterns are discarded.
-- GoSPL's implicit drainage network state (flow accumulation, chi, pit-filling history) is wiped and must rebuild from scratch.
-- If DES remeshes frequently (governed by `quality_check_step_interval` and `min_quality`), GoSPL may never accumulate enough time to develop stable stream incision before being reset again.
-
-This reset is necessary because DES node positions change after remeshing, so GoSPL's elevation must re-sync with DES. However, it is a hard discontinuity. A gentler post-remesh correction (e.g., `apply_drift_correction` with `alpha=1.0`) is equivalent in effect but could in principle be tuned. GoSPL's own mesh is fixed and independent of DES's mesh, so only the elevation field — not the connectivity — needs updating after remeshing.
-
-**Practical implication**: To give GoSPL time to develop a stable drainage network, prefer infrequent remeshing (larger `quality_check_step_interval`, looser `min_quality`) during the phase when surface processes are most important.
+| `set_surface_velocity(coords, vx, vy, vz, n)` | IDW-interpolate DES velocities onto GoSPL mesh |
+| `run_and_get_erosion(dt, coords, n, out, k, p)` | Advance GoSPL one step; return `delta_h` at query points |
+| `apply_elevation_data(coords, elev, n, k, p)` | Seed GoSPL `hGlobal` from DES surface (called once at init) |
+| `interpolate_elevation_to_points(coords, n, out, k, p)` | Query current `hGlobal` at arbitrary coordinates |
 
 ## Troubleshooting
 

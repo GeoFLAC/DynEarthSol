@@ -1639,7 +1639,7 @@ namespace {
         static std::vector<double> surface_coords_start;
         static bool has_surface_start = false;
 
-        // Re-initialize GoSPL topography only on first step or after remeshing.
+        // Re-initialize GoSPL topography on the first coupling event only.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
         // Also invalidate surface_coords_start: after remeshing the node set changes,
         // so time-averaged velocities cannot span across the remesh boundary.

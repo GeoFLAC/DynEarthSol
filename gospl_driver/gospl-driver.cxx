@@ -101,9 +101,7 @@ double GoSPLDriver::run_processes_for_dt(double dt, bool verbose, bool skip_tect
 
     // Set verbose mode on the Python model object before running
     std::stringstream ss;
-    ss << "import sys\n"
-       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
-       << "import gospl_python_interface as gpi\n"
+    ss << "import gospl_python_interface as gpi\n"
        << "model = gpi._models.get(" << model_handle << ")\n"
        << "if model is not None:\n"
        << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
@@ -445,13 +443,11 @@ int GoSPLDriver::set_verbose(bool verbose) {
     
     // Build Python code to set verbose mode on the model
     std::stringstream ss;
-    ss << "import sys\n"
-       << "sys.path.insert(0, '/home/echoi2/opt/gospl_extensions/cpp_interface')\n"
-       << "import gospl_python_interface as gpi\n"
+    ss << "import gospl_python_interface as gpi\n"
        << "model = gpi._models.get(" << model_handle << ")\n"
        << "if model is not None:\n"
        << "    model.verbose = " << (verbose ? "True" : "False") << "\n";
-    
+
     int result = PyRun_SimpleString(ss.str().c_str());
     
     if (result != 0) {
