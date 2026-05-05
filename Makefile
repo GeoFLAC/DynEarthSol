@@ -33,7 +33,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
-use_gospl = 1
+use_gospl = 0
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
