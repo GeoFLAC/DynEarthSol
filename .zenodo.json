@@ -4,7 +4,7 @@
     "title": "DynEarthSol",
     "upload_type": "software",
     "keywords": [
-        "Geodynamics","Lithosphere",
+        "Geodynamics","Lithosphere","Tectonics",
         "FLAC","Finite Element Method","Lagrangian",
         "OpenMP","OpenACC","HDF5","MMG","Exodus"
     ],
