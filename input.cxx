@@ -971,7 +971,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     if (p.sim.is_outputting_averaged_fields == true)
-        if (p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
+        if (vm.count("sim.output_step_interval") &&
+            p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
             std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
             std::exit(1);
     }
