@@ -353,6 +353,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     #pragma omp parallel for default(none) \
         shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
         bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, zmin, \
+        bc_vx0_l, bc_vx1_l, \
         vbc_applied_x0, vbc_applied_x1, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
@@ -380,7 +381,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             case 3: v[f.ni] = f.val; v[f.li] = 0; v[2] = 0; break;
             case 4: v[f.li] = f.val; v[2] = 0; break;
             case 5: v[f.ni] = 0; v[f.li] = f.val; v[2] = 0; break;
-            case 6: v[f.ni] = f.val; v[f.li] = f.val_l; v[2] = 0; break;
+            case 6: v[f.ni] = f.val; v[f.li] = f.val_l; break;
             case 7: v[f.ni] = f.val; v[f.li] = 0; break;
             }
         }

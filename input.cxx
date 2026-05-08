@@ -447,7 +447,7 @@ static void declare_parameters(po::options_description &cfg,
          "3: normal component fixed, shear components fixed at 0;\n"
          "4: normal component free, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
          "5: normal component fixed at 0, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
-         "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component fixed at 0 in 3D, shear free in 2D;\n"
+         "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component free;\n"
          "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
          "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
          "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n")
