@@ -4,7 +4,6 @@
 #
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
-
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
@@ -34,6 +33,7 @@ usemmg = 0
 adaptive_time_step = 0
 use_R_S = 0
 useexo = 0
+use_gospl = 0
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
@@ -74,7 +74,16 @@ HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
-BOOST_ROOT_DIR =
+## Use conda environment only if boost is actually installed there, otherwise system boost
+ifdef CONDA_PREFIX
+	ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
+		BOOST_ROOT_DIR = $(CONDA_PREFIX)
+	else
+		BOOST_ROOT_DIR = /usr
+	endif
+else
+	BOOST_ROOT_DIR = /usr
+endif
 
 ########################################################################
 ## Select compiler and linker flags
@@ -82,13 +91,30 @@ BOOST_ROOT_DIR =
 ########################################################################
 
 BOOST_LDFLAGS = -lboost_program_options
+# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other
+MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
+ifeq ($(MULTIARCH),)
+	MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+endif
 ifdef BOOST_ROOT_DIR
 	# check existence of stage/ directory
 	has_stage_dir = $(wildcard $(BOOST_ROOT_DIR)/stage)
 	ifeq (, $(has_stage_dir))
 		# no stage dir, BOOST_ROOT_DIR is the installation directory
-		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)/include
-		BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/lib
+		ifeq ($(BOOST_ROOT_DIR), /usr)
+			# Conda environments can disrupt gcc's default search order, so explicitly
+			# add the multiarch path before /usr/include (keeps bits/stdint-least.h
+			# resolvable) and use the multiarch lib dir where boost is installed.
+			ifneq ($(MULTIARCH),)
+				BOOST_CXXFLAGS = -I/usr/include/$(MULTIARCH) -I/usr/include
+				BOOST_LIB_DIR = /usr/lib/$(MULTIARCH)
+			else
+				BOOST_LIB_DIR = /usr/lib
+			endif
+		else
+			BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)/include
+			BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/lib
+		endif
 	else
 		# with stage dir, BOOST_ROOT_DIR is the build directory
 		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)
@@ -116,10 +142,10 @@ endif
 
 ifeq ($(usemmg), 1)
 	# path to MMG3D header files
-	MMG_INCLUDE = ./mmg/build/include
+	MMG_INCLUDE = ${HOME}/opt/mmg/build/include
 
 	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ./mmg/build/lib
+	MMG_LIB_DIR = ${HOME}/opt/mmg/build/lib
 
 	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
 	ifeq ($(ndims), 3)	
@@ -129,6 +155,37 @@ ifeq ($(usemmg), 1)
 	endif
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+	endif
+endif
+
+ifeq ($(use_gospl), 1)
+	# GoSPL extensions library configuration
+	# Path to locally built gospl_extensions (clone from GitHub)
+	GOSPL_EXT_DIR = $(HOME)/opt/gospl_extensions
+	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
+	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
+	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
+	
+	# Export PYTHONPATH for GoSPL extensions
+    	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
+  
+	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
+	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
+	endif
+	
+	# Python include/lib dirs — override on the command line for non-conda builds:
+	#   make use_gospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
+	CONDA_ENV_PATH = $(HOME)/miniconda3/envs/gospl
+	PYTHON_VERSION     ?= 3.11
+	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
+	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
+
+	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
+	GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
+	ifneq ($(OSNAME), Darwin)
+		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
 	endif
 endif
 
@@ -336,6 +393,10 @@ SRCS =	\
 	markerset.cxx \
 	knn.cxx
 
+ifeq ($(use_gospl), 1)
+	SRCS += gospl_driver/gospl-driver.cxx
+endif
+
 INCS =	\
 	array2d.hpp \
 	ats_output_scheduler.hpp \
@@ -396,11 +457,19 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(use_gospl), 1)
+	CXXFLAGS += $(GOSPL_CXXFLAGS)
+	LDFLAGS += $(GOSPL_LDFLAGS)
+endif
+
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
 
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
+
+GOSPL_DIR = gospl_driver
+CXXFLAGS += -I$(GOSPL_DIR)
 
 KNN_BVH_DIR = knn-bvh
 ifeq ($(openacc), 1)
@@ -418,6 +487,16 @@ CXXFLAGS += -DSOA
 
 all: prepare
 	$(MAKE) build
+
+ifeq ($(use_gospl), 1)
+.PHONY: install-gospl-wrapper
+install-gospl-wrapper: 
+	@echo '#!/bin/bash' > dynearthsol-gospl
+	@echo '# Auto-generated wrapper for DynEarthSol with GoSPL support' >> dynearthsol-gospl
+	@echo 'export PYTHONPATH="$(GOSPL_PYTHONPATH):$$PYTHONPATH"' >> dynearthsol-gospl
+	@echo 'exec "$$(dirname "$$0")/$(EXE)" "$$@"' >> dynearthsol-gospl
+	@chmod +x dynearthsol-gospl
+endif
 
 prepare:
 ifeq ($(openacc), 1)
@@ -441,6 +520,23 @@ $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
+
+ifeq ($(use_gospl), 1)
+	@+$(MAKE) install-gospl-wrapper
+	@echo ""
+	@echo "=============================================="
+	@echo "✅ DynEarthSol built with GoSPL support!"
+	@echo "=============================================="
+	@echo "🚀 To run with GoSPL support:"
+	@echo ""
+	@echo "Use the wrapper script (PYTHONPATH is set automatically):"
+	@echo "  ./dynearthsol-gospl your_input.cfg"
+	@echo ""
+	@echo "Or set PYTHONPATH manually and use the regular executable:"
+	@echo "  PYTHONPATH=$(GOSPL_PYTHONPATH):\$$PYTHONPATH ./$(EXE) your_input.cfg"
+	@echo "=============================================="
+	@echo ""
+endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
 		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
@@ -524,11 +620,18 @@ $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
+ifeq ($(use_gospl), 1)
+	@rm -f dynearthsol-gospl
+endif
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
 	
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
+ifeq ($(use_gospl), 1)
+	@rm -f dynearthsol-gospl
+endif
+	@+$(MAKE) -C $(C3X3_DIR) clean
 ifeq ($(openacc), 1)
 	@+$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims)
 endif

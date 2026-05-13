@@ -19,6 +19,11 @@
 #include "knn_bvh.hpp"
 #endif
 
+// Forward declarations
+#ifdef HAS_GOSPL_CPP_INTERFACE
+class GoSPLDriver;
+#endif
+
 typedef std::pair<int,int> int_pair;
 typedef std::pair<double,double> double_pair;
 typedef std::unordered_map<int,int> int_map;
@@ -216,6 +221,14 @@ struct Control {
     double surf_diff_ratio_marine;
     double surf_depo_universal;
     double surf_base_level;
+    std::string surface_process_gospl_config_file;
+    int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
+    double gospl_coupling_interval_in_yr;   // Run GoSPL every T years (default: 1000)
+    std::string gospl_coupling_mode;  // "steps" (default) or "time"
+    bool gospl_velocity_coupling;  // Send all 3 DES velocity components to GoSPL (default: true)
+    double gospl_mesh_resolution;  // GoSPL mesh spacing (default: -1 = auto)
+    double gospl_mesh_perturbation;  // Grid perturbation factor 0-1 (default: 0, 0.3=moderate)
+    double gospl_mesh_padding;       // Fractional padding beyond DES domain on each side (default: 0.1)
     double terrig_sediment_volume;
     double terrig_sediment_area;
     double terrig_sediment_diffusivity;
@@ -352,6 +365,7 @@ struct IC {
     double weakzone_ysemi_axis;
     double weakzone_zsemi_axis;
     double weakzone_standard_deviation;
+    double weakzone_gaussian_amplitude; // x-shift amplitude for weakzone_option=4 (meters)
 
     int temperature_option;
     std::string Temp_filename;
@@ -695,6 +709,11 @@ struct Variables {
     SurfaceInfo surfinfo;
     int_vec melt_markers;
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // GoSPL driver for landscape evolution modeling
+    GoSPLDriver* gospl_driver;
+#endif
+
     array_t *vel, *force, *coord0;
     array_t *force_residual;
     tensor_t *strain_rate, *strain, *stress;
@@ -719,6 +738,9 @@ struct Variables {
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);
         vbc_vertical_ratio_x1.resize(4);
+#ifdef HAS_GOSPL_CPP_INTERFACE
+        gospl_driver = nullptr;
+#endif
     }
 
     double_vec *log_table; // for log(x) lookup table
