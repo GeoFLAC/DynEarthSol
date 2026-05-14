@@ -1745,8 +1745,11 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     create_equilateral_elem(var, qconn);
     create_equilateral_segments(var, qsegment, qsegflag);
 
-    var.connectivity->reset(qconn, nelem_new);
-    var.segment->reset(qsegment, nseg_new);
+    var.connectivity->load_from_buffer(qconn, nelem_new);
+    var.segment->load_from_buffer(qsegment, nseg_new);
+    delete [] qconn;
+    delete [] qsegment;
+
     var.segflag->reset(qsegflag, nseg_new);
 }
 
