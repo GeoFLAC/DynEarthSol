@@ -2834,7 +2834,11 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
 #endif
     if (q < param.mesh.min_quality) {
         index = worst_elem;
-        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << ".\n";
+        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << " (bcflag: ";
+        for (int i = 0; i < NODES_PER_ELEM; i++) {
+            std::cout << (*var.bcflag)[(*var.connectivity)[worst_elem][i]];
+            std::cout << (i < NODES_PER_ELEM - 1 ? ", " : ").\n");
+        }
 #ifdef NPROF
         nvtxRangePop();
 #endif
