@@ -236,14 +236,17 @@ static void declare_parameters(po::options_description &cfg,
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
         ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
          "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-         ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
+        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
          "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
-         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
+        ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
-         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
+        ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
          "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
+        ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
+         "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
+         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
         ;
 
     cfg.add_options()
@@ -1135,6 +1138,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.remeshing_option == 2) {
         std::cerr << "Error: mesh.remeshing_option=2 is not available in 3D.\n";
         std::exit(1);
+    }
+#endif
+
+#ifndef USEMMG
+    if (p.mesh.use_mmg_init) {
+        p.mesh.use_mmg_init = false;
+        std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
 #endif
 

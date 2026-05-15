@@ -1319,59 +1319,69 @@ void points_to_mesh(const Param &param, Variables &var,
     const double *coarse_regattr_ptr = regattr;
 
 #ifdef USEMMG
-    // Step 1: scale volume for coarse TetGen mesh
-    if (max_elem_size > 0) {
-        coarse_max_elem_size = max_elem_size *
-            std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
-    } else {
-        // per-region: encode region index as temporary mattype so TetGen -A
-        // stamps coarse elements with their zone index (0, 1, ...).
-        // This allows compute_init_metric() to use connectivity-based projection,
-        // correctly preserving per-zone resolution (e.g. meshing_option=2).
-        const int stride = NDIMS + 2;
-        coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
-        // Find the fine zone: region with the smallest volume constraint.
-        // Keep it at target density so TetGen places elements near the fine zone
-        // resolution directly, avoiding a large MMG transition zone that would
-        // cause over-refinement at the first remesh.
-        double min_vol = std::numeric_limits<double>::max();
-        for (int r = 0; r < nregions; ++r) {
-            double vol = coarse_regattr_vec[r * stride + NDIMS + 1];
-            if (vol > 0 && vol < min_vol) min_vol = vol;
+    if (param.mesh.use_mmg_init) {
+        // Step 1: scale volume for coarse TetGen mesh
+        if (max_elem_size > 0) {
+            coarse_max_elem_size = max_elem_size *
+                std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+        } else {
+            // per-region: encode region index as temporary mattype so TetGen -A
+            // stamps coarse elements with their zone index (0, 1, ...).
+            // This allows compute_init_metric() to use connectivity-based projection,
+            // correctly preserving per-zone resolution (e.g. meshing_option=2).
+            const int stride = NDIMS + 2;
+            coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
+            // Find the fine zone: region with the smallest volume constraint.
+            // Keep it at target density so TetGen places elements near the fine zone
+            // resolution directly, avoiding a large MMG transition zone that would
+            // cause over-refinement at the first remesh.
+            double min_vol = std::numeric_limits<double>::max();
+            for (int r = 0; r < nregions; ++r) {
+                double vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+                if (vol > 0 && vol < min_vol) min_vol = vol;
+            }
+            for (int r = 0; r < nregions; ++r) {
+                coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
+                double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+                // Only coarsen non-fine zones; fine zone stays at target density.
+                if (vol > 0 && vol > min_vol) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+            }
+            coarse_regattr_ptr = coarse_regattr_vec.data();
         }
-        for (int r = 0; r < nregions; ++r) {
-            coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
-            double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
-            // Only coarsen non-fine zones; fine zone stays at target density.
-            if (vol > 0 && vol > min_vol) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
-        }
-        coarse_regattr_ptr = coarse_regattr_vec.data();
-    }
 
-    // For the coarse TetGen mesh, hardcode optlevel=0 to save time
-    Mesh coarse_mesh = param.mesh;
-    coarse_mesh.tetgen_optlevel = 0;
+        // For the coarse TetGen mesh, hardcode optlevel=0 to save time
+        Mesh coarse_mesh = param.mesh;
+        coarse_mesh.tetgen_optlevel = 0;
 
-    points_to_new_mesh(coarse_mesh, npoints, points,
-                       n_init_segments, init_segments, init_segflags,
-                       nregions, coarse_regattr_ptr,
-                       coarse_max_elem_size, vertex_per_polygon,
-                       var.nnode, var.nelem, var.nseg,
-                       pcoord, pconnectivity, psegment, psegflag, pregattr);
+        points_to_new_mesh(coarse_mesh, npoints, points,
+                           n_init_segments, init_segments, init_segflags,
+                           nregions, coarse_regattr_ptr,
+                           coarse_max_elem_size, vertex_per_polygon,
+                           var.nnode, var.nelem, var.nseg,
+                           pcoord, pconnectivity, psegment, psegflag, pregattr);
 
-    // Step 2: MMG refinement — also compute fine-mesh init size hint
+        // Step 2: MMG refinement — also compute fine-mesh init size hint
 #ifdef THREED
-    mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
-                            var.nnode, var.nelem, var.nseg,
-                            pcoord, pconnectivity, psegment, psegflag, pregattr,
-                            var.init_elem_size_n);
+        mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
+                                var.nnode, var.nelem, var.nseg,
+                                pcoord, pconnectivity, psegment, psegflag, pregattr,
+                                var.init_elem_size_n);
 #else
-    mmg_refine_init_mesh_2d(param.mesh, max_elem_size, nregions, regattr,
-                            var.nnode, var.nelem, var.nseg,
-                            pcoord, pconnectivity, psegment, psegflag, pregattr,
-                            var.init_elem_size_n);
+        mmg_refine_init_mesh_2d(param.mesh, max_elem_size, nregions, regattr,
+                                var.nnode, var.nelem, var.nseg,
+                                pcoord, pconnectivity, psegment, psegflag, pregattr,
+                                var.init_elem_size_n);
 #endif
-
+    } else {
+        // Plain triangle/tetgen path — init_elem_size_n left empty;
+        // initialize_elem_size_n() will compute it from the mesh at step 0.
+        points_to_new_mesh(param.mesh, npoints, points,
+                           n_init_segments, init_segments, init_segflags,
+                           nregions, regattr,
+                           max_elem_size, vertex_per_polygon,
+                           var.nnode, var.nelem, var.nseg,
+                           pcoord, pconnectivity, psegment, psegflag, pregattr);
+    }
 #else // !USEMMG
     points_to_new_mesh(param.mesh, npoints, points,
                        n_init_segments, init_segments, init_segflags,
