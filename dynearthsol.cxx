@@ -305,7 +305,9 @@ void restart(const Param& param, Variables& var)
     }
 
     allocate_variables(param, var);
+#ifdef USEMMG
     var.init_elem_size_n->resize(var.nnode);
+#endif
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
