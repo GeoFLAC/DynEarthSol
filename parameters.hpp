@@ -215,7 +215,6 @@ struct Control {
     int ref_pressure_option;
 //    bool surface_pressure_correction;
     bool is_using_mixed_stress;
-    double mixed_stress_reference_viscosity;
 
     int surface_process_option;
     double surface_diffusivity;
@@ -743,6 +742,10 @@ struct Variables {
     elem_cache *tmp_result;
     double_vec *etmp;
     int_vec *etmp_int;
+
+    // For remeshing
+    tensor_t *stress_n;
+    double_vec *stressyy_n;
 
     // tensor_t *stress_old;
 

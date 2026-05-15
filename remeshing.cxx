@@ -2901,6 +2901,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     #pragma acc wait
 
+    // superconvergen patch recovery for stress before remeshing
+    spr_elem_to_node(param, var);
+
     {
         // creating a "copy" of mesh pointer so that they are not deleted
         array_t old_coord;
@@ -3034,6 +3037,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
      * delete var.support;
      * create_support(var);
      */
+
+    spr_node_to_elem(param, var);
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 

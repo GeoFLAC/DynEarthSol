@@ -570,14 +570,14 @@ namespace {
 
             #pragma acc wait
 
-            tensor_t *new_stress = new tensor_t(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
 
-            double_vec *new_stressyy = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
+            double_vec *new_dyn_fric_coeff = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
 
-            double_vec *new_old_mean_stress = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
+            double_vec *new_state_variable = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
 
             double_vec *new_volume_old = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
@@ -590,26 +590,6 @@ namespace {
 
             delete var.strain;
             var.strain = new_strain;
-
-            #pragma acc wait
-
-            double_vec *new_radiogenic_source = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
-
-            double_vec *new_dyn_fric_coeff = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
-
-            double_vec *new_state_variable = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
-
-            delete var.stress;
-            var.stress = new_stress;
-
-            delete var.stressyy;
-            var.stressyy = new_stressyy;
-
-            delete var.old_mean_stress;
-            var.old_mean_stress = new_old_mean_stress;
 
             #pragma acc wait
 
