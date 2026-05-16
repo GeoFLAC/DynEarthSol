@@ -788,7 +788,8 @@ int main(int argc, const char* argv[])
                     if (param.control.has_moving_mesh)
                     {
                         int quality_is_bad, bad_quality_index;
-                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index);
+                        double min_quality;
+                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
                         if (quality_is_bad) {
 
                             if (param.sim.has_output_during_remeshing) {
@@ -882,10 +883,11 @@ int main(int argc, const char* argv[])
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
+            double min_quality = 1.0;
             if (param.control.has_moving_mesh)
             {
                 int quality_is_bad, bad_quality_index;
-                quality_is_bad = bad_mesh_quality(param, var, bad_quality_index);
+                quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
                 if (quality_is_bad) {
 
                     if (param.sim.has_output_during_remeshing) {
@@ -906,7 +908,11 @@ int main(int argc, const char* argv[])
                 int64_t now_ns = get_nanoseconds();
                 std::cout << "              Step = " << var.steps
                     << ", time = " << std::scientific << std::setprecision(5)
-                    << var.time / YEAR2SEC << " yr" << ", wt = ";
+                    << var.time / YEAR2SEC << " yr"
+                    << ", vmax = " << var.max_global_vel_mag << " m/s";
+                if (param.control.has_moving_mesh && min_quality < 1.0)
+                    std::cout << ", min_q = " << std::fixed << std::setprecision(4) << min_quality;
+                std::cout << ", wt = ";
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
 

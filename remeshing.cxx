@@ -2735,7 +2735,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 }
 
 
-int bad_mesh_quality(const Param &param, const Variables &var, int &index)
+int bad_mesh_quality(const Param &param, const Variables &var, int &index, double &min_quality)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -2832,6 +2832,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     // normalizing q so that its magnitude is about the same in 2D and 3D
     q = std::pow(q, 1.0/3);
 #endif
+    min_quality = q;
     if (q < param.mesh.min_quality) {
         index = worst_elem;
         std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << " (bcflag: ";
