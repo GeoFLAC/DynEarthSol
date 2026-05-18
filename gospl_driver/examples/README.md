@@ -45,3 +45,28 @@ conda activate gospl
 
 GoSPL is driven automatically by the coupling layer; no separate GoSPL invocation
 is needed.
+
+## Known Issues
+
+### Intermittent PETSc error during coupling
+
+When `seadepo: true` is set in the GoSPL config, you may occasionally see the following during
+a coupling step:
+
+```
+Error in run_and_get_erosion: error code 77
+[0] TSSolve() ...
+[0] TSAdaptChoose() ...
+[0] Unexpected state: bad hmax in TSAdaptChoose()
+Error: GoSPL run_and_get_erosion failed
+```
+
+This is a floating-point issue in PETSc's Rosenbrock W-scheme adaptive time stepper inside
+GoSPL's nonlinear marine deposition solver. The stepper occasionally lands just past the
+integration end time (`self.dt`), making the remaining interval `hmax = max_time -
+current_time` slightly negative. The coupled run recovers automatically: DynEarthSol skips
+applying erosion for that one step and proceeds normally.
+
+If the sea level is well below the model surface (e.g., `sea: position: -2000.`), marine
+deposition is physically inactive and `seadepo: false` can be set to avoid this code path
+entirely.
