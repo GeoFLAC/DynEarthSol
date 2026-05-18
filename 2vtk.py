@@ -314,11 +314,12 @@ def process_single_frame(args):
             convert_field(des, frame, 'friction state variable', fvtu)
         except (KeyError, NameError):
             # Optional RSF friction state variable field not present; skip it.
-            print(
-                "Info: 'friction state variable' field not written for frame {} "
-                "because it is not available in this dataset.".format(frame),
-                file=sys.stderr,
-            )
+            if i == 0:
+                print(
+                    "Info: 'friction state variable' field is not available in this dataset"
+                    " and will be skipped.",
+                    file=sys.stderr,
+                )
 
         # Write Cell Data
         for name, (data, comps) in cell_data.items():

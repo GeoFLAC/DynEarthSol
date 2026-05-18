@@ -472,6 +472,7 @@ static void declare_parameters(po::options_description &cfg,
          "3: normal component fixed, shear components fixed at 0;\n"
          "4: normal component free, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
          "5: normal component fixed at 0, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
+         "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component free;\n"
          "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
          "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
          "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n")
@@ -479,6 +480,8 @@ static void declare_parameters(po::options_description &cfg,
          "Type of boundary condition for the right/eastern side")
         ("bc.vbc_val_x0", po::value<double>(&p.bc.vbc_val_x0)->default_value(-1e-9),
          "Value of boundary condition for left/western side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_x0_l", po::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
+         "Lateral shear velocity for left/western side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_division_x0_min", po::value<double>(&p.bc.vbc_val_division_x0_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
         ("bc.vbc_val_division_x0_max", po::value<double>(&p.bc.vbc_val_division_x0_max)->default_value(1.),
@@ -507,6 +510,8 @@ static void declare_parameters(po::options_description &cfg,
 
         ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_x1_l", po::value<double>(&p.bc.vbc_val_x1_l)->default_value(0),
+         "Lateral shear velocity for right/eastern side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_division_x1_min", po::value<double>(&p.bc.vbc_val_division_x1_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
         ("bc.vbc_val_division_x1_max", po::value<double>(&p.bc.vbc_val_division_x1_max)->default_value(1.),
@@ -526,8 +531,12 @@ static void declare_parameters(po::options_description &cfg,
          "Type of boundary condition for the northern side")
         ("bc.vbc_val_y0", po::value<double>(&p.bc.vbc_val_y0)->default_value(0),
          "Value of boundary condition for the southern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_y0_l", po::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
+         "Lateral shear velocity for southern side (used with bc type 6, unit is m/s)")
         ("bc.vbc_val_y1", po::value<double>(&p.bc.vbc_val_y1)->default_value(0),
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
+        ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
+         "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
 
         ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
@@ -583,7 +592,8 @@ static void declare_parameters(po::options_description &cfg,
          "0: no weak zone.\n"
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
          "2: ellipsoidal weak zone with specified center location and semi-axes.\n"
-         "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n")
+         "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n"
+         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n")
         ("ic.is_restarting_weakzone", po::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
         ("ic.weakzone_plstrain", po::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
@@ -621,6 +631,34 @@ static void declare_parameters(po::options_description &cfg,
          "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
          "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
          "A = weakzone_gaussian_amplitude and sigma = weakzone_standard_deviation.\n")
+
+        // multi-segment planar weak zone (weakzone_option == 5)
+        ("ic.weakzone_num_segments", po::value<int>(&p.ic.weakzone_num_segments)->default_value(1),
+         "Number of planar segments for multi-segment weak zone (weakzone_option=5)")
+        ("ic.weakzone_segments_xcenter", po::value<std::string>()->default_value("[0.5]"),
+         "X centers of each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_ycenter", po::value<std::string>()->default_value("[0.5]"),
+         "Y centers of each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
+        ("ic.weakzone_segments_zcenter", po::value<std::string>()->default_value("[0.5]"),
+         "Z centers of each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_azimuth", po::value<std::string>()->default_value("[0]"),
+         "Azimuth angles for each segment (in degrees), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_inclination", po::value<std::string>()->default_value("[90]"),
+         "Inclination angles for each segment (in degrees), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_halfwidth", po::value<std::string>()->default_value("[1.5]"),
+         "Half-widths for each segment (true perpendicular distance, in unit of mesh.resolution), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_x_min", po::value<std::string>()->default_value("[0]"),
+         "X lower bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_x_max", po::value<std::string>()->default_value("[1]"),
+         "X upper bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_depth_min", po::value<std::string>()->default_value("[0]"),
+         "Depth upper (shallower) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_depth_max", po::value<std::string>()->default_value("[1]"),
+         "Depth lower (deeper) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
+        ("ic.weakzone_segments_y_min", po::value<std::string>()->default_value("[0]"),
+         "Y lower bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
+        ("ic.weakzone_segments_y_max", po::value<std::string>()->default_value("[1]"),
+         "Y upper bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)\n")
 
         ("ic.temperature_option", po::value<int>(&p.ic.temperature_option)->default_value(0),
          "How to set the initial temperature?\n"
@@ -963,7 +1001,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     if (p.sim.is_outputting_averaged_fields == true)
-        if (p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
+        if (vm.count("sim.output_step_interval") &&
+            p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
             std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
             std::exit(1);
     }
@@ -1248,6 +1287,24 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // ic
     //
     {
+        if ( p.ic.weakzone_option == 5 ) {
+            int n = p.ic.weakzone_num_segments;
+            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, -1);
+            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, -1);
+            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, -1);
+            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, -1);
+#ifdef THREED
+            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, -1);
+            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, -1);
+#endif
+        }
+
         if ( p.ic.mattype_option == 1) {
             get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers);
             get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1);

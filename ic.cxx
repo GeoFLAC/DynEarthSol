@@ -1,3 +1,4 @@
+#include <array>
 #include <iostream>
 
 #include "constants.hpp"
@@ -64,6 +65,116 @@ namespace {
                                - az * (x[1] - x0[1])
 #endif
                                + incl * (x[NDIMS-1] - x0[NDIMS-1]) ) < halfwidth );
+        }
+    };
+
+
+    class General_planar_zone : public Zone
+    {
+        // Like Planar_zone but uses a proper unit normal (no degeneracy at azimuth=90° or
+        // inclination=90°) and adds x_min/x_max bounding.
+        //
+        // Fault plane normal: n = (-cos(az)*sin(incl),  sin(az)*sin(incl),  -cos(incl))
+        // Distance condition: |n · (x - x0)| < halfwidth  (true perpendicular distance)
+    private:
+        const double nx, nz; // unit normal components (always present)
+#ifdef THREED
+        const double ny;     // unit normal y-component (3D only)
+        const double ymin, ymax; // in meter
+#endif
+        const double xmin, xmax; // in meter
+        const double zmin, zmax; // in meter
+        const double halfwidth;  // true perpendicular half-width, in meter
+        const double *x0;
+
+    public:
+        General_planar_zone(const double center[NDIMS],
+                            double azimuth, double inclination, double halfwidth_,
+                            double xmin_, double xmax_,
+#ifdef THREED
+                            double ymin_, double ymax_,
+#endif
+                            double zmin_, double zmax_) :
+            nx(-std::cos(azimuth * DEG2RAD) * std::sin(inclination * DEG2RAD)),
+            nz(-std::cos(inclination * DEG2RAD)),
+#ifdef THREED
+            ny( std::sin(azimuth * DEG2RAD) * std::sin(inclination * DEG2RAD)),
+            ymin(ymin_), ymax(ymax_),
+#endif
+            xmin(xmin_), xmax(xmax_),
+            zmin(zmin_), zmax(zmax_),
+            halfwidth(halfwidth_),
+            x0(center) // pointer only — caller must keep center alive
+        {}
+
+        bool contains(const double x[NDIMS]) const
+        {
+            if (x[0]      <= xmin || x[0]      >= xmax) return false;
+            if (x[NDIMS-1] <= zmin || x[NDIMS-1] >= zmax) return false;
+#ifdef THREED
+            if (x[1] <= ymin || x[1] >= ymax) return false;
+#endif
+            double dist = nx * (x[0] - x0[0])
+                        + nz * (x[NDIMS-1] - x0[NDIMS-1]);
+#ifdef THREED
+            dist += ny * (x[1] - x0[1]);
+#endif
+            return std::fabs(dist) < halfwidth;
+        }
+    };
+
+
+    class Multi_planar_zone : public Zone
+    {
+    private:
+        // centers_storage must be populated before segments so that pointers remain valid
+        std::vector<std::array<double, NDIMS>> centers_storage;
+        std::vector<General_planar_zone> segments;
+
+    public:
+        Multi_planar_zone(int n,
+                          const double_vec &xcenter,
+#ifdef THREED
+                          const double_vec &ycenter,
+#endif
+                          const double_vec &zcenter,
+                          const double_vec &azimuth,
+                          const double_vec &inclination,
+                          const double_vec &halfwidth,
+                          const double_vec &xmin,
+                          const double_vec &xmax,
+#ifdef THREED
+                          const double_vec &ymin,
+                          const double_vec &ymax,
+#endif
+                          const double_vec &zmin,
+                          const double_vec &zmax)
+        {
+            centers_storage.resize(n);
+            for (int i = 0; i < n; ++i) {
+                centers_storage[i][0]       = xcenter[i];
+#ifdef THREED
+                centers_storage[i][1]       = ycenter[i];
+#endif
+                centers_storage[i][NDIMS-1] = zcenter[i];
+            }
+            segments.reserve(n);
+            for (int i = 0; i < n; ++i) {
+                segments.emplace_back(centers_storage[i].data(),
+                                      azimuth[i], inclination[i], halfwidth[i],
+                                      xmin[i], xmax[i],
+#ifdef THREED
+                                      ymin[i], ymax[i],
+#endif
+                                      zmin[i], zmax[i]);
+            }
+        }
+
+        bool contains(const double x[NDIMS]) const
+        {
+            for (const auto &seg : segments)
+                if (seg.contains(x)) return true;
+            return false;
         }
     };
 
@@ -466,6 +577,55 @@ void initial_weak_zone(const Param &param, const Variables &var,
                                             param.ic.weakzone_standard_deviation);
         weakvalue = new Constant_value();
         break;
+    case 5:
+    {
+        // multiple general planar segments (or one with num_segments=1);
+        // uses unit-normal formulation with x_min/x_max bounding.
+        // A point is in the weakzone if any segment contains it.
+        const int n = param.ic.weakzone_num_segments;
+        double_vec xc(n), zc(n);
+        for (int i = 0; i < n; ++i) {
+            xc[i] = param.ic.weakzone_segments_xcenter[i] * param.mesh.xlength;
+            zc[i] = -param.ic.weakzone_segments_zcenter[i] * param.mesh.zlength;
+        }
+        double_vec xmin_seg(n), xmax_seg(n);
+        for (int i = 0; i < n; ++i) {
+            xmin_seg[i] = param.ic.weakzone_segments_x_min[i] * param.mesh.xlength;
+            xmax_seg[i] = param.ic.weakzone_segments_x_max[i] * param.mesh.xlength;
+        }
+        double_vec zmin_seg(n), zmax_seg(n);
+        for (int i = 0; i < n; ++i) {
+            zmin_seg[i] = -param.ic.weakzone_segments_depth_max[i] * param.mesh.zlength;
+            zmax_seg[i] = -param.ic.weakzone_segments_depth_min[i] * param.mesh.zlength;
+        }
+        double_vec hw(n);
+        for (int i = 0; i < n; ++i)
+            hw[i] = param.ic.weakzone_segments_halfwidth[i] * param.mesh.resolution;
+#ifdef THREED
+        double_vec yc(n), ymin_seg(n), ymax_seg(n);
+        for (int i = 0; i < n; ++i) {
+            yc[i]       = param.ic.weakzone_segments_ycenter[i] * param.mesh.ylength;
+            ymin_seg[i] = param.ic.weakzone_segments_y_min[i]   * param.mesh.ylength;
+            ymax_seg[i] = param.ic.weakzone_segments_y_max[i]   * param.mesh.ylength;
+        }
+        weakzone = new Multi_planar_zone(n, xc, yc, zc,
+                                         param.ic.weakzone_segments_azimuth,
+                                         param.ic.weakzone_segments_inclination,
+                                         hw,
+                                         xmin_seg, xmax_seg,
+                                         ymin_seg, ymax_seg,
+                                         zmin_seg, zmax_seg);
+#else
+        weakzone = new Multi_planar_zone(n, xc, zc,
+                                         param.ic.weakzone_segments_azimuth,
+                                         param.ic.weakzone_segments_inclination,
+                                         hw,
+                                         xmin_seg, xmax_seg,
+                                         zmin_seg, zmax_seg);
+#endif
+        weakvalue = new Constant_value();
+        break;
+    }
     default:
         std::cerr << "Error: unknown weakzone_option: " << param.ic.weakzone_option << '\n';
         std::exit(1);
