@@ -110,7 +110,9 @@ jobs:
   nvc-build:
     needs: [check-duplicate, detect-changes, build-and-push-image]
     # Skip if the interceptor flagged it (prevents downstream execution)
-    if: ${{ needs.check-duplicate.outputs.should_skip != 'true' }}
+    if: |
+      !failure() && !cancelled() &&
+      needs.check-duplicate.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
 
     strategy:
