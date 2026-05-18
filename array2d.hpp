@@ -93,6 +93,27 @@ public:
     };
 
     //
+    // Component accessor — access all elements for one dimension
+    //
+    struct ComponentAccessor {
+        T*  ptr_;    // a_[d*n_] (SOA) or a_[d] (AoS)
+        int stride_; // 1 (SOA) or N (AoS)
+        int n_;
+
+        T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    struct ConstComponentAccessor {
+        const T* ptr_;
+        int stride_;
+        int n_;
+
+        const T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    //
     // View
     //
     struct ConstIndirectAccessor {
@@ -382,6 +403,22 @@ public:
         return ConstAccessor{ a_ + i, n_ };
 #else
         return ConstAccessor{ a_ + i*N, 1 };
+#endif
+    }
+
+    ComponentAccessor component(int d) {
+#ifdef SOA
+        return ComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ComponentAccessor{ a_ + d, N, n_ };
+#endif
+    }
+
+    ConstComponentAccessor component(int d) const {
+#ifdef SOA
+        return ConstComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ConstComponentAccessor{ a_ + d, N, n_ };
 #endif
     }
 
