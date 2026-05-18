@@ -3,6 +3,9 @@
 To reproduce the demo coupled model, follow the instructions in
 [`gospl_driver/README.md`](../../../gospl_driver/README.md).
 
+For more information about the demo, 
+[`gospl_driver/examples/README.md`](../../../gospl_driver/examples/README.md).
+
 ## TL;DR
 
 ### Prerequisites
