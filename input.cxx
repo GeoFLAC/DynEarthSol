@@ -236,10 +236,17 @@ static void declare_parameters(po::options_description &cfg,
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
         ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
          "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-         ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
+        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
          "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
-         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
+        ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
+        ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
+         "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
+         "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
+         "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
+        ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
+         "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
+         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
         ;
 
     cfg.add_options()
@@ -309,8 +316,9 @@ static void declare_parameters(po::options_description &cfg,
         ("control.surface_process_option", po::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
-         "101: custom function."
-         "2: using simple deposition."
+         "2: using simple deposition. "
+         "11: using GoSPL landscape evolution model. "
+         "101: custom function. "
          "102: using simple deposition and diffusion.")
         ("control.surface_diffusivity", po::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
          "Standard diffusition coefficient of surface topography (m^2/s)")
@@ -322,6 +330,23 @@ static void declare_parameters(po::options_description &cfg,
          "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",po::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
+        ("control.surface_process_gospl_config_file", po::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
+         "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
+        ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
+         "Run GoSPL coupling every N DES steps (used when gospl_coupling_mode = steps).")
+        ("control.gospl_coupling_interval_in_yr", po::value<double>(&p.control.gospl_coupling_interval_in_yr)->default_value(1000.0),
+         "Run GoSPL coupling every T years (used when gospl_coupling_mode = time). E.g. 1000 = couple once per 1000 yr.")
+        ("control.gospl_coupling_mode", po::value<std::string>(&p.control.gospl_coupling_mode)->default_value("steps"),
+         "Coupling frequency mode: 'steps' (use gospl_coupling_frequency) or 'time' (use gospl_coupling_interval_in_yr).")
+        ("control.gospl_velocity_coupling", po::value<bool>(&p.control.gospl_velocity_coupling)->default_value(true),
+         "Send all three DES surface velocity components (vx, vy, vz) to GoSPL each coupling step. "
+         "vz drives uplift/subsidence; vx/vy drive semi-Lagrangian horizontal advection of GoSPL topography.")
+        ("control.gospl_mesh_resolution", po::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
+         "GoSPL mesh node spacing in meters (default: -1 = auto-size based on DES surface nodes). Set to desired resolution for control over GoSPL grid density.")
+        ("control.gospl_mesh_perturbation", po::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
+         "Fraction of grid spacing to randomly perturb node positions (0-1). 0 = regular grid, 0.3 = moderate perturbation to avoid grid artifacts.")
+        ("control.gospl_mesh_padding", po::value<double>(&p.control.gospl_mesh_padding)->default_value(0.1),
+         "Fractional extension of the GoSPL mesh beyond the DES domain on each side (default: 0.1 = 10%). Keeps DES nodes in the interior of GoSPL's mesh, away from boundary artifacts.")
         ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
         ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),
@@ -600,11 +625,16 @@ static void declare_parameters(po::options_description &cfg,
         ("ic.weakzone_zsemi_axis", po::value<double>(&p.ic.weakzone_zsemi_axis)->default_value(1e3),
          "Length of weak zone semi-axis in z direction (in meters)\n")
         ("ic.weakzone_standard_deviation", po::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
-         "Standard deviation of Gussian distribution point weak zone (in meters)\n")
+         "Standard deviation of Gaussian weak zone (in meters).\n"
+         "Used as point-Gaussian std dev (option 3) and as along-strike sigma (option 4).\n")
+        ("ic.weakzone_gaussian_amplitude", po::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
+         "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
+         "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
+         "A = weakzone_gaussian_amplitude and sigma = weakzone_standard_deviation.\n")
 
-        // multi-segment planar weak zone (weakzone_option == 4)
+        // multi-segment planar weak zone (weakzone_option == 5)
         ("ic.weakzone_num_segments", po::value<int>(&p.ic.weakzone_num_segments)->default_value(1),
-         "Number of planar segments for multi-segment weak zone (weakzone_option=4)")
+         "Number of planar segments for multi-segment weak zone (weakzone_option=5)")
         ("ic.weakzone_segments_xcenter", po::value<std::string>()->default_value("[0.5]"),
          "X centers of each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
         ("ic.weakzone_segments_ycenter", po::value<std::string>()->default_value("[0.5]"),
@@ -1173,6 +1203,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 #endif
 
+#ifndef USEMMG
+    if (p.mesh.use_mmg_init) {
+        p.mesh.use_mmg_init = false;
+        std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
+    }
+#endif
+
     //
     // bc
     //
@@ -1250,7 +1287,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // ic
     //
     {
-        if ( p.ic.weakzone_option == 4 ) {
+        if ( p.ic.weakzone_option == 5 ) {
             int n = p.ic.weakzone_num_segments;
             get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
             get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);

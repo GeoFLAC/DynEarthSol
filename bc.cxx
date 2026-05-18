@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <unordered_map>
 #include <iomanip>
@@ -9,6 +10,9 @@
 #include "barycentric-fn.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
+#ifdef HAS_GOSPL_CPP_INTERFACE
+#include "gospl_driver/gospl-driver.hpp"
+#endif
 
 
 #include "bc.hpp"
@@ -1093,6 +1097,160 @@ namespace {
         }
     }
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    void use_gospl(const Param& param, const Variables& var)
+    {
+        if (!var.gospl_driver || !var.gospl_driver->is_initialized()) {
+            std::cerr << "Error: GoSPL driver is not initialized" << std::endl;
+            return;
+        }
+
+        // Accumulate time and steps since last coupling
+        const double SEC_PER_YR = 3.1536e7;
+        double dt_years = var.dt / SEC_PER_YR;
+        var.gospl_driver->accumulated_dt += dt_years;
+        var.gospl_driver->step_counter++;
+
+        // Check whether it's time to couple
+        bool do_couple;
+        if (var.gospl_driver->coupling_by_time)
+            do_couple = (var.gospl_driver->accumulated_dt >= var.gospl_driver->coupling_interval_in_yr);
+        else
+            do_couple = (var.gospl_driver->step_counter >= var.gospl_driver->coupling_frequency);
+
+        if (!do_couple)
+            return;  // GoSPL idle this step
+
+        // ===== COUPLING STEP =====
+        double total_dt = var.gospl_driver->accumulated_dt;
+        var.gospl_driver->accumulated_dt = 0.0;
+        var.gospl_driver->step_counter   = 0;
+
+        const int_vec& top_nodes = *var.bnodes[iboundz1];
+        const std::size_t ntop = top_nodes.size();
+
+        std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
+                  << ntop << " surface nodes, vel_coupling="
+                  << (var.gospl_driver->velocity_coupling ? "on" : "off")
+                  << std::endl;
+
+        // Build coordinate array for current DES surface nodes
+        std::vector<double> coords(ntop * 3);
+        for (std::size_t i = 0; i < ntop; ++i) {
+            int n = top_nodes[i];
+            for (int d = 0; d < NDIMS; d++)
+                coords[i * 3 + d] = (*var.coord)[n][d];
+        }
+
+        // Static storage for time-averaged velocity reference.
+        // Stored as static (not in GoSPLDriver) to avoid any allocation in
+        // GoSPLDriver's memory space, which is adjacent to PETSc-managed memory
+        // that can interfere with the C++ heap.
+        static std::vector<double> surface_coords_start;
+        static bool has_surface_start = false;
+
+        // Re-initialize GoSPL topography on the first coupling event only.
+        // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
+        // Also invalidate surface_coords_start: after remeshing the node set changes,
+        // so time-averaged velocities cannot span across the remesh boundary.
+        if (var.gospl_driver->needs_elevation_reset) {
+            std::vector<double> des_elev(ntop);
+            for (std::size_t i = 0; i < ntop; ++i)
+                des_elev[i] = (*var.coord)[top_nodes[i]][NDIMS-1];
+            int r = var.gospl_driver->apply_elevation_data(
+                coords.data(), des_elev.data(), ntop, 3, 1.0);
+            if (r != 0)
+                std::cerr << "Warning: Failed to reset GoSPL elevation" << std::endl;
+            var.gospl_driver->needs_elevation_reset = false;
+            has_surface_start = false;  // force instantaneous vel this event
+        }
+
+        // Pass all three DES surface velocity components to GoSPL.
+        // Use time-averaged velocities (Δcoord/Δt over the coupling interval) when
+        // available to filter out inertial (quasi-dynamic) oscillations in the
+        // instantaneous DES velocity.  Fall back to instantaneous on the first
+        // coupling event or after remeshing.
+        if (var.gospl_driver->velocity_coupling) {
+            std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
+            bool use_time_avg = has_surface_start &&
+                                surface_coords_start.size() == ntop * 3;
+            for (std::size_t i = 0; i < ntop; ++i) {
+                int n = top_nodes[i];
+                if (use_time_avg) {
+                    vx_yr[i] = (coords[i*3+0]       - surface_coords_start[i*3+0])       / total_dt;
+#ifdef THREED
+                    vy_yr[i] = (coords[i*3+1]       - surface_coords_start[i*3+1])       / total_dt;
+#else
+                    vy_yr[i] = 0.0;
+#endif
+                    vz_yr[i] = (coords[i*3+NDIMS-1] - surface_coords_start[i*3+NDIMS-1]) / total_dt;
+                } else {
+                    vx_yr[i] = (*var.vel)[n][0]       * SEC_PER_YR;
+#ifdef THREED
+                    vy_yr[i] = (*var.vel)[n][1]        * SEC_PER_YR;
+#else
+                    vy_yr[i] = 0.0;
+#endif
+                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * SEC_PER_YR;
+                }
+            }
+            int r = var.gospl_driver->set_surface_velocity(
+                coords.data(), vx_yr.data(), vy_yr.data(), vz_yr.data(), ntop, 3, 1.0);
+            if (r != 0)
+                std::cerr << "Warning: Failed to set surface velocity in GoSPL" << std::endl;
+
+            // Velocity transfer diagnostics
+            double vx_min = *std::min_element(vx_yr.begin(), vx_yr.end());
+            double vx_max = *std::max_element(vx_yr.begin(), vx_yr.end());
+            double vy_min = *std::min_element(vy_yr.begin(), vy_yr.end());
+            double vy_max = *std::max_element(vy_yr.begin(), vy_yr.end());
+            double vz_min = *std::min_element(vz_yr.begin(), vz_yr.end());
+            double vz_max = *std::max_element(vz_yr.begin(), vz_yr.end());
+            std::cout << "  vel DES->GoSPL (" << (use_time_avg ? "time-avg" : "instantaneous") << ", m/yr):"
+                      << " vx=[" << vx_min << ", " << vx_max << "]"
+                      << " vy=[" << vy_min << ", " << vy_max << "]"
+                      << " vz=[" << vz_min << ", " << vz_max << "]"
+                      << std::endl;
+        }
+
+        // Run GoSPL and get net dh in one call.
+        // Internally: horiz advection (if vel set) + uplift + erosion/deposition,
+        // differenced on the native GoSPL mesh, IDW-interpolated to DES query points.
+        std::vector<double> net_erosion(ntop, 0.0);
+        int run_result = var.gospl_driver->run_and_get_erosion(
+            total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
+        if (run_result != 0) {
+            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
+            return;
+        }
+
+        // Apply dh to all DES surface nodes.
+        // net_erosion contains only erosion+diffusion (uplift stripped in Python);
+        // tectonic uplift is already present in DES coords from the mechanical solver.
+        // The GoSPL mesh is padded beyond the DES domain (gospl_mesh_padding),
+        // so all DES nodes query interior GoSPL nodes, free of boundary artifacts.
+        double min_dh = 0, max_dh = 0, sum_dh = 0;
+        for (std::size_t i = 0; i < ntop; ++i) {
+            int n = top_nodes[i];
+            double dh = net_erosion[i];
+            min_dh = std::min(min_dh, dh);
+            max_dh = std::max(max_dh, dh);
+            sum_dh += dh;
+            (*var.coord)[n][NDIMS-1] += dh;
+            coords[i*3+NDIMS-1]      += dh;  // keep coords in sync for recording below
+        }
+
+        // Record end-of-coupling surface coords for next interval's time-averaged velocity.
+        // Done after GoSPL returns; surface_coords_start is a static vector allocated in
+        // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
+        surface_coords_start = coords;
+        has_surface_start = true;
+
+        std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
+                  << " mean=" << sum_dh / ntop << std::endl;
+    }
+#endif
+
     void get_surface_info(const Variables& var, \
         double_vec& top_base, double_vec& top_depth) {
 #ifdef NPROF_DETAIL
@@ -1525,6 +1683,15 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     case 1:
         simple_diffusion(var);
         break;
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    case 11:
+        if (var.gospl_driver != nullptr) {
+            use_gospl(param, var);
+        } else {
+            std::cerr << "Error: GoSPL driver not initialized for surface process option 11" << std::endl;
+        }
+        break;
+#endif
     case 101:
         custom_surface_processes(var, coord);
         break;

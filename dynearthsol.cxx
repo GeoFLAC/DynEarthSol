@@ -1,6 +1,7 @@
 #include <iostream>
 #include <limits>
 #include <cstdlib>
+#include <fstream>
 
 
 #include "constants.hpp"
@@ -23,6 +24,7 @@
 #include "rheology.hpp"
 #include "runtime_info.hpp"
 #include "utils.hpp"
+#include "gospl_driver/gospl-driver.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -40,6 +42,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
+    var.init_elem_size_n = new double_vec(0);
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -185,7 +188,9 @@ void init(const Param& param, Variables& var)
     var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
+#ifdef USEMMG
     initialize_elem_size_n(var, *var.init_elem_size_n);
+#endif
 
     compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
@@ -302,6 +307,9 @@ void restart(const Param& param, Variables& var)
     }
 
     allocate_variables(param, var);
+#ifdef USEMMG
+    var.init_elem_size_n->resize(var.nnode);
+#endif
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
@@ -327,8 +335,9 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.ppressure, "pore pressure");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+#ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
-
+#endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
@@ -583,6 +592,7 @@ int main(int argc, const char* argv[])
     if (! param.sim.is_restarting) {
         init(param, var);
 
+
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
             // output.write_exact(var);
             isostasy_adjustment(param, var);
@@ -593,6 +603,85 @@ int main(int argc, const char* argv[])
     else {
         restart(param, var);
     }
+
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Initialize GoSPL driver if surface process option is 11
+    // This runs for both fresh starts and restarts
+    if (param.control.surface_process_option == 11) {
+        std::cout << "Initializing GoSPL driver for surface process option 11..." << std::endl;
+        var.gospl_driver = new GoSPLDriver();
+        
+        // Step 1: Initialize Python/gospl_extensions (needed for generate_mesh)
+        if (!var.gospl_driver->init_python()) {
+            std::cerr << "Failed to initialize Python for GoSPL" << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+            return -1;
+        }
+        
+        // Step 2: Generate GoSPL mesh from DynEarthSol surface nodes (or reuse existing on restart)
+        std::string mesh_file = "gospl_mesh.npz";
+        bool reuse_mesh = false;
+        
+        if (param.sim.is_restarting) {
+            // Only check for existing mesh when restarting
+            std::ifstream mesh_check(mesh_file);
+            reuse_mesh = mesh_check.good();
+            mesh_check.close();
+        }
+        
+        if (reuse_mesh) {
+            std::cout << "Restarting: Found existing GoSPL mesh file: " << mesh_file << ". Reusing it." << std::endl;
+        } else {
+            std::cout << "Generating new GoSPL mesh..." << std::endl;
+            std::vector<double> x_coords;
+            std::vector<double> y_coords;
+            
+            for (int i = 0; i < var.nnode; ++i) {
+                if ((*var.bcflag)[i] & BOUNDZ1) {  // Top surface nodes
+                    x_coords.push_back((*var.coord)[i][0]);
+#ifdef THREED
+                    y_coords.push_back((*var.coord)[i][1]);
+#else
+                    y_coords.push_back(0.0);  // 2D case
+#endif
+                }
+            }
+            
+            if (!x_coords.empty()) {
+                var.gospl_driver->generate_mesh(x_coords, y_coords, mesh_file,
+                                                param.control.gospl_mesh_resolution,
+                                                param.control.gospl_mesh_perturbation,
+                                                param.control.gospl_mesh_padding);
+            }
+        }
+        
+        // Step 3: Initialize GoSPL model (loads the mesh)
+        if (var.gospl_driver->initialize(param.control.surface_process_gospl_config_file)) {
+            std::cout << "GoSPL driver successfully initialized with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+            // Suppress verbose output from GoSPL
+            var.gospl_driver->set_verbose(false);
+            // Set coupling frequency from config (default: 1 = every step)
+            var.gospl_driver->coupling_by_time   = (param.control.gospl_coupling_mode == "time");
+            var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
+            var.gospl_driver->coupling_interval_in_yr  = param.control.gospl_coupling_interval_in_yr;
+            var.gospl_driver->velocity_coupling  = param.control.gospl_velocity_coupling;
+            if (var.gospl_driver->coupling_by_time)
+                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_interval_in_yr << " yr"
+                          << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
+            else
+                std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_frequency << " step(s)"
+                          << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;
+        } else {
+            std::cerr << "Failed to initialize GoSPL driver with config: " 
+                      << param.control.surface_process_gospl_config_file << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+            return -1;
+        }
+    }
+#endif
 
     var.dt = compute_dt(param, var);
     var.dt_PT = compute_dt(param, var);
@@ -867,6 +956,14 @@ int main(int argc, const char* argv[])
         std::cout << " (" <<  std::setw(5) <<  std::fixed << std::setprecision(2) << std::setfill(' ')
             << 100.*var.func_time.output_time/duration_ns << "%)/ " << var.noutput
             << " = " << std::setprecision(2) << output_time_avg << " s/output\n";
+#ifdef HAS_GOSPL_CPP_INTERFACE
+        // Clean up GoSPL driver if it was created
+        if (var.gospl_driver != nullptr) {
+            std::cout << "Cleaning up GoSPL driver..." << std::endl;
+            delete var.gospl_driver;
+            var.gospl_driver = nullptr;
+        }
+#endif
     }
     return 0;
 }

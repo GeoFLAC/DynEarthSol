@@ -1,0 +1,38 @@
+# Auto-detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Source code
+*.cxx text eol=lf
+*.cpp text eol=lf
+*.c   text eol=lf
+*.hpp text eol=lf
+*.h   text eol=lf
+
+# Scripts and config
+*.py  text eol=lf
+*.sh  text eol=lf
+*.cfg text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Documentation
+*.md  text eol=lf
+*.tex text eol=lf
+*.txt text eol=lf
+
+# Build files
+Makefile text eol=lf
+Dockerfile text eol=lf
+
+# Binary files (never modify)
+*.o binary
+*.a binary
+*.so binary
+*.dylib binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.npz binary
+*.h5 binary
+*.vtkhdf binary

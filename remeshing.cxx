@@ -2152,6 +2152,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 #endif
 }
 
+#ifdef USEMMG
 void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
 {
     /* Compute the desired element size (metric) for MMG remeshing.
@@ -2173,7 +2174,6 @@ void compute_metric_field(const Variables &var, double_vec &metric, double_vec &
     }
 }
 
-#ifdef USEMMG
 #ifdef THREED
 void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
@@ -2696,6 +2696,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
      * to new nodes during remeshing to prevent refinement zones from
      * diffusing away.
      */
+    if (init_elem_size_n.size() > 0) return;
 
 #ifndef ACC
 #ifdef GPP1X
@@ -2716,8 +2717,8 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
         (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
+    init_elem_size_n.resize(var.nnode);
     std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
-
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, init_elem_size_n)
@@ -2948,7 +2949,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
         if (param.mesh.meshing_elem_shape == 0) {
             // renumbering mesh
-            renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, NULL);
+            renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, nullptr);
         }
 
         create_boundary_flags(var);
