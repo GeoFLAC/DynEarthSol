@@ -1,6 +1,6 @@
-# GoSPL Integration for DynEarthSol
+# GoSPL Coupling for DynEarthSol
 
-This directory contains the integration code for GoSPL (Geomorphological Landscape Evolution) surface processes within DynEarthSol.
+This directory contains the coupling code for GoSPL (Geomorphological Landscape Evolution) surface processes within DynEarthSol.
 
 ## Files
 
@@ -10,7 +10,7 @@ This directory contains the integration code for GoSPL (Geomorphological Landsca
 
 ## Prerequisites
 
-**GoSPL Extensions Library**: You need to clone and build the gospl_extensions repository:
+**GoSPL Extensions Library**: You need to clone and build the gospl_extensions repository: e.g.,
    ```bash
    git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
    cd ~/opt/gospl_extensions/cpp_interface
@@ -29,15 +29,28 @@ This directory contains the integration code for GoSPL (Geomorphological Landsca
 
 ## Build and Runtime Workflow
 
-The GoSPL integration provides two ways to run DynEarthSol with GoSPL support:
+The GoSPL coupling needs configuration and provides two ways to run a coupled simulation:
 
-### Method 1: Use the Auto-Generated Wrapper (Recommended)
+### Configuration
+1. In your DynEarthSol configuration file, set:
+   ```
+   surface_process_option = 11
+   surface_process_gospl_config_file = ./gospl_config.yml
+   ```
+   Here, DynEarthSol is assumed to run from the directory containing the GoSPL config file so that relative paths resolve correctly.
+
+2. Create a GoSPL configuration file compatible with gospl_extensions:
+   - See working examples in `~/opt/gospl_extensions/examples/`
+   - Use `gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml` as a starting template
+
+### Run Method 1: Use the Auto-Generated Wrapper (Recommended)
 
 The Makefile automatically creates a wrapper script that handles all environment setup:
 
 1. **Build DynEarthSol with GoSPL support**:
    ```bash
-   # Set use_gospl = 1 in the Makefile, then:
+   # Set use_gospl = 1 and GOSPL_EXT_DIR in the Makefile
+   # (e.g., GOSPL_EXT_DIR = $(HOME)/opt/gospl_extensions), then:
    make clean
    make -j4
    ```
@@ -50,10 +63,11 @@ The Makefile automatically creates a wrapper script that handles all environment
    conda activate gospl
    
    # Run using the wrapper (PYTHONPATH is set automatically)
-   ./dynearthsol-gospl your_config.cfg
+   cd DynEarthSol/gospl_driver/examples
+   ../../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg
    ```
 
-### Method 2: Manual Environment Setup
+### Run Method 2: Manual Environment Setup
 
 If you prefer manual control or the wrapper doesn't work:
 
@@ -76,24 +90,11 @@ If you prefer manual control or the wrapper doesn't work:
    export PYTHONPATH="$HOME/opt/gospl_extensions/cpp_interface:${PYTHONPATH}"
    
    # Run DynEarthSol with GoSPL-enabled configuration
-   ./dynearthsol3d your_config.cfg
+   cd DynEarthSol/gospl_driver/examples
+   ../../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg
    ```
 
-### Configuration
-3. In your DynEarthSol configuration file, set:
-   ```
-   surface_process_option = 11
-   surface_process_gospl_config_file = ./gospl_config.yml
-   ```
-   Run DynEarthSol from the directory containing the GoSPL config file so that relative paths resolve correctly.
-
-4. Create a GoSPL configuration file compatible with gospl_extensions:
-   - See working examples in `~/opt/gospl_extensions/examples/`
-   - Use `gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml` as a starting template
-
-## Integration Details
-
-The GoSPL integration works as follows:
+## Coupling Details
 
 1. **Initialization**: GoSPL is initialized once from the YAML config file. At the first coupling event, GoSPL's elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
 2. **Each coupling event** (every `gospl_coupling_frequency` DES steps, or every `gospl_coupling_interval_in_yr` years when `gospl_coupling_mode = time`):
