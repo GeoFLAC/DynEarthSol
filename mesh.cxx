@@ -2122,48 +2122,62 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     int *pconnectivity, *psegment, *psegflag;
 
 #ifdef USEMMG
-    // Step 1: scale volume for coarse TetGen mesh
-    double coarse_max_elem_size = max_elem_size;
-    std::vector<double> coarse_regattr_vec;
-    const double *coarse_regattr_ptr = regattr;
+    if (param.mesh.use_mmg_init) {
+        // Step 1: scale volume for coarse TetGen mesh
+        double coarse_max_elem_size = max_elem_size;
+        std::vector<double> coarse_regattr_vec;
+        const double *coarse_regattr_ptr = regattr;
 
-    if (max_elem_size > 0) {
-        coarse_max_elem_size = max_elem_size *
-            std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
-    } else {
-        // per-region: encode region index as temporary mattype so TetGen -A
-        // stamps coarse elements with their zone index (0, 1, ...).
-        // This allows compute_init_metric() to use connectivity-based projection,
-        // correctly preserving per-zone resolution.
-        const int stride = NDIMS + 2;
-        coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
-        for (int r = 0; r < nregions; ++r) {
-            coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
-            double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
-            if (vol > 0) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+        if (max_elem_size > 0) {
+            coarse_max_elem_size = max_elem_size *
+                std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+        } else {
+            // per-region: encode region index as temporary mattype so TetGen -A
+            // stamps coarse elements with their zone index (0, 1, ...).
+            // This allows compute_init_metric() to use connectivity-based projection,
+            // correctly preserving per-zone resolution.
+            const int stride = NDIMS + 2;
+            coarse_regattr_vec.assign(regattr, regattr + nregions * stride);
+            for (int r = 0; r < nregions; ++r) {
+                coarse_regattr_vec[r * stride + NDIMS] = (double)r;  // temporary: region index as mattype
+                double &vol = coarse_regattr_vec[r * stride + NDIMS + 1];
+                if (vol > 0) vol *= std::pow(param.mesh.mmg_init_coarsening_factor, NDIMS);
+            }
+            coarse_regattr_ptr = coarse_regattr_vec.data();
         }
-        coarse_regattr_ptr = coarse_regattr_vec.data();
+
+        tetrahedralize_polyhedron(param.mesh.max_ratio,
+                                  param.mesh.min_tet_angle, coarse_max_elem_size,
+                                  0,
+                                  param.mesh.meshing_verbosity,
+                                  0, // HARDCODED optlevel=0 for coarse mesh
+                                  npoints, n_init_segments, points,
+                                  NULL, init_segflags,
+                                  facets,
+                                  nregions, coarse_regattr_ptr,
+                                  &var.nnode, &var.nelem, &var.nseg,
+                                  &pcoord, &pconnectivity,
+                                  &psegment, &psegflag, &pregattr);
+
+        // Step 2: MMG refinement — also compute fine-mesh init size hint
+        mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
+                                var.nnode, var.nelem, var.nseg,
+                                pcoord, pconnectivity, psegment, psegflag, pregattr,
+                                var.init_elem_size_n);
+    } else {
+        tetrahedralize_polyhedron(param.mesh.max_ratio,
+                                  param.mesh.min_tet_angle, max_elem_size,
+                                  0,
+                                  param.mesh.meshing_verbosity,
+                                  param.mesh.tetgen_optlevel,
+                                  npoints, n_init_segments, points,
+                                  NULL, init_segflags,
+                                  facets,
+                                  nregions, regattr,
+                                  &var.nnode, &var.nelem, &var.nseg,
+                                  &pcoord, &pconnectivity,
+                                  &psegment, &psegflag, &pregattr);
     }
-
-    tetrahedralize_polyhedron(param.mesh.max_ratio,
-                              param.mesh.min_tet_angle, coarse_max_elem_size,
-                              0,
-                              param.mesh.meshing_verbosity,
-                              0, // HARDCODED optlevel=0 for coarse mesh
-                              npoints, n_init_segments, points,
-                              NULL, init_segflags,
-                              facets,
-                              nregions, coarse_regattr_ptr,
-                              &var.nnode, &var.nelem, &var.nseg,
-                              &pcoord, &pconnectivity,
-                              &psegment, &psegflag, &pregattr);
-
-    // Step 2: MMG refinement — also compute fine-mesh init size hint
-    mmg_refine_init_mesh_3d(param.mesh, max_elem_size, nregions, regattr,
-                            var.nnode, var.nelem, var.nseg,
-                            pcoord, pconnectivity, psegment, psegflag, pregattr,
-                            var.init_elem_size_n);
-
 #else // !USEMMG
     tetrahedralize_polyhedron(param.mesh.max_ratio,
                               param.mesh.min_tet_angle, max_elem_size,
