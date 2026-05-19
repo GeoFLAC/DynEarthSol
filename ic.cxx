@@ -748,17 +748,17 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
         thickness[i] = layer_bdy[i+1] - layer_bdy[i];
     }
 
-    double wx_r = 1./param.ic.rh_dome_width;
+    double wx_r = 1./param.ic.radiogenic_heat_dome_width;
 
 #ifdef THREED
-    double az = param.ic.rh_dome_azimuth * DEG2RAD;
+    double az = param.ic.radiogenic_heat_dome_azimuth * DEG2RAD;
     double wy_r;
-    if (param.ic.rh_dome_width_y == 0) {
-        wy_r = 1./param.ic.rh_dome_width;
-    } else if (param.ic.rh_dome_width_y < 0.0) {
+    if (param.ic.radiogenic_heat_dome_width_y == 0) {
+        wy_r = 1./param.ic.radiogenic_heat_dome_width;
+    } else if (param.ic.radiogenic_heat_dome_width_y < 0.0) {
         wy_r = 0.;
     } else {
-        wy_r = 1./param.ic.rh_dome_width_y;
+        wy_r = 1./param.ic.radiogenic_heat_dome_width_y;
     }
 #endif
 
@@ -769,9 +769,9 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
         const double zPotT = param.bc.mantle_temperature * exp(param.control.gravity * z * 4e-8);
 
         double radius_sq;
-        double dx = p[0] - param.ic.rh_dome_center_x * param.mesh.xlength;
+        double dx = p[0] - param.ic.radiogenic_heat_dome_center_x * param.mesh.xlength;
 #ifdef THREED
-        double dy = p[1] - param.ic.rh_dome_center_y * param.mesh.ylength;
+        double dy = p[1] - param.ic.radiogenic_heat_dome_center_y * param.mesh.ylength;
         double dx_rot = dx * std::cos(az) - dy * std::sin(az);
         double dy_rot = dx * std::sin(az) + dy * std::cos(az);
         radius_sq = std::pow(dx_rot * wx_r, 2) + std::pow(dy_rot * wy_r, 2);
@@ -779,7 +779,7 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
         radius_sq = std::pow(dx * wx_r, 2);
 #endif
 
-        const double xsfh = param.ic.surface_heat_flux + param.ic.rh_dome_amplitude / 1e6 * exp(-radius_sq);
+        const double xsfh = param.ic.surface_heat_flux + param.ic.radiogenic_heat_dome_amplitude / 1e6 * exp(-radius_sq);
         hp[0] = (1. - F)*xsfh/rho[0]/layer_bdy[1];
 
         double t = param.bc.surface_temperature;
