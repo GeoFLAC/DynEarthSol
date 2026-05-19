@@ -363,7 +363,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
 #endif
 #endif
+#ifdef THREED
+    #pragma acc parallel loop gang vector async copyin(lateral_faces[0:4])
+#else
     #pragma acc parallel loop gang vector async
+#endif
     for (int i=0; i<var.nnode; ++i) {
 
         // fast path: skip nodes not on boundary
