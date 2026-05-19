@@ -146,10 +146,10 @@ endif
 
 ifeq ($(usemmg), 1)
 	# path to MMG3D header files
-	MMG_INCLUDE = ${HOME}/opt/mmg/build/include
+	MMG_INCLUDE = ./mmg/build/include
 
 	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ${HOME}/opt/mmg/build/lib
+	MMG_LIB_DIR = ./mmg/build/lib
 
 	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
 	ifeq ($(ndims), 3)	
