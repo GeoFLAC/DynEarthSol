@@ -29,5 +29,11 @@ For more information about the demo,
 ### Run the coupled model
 
 1. `cd DynEarthSol/gospl_driver/examples`
-2. `./../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg`
+2. `../../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg`
+
+### Run the standalone DES model
+
+1. `cd DynEarthSol/gospl_driver/examples`
+2. Change `surface_process_option` to `1` (simple diffusion) in `gaussian-weakzone-3d-with-gospl.cfg`.
+3. `../../dynearthsol ./gaussian-weakzone-3d-with-gospl.cfg`
 
