@@ -1,12 +1,12 @@
 # DES–GoSPL Coupled Model Benchmark
 
-To reproduce the demo coupled model, follow the instructions in
-[`gospl_driver/README.md`](../../../gospl_driver/README.md).
+To reproduce the demo coupled model, follow the full instructions in
+[`gospl_driver/README.md`](../../../gospl_driver/README.md); or follow the [Quick Start](#quick-start)
 
 For more information about the demo, 
 [`gospl_driver/examples/README.md`](../../../gospl_driver/examples/README.md).
 
-## TL;DR
+## Quick Start
 
 ### Prerequisites
 
