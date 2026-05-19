@@ -74,14 +74,14 @@ cmp:
 	${RUN_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python3 compare.py ${ORIG} ${FRAME} ${MODELNAME}
+	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
 
 restart:
 	${RESTART_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python3 compare.py ${ORIG} ${FRAME} ${MODELNAME}
+	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
 
 store:
@@ -96,7 +96,7 @@ setjob:
 	ln -s ~/data/jobs/${CASE} orig-job
 
 cmpjob:
-	python3 compare.py orig-job ${CURR} ${FRAME} ${MODELNAME}
+	python ./compare.py orig-job ${CURR} ${FRAME} ${MODELNAME}
 
 vtk:
 	python ../2vtk.py -m  ${MODELNAME}

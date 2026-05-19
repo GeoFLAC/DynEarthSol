@@ -1,4 +1,5 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
+
 from __future__ import print_function
 import sys, os
 import numpy as np
@@ -153,7 +154,11 @@ markersetname = 'markerset'
 try:
     # read old and new results
 
-    os.chdir(olddir)
+    try:
+        os.chdir(olddir)
+    except OSError:
+        print("Error: Directory of old results doesn't exist:", olddir)
+        sys.exit(1)
     des = Dynearthsol(modelname)
     old = read_data(des, frame)
     format = des.format

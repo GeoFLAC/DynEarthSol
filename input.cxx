@@ -692,16 +692,23 @@ static void declare_parameters(po::options_description &cfg,
         ("ic.lithospheric_thickness", po::value<double>(&p.ic.lithospheric_thickness)->default_value(100.e3),
          "Lithospheric thickness (in meters), used for the temperature profile on the plate.\n")
          // for temperature_option = 3
-        ("ic.rh_dome_center_x", po::value<double>(&p.ic.rh_dome_center_x)->default_value(0.5),
+        ("ic.radiogenic_heat_dome_center_x", po::value<double>(&p.ic.radiogenic_heat_dome_center_x)->default_value(0.5),
          "x of center of geothermal dome, used for the temperature profile on the plate.\n")
-        ("ic.rh_dome_center_y", po::value<double>(&p.ic.rh_dome_center_y)->default_value(0.5),
+        ("ic.radiogenic_heat_dome_center_y", po::value<double>(&p.ic.radiogenic_heat_dome_center_y)->default_value(0.5),
          "y of center of geothermal dome, used for the temperature profile on the plate.\n")
         ("ic.surface_heat_flux", po::value<double>(&p.ic.surface_heat_flux)->default_value(70e-3),
          "surface heat flux, used for the temperature profile on the plate.\n")
-        ("ic.rh_dome_amplitude", po::value<double>(&p.ic.rh_dome_amplitude)->default_value(0),
+        ("ic.radiogenic_heat_dome_amplitude", po::value<double>(&p.ic.radiogenic_heat_dome_amplitude)->default_value(0),
          "Dome amplitude, used for the temperature profile on the plate.\n")
-        ("ic.rh_dome_width", po::value<double>(&p.ic.rh_dome_width)->default_value(0),
+        ("ic.radiogenic_heat_dome_width", po::value<double>(&p.ic.radiogenic_heat_dome_width)->default_value(0),
          "Dome half width, used for the temperature profile on the plate.\n")
+        ("ic.radiogenic_heat_dome_width_y", po::value<double>(&p.ic.radiogenic_heat_dome_width_y)->default_value(0),
+         "Dome half width in y-axis, used for the temperature profile on the plate (3D).\n"
+         " 0: Isotropic (uses radiogenic_heat_dome_width for both axes).\n"
+         ">0: Specific width for y-axis (elliptical dome).\n"
+         "<0: Infinite width; thermal profile is uniform along y-axis (ridge/hinge).\n")
+        ("ic.radiogenic_heat_dome_azimuth", po::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
+         "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
 
         // for temperature_option = 90
         ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
@@ -1312,6 +1319,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             if (! std::is_sorted(p.ic.mattype_layer_depths.begin(), p.ic.mattype_layer_depths.end())) {
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
                     " small to big values.\n";
+                std::exit(1);
+            }
+        }
+
+        if (p.ic.temperature_option == 3) {
+            if (p.ic.radiogenic_heat_dome_width == 0) {
+                std::cerr << "Error: ic.radiogenic_heat_dome_width must be greater than 0 for ic.temperature_option=3.\n";
                 std::exit(1);
             }
         }

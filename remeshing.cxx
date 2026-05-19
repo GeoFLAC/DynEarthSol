@@ -1745,8 +1745,11 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     create_equilateral_elem(var, qconn);
     create_equilateral_segments(var, qsegment, qsegflag);
 
-    var.connectivity->reset(qconn, nelem_new);
-    var.segment->reset(qsegment, nseg_new);
+    var.connectivity->load_from_buffer(qconn, nelem_new);
+    var.segment->load_from_buffer(qsegment, nseg_new);
+    delete [] qconn;
+    delete [] qsegment;
+
     var.segflag->reset(qsegflag, nseg_new);
 }
 
@@ -2732,7 +2735,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 }
 
 
-int bad_mesh_quality(const Param &param, const Variables &var, int &index)
+int bad_mesh_quality(const Param &param, const Variables &var, int &index, double &min_quality)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -2829,9 +2832,14 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index)
     // normalizing q so that its magnitude is about the same in 2D and 3D
     q = std::pow(q, 1.0/3);
 #endif
+    min_quality = q;
     if (q < param.mesh.min_quality) {
         index = worst_elem;
-        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << ".\n";
+        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << " (bcflag: ";
+        for (int i = 0; i < NODES_PER_ELEM; i++) {
+            std::cout << (*var.bcflag)[(*var.connectivity)[worst_elem][i]];
+            std::cout << (i < NODES_PER_ELEM - 1 ? ", " : ").\n");
+        }
 #ifdef NPROF
         nvtxRangePop();
 #endif

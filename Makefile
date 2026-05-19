@@ -74,15 +74,19 @@ HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## path to Boost's base directory, if not in standard system location
+BOOST_ROOT_DIR = # /path/to/boost
+
 ## Use conda environment only if boost is actually installed there, otherwise system boost
-ifdef CONDA_PREFIX
-	ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
-		BOOST_ROOT_DIR = $(CONDA_PREFIX)
+ifndef BOOST_ROOT_DIR
+	ifdef CONDA_PREFIX
+		ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
+			BOOST_ROOT_DIR = $(CONDA_PREFIX)
+		else
+			BOOST_ROOT_DIR = /usr
+		endif
 	else
 		BOOST_ROOT_DIR = /usr
 	endif
-else
-	BOOST_ROOT_DIR = /usr
 endif
 
 ########################################################################
@@ -142,10 +146,10 @@ endif
 
 ifeq ($(usemmg), 1)
 	# path to MMG3D header files
-	MMG_INCLUDE = ${HOME}/opt/mmg/build/include
+	MMG_INCLUDE = ./mmg/build/include
 
 	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ${HOME}/opt/mmg/build/lib
+	MMG_LIB_DIR = ./mmg/build/lib
 
 	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
 	ifeq ($(ndims), 3)	
