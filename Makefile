@@ -160,6 +160,8 @@ ifeq ($(usemmg), 1)
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
 	endif
+
+	MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
 endif
 
 ifeq ($(use_gospl), 1)
@@ -517,10 +519,33 @@ ifeq ($(openacc), 1)
 		exit 1; \
 	fi
 endif
+ifeq ($(usemmg), 1)
+	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status mmg | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule mmg..."; \
+			git submodule update --init --recursive mmg; \
+		fi; \
+	elif [ -f "mmg/CMakeLists.txt" ]; then \
+		:; \
+	else \
+		echo "Error: usemmg requires the mmg submodule, but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please initialize/provide the mmg submodule before building with usemmg=1."; \
+		exit 1; \
+	fi
+
+	@mkdir -p mmg/build
+	@if [ ! -f "mmg/build/Makefile" ]; then \
+		echo "   Configuring MMG..."; \
+		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+	fi
+	@if [ ! -f "$(MMG_LIB)" ]; then \
+		$(MAKE) -C mmg/build; \
+	fi
+endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB)
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -622,6 +647,16 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
 	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
 
+clean-submodules:
+	@echo "   Cleaning external submodules..."
+	@if [ -d "mmg/build" ]; then \
+		echo "   Removing MMG build directory..."; \
+		rm -rf mmg/build; \
+	fi
+	@if [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
+		$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims) >/dev/null 2>&1; \
+	fi
+
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 ifeq ($(use_gospl), 1)
@@ -636,9 +671,6 @@ ifeq ($(use_gospl), 1)
 	@rm -f dynearthsol-gospl
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
-ifeq ($(openacc), 1)
-	@+$(MAKE) -C $(KNN_BVH_DIR) clean NDIM=$(ndims)
-endif
 
 clean:
 	@rm -f $(OBJS) $(EXE)
