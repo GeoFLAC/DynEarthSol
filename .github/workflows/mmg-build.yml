@@ -25,12 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: get mmg
-      run: |
-        git clone https://github.com/MmgTools/mmg.git
-        cd mmg; mkdir build; cd build
-        cmake ..
-        make
     - name: get boost
       run: |
         sudo apt update

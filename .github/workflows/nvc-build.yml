@@ -148,6 +148,9 @@ jobs:
     - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
       run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 SM=80
 
+    - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
+      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 usemmg=1 SM=80
+
     - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80 hdf5=1
       run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80
 
