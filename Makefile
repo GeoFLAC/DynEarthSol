@@ -505,6 +505,18 @@ install-gospl-wrapper:
 endif
 
 prepare:
+	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
+			git submodule update --init --recursive $(ANN_DIR); \
+		fi; \
+	elif [ -f "$(ANN_DIR)/include/nanoflann.hpp" ]; then \
+		:; \
+	else \
+		echo "Error: DES build requires $(ANN_DIR), but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please initialize/provide $(ANN_DIR) before building with 'git submodule update --init --recursive $(ANN_DIR)'."; \
+		exit 1; \
+	fi
 ifeq ($(openacc), 1)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
