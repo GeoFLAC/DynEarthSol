@@ -192,7 +192,6 @@ void init(const Param& param, Variables& var)
     initialize_elem_size_n(var, *var.init_elem_size_n);
 #endif
 
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
     // apply_vbcs(param, var, *var.vel); move to above compute_mass
@@ -319,7 +318,6 @@ void restart(const Param& param, Variables& var)
     compute_volume(*var.coord, *var.connectivity, *var.volume);
     bin_chkpt.read_array(*var.volume_old, "volume_old");
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
 
@@ -391,7 +389,6 @@ void restart(const Param& param, Variables& var)
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-        compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
     report_mesh_info(var, "restart");
@@ -443,7 +440,6 @@ void update_mesh(const Param& param, Variables& var)
 
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     #pragma acc wait
 

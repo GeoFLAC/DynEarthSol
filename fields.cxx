@@ -7,6 +7,66 @@
 #include "fields.hpp"
 #include "utils.hpp"
 
+#ifdef THREED
+inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], double shpdy[4], double shpdz[4])
+{
+    int n0 = (*var.connectivity)[e][0];
+    int n1 = (*var.connectivity)[e][1];
+    int n2 = (*var.connectivity)[e][2];
+    int n3 = (*var.connectivity)[e][3];
+
+    ConstArrayAccessor d0 = (*var.coord)[n0];
+    ConstArrayAccessor d1 = (*var.coord)[n1];
+    ConstArrayAccessor d2 = (*var.coord)[n2];
+    ConstArrayAccessor d3 = (*var.coord)[n3];
+
+    double iv = 1.0 / (6.0 * (*var.volume)[e]);
+
+    double x01 = d0[0] - d1[0]; double x02 = d0[0] - d2[0]; double x03 = d0[0] - d3[0];
+    double x12 = d1[0] - d2[0]; double x13 = d1[0] - d3[0]; double x23 = d2[0] - d3[0];
+    double y01 = d0[1] - d1[1]; double y02 = d0[1] - d2[1]; double y03 = d0[1] - d3[1];
+    double y12 = d1[1] - d2[1]; double y13 = d1[1] - d3[1]; double y23 = d2[1] - d3[1];
+    double z01 = d0[2] - d1[2]; double z02 = d0[2] - d2[2]; double z03 = d0[2] - d3[2];
+    double z12 = d1[2] - d2[2]; double z13 = d1[2] - d3[2]; double z23 = d2[2] - d3[2];
+
+    shpdx[0] = iv * (y13*z12 - y12*z13);
+    shpdx[1] = iv * (y02*z23 - y23*z02);
+    shpdx[2] = iv * (y13*z03 - y03*z13);
+    shpdx[3] = iv * (y01*z02 - y02*z01);
+
+    shpdy[0] = iv * (z13*x12 - z12*x13);
+    shpdy[1] = iv * (z02*x23 - z23*x02);
+    shpdy[2] = iv * (z13*x03 - z03*x13);
+    shpdy[3] = iv * (z01*x02 - z02*x01);
+
+    shpdz[0] = iv * (x13*y12 - x12*y13);
+    shpdz[1] = iv * (x02*y23 - x23*y02);
+    shpdz[2] = iv * (x13*y03 - x03*y13);
+    shpdz[3] = iv * (x01*y02 - x02*y01);
+}
+#else
+inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], double shpdz[3])
+{
+    int n0 = (*var.connectivity)[e][0];
+    int n1 = (*var.connectivity)[e][1];
+    int n2 = (*var.connectivity)[e][2];
+
+    ConstArrayAccessor d0 = (*var.coord)[n0];
+    ConstArrayAccessor d1 = (*var.coord)[n1];
+    ConstArrayAccessor d2 = (*var.coord)[n2];
+
+    double iv = 1.0 / (2.0 * (*var.volume)[e]);
+
+    shpdx[0] = iv * (d1[1] - d2[1]);
+    shpdx[1] = iv * (d2[1] - d0[1]);
+    shpdx[2] = iv * (d0[1] - d1[1]);
+
+    shpdz[0] = iv * (d2[0] - d1[0]);
+    shpdz[1] = iv * (d0[0] - d2[0]);
+    shpdz[2] = iv * (d1[0] - d0[0]);
+}
+#endif
+
 void allocate_variables(const Param &param, Variables& var)
 {
     const int n = var.nnode;
@@ -68,10 +128,6 @@ void allocate_variables(const Param &param, Variables& var)
     var.force_residual = new array_t(n, 0);
 
     var.strain_rate = new tensor_t(e, 0);
-
-    var.shpdx = new shapefn(e);
-    if (NDIMS == 3) var.shpdy = new shapefn(e);
-    var.shpdz = new shapefn(e);
 
     var.mat = new MatProps(param, var);
 
@@ -137,14 +193,7 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
-    delete var.shpdx;
-    delete var.shpdz;
-    var.shpdx = new shapefn(e);
-    if (NDIMS == 3) {
-        delete var.shpdy;
-        var.shpdy = new shapefn(e);
-    }
-    var.shpdz = new shapefn(e);
+
 
     delete var.mat;
     var.mat = new MatProps(param, var);
@@ -173,11 +222,13 @@ void update_temperature(const Param &param, const Variables &var,
             ElemCacheAccessor tr = tmp_result[e];
             double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
@@ -295,12 +346,13 @@ void update_pore_pressure(const Param &param, const Variables &var,
 
         // volume term (poroelastic effect)
         double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
-       
-        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             double diffusion = 0.0;
@@ -371,9 +423,13 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-
-        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+#ifdef THREED
+        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdz);
+#endif
         TensorAccessor s = strain_rate[e];
         
         ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
@@ -385,7 +441,6 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
             s[n] += v[i][0] * shpdx[i];
 
 #ifdef THREED
-        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
         // YY component
         n = 1;
         s[n] = 0;
@@ -576,11 +631,13 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
             TensorAccessor s = (*var.stress)[e];
             double vol = (*var.volume)[e];
             ElemCacheAccessor tr = tmp_result[e];
@@ -811,9 +868,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
         double w3, w4, w5;
         {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
 
             ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 
@@ -837,8 +893,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
         double w2;
         {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 
             ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 

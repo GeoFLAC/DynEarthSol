@@ -314,17 +314,6 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
                 if (std::isnan((*var.stress)[e][i]))
                     is_nan += out_nan_error("stress", e, i);
 
-            for (int i=0; i<NODES_PER_ELEM; i++)
-                if(std::isnan((*var.shpdx)[e][i]))
-                    is_nan += out_nan_error("shpdx", e, i);
-            if (NDIMS == 3) {
-                for (int i=0; i<NODES_PER_ELEM; i++)
-                    if(std::isnan((*var.shpdy)[e][i]))
-                        is_nan += out_nan_error("shpdy", e, i);
-            }
-            for (int i=0; i<NODES_PER_ELEM; i++)
-                if(std::isnan((*var.shpdz)[e][i]))
-                    is_nan += out_nan_error("shpdz", e, i);
         }
 
 #ifndef ACC
