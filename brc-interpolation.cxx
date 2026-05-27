@@ -1,5 +1,6 @@
 #include "algorithm"
 #include "iostream"
+#include "unordered_set"
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -223,70 +224,82 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
             /* not_found */
 
-        {
-            /* Situation: q is in the upper element, but its nearest point is o!
-             * we won't find the enclosing element with the method above
-             *     x
-             *    / \   <-- this is a large triangle
-             *   / q                            \
-             *  x---- x
-             *   \-o-/   <-- this is a small triangle
-             */
+            {
+                /* Situation: q is in the upper element, but its nearest point is o!
+                * we won't find the enclosing element with the method above
+                *     x
+                *    / \   <-- this is a large triangle
+                *   / q                            \
+                *  x---- x
+                *   \-o-/   <-- this is a small triangle
+                *
+                * True Breadth-First Search (BFS) outward from nn's element support, 
+                * expanding level by level.
+                * The one-level expansion above fails when q lies in a large old element
+                * whose nearest node nn is not one of its vertices (common after aggressive
+                * 3D remeshing that places new nodes far from any existing node).
+                * BFS guarantees every reachable element is visited and the correct
+                * enclosing element is found.  When the frontier empties without finding
+                * q, it is outside the old domain and falls through to the nearest-node
+                * fallback below.
+                */
+                std::unordered_set<int> visited(nn_elem.begin(), nn_elem.end());
+                int_vec frontier(nn_elem.begin(), nn_elem.end());
+                // Track the element where q is least outside (highest min bary coord).
+                // Used post-BFS to distinguish boundary-face vs. clearly-outside vs. bug.
+                int    best_e_bfs    = nn_elem.empty() ? 0 : nn_elem[0];
+                double best_min_bary = -1e30;
 
-            // this array contains the elements that have been searched so far
-                const int MAX_SEARCH = 256;
-                int searched[MAX_SEARCH];
-                int n_searched = 0;
-
-                // Initialize searched with nn_elem
-                for (std::size_t k=0; k<nn_elem.size(); ++k) {
-                    if (n_searched < MAX_SEARCH) {
-                        searched[n_searched++] = nn_elem[k];
-                    }
-                }
-
-                // search through elements that are neighbors of nn_elem
-                for (std::size_t j=0; j<nn_elem.size(); j++) {
-                    int ee = nn_elem[j];
-                    ConstConnAccessor conn = old_connectivity[ee];
-                    for (int m=0; m<NODES_PER_ELEM; m++) {
-                        // np is a node close to q
-                        int np = conn[m];
-                        const int_vec &np_elem = old_support[np];
-                        for (std::size_t jj=0; jj<np_elem.size(); jj++) {
-                            e = np_elem[jj];
-
-                            // Check if e is already in searched
-                            bool found_in_searched = false;
-                            for (int k=0; k<n_searched; ++k) {
-                                if (searched[k] == e) {
-                                    found_in_searched = true;
-                                    break;
+                while (!frontier.empty()) {
+                    int_vec next_frontier;
+                    for (int ee : frontier) {
+                        ConstConnAccessor conn = old_connectivity[ee];
+                        for (int m=0; m<NODES_PER_ELEM; m++) {
+                            // np is a node close to q
+                            int np = conn[m];
+                            const int_vec &np_elem = old_support[np];
+                            for (std::size_t jj=0; jj<np_elem.size(); jj++) {
+                                int candidate = np_elem[jj];
+                                if (!visited.insert(candidate).second) continue;
+                                bary.transform(q, candidate, r);
+                                // min bary coord = how far inside (negative means outside)
+                                double min_bary = r[0];
+                                for (int d = 1; d < NDIMS; d++)
+                                    if (r[d] < min_bary) min_bary = r[d];
+                                double last = 1.0;
+                                for (int d = 0; d < NDIMS; d++) last -= r[d];
+                                if (last < min_bary) min_bary = last;
+                                if (min_bary > best_min_bary) {
+                                    best_min_bary = min_bary;
+                                    best_e_bfs = candidate;
                                 }
-                            }
-
-                            if (found_in_searched) {
-                            // this element has been searched before
-                                continue;
-                            }
-
-                            if (n_searched < MAX_SEARCH) {
-                                searched[n_searched++] = e;
-                            } else {
-                                printf("Error: barycentric_node_interpolation prepare_interpolation: ");
-                                printf("MAX_SEARCH (%d) exceeded for node %d.\n", MAX_SEARCH, i);
-                                std::exit(11);
-                            }
-
-                            bary.transform(q, e, r);
-                        // std::cout << e << " ";
-                        // print(std::cout, r, NDIMS);
-                        // std::cout << " ... \n";
-                            if (bary.is_inside(r)) {
-                                goto found;
+                                if (bary.is_inside(r)) {
+                                    e = candidate;
+                                    goto found;
+                                }
+                                next_frontier.push_back(candidate);
                             }
                         }
                     }
+                    frontier = std::move(next_frontier);
+                }
+                // BFS exhausted without finding q.
+                // best_min_bary > -1e-10: q is numerically on a face (FP tolerance
+                //   missed it) — use best_e_bfs directly, no fallback needed.
+                if (best_min_bary > -1e-10) {
+                    e = best_e_bfs;
+                    bary.transform(q, e, r);
+                    goto found;
+                }
+                // For all other cases, distinguish by bcflag of the new node:
+                //   bcflag == 0: interior node — might be inside old domain, BFS failure might be a bug.
+                //   bcflag != 0: boundary node — may sit just outside the old mesh after
+                //                remeshing; nearest-node fallback is correct.
+                if ((*var.bcflag)[i] == 0) {
+                    printf("Warning: prepare_interpolation: interior node %d (bcflag=0) "
+                           "not found after full BFS (%zu/%d elements searched), "
+                           "best_min_bary=%.3e. Mesh connectivity may be broken.\n",
+                           i, visited.size(), (int)old_connectivity.size(), best_min_bary);
                 }
             }
             {
