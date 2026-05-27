@@ -250,7 +250,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 int    best_e_bfs    = nn_elem.empty() ? 0 : nn_elem[0];
                 double best_min_bary = -1e30;
 
-                while (!frontier.empty()) {
+                const int MAX_LAYERS = 3;
+                for (int layer = 0; layer < MAX_LAYERS && !frontier.empty(); layer++) {
                     int_vec next_frontier;
                     for (int ee : frontier) {
                         ConstConnAccessor conn = old_connectivity[ee];
@@ -297,9 +298,9 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 //                remeshing; nearest-node fallback is correct.
                 if ((*var.bcflag)[i] == 0) {
                     printf("Warning: prepare_interpolation: interior node %d (bcflag=0) "
-                           "not found after full BFS (%zu/%d elements searched), "
+                           "not found after capped BFS (MAX_LAYERS=%d; %zu/%d elements searched), "
                            "best_min_bary=%.3e. Mesh connectivity may be broken.\n",
-                           i, visited.size(), (int)old_connectivity.size(), best_min_bary);
+                           i, MAX_LAYERS, visited.size(), (int)old_connectivity.size(), best_min_bary);
                 }
             }
             {
