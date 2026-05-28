@@ -10,24 +10,16 @@
 #ifdef THREED
 inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], double shpdy[4], double shpdz[4])
 {
-    int n0 = (*var.connectivity)[e][0];
-    int n1 = (*var.connectivity)[e][1];
-    int n2 = (*var.connectivity)[e][2];
-    int n3 = (*var.connectivity)[e][3];
-
-    ConstArrayAccessor d0 = (*var.coord)[n0];
-    ConstArrayAccessor d1 = (*var.coord)[n1];
-    ConstArrayAccessor d2 = (*var.coord)[n2];
-    ConstArrayAccessor d3 = (*var.coord)[n3];
+    ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
     double iv = 1.0 / (6.0 * (*var.volume)[e]);
 
-    double x01 = d0[0] - d1[0]; double x02 = d0[0] - d2[0]; double x03 = d0[0] - d3[0];
-    double x12 = d1[0] - d2[0]; double x13 = d1[0] - d3[0]; double x23 = d2[0] - d3[0];
-    double y01 = d0[1] - d1[1]; double y02 = d0[1] - d2[1]; double y03 = d0[1] - d3[1];
-    double y12 = d1[1] - d2[1]; double y13 = d1[1] - d3[1]; double y23 = d2[1] - d3[1];
-    double z01 = d0[2] - d1[2]; double z02 = d0[2] - d2[2]; double z03 = d0[2] - d3[2];
-    double z12 = d1[2] - d2[2]; double z13 = d1[2] - d3[2]; double z23 = d2[2] - d3[2];
+    double x01 = d[0][0] - d[1][0]; double x02 = d[0][0] - d[2][0]; double x03 = d[0][0] - d[3][0];
+    double x12 = d[1][0] - d[2][0]; double x13 = d[1][0] - d[3][0]; double x23 = d[2][0] - d[3][0];
+    double y01 = d[0][1] - d[1][1]; double y02 = d[0][1] - d[2][1]; double y03 = d[0][1] - d[3][1];
+    double y12 = d[1][1] - d[2][1]; double y13 = d[1][1] - d[3][1]; double y23 = d[2][1] - d[3][1];
+    double z01 = d[0][2] - d[1][2]; double z02 = d[0][2] - d[2][2]; double z03 = d[0][2] - d[3][2];
+    double z12 = d[1][2] - d[2][2]; double z13 = d[1][2] - d[3][2]; double z23 = d[2][2] - d[3][2];
 
     shpdx[0] = iv * (y13*z12 - y12*z13);
     shpdx[1] = iv * (y02*z23 - y23*z02);
@@ -47,23 +39,17 @@ inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], dou
 #else
 inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], double shpdz[3])
 {
-    int n0 = (*var.connectivity)[e][0];
-    int n1 = (*var.connectivity)[e][1];
-    int n2 = (*var.connectivity)[e][2];
-
-    ConstArrayAccessor d0 = (*var.coord)[n0];
-    ConstArrayAccessor d1 = (*var.coord)[n1];
-    ConstArrayAccessor d2 = (*var.coord)[n2];
+    ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
     double iv = 1.0 / (2.0 * (*var.volume)[e]);
 
-    shpdx[0] = iv * (d1[1] - d2[1]);
-    shpdx[1] = iv * (d2[1] - d0[1]);
-    shpdx[2] = iv * (d0[1] - d1[1]);
+    shpdx[0] = iv * (d[1][1] - d[2][1]);
+    shpdx[1] = iv * (d[2][1] - d[0][1]);
+    shpdx[2] = iv * (d[0][1] - d[1][1]);
 
-    shpdz[0] = iv * (d2[0] - d1[0]);
-    shpdz[1] = iv * (d0[0] - d2[0]);
-    shpdz[2] = iv * (d1[0] - d0[0]);
+    shpdz[0] = iv * (d[2][0] - d[1][0]);
+    shpdz[1] = iv * (d[0][0] - d[2][0]);
+    shpdz[2] = iv * (d[1][0] - d[0][0]);
 }
 #endif
 
