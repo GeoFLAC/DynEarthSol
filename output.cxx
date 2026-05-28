@@ -333,16 +333,20 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
+    bin.write_scalar(var.dt, "dt");
+    bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename);
 
-    double_vec tmp(4);
+    double_vec tmp(6);
     tmp[0] = var.time;
     tmp[1] = var.info_display_next_step;
     tmp[2] = var.compensation_pressure;
     tmp[3] = var.bottom_temperature;
-    bin.write_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature", tmp.size());
+    tmp[4] = var.dt;
+    tmp[5] = var.max_global_vel_mag;
+    bin.write_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag", tmp.size());
 #endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());

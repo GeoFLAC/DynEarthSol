@@ -347,14 +347,18 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
         bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
         bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scaler(var.dt, "dt");
+        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
 #else
-        double_vec tmp(4);
-        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature");
+        double_vec tmp(6);
+        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag");
         var.time = tmp[0];
         var.info_display_next_step = tmp[1];
         var.compensation_pressure = tmp[2];
         // Set bottom temperature
         var.bottom_temperature = tmp[3];
+        var.dt = tmp[4];
+        var.max_global_vel_mag = tmp[5];
 #endif
         // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
@@ -681,9 +685,10 @@ int main(int argc, const char* argv[])
     }
 #endif
 
-    var.dt = compute_dt(param, var);
-    var.dt_PT = compute_dt(param, var);
-
+    if (!param.sim.is_restarting) {
+       var.dt = compute_dt(param, var);
+        var.dt_PT = compute_dt(param, var);
+    }
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
