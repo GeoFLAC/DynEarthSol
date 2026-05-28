@@ -651,6 +651,7 @@ struct Variables {
     int steps;
     int nremesh;
     int noutput;
+    int info_display_next_step;
     Time func_time;
     Output *output;
 

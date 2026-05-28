@@ -344,15 +344,17 @@ void restart(const Param& param, Variables& var)
     {
 #ifdef HDF5
         bin_chkpt.read_scaler(var.time, "time");
+        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
         bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
         bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
 #else
-        double_vec tmp(3);
-        bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
+        double_vec tmp(4);
+        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature");
         var.time = tmp[0];
-        var.compensation_pressure = tmp[1];
+        var.info_display_next_step = tmp[1];
+        var.compensation_pressure = tmp[2];
         // Set bottom temperature
-        var.bottom_temperature = tmp[2];
+        var.bottom_temperature = tmp[3];
 #endif
         // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
@@ -587,7 +589,7 @@ int main(int argc, const char* argv[])
 
     if (! param.sim.is_restarting) {
         init(param, var);
-
+        var.info_display_next_step = param.sim.info_display_step_interval;
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
             // output.write_exact(var);
@@ -714,7 +716,7 @@ int main(int argc, const char* argv[])
     std::cout << "  Showing model progress every "
               << param.sim.info_display_step_interval
               << " steps.\n";
-    int info_display_next_step = param.sim.info_display_step_interval;
+
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
@@ -902,7 +904,7 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            if (var.steps >= info_display_next_step) {
+            if (var.steps >= var.info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
                 std::cout << "              Step = " << var.steps
                     << ", time = " << std::scientific << std::setprecision(5)
@@ -915,7 +917,7 @@ int main(int argc, const char* argv[])
                 std::cout << "\n";
 
 
-                info_display_next_step = var.steps + param.sim.info_display_step_interval;
+                var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }
         }
 #ifdef NPROF_DETAIL
