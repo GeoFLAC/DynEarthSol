@@ -38,8 +38,6 @@ void compute_mass(const Param &param, const Variables &var,
 
                   elem_cache &tmp_result);
 
-void compute_shape_fn(const Variables &var, shapefn &shpdx,
-                      shapefn &shpdy, shapefn &shpdz);
 
 double elem_quality(const array_t &coord, const conn_t &connectivity,
                     const double_vec &volume, int e);

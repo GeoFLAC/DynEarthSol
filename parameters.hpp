@@ -740,7 +740,6 @@ struct Variables {
     array_t *vel, *force, *coord0;
     array_t *force_residual;
     tensor_t *strain_rate, *strain, *stress;
-    shapefn *shpdx, *shpdy, *shpdz; // gradient of shape function
     elem_cache *tmp_result;
     double_vec *etmp;
     int_vec *etmp_int;
