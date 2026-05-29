@@ -292,7 +292,7 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
         std::exit(1);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 }
 
 
@@ -1060,7 +1060,7 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
         std::exit(1);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 
     H5Sclose(mspace_id);
     H5Sclose(space_id);

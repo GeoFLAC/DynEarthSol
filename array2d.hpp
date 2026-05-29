@@ -176,12 +176,14 @@ public:
     //
     // I/O and Transition Helpers
     //
-    void load_from_buffer(const T* buffer, std::size_t count) {
-        if (a_ == nullptr)
+    void load_from_buffer(const T* buffer, std::size_t count, bool should_strip = true) {
+        if (a_ == nullptr) {
             a_ = new T[N * count];
-        else
+            n_ = count;
+        } else if (count > n_ || should_strip) {
             this->resize(count, false);
-        n_ = count;
+            n_ = count;
+        }
 #ifndef ACC
         #pragma omp parallel for collapse(2) if(count > 10000)
 #endif
