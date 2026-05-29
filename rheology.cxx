@@ -875,7 +875,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
-                    syy = spyy;
+                    if (var.mat->is_plane_strain) syy = spyy;
                 }
             }
             break;
@@ -970,7 +970,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
-                    syy = spyy;
+                    if (var.mat->is_plane_strain) syy = spyy;
                 }
             }
             break;
