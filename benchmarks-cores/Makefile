@@ -23,6 +23,8 @@ ifeq ($(ACC), 1)
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+IS_RESTARTING := $(shell awk -F '=' '/^is_restarting/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+RESTARTING_FROM_MODELNAME := $(shell awk -F '=' '/^[ \t]*restarting_from_modelname/ {gsub(/^[ \t]+|[ \t]+$$/, "", $$2); print $$2}' $(CASE))
 JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
 
 GITID = $(shell git rev-parse HEAD | cut -c1-7)
@@ -46,6 +48,15 @@ endif
 # Use single cpu for omp to avoid round-off errors
 RUN_TEST = rm -f ${MODELNAME}.*; OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
 RESTART_TEST = OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
+
+ifeq ($(IS_RESTARTING),yes)
+  ifeq ($(MODELNAME),$(RESTARTING_FROM_MODELNAME))
+    define RUN_TEST
+      @echo "Warning: MODELNAME & RESTARTING_FROM_MODELNAME are both '$(MODELNAME)': Avoid rm -f"
+      ${RESTART_TEST}
+    endef
+  endif
+endif
 
 ORIG = orig-${CASE}
 CURR = ~/data/jobs/${CASE}
