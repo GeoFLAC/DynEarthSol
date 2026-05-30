@@ -26,7 +26,7 @@ private:
     void write_header(const char *name);
 
 public:
-    BinaryOutput(const char *filename);
+    BinaryOutput(const char *filename, const bool rename_if_exists=false);
     ~BinaryOutput();
 
     template <typename T>
@@ -78,7 +78,8 @@ private:
     void write_header();
 
 public:
-    HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt=false);
+    HDF5Output(const char *filename, const int hdf5_compression_level,
+               const bool is_chkpt=false, const bool rename_if_exists=false);
     ~HDF5Output();
 
     template<typename T>

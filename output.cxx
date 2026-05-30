@@ -27,6 +27,9 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
+    may_overwrite_(param.sim.is_restarting
+        && param.sim.modelname == param.sim.restarting_from_modelname),
+    start_frame_(start_frame),
     frame(start_frame),
     time0(0)
 {}
@@ -83,7 +86,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     char filename[256];
 #ifdef HDF5
     std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
-    HDF5Output bin(filename, hdf5_compression_level);
+    HDF5Output bin(filename, hdf5_compression_level, false,
+                   may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
     bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
@@ -91,7 +95,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_fieldData(double(run_time_ns) * 1e-9, "walltime_sec");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename);
+    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
@@ -325,7 +329,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     char filename[256];
 #ifdef HDF5
     std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
-    HDF5Output bin(filename, hdf5_compression_level, true);
+    HDF5Output bin(filename, hdf5_compression_level, true,
+                   may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
 
@@ -337,7 +342,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename);
+    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 
     double_vec tmp(6);
     tmp[0] = var.time;
