@@ -627,7 +627,7 @@ int main(int argc, const char* argv[])
         restart(param, var);
     }
 
-    var.dt_PT = var.dt;
+    // var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11

@@ -646,7 +646,7 @@ class MarkerSet;
 struct Variables {
     double time;
     double dt;
-    double dt_PT;
+    // double dt_PT;
     double l2_residual;
     double reference_frame_time;
     int steps;

@@ -922,100 +922,100 @@ double compute_dt(const Param& param, Variables& var)
     return dt;
 }
 
-double compute_dt_PT(const Param& param, const Variables& var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    // constant dt
-    if (param.control.fixed_dt != 0) return param.control.fixed_dt;
+// double compute_dt_PT(const Param& param, const Variables& var)
+// {
+// #ifdef NPROF_DETAIL
+//     nvtxRangePush(__FUNCTION__);
+// #endif
+//     // constant dt
+//     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
 
-    // dynamic dt
-    double dt_maxwell = std::numeric_limits<double>::max();
-    double dt_diffusion = std::numeric_limits<double>::max();
-    double dt_hydro_diffusion = std::numeric_limits<double>::max();
-    double minl = std::numeric_limits<double>::max();
+//     // dynamic dt
+//     double dt_maxwell = std::numeric_limits<double>::max();
+//     double dt_diffusion = std::numeric_limits<double>::max();
+//     double dt_hydro_diffusion = std::numeric_limits<double>::max();
+//     double minl = std::numeric_limits<double>::max();
 
-    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-        default(none) shared(param,var)
-    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
-    for (int e=0; e<var.nelem; ++e) {
-        int n0 = (*var.connectivity)[e][0];
-        int n1 = (*var.connectivity)[e][1];
-        int n2 = (*var.connectivity)[e][2];
+//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
+//         default(none) shared(param,var)
+//     // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
+//     for (int e=0; e<var.nelem; ++e) {
+//         int n0 = (*var.connectivity)[e][0];
+//         int n1 = (*var.connectivity)[e][1];
+//         int n2 = (*var.connectivity)[e][2];
 
-        ConstArrayAccessor a = (*var.coord)[n0];
-        ConstArrayAccessor b = (*var.coord)[n1];
-        ConstArrayAccessor c = (*var.coord)[n2];
+//         ConstArrayAccessor a = (*var.coord)[n0];
+//         ConstArrayAccessor b = (*var.coord)[n1];
+//         ConstArrayAccessor c = (*var.coord)[n2];
 
-        // min height of this element
-        double minh;
-#ifdef THREED
-        {
-            int n3 = (*var.connectivity)[e][3];
-            ConstArrayAccessor d = (*var.coord)[n3];
+//         // min height of this element
+//         double minh;
+// #ifdef THREED
+//         {
+//             int n3 = (*var.connectivity)[e][3];
+//             ConstArrayAccessor d = (*var.coord)[n3];
 
-            // max facet area of this tet
-            double maxa = std::max(std::max(triangle_area(a, b, c),
-                                            triangle_area(a, b, d)),
-                                   std::max(triangle_area(c, d, a),
-                                            triangle_area(c, d, b)));
-            minh = 3 * (*var.volume)[e] / maxa;
-        }
-#else
-        {
-            // max edge length of this triangle
-            double maxl = std::sqrt(std::max(std::max(dist2(a, b),
-                                                      dist2(b, c)),
-                                             dist2(a, c)));
-            minh = 2 * (*var.volume)[e] / maxl;
-        }
-#endif
-        dt_maxwell = std::min(dt_maxwell,
-                              0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
-        // if (param.control.has_thermal_diffusion)
-        //     dt_diffusion = std::min(dt_diffusion,
-        //                             0.5 * minh * minh / var.mat->therm_diff_max);
+//             // max facet area of this tet
+//             double maxa = std::max(std::max(triangle_area(a, b, c),
+//                                             triangle_area(a, b, d)),
+//                                    std::max(triangle_area(c, d, a),
+//                                             triangle_area(c, d, b)));
+//             minh = 3 * (*var.volume)[e] / maxa;
+//         }
+// #else
+//         {
+//             // max edge length of this triangle
+//             double maxl = std::sqrt(std::max(std::max(dist2(a, b),
+//                                                       dist2(b, c)),
+//                                              dist2(a, c)));
+//             minh = 2 * (*var.volume)[e] / maxl;
+//         }
+// #endif
+//         dt_maxwell = std::min(dt_maxwell,
+//                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
+//         // if (param.control.has_thermal_diffusion)
+//         //     dt_diffusion = std::min(dt_diffusion,
+//         //                             0.5 * minh * minh / var.mat->therm_diff_max);
         
-        // // Compute dt_hydro_diffusion (hydraulic)
-        // if (var.mat->hydro_diff_max > 0) {
-        //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-        //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-        // }
-        minl = std::min(minl, minh);
-    }
+//         // // Compute dt_hydro_diffusion (hydraulic)
+//         // if (var.mat->hydro_diff_max > 0) {
+//         //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
+//         //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
+//         // }
+//         minl = std::min(minl, minh);
+//     }
 
 
-    // max_vbc_val is maximum boundary velocity
-    double max_vbc_val;
-    if (param.control.characteristic_speed == 0) {
-        max_vbc_val = var.max_vbc_val; 
+//     // max_vbc_val is maximum boundary velocity
+//     double max_vbc_val;
+//     if (param.control.characteristic_speed == 0) {
+//         max_vbc_val = var.max_vbc_val; 
 
-        if (param.control.surface_process_option > 0)
-            max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
-    }
-    else
-        max_vbc_val = param.control.characteristic_speed;
+//         if (param.control.surface_process_option > 0)
+//             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
+//     }
+//     else
+//         max_vbc_val = param.control.characteristic_speed;
 
-    double dt_advection = 0.5 * minl / max_vbc_val;
-    double dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
+//     double dt_advection = 0.5 * minl / max_vbc_val;
+//     double dt_elastic = (param.control.is_quasi_static) ?
+//         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
+//         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
 
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
-    if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
-    }
-    if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
-        std::exit(11);
-    }
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-    return dt;
-}
+//     double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
+//     if (param.debug.dt) {
+//         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
+//     }
+//     if (dt <= 0) {
+//         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
+//         var.output->write_exact_error(var);
+//         std::exit(11);
+//     }
+// #ifdef NPROF_DETAIL
+//     nvtxRangePop();
+// #endif
+//     return dt;
+// }
 
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
