@@ -315,11 +315,26 @@ void restart(const Param& param, Variables& var)
 
     bin_save.read_array(*var.coord0, "coord0");
 
-    compute_volume(*var.coord, *var.connectivity, *var.volume);
-    bin_chkpt.read_array(*var.volume_old, "volume_old");
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+    // Misc. items
+    {
+#ifdef HDF5
+        bin_chkpt.read_scaler(var.time, "time");
+        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
+        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scaler(var.dt, "dt");
+        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
+#else
+        double_vec tmp(6);
+        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag");
+        var.time = tmp[0];
+        var.info_display_next_step = tmp[1];
+        var.compensation_pressure = tmp[2];
+        var.bottom_temperature = tmp[3];
+        var.dt = tmp[4];
+        var.max_global_vel_mag = tmp[5];
+#endif
+    }
 
     // Initializing field variables
     {
@@ -342,29 +357,17 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Misc. items
+    // the following fields are not required for restarting, yet
     {
-#ifdef HDF5
-        bin_chkpt.read_scaler(var.time, "time");
-        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
-        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
-        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
-        bin_chkpt.read_scaler(var.dt, "dt");
-        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
-#else
-        double_vec tmp(6);
-        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag");
-        var.time = tmp[0];
-        var.info_display_next_step = tmp[1];
-        var.compensation_pressure = tmp[2];
-        // Set bottom temperature
-        var.bottom_temperature = tmp[3];
-        var.dt = tmp[4];
-        var.max_global_vel_mag = tmp[5];
-#endif
-        // the following fields are not required for restarting
         bin_save.read_array(*var.force, "force");
     }
+
+    compute_volume(*var.coord, *var.connectivity, *var.volume);
+    // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+
     apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
