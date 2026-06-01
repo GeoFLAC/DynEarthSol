@@ -383,6 +383,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     // bin.write_array(*var.regattr, "regattr", var.regattr->size());
 
     bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
+    bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
 #ifdef USEMMG
