@@ -346,6 +346,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        // previous-step volume for volumetric strain rate.
+        bin_chkpt.read_array(*var.volume_old, "volume_old");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
         // for surface marker correction after surface processes
