@@ -340,7 +340,6 @@ void restart(const Param& param, Variables& var)
     {
         bin_save.read_array(*var.vel, "velocity");
         bin_save.read_array(*var.temperature, "temperature");
-        bin_save.read_array(*var.strain_rate, "strain-rate");
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
@@ -361,6 +360,10 @@ void restart(const Param& param, Variables& var)
 
     // the following fields are not required for restarting, yet
     {
+        // for shear heating
+        bin_save.read_array(*var.strain_rate, "strain-rate");
+        // for tidal heating
+        bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
     }
 
