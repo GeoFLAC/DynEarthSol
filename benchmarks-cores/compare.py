@@ -74,63 +74,62 @@ def reldiff(oldf, newf):
         return diff.max()/m, diff.std()/m
 
 
-def show_msg(kind,max,sigma):
-    if max+sigma > 1.e-8:
-        print('  %s:\t\t%.3e %.3e (> 1.e-8)'%(kind,max, sigma))
-        inc = 1
+def show_msg(kind, max, sigma):
+    """Print one field comparison line; return (fail, nonzero).
+
+    fail=1  if max+sigma > 1e-8  (serious divergence)
+    nonzero=1 if max+sigma > 0   (any difference, even round-off)
+    Both zero means the field is bit-identical.
+    """
+    if max + sigma > 1.e-8:
+        print('  %s:\t\t%.3e %.3e (> 1.e-8)' % (kind, max, sigma))
+        return 1, 1
+    elif max + sigma > 0.:
+        print('  %s:\t\t%.3e %.3e' % (kind, max, sigma))
+        return 0, 1
     else:
-        print('  %s:\t\t%.3e %.3e'%(kind,max, sigma))
-        inc = 0
-    return inc
+        print('  %s:\t\t%.3e %.3e' % (kind, max, sigma))
+        return 0, 0
 
 
 def reldiff_and_show_msg(oldf, newf, kind):
     if oldf.size != newf.size:
         print('  %s:\t\t%-.d -> %-d (size mismatch)'%(kind, oldf.size, newf.size))
-        return 1
+        return 1, 1
     else:
         max, sigma = reldiff(oldf, newf)
         return show_msg(kind, max, sigma)
 
 
 def compare(old, new):
-    inc = 0
-    
-    inc += reldiff_and_show_msg(old.T, new.T, 'Temperature')
+    """Compare all fields; return (n_fail, n_nonzero).
 
-    inc += reldiff_and_show_msg(old.x, new.x, 'X coordinate')
-
-    inc += reldiff_and_show_msg(old.z, new.z, 'Z coordinate')
-
-    inc += reldiff_and_show_msg(old.vx, new.vx, 'X velocity')
-
-    inc += reldiff_and_show_msg(old.vz, new.vz, 'Z velocity')
-
-    inc += reldiff_and_show_msg(old.pls, new.pls, 'Pl. strain')
-
-    inc += reldiff_and_show_msg(old.tI, new.tI, 'Stress I')
-
-    inc += reldiff_and_show_msg(old.tII, new.tII, 'Stress II')
-
-    inc += reldiff_and_show_msg(old.sI, new.sI, 'Strain I')
-
-    inc += reldiff_and_show_msg(old.sII, new.sII, 'Strain II')
-
-    inc += reldiff_and_show_msg(old.srI, new.srI, 'S. rate I')
-
-    inc += reldiff_and_show_msg(old.srII, new.srII, 'S. rate II')
-
-    inc += reldiff_and_show_msg(old.visc, new.visc, 'Viscosity')
-
-    inc += reldiff_and_show_msg(old.m_x, new.m_x, 'Marker X')
-
-    inc += reldiff_and_show_msg(old.m_z, new.m_z, 'Marker Z')
-
-    inc += reldiff_and_show_msg(old.m_mat, new.m_mat, 'Marker Mat')
-
-    inc += reldiff_and_show_msg(old.m_time, new.m_time, 'Marker Time')
-
-    return inc
+    n_fail    — fields with relative diff >= 1e-8 (serious)
+    n_nonzero — fields with any nonzero diff (round-off or worse)
+    Caller uses these to distinguish: bit-exact / round-off / seriously wrong.
+    """
+    n_fail = n_nonzero = 0
+    for a, b, kind in [
+            (old.T,      new.T,      'Temperature'),
+            (old.x,      new.x,      'X coordinate'),
+            (old.z,      new.z,      'Z coordinate'),
+            (old.vx,     new.vx,     'X velocity'),
+            (old.vz,     new.vz,     'Z velocity'),
+            (old.pls,    new.pls,    'Pl. strain'),
+            (old.tI,     new.tI,     'Stress I'),
+            (old.tII,    new.tII,    'Stress II'),
+            (old.sI,     new.sI,     'Strain I'),
+            (old.sII,    new.sII,    'Strain II'),
+            (old.srI,    new.srI,    'S. rate I'),
+            (old.srII,   new.srII,   'S. rate II'),
+            (old.visc,   new.visc,   'Viscosity'),
+            (old.m_x,    new.m_x,    'Marker X'),
+            (old.m_z,    new.m_z,    'Marker Z'),
+            (old.m_mat,  new.m_mat,  'Marker Mat'),
+            (old.m_time, new.m_time, 'Marker Time')]:
+        f, nz = reldiff_and_show_msg(a, b, kind)
+        n_fail += f; n_nonzero += nz
+    return n_fail, n_nonzero
 
 
 olddir = sys.argv[1]
@@ -145,45 +144,37 @@ else:
     newdir = curdir
     modelname = sys.argv[3]
 
-# name holder
-old = 0
-new = 0
-
 markersetname = 'markerset'
 
+# read old and new results
+
 try:
-    # read old and new results
+    des_old = Dynearthsol(olddir + '/' + modelname)
+except OSError:
+    print("Error: Directory of old results doesn't exist:", olddir)
+    sys.exit(1)
+old = read_data(des_old, frame)
+fmt_old = des_old.format
 
-    try:
-        os.chdir(olddir)
-    except OSError:
-        print("Error: Directory of old results doesn't exist:", olddir)
-        sys.exit(1)
-    des = Dynearthsol(modelname)
-    old = read_data(des, frame)
-    format = des.format
+des_new = Dynearthsol(newdir + '/' + modelname)
+new = read_data(des_new, frame)
+fmt_new = des_new.format
 
-    os.chdir(newdir)
-    des = Dynearthsol(modelname)
-    new = read_data(des, frame)
-    format_new = des.format
+# compare results
+print()
+if fmt_old != fmt_new:
+    print('Comparison between :', fmt_old, 'and', fmt_new, '(new)')
+print('Relative difference (max, stddev) of frame = %d  step = %d' \
+            % (frame, int(des_old.steps[frame])))
+print('  ---')
+n_fail, n_nonzero = compare(old, new)
+print('')
+if n_fail > 0:
+    print('  Status: !!!!!!!!!! SOMETHING WRONG !!!!!!!!!!')
+elif n_nonzero > 0:
+    print('  Status: Normal round-off error~')
+else:
+    print('  Status: BIT-EXACT (all fields identical)')
+print('  ---')
 
-    # compare results
-    print()
-    if (format != format_new):
-        print('Comparison between :', format, 'and', format_new, '(new)')
-    print('Relative difference (max, stddev) of frame =', frame,
-          ' step =', int(des.steps[frame]))
-    print('  ---')
-    inc = compare(old, new)
-    print('')
-    if inc == 0:
-        print('  Status: Normal round-off error~')
-    else:
-        print('  Status: !!!!!!!!!! SOMETHING WRONG !!!!!!!!!!')
-    print('  ---')
-
-
-finally:
-    # restort to original directory
-    os.chdir(curdir)
+sys.exit(0 if n_fail == 0 else 1)

@@ -70,19 +70,39 @@ set:
 	${RUN_TEST}
 	${MAKE} store
 
-cmp:
+detect-orig:
+	$(if $(wildcard ${ORIG}),,$(error Error: Original results directory '${ORIG}' doesn't exist. Please run 'make set' first.))
+
+cmp: detect-orig
 	${RUN_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
 	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
 
-restart:
+restart: detect-orig
 	${RESTART_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
 	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
+
+# restart reproducibility test; config file with restart information is needed
+IS_RESTART_EXISTS := $(shell grep -i "^[[:space:]\#]*is_restarting[[:space:]]*=" $(CASE))
+RESTART_FRAME := $(shell awk -F '=' '/^[[:space:]]*restarting_from_frame/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+MODELNAME_EXISTS := $(shell grep -i "^[[:space:]\#]*restarting_from_modelname[[:space:]]*=" $(CASE))
+FRC_CASE = $(CASE:%.cfg=%-frc.cfg)
+fresh-restart-cmp:
+	$(if $(strip $(IS_RESTART_EXISTS)),,$(error Error: 'sim.is_restarting' does not exist in ${CASE}...))
+	$(if $(strip $(RESTART_FRAME)),,$(error Error: 'sim.restarting_from_frame' is not set in ${CASE}...))
+	$(if $(strip $(MODELNAME_EXISTS)),,$(error Error: 'sim.restarting_from_modelname' does not exist in ${CASE}...))
+	@sed 's|^[[:space:]\#]*is_restarting[[:space:]]*=.*|is_restarting = no|' ${CASE} > ${FRC_CASE}
+	${MAKE} set CASE=${FRC_CASE}
+	@sed 's|^[[:space:]\#]*is_restarting[[:space:]]*=.*|is_restarting = yes|' ${CASE} > ${FRC_CASE}
+	@sed 's|^[[:space:]\#]*restarting_from_modelname[[:space:]]*=.*|restarting_from_modelname = orig-${FRC_CASE}/${MODELNAME}|' ${FRC_CASE} > ${FRC_CASE}.tmp
+	@mv ${FRC_CASE}.tmp ${FRC_CASE}
+	${MAKE} CASE=${FRC_CASE}
+	rm -f ${FRC_CASE}
 
 store:
 	rm -rf ${ORIG}
@@ -101,4 +121,4 @@ cmpjob:
 vtk:
 	python ../2vtk.py -m  ${MODELNAME}
 
-.PHONY: all set cmp store
+.PHONY: all set cmp store test job fresh-restart-cmp
