@@ -381,6 +381,68 @@ static bool spr_solve_centered(const double A[3][3], const double b[3],
     return true;
 }
 
+#ifdef THREED
+// Fit linear polynomial sigma*(dx,dy,dz) = a0 + a1*dx + a2*dy + a3*dz to element
+// centroid values in the patch.  Uses Gaussian elimination with partial pivoting
+// on the 4×4 normal system.  Returns true on success; false if the patch is
+// degenerate (fewer than 4 independent directions → fallback).
+#pragma acc routine seq
+static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
+                                   const double dxi, const double dyi, const double dzi,
+                                   double &result)
+{
+    // Per-column ∞-norms of the original A, used as per-step singularity thresholds.
+    // Column 0 scale ~ n (count); columns 1–3 scale ~ n·h² (patch-relative coords).
+    double col_scale[4] = {};
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) {
+            const double v = fabs(A[i][j]);
+            if (v > col_scale[j]) col_scale[j] = v;
+        }
+    if (col_scale[0] == 0.0) return false;
+
+    // Augmented system [A | b]
+    double M[4][5];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) M[i][j] = A[i][j];
+        M[i][4] = b[i];
+    }
+
+    for (int col = 0; col < 4; ++col) {
+        int pivot_row = col;
+        double pval = fabs(M[col][col]);
+        for (int row = col+1; row < 4; ++row) {
+            const double v = fabs(M[row][col]);
+            if (v > pval) { pval = v; pivot_row = row; }
+        }
+        // col_scale[col]==0 means that entire column of A was zero (degenerate patch,
+        // e.g. all centroids at the same depth) → rank-deficient → fall back.
+        if (col_scale[col] == 0.0 || pval < 1e-6 * col_scale[col]) return false;
+
+        if (pivot_row != col)
+            for (int j = 0; j <= 4; ++j) {
+                double tmp = M[col][j]; M[col][j] = M[pivot_row][j]; M[pivot_row][j] = tmp;
+            }
+
+        const double inv_pivot = 1.0 / M[col][col];
+        for (int row = col+1; row < 4; ++row) {
+            const double factor = M[row][col] * inv_pivot;
+            for (int j = col; j <= 4; ++j) M[row][j] -= factor * M[col][j];
+        }
+    }
+
+    double x[4];
+    for (int i = 3; i >= 0; --i) {
+        double s = M[i][4];
+        for (int j = i+1; j < 4; ++j) s -= M[i][j] * x[j];
+        x[i] = s / M[i][i];
+    }
+
+    result = x[0] + x[1]*dxi + x[2]*dyi + x[3]*dzi;
+    return true;
+}
+#endif // THREED
+
 // Volume-weighted average of element stress values in the patch.
 // Used as fallback when the SPR normal matrix is near-singular, and as a
 // clamp range for the polynomial result to prevent out-of-range extrapolation.
@@ -400,7 +462,7 @@ static double spr_volume_weighted_avg(const int_vec &patch,
     return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
 }
 
-#define MAX_PATCH_SIZE 64
+#define MAX_PATCH_SIZE 128
 // Compute SPR nodal value for one scalar field sigma[0..nelem-1].
 template<typename T>
 static void spr_scalar_field(const Variables &var, const T sigma, T out)
@@ -417,11 +479,20 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
         const ConstArrayAccessor ci = (*var.coord)[i];
         const double xi = ci[0];
         const double yi = ci[1];
+#ifdef THREED
+        const double zi = ci[2];
+#endif
 
-        // double_vec cx_arr(npatch), cy_arr(npatch);
         double cx_arr[MAX_PATCH_SIZE];
         double cy_arr[MAX_PATCH_SIZE];
-        assert(npatch <= MAX_PATCH_SIZE);
+#ifdef THREED
+        double cz_arr[MAX_PATCH_SIZE];
+        double z0 = 0.0;
+#endif
+        if (npatch > MAX_PATCH_SIZE) {
+            out[i] = spr_volume_weighted_avg(patch, *var.volume, sigma);
+            continue;
+        }
         double smin = sigma[patch[0]], smax = smin;
         double x0 = 0.0, y0 = 0.0;
 
@@ -430,18 +501,33 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
             const ConstConnAccessor conn = (*var.connectivity)[e];
 
             double cx = 0.0, cy = 0.0;
+#ifdef THREED
+            double cz = 0.0;
+#endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 const ConstArrayAccessor ck = (*var.coord)[conn[k]];
                 cx += ck[0];
                 cy += ck[1];
+#ifdef THREED
+                cz += ck[2];
+#endif
             }
             cx /= NODES_PER_ELEM;
             cy /= NODES_PER_ELEM;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+#endif
 
             cx_arr[jp] = cx;
             cy_arr[jp] = cy;
+#ifdef THREED
+            cz_arr[jp] = cz;
+#endif
             x0 += cx;
             y0 += cy;
+#ifdef THREED
+            z0 += cz;
+#endif
 
             const double sj = sigma[e];
             if (sj < smin) smin = sj;
@@ -449,13 +535,21 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
         }
         x0 /= npatch;
         y0 /= npatch;
-
+#ifdef THREED
+        z0 /= npatch;
+        double A[4][4] = {};
+        double b[4]    = {};
+#else
         double A[3][3] = {};
         double b[3]    = {};
+#endif
 
         for (int jp = 0; jp < npatch; ++jp) {
             const double dx = cx_arr[jp] - x0;
             const double dy = cy_arr[jp] - y0;
+#ifdef THREED
+            const double dz = cz_arr[jp] - z0;
+#endif
             const double sj = sigma[patch[jp]];
 
             A[0][0] += 1.0;
@@ -464,17 +558,33 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
             A[1][1] += dx*dx;
             A[1][2] += dx*dy; A[2][1] = A[1][2];
             A[2][2] += dy*dy;
+#ifdef THREED
+            A[0][3] += dz;    A[3][0] = A[0][3];
+            A[1][3] += dx*dz; A[3][1] = A[1][3];
+            A[2][3] += dy*dz; A[3][2] = A[2][3];
+            A[3][3] += dz*dz;
+#endif
 
             b[0] += sj;
             b[1] += dx * sj;
             b[2] += dy * sj;
+#ifdef THREED
+            b[3] += dz * sj;
+#endif
         }
 
         const double dxi = xi - x0;
         const double dyi = yi - y0;
+#ifdef THREED
+        const double dzi = zi - z0;
+#endif
 
         double val;
+#ifdef THREED
+        if (!spr_solve_centered_3d(A, b, dxi, dyi, dzi, val)) {
+#else
         if (!spr_solve_centered(A, b, dxi, dyi, val)) {
+#endif
             val = spr_volume_weighted_avg(patch, *var.volume, sigma);
         } else {
             if (val < smin) val = smin;
