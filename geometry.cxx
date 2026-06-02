@@ -344,6 +344,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 // number from ~2.5e9 to ~2.3e4 — numerically safe for double precision.
 //
 // Returns true if the Cramer solve succeeded; false if degenerate (fallback).
+#pragma acc routine seq
 static bool spr_solve_centered(const double A[3][3], const double b[3],
                                const double dxi, const double dyi,
                                double &result)
@@ -355,8 +356,8 @@ static bool spr_solve_centered(const double A[3][3], const double b[3],
 
     // Scale-adaptive singularity threshold: A[1][1] ~ Σdx², A[2][2] ~ Σdz²
     // both O(h²) with patch-relative coords — well-conditioned.
-    const double scale = A[0][0] * std::max(A[1][1], A[2][2]);
-    if (scale == 0.0 || std::abs(det) < 1e-6 * scale)
+    const double scale = A[0][0] * (A[1][1] > A[2][2] ? A[1][1] : A[2][2]);
+    if (scale == 0.0 || fabs(det) < 1e-6 * scale)
         return false;
 
     const double inv_det = 1.0 / det;
@@ -383,6 +384,7 @@ static bool spr_solve_centered(const double A[3][3], const double b[3],
 // Volume-weighted average of element stress values in the patch.
 // Used as fallback when the SPR normal matrix is near-singular, and as a
 // clamp range for the polynomial result to prevent out-of-range extrapolation.
+#pragma acc routine seq
 template<typename T>
 static double spr_volume_weighted_avg(const int_vec &patch,
                                       const double_vec &elem_volume,
@@ -398,41 +400,38 @@ static double spr_volume_weighted_avg(const int_vec &patch,
     return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
 }
 
+#define MAX_PATCH_SIZE 64
 // Compute SPR nodal value for one scalar field sigma[0..nelem-1].
 template<typename T>
-static void spr_scalar_field(const array_t &old_coord,
-                             const conn_t &old_connectivity,
-                             const int_vec2D &old_support,
-                             const T sigma,
-                             const double_vec &elem_volume,
-                             const int nnode_old,
-                             T out)
+static void spr_scalar_field(const Variables &var, const T sigma, T out)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma omp parallel for default(none) \
-            shared(old_coord, old_connectivity, old_support, sigma, elem_volume, nnode_old, out)
-    for (int i = 0; i < nnode_old; ++i) {
-        const int_vec &patch = old_support[i];
+    #pragma omp parallel for default(none) shared(var, sigma, out)
+    for (int i = 0; i < var.nnode; ++i) {
+        const int_vec &patch = (*var.support)[i];
         const int npatch = (int)patch.size();
 
-        const ConstArrayAccessor ci = old_coord[i];
+        const ConstArrayAccessor ci = (*var.coord)[i];
         const double xi = ci[0];
         const double yi = ci[1];
 
-        double_vec cx_arr(npatch), cy_arr(npatch);
+        // double_vec cx_arr(npatch), cy_arr(npatch);
+        double cx_arr[MAX_PATCH_SIZE];
+        double cy_arr[MAX_PATCH_SIZE];
+        assert(npatch <= MAX_PATCH_SIZE);
         double smin = sigma[patch[0]], smax = smin;
         double x0 = 0.0, y0 = 0.0;
 
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = patch[jp];
-            const ConstConnAccessor conn = old_connectivity[e];
+            const ConstConnAccessor conn = (*var.connectivity)[e];
 
             double cx = 0.0, cy = 0.0;
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
-                const ConstArrayAccessor ck = old_coord[conn[k]];
+                const ConstArrayAccessor ck = (*var.coord)[conn[k]];
                 cx += ck[0];
                 cy += ck[1];
             }
@@ -476,7 +475,7 @@ static void spr_scalar_field(const array_t &old_coord,
 
         double val;
         if (!spr_solve_centered(A, b, dxi, dyi, val)) {
-            val = spr_volume_weighted_avg(patch, elem_volume, sigma);
+            val = spr_volume_weighted_avg(patch, *var.volume, sigma);
         } else {
             if (val < smin) val = smin;
             if (val > smax) val = smax;
@@ -566,17 +565,12 @@ void spr_elem_to_node(const Param &param, Variables &var)
     // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
     // nodal_stress_out: flat SoA array, size nnode_old * NSTR, indexed as [d * nnode_old + n]
     // nodal_stressyy_out: flat array, size nnode_old (plane-strain out-of-plane component)
-    for (int d = 0; d < NSTR; ++d) {
-        spr_scalar_field(*var.coord, *var.connectivity, *var.support,
-                         var.stress->component(d), *var.volume,
-                         var.nnode, var.stress_n->component(d));
-    }
+    for (int d = 0; d < NSTR; ++d)
+        spr_scalar_field(var, var.stress->component(d), var.stress_n->component(d));
 
-    if (param.mat.is_plane_strain) {
-        spr_scalar_field(*var.coord, *var.connectivity, *var.support,
-                         var.stressyy->data(), *var.volume,
-                         var.nnode, var.stressyy_n->data());
-    }
+    if (param.mat.is_plane_strain)
+        spr_scalar_field(var, var.stressyy->data(), var.stressyy_n->data());
+
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
