@@ -370,6 +370,34 @@ public:
         n_ = 0;
     }
 
+    void fill_component(int d, const T& val = T(0)) {
+        if (!a_ || n_ == 0 || d < 0 || d >= N) return;
+
+        T* ptr = a_;
+        int stride;
+        int offset;
+
+#ifdef SOA
+        stride = 1;
+        offset = d * n_;
+#else
+        stride = N;
+        offset = d;
+#endif
+
+#ifndef ACC
+        #pragma omp parallel for if(n_ > 10000)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int i = 0; i < n_; ++i) {
+            ptr[offset + i * stride] = val;
+        }
+    }
+
+    void zero_component(int d) {
+        fill_component(d, T(0));
+    }
+
     //
     // index accessing
     //
@@ -414,7 +442,7 @@ public:
 #endif
     }
 
-    ConstComponentAccessor component(int d) const {
+    ConstComponentAccessor component_const(int d) const {
 #ifdef SOA
         return ConstComponentAccessor{ a_ + d * n_, 1, n_ };
 #else

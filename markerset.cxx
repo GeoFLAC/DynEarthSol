@@ -579,7 +579,10 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, in
 
     // nearest-neighbor search structure
     array_t centroid(var.nelem);
-    elem_center(*var.coord, *var.connectivity, centroid);
+    for (int d=0; d<NDIMS; d++)
+        average_nodal_to_elem(var.coord->component_const(d), *var.connectivity, var.nelem, centroid.component(d));
+
+    #pragma acc wait
 
     PointCloud cloud(centroid);
     NANOKDTree kdtree(NDIMS, cloud);
@@ -1758,7 +1761,10 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 
         array_t points(var.nelem);
-        elem_center(*var.coord, *var.connectivity, points); // centroid of elements
+        for (int d = 0; d < NDIMS; d++)
+            average_nodal_to_elem(var.coord->component_const(d), *var.connectivity, var.nelem, points.component(d));
+
+        #pragma acc wait
 
 #ifdef ACC
         array_t point_tmp(1);

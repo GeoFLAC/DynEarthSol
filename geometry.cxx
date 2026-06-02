@@ -488,32 +488,6 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
 #endif
 }
 
-// Average per-node scalar values to element centroids (simple arithmetic mean over vertices).
-template<typename T>
-static void average_nodal_to_elem(const T nodal, const conn_t &connectivity,
-                                   int nelem, T elem)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-#ifndef ACC
-    #pragma omp parallel for default(none) \
-            shared(nodal, connectivity, nelem, elem)
-#endif
-    #pragma acc parallel loop gang vector async
-    for (int e = 0; e < nelem; ++e) {
-        ConstConnAccessor conn = connectivity[e];
-        double avg = 0.0;
-        for (int k = 0; k < NODES_PER_ELEM; ++k)
-            avg += nodal[conn[k]];
-        elem[e] = avg / NODES_PER_ELEM;
-    }
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
 void spr_elem_to_node(const Param &param, Variables &var)
 {
 #ifdef NPROF_DETAIL
@@ -585,11 +559,12 @@ void spr_node_to_elem(const Param &param, Variables &var)
     // Step C: Average SPR nodal stresses -> new element stresses.
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
-        average_nodal_to_elem(var.stress_n->component(d), *var.connectivity,
+        average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
                               var.nelem, var.stress->component(d));
 
     if (param.mat.is_plane_strain)
-        average_nodal_to_elem(var.stressyy_n->data(), *var.connectivity, var.nelem, var.stressyy->data());
+        average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
+                                var.nelem, var.stressyy->data());
 
     // Step C': Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each

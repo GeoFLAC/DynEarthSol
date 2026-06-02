@@ -3462,69 +3462,42 @@ void create_new_mesh(const Param& param, Variables& var)
     // std::cout << '\n';
 }
 
-
-void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
+// Average per-node scalar values to element centroids (simple arithmetic mean over vertices).
+template<typename T_in, typename T_out>
+void average_nodal_to_elem(T_in nodal, const conn_t &connectivity,
+                                   int nelem, T_out elem, bool is_surface)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    int nelem = connectivity.size();
+
+    int nnodes_per_elem = is_surface ? NODES_PER_FACET : NODES_PER_ELEM;
 
 #ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        // const int* conn = connectivity[e];
-        for(int d=0; d<NDIMS; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_ELEM; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_ELEM;
-        }
-    }
-
-    #pragma acc wait
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
-void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    int nelem = connectivity.size();
-
-#ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        for(int d=0; d<NDIMS-1; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_FACET; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_FACET;
-        }
-    }
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(nelem, center)
+    #pragma omp parallel for default(none) \
+            shared(nodal, connectivity, nelem, elem, nnodes_per_elem)
 #endif
     #pragma acc parallel loop gang vector async
-    for(int e=0; e<nelem; e++)
-        center[e][NDIMS-1] = 0.;
-
-    #pragma acc wait
-
+    for (int e = 0; e < nelem; ++e) {
+        ConstConnAccessor conn = connectivity[e];
+        double avg = 0.0;
+        for (int k = 0; k < nnodes_per_elem; ++k)
+            avg += nodal[conn[k]];
+        elem[e] = avg / nnodes_per_elem;
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
+
+template
+void average_nodal_to_elem<array_t::ConstComponentAccessor, array_t::ComponentAccessor>(
+    array_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, array_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<tensor_t::ConstComponentAccessor, tensor_t::ComponentAccessor>(
+    tensor_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, tensor_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<const double*, double*>(const double* nodal, 
+    const conn_t &connectivity, int nelem, double* elem, bool);

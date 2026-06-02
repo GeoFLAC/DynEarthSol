@@ -32,9 +32,9 @@ int get_sup_size(const Variables& var, const int inode);
 void create_elemmarkers(const Param&, Variables&);
 void create_markers(const Param&, Variables&);
 void create_new_mesh(const Param&, Variables&);
-void elem_center(const array_t &coord, const conn_t &connectivity, array_t& points);
-void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center);
 void create_equilateral_elem(const Variables& var, int *&connectivity);
 void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags);
+template <typename T_in, typename T_out>
+void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_out elem, bool is_surface=false);
 
 #endif

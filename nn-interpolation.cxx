@@ -23,20 +23,18 @@ namespace {
 #endif
 
         double eps = 1e-15;
-        int nqueries;
-
-        if (is_surface)
-            nqueries = var.bfacets[iboundz1]->size();
-        else
-            nqueries = var.nelem;
+        int nqueries = is_surface ? var.bfacets[iboundz1]->size() : var.nelem;
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
+        conn_t *connectivity = is_surface ? var.connectivity_surface : var.connectivity;
 
         array_t queries(nqueries);
 
-        if (is_surface) {
-            facet_center(*var.coord, *var.connectivity_surface, queries);
-        } else {
-            elem_center(*var.coord, *var.connectivity, queries);
-        }
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(var.coord->component_const(d), *connectivity, nqueries, queries.component(d), is_surface);
+
+        if (is_surface) queries.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
         {
             printf(is_surface ? "    Top surface:      "
@@ -350,13 +348,17 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush("create kdtree for old elements");
 #endif
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
 
         array_t points(old_npoint);
-        if (is_surface) {
-            facet_center(old_coord, old_connectivity, points);
-        } else {
-            elem_center(old_coord, old_connectivity, points);
-        }
+
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(old_coord.component_const(d), old_connectivity,
+                                  old_npoint, points.component(d), is_surface);
+
+        if (is_surface) points.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
 #ifdef ACC
         array_t point_tmp(1);
