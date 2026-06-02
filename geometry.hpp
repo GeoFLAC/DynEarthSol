@@ -20,9 +20,11 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd,
                 double_vec &etmp);
 
-void spr_elem_to_node(const Param& param, Variables& var);
+void spr_elem_to_node(const Param& param, const Variables& var,
+                      tensor_t* stress_n, double_vec* stressyy_n);
 
-void spr_node_to_elem(const Param& param, Variables& var);
+void spr_node_to_elem(const Param& param, const Variables& var,
+                      tensor_t* stress, double_vec* stressyy);
 
 double compute_dt(const Param& param, Variables& var);
 // double compute_dt(const Param& param, const Variables& var);

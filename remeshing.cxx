@@ -2860,7 +2860,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     int64_t time_tmp = get_nanoseconds();
 
     std::cout << "  Remeshing starts...\n";
-
 #ifdef ACC
     {
         size_t free_bytes, total_bytes;
@@ -2899,10 +2898,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int e = 0; e < var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (*var.volume_old)[e] - 1.0;
 
-    #pragma acc wait
-
     // superconvergen patch recovery for stress before remeshing
-    spr_elem_to_node(param, var);
+    var.stress_n = new tensor_t(var.nnode);
+    if (param.mat.is_plane_strain)
+        var.stressyy_n = new double_vec(var.nnode);
+
+    spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
 
     {
         // creating a "copy" of mesh pointer so that they are not deleted
@@ -3038,7 +3039,11 @@ void remesh(const Param &param, Variables &var, int bad_quality)
      * create_support(var);
      */
 
-    spr_node_to_elem(param, var);
+    spr_node_to_elem(param, var, var.stress, var.stressyy);
+
+    delete var.stress_n;
+    if (param.mat.is_plane_strain)
+        delete var.stressyy_n;
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 

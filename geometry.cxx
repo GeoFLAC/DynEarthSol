@@ -488,7 +488,8 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
 #endif
 }
 
-void spr_elem_to_node(const Param &param, Variables &var)
+void spr_elem_to_node(const Param &param, const Variables &var,
+                      tensor_t *stress_n, double_vec *stressyy_n)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -528,11 +529,6 @@ void spr_elem_to_node(const Param &param, Variables &var)
             (*var.stressyy)[e] += p_ref_old;
     }
 
-    var.stress_n = new tensor_t(var.nnode);
-
-    if (param.mat.is_plane_strain)
-        var.stressyy_n = new double_vec(var.nnode);
-
     #pragma acc wait
 
     // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
@@ -540,17 +536,18 @@ void spr_elem_to_node(const Param &param, Variables &var)
     // nodal_stress_out: flat SoA array, size nnode_old * NSTR, indexed as [d * nnode_old + n]
     // nodal_stressyy_out: flat array, size nnode_old (plane-strain out-of-plane component)
     for (int d = 0; d < NSTR; ++d)
-        spr_scalar_field(var, var.stress->component(d), var.stress_n->component(d));
+        spr_scalar_field(var, var.stress->component(d), stress_n->component(d));
 
     if (param.mat.is_plane_strain)
-        spr_scalar_field(var, var.stressyy->data(), var.stressyy_n->data());
+        spr_scalar_field(var, var.stressyy->data(), stressyy_n->data());
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
-void spr_node_to_elem(const Param &param, Variables &var)
+void spr_node_to_elem(const Param &param, const Variables &var, 
+                      tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -560,17 +557,17 @@ void spr_node_to_elem(const Param &param, Variables &var)
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
         average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
-                              var.nelem, var.stress->component(d));
+                              var.nelem, stress->component(d));
 
     if (param.mat.is_plane_strain)
         average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
-                                var.nelem, var.stressyy->data());
+                                var.nelem, stressyy->data());
 
     // Step C': Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each
     // new element's depth to recover the correct total stress.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
@@ -580,17 +577,15 @@ void spr_node_to_elem(const Param &param, Variables &var)
             z += (*var.coord)[conn[k]][NDIMS-1];
         z /= NODES_PER_ELEM;
         double p_ref = ref_pressure(param, z);
-        TensorAccessor s = (*var.stress)[e];
+        TensorAccessor s = (*stress)[e];
         for (int d = 0; d < NDIMS; ++d) s[d] -= p_ref;
 
         if (param.mat.is_plane_strain)
-            (*var.stressyy)[e] -= p_ref;
+            (*stressyy)[e] -= p_ref;
     }
 
     #pragma acc wait
 
-    delete var.stress_n;
-    delete var.stressyy_n;
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
