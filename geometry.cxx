@@ -448,13 +448,14 @@ static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
 // clamp range for the polynomial result to prevent out-of-range extrapolation.
 #pragma acc routine seq
 template<typename T>
-static double spr_volume_weighted_avg(const int_vec &patch,
+static double spr_volume_weighted_avg(const Variables &var, const int node,
                                       const double_vec &elem_volume,
                                       const T sigma)
 {
     double sum_w = 0.0, sum_ws = 0.0;
-    for (int i = 0; i < (int)patch.size(); ++i) {
-        const int e = patch[i];
+    const int nsup = get_sup_size(var, node);
+    for (int i = 0; i < nsup; ++i) {
+        const int e = get_support(var, node, i);
         const double w = elem_volume[e];
         sum_ws += w * sigma[e];
         sum_w  += w;
@@ -462,7 +463,6 @@ static double spr_volume_weighted_avg(const int_vec &patch,
     return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
 }
 
-#define MAX_PATCH_SIZE 128
 // Compute SPR nodal value for one scalar field sigma[0..nelem-1].
 template<typename T>
 static void spr_scalar_field(const Variables &var, const T sigma, T out)
@@ -471,10 +471,12 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
     nvtxRangePush(__FUNCTION__);
 #endif
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var, sigma, out)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.nnode; ++i) {
-        const int_vec &patch = (*var.support)[i];
-        const int npatch = (int)patch.size();
+        const int npatch = get_sup_size(var, i);
 
         const ConstArrayAccessor ci = (*var.coord)[i];
         const double xi = ci[0];
@@ -483,49 +485,39 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
         const double zi = ci[2];
 #endif
 
-        double cx_arr[MAX_PATCH_SIZE];
-        double cy_arr[MAX_PATCH_SIZE];
-#ifdef THREED
-        double cz_arr[MAX_PATCH_SIZE];
-        double z0 = 0.0;
-#endif
-        if (npatch > MAX_PATCH_SIZE) {
-            out[i] = spr_volume_weighted_avg(patch, *var.volume, sigma);
+        if (npatch == 0) {
+            out[i] = spr_volume_weighted_avg(var, i, *var.volume, sigma);
             continue;
         }
-        double smin = sigma[patch[0]], smax = smin;
+        
+        double smin = sigma[get_support(var, i, 0)], smax = smin;
         double x0 = 0.0, y0 = 0.0;
+#ifdef THREED
+        double z0 = 0.0;
+#endif
 
+        #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
-            const int e = patch[jp];
-            const ConstConnAccessor conn = (*var.connectivity)[e];
-
+            const int e = get_support(var, i, jp);
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
             double cx = 0.0, cy = 0.0;
 #ifdef THREED
             double cz = 0.0;
 #endif
+            #pragma acc loop seq
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
-                const ConstArrayAccessor ck = (*var.coord)[conn[k]];
-                cx += ck[0];
-                cy += ck[1];
+                cx += ck[k][0];
+                cy += ck[k][1];
 #ifdef THREED
-                cz += ck[2];
+                cz += ck[k][2];
 #endif
             }
             cx /= NODES_PER_ELEM;
             cy /= NODES_PER_ELEM;
-#ifdef THREED
-            cz /= NODES_PER_ELEM;
-#endif
-
-            cx_arr[jp] = cx;
-            cy_arr[jp] = cy;
-#ifdef THREED
-            cz_arr[jp] = cz;
-#endif
             x0 += cx;
             y0 += cy;
 #ifdef THREED
+            cz /= NODES_PER_ELEM;
             z0 += cz;
 #endif
 
@@ -544,13 +536,34 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
         double b[3]    = {};
 #endif
 
+        #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
-            const double dx = cx_arr[jp] - x0;
-            const double dy = cy_arr[jp] - y0;
+            const int e = get_support(var, i, jp);
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
+            double cx = 0.0, cy = 0.0;
 #ifdef THREED
-            const double dz = cz_arr[jp] - z0;
+            double cz = 0.0;
 #endif
-            const double sj = sigma[patch[jp]];
+            #pragma acc loop seq
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                cx += ck[k][0];
+                cy += ck[k][1];
+#ifdef THREED
+                cz += ck[k][2];
+#endif
+            }
+            cx /= NODES_PER_ELEM;
+            cy /= NODES_PER_ELEM;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+#endif
+
+            const double dx = cx - x0;
+            const double dy = cy - y0;
+#ifdef THREED
+            const double dz = cz - z0;
+#endif
+            const double sj = sigma[e];
 
             A[0][0] += 1.0;
             A[0][1] += dx;    A[1][0] = A[0][1];
@@ -585,10 +598,9 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
 #else
         if (!spr_solve_centered(A, b, dxi, dyi, val)) {
 #endif
-            val = spr_volume_weighted_avg(patch, *var.volume, sigma);
+            val = spr_volume_weighted_avg(var, i, *var.volume, sigma);
         } else {
-            if (val < smin) val = smin;
-            if (val > smax) val = smax;
+            val = fmax(smin, fmin(smax, val));
         }
 
         out[i] = val;
@@ -639,8 +651,6 @@ void spr_elem_to_node(const Param &param, const Variables &var,
             (*var.stressyy)[e] += p_ref_old;
     }
 
-    #pragma acc wait
-
     // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
     // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
     // nodal_stress_out: flat SoA array, size nnode_old * NSTR, indexed as [d * nnode_old + n]
@@ -650,6 +660,8 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 
     if (param.mat.is_plane_strain)
         spr_scalar_field(var, var.stressyy->data(), stressyy_n->data());
+
+    #pragma acc wait
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
