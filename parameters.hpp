@@ -626,6 +626,19 @@ struct SurfaceInfo {
 };
 
 //
+// Non-owning view over the flattened (CSR) node-support arrays.
+// idx[n] = start of node n's entries in arr; idx[n+1]-idx[n] = count.
+struct SupportView {
+    const int* arr;  // flat element IDs
+    const int* idx;  // CSR row-pointers (size nnode+1)
+
+    #pragma acc routine seq
+    int size(int inode) const { return idx[inode+1] - idx[inode]; }
+
+    #pragma acc routine seq
+    const int* patch(int inode) const { return arr + idx[inode]; }
+};
+
 // Structures for model variables
 //
 class MatProps;
@@ -700,6 +713,7 @@ struct Variables {
     int_vec2D *support;
     int_vec *support_arr;
     int_vec *support_idx;
+    SupportView sup;
     conn_t *neighbor; // neighboring elements for each element
     int_pair_vec *contact; // contact elements for each element
     double_vec *ctmp; // temporary array for contact elements

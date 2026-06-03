@@ -3236,19 +3236,6 @@ void create_boundary_facets(Variables& var)
 }
 
 
-int get_support(const Variables& var, const int inode, const int isup)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    return (*var.support_arr)[start + isup];
-}
-
-int get_sup_size(const Variables& var, const int inode)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    const int end = (*var.support_idx)[inode];
-    return end - start;
-}
-
 
 void create_support(Variables& var)
 {
@@ -3256,32 +3243,35 @@ void create_support(Variables& var)
     nvtxRangePush(__FUNCTION__);
 #endif
     var.support = new int_vec2D(var.nnode);
-    var.support_idx = new int_vec(var.nnode, 0);
+    // CSR row-pointer format: size nnode+1, support_idx[n] = start of node n
+    var.support_idx = new int_vec(var.nnode + 1, 0);
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             (*var.support)[conn[i]].push_back(e);
-            (*var.support_idx)[conn[i]]++;
+            (*var.support_idx)[conn[i] + 1]++;
         }
     }
-    // create suppert 1D for ACC
-    for (int n=1; n<var.nnode; ++n)
-        (*var.support_idx)[n] = (*var.support_idx)[n-1] + (*var.support_idx)[n];
+    // prefix-sum counts into start offsets
+    for (int n=1; n<=var.nnode; ++n)
+        (*var.support_idx)[n] += (*var.support_idx)[n-1];
 
-    int nsup = (*var.support_idx)[var.nnode-1];
+    int nsup = (*var.support_idx)[var.nnode];
 
-    var.support_arr = new int_vec((*var.support_idx)[var.nnode-1]);
+    var.support_arr = new int_vec(nsup);
 
     // fill support_arr
     for (int n=0; n<var.nnode; ++n) {
-        int start = (n == 0) ? 0 : (*var.support_idx)[n-1];
-        int end = (*var.support_idx)[n];
+        int start = (*var.support_idx)[n];
+        int end   = (*var.support_idx)[n+1];
         for (int i=start; i<end; ++i) {
             (*var.support_arr)[i] = (*var.support)[n][i-start];
         }
     }
+    var.sup = {var.support_arr->data(), var.support_idx->data()};
+
     // std::cout << "support:\n";
     // print(std::cout, *var.support);
     // std::cout << "\n";

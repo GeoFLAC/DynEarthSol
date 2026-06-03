@@ -447,16 +447,14 @@ static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
 // Used as fallback when the SPR normal matrix is near-singular, and as a
 // clamp range for the polynomial result to prevent out-of-range extrapolation.
 #pragma acc routine seq
-static double spr_volume_weighted_avg_strided(const Variables &var, 
-                                              int node_idx, 
+static double spr_volume_weighted_avg_strided(const int npatch, const int* patch, 
                                               const double_vec &elem_volume, 
                                               const double* ptr, 
                                               int stride) 
 {
     double sum_w = 0.0, sum_ws = 0.0;
-    int npatch = get_sup_size(var, node_idx);
     for (int jp = 0; jp < npatch; ++jp) {
-        int e = get_support(var, node_idx, jp);
+        int e = patch[jp];
         double w = elem_volume[e];
         sum_ws += w * ptr[e * stride]; 
         sum_w  += w;
@@ -484,10 +482,11 @@ static void spr_fused_fields(const Variables &var,
     #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
     for (int i = 0; i < var.nnode; ++i) {
-        const int npatch = get_sup_size(var, i);
+        const int npatch = var.sup.size(i);
 
         double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
-        const int e0 = get_support(var, i, 0);
+        const int* patch = var.sup.patch(i);
+        const int e0 = patch[0];
         
         #pragma acc loop seq
         for (int f = 0; f < num_fields; ++f) {
@@ -502,7 +501,7 @@ static void spr_fused_fields(const Variables &var,
         // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
         #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
-            const int e = get_support(var, i, jp);
+            const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
             double cx = 0.0, cy = 0.0;
 #ifdef THREED
@@ -543,7 +542,7 @@ static void spr_fused_fields(const Variables &var,
         // with shared loops and Stride-aware access
         #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
-            const int e = get_support(var, i, jp);
+            const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
             double cx = 0.0, cy = 0.0;
 #ifdef THREED
@@ -617,7 +616,8 @@ static void spr_fused_fields(const Variables &var,
                 // if the matrix is degenerate, the polynomial fit is unreliable. 
                 // Fall back to volume-weighted average, which is stable but less accurate. 
                 // The clamping range is still valid since it's based on the patch values.
-                spr_volume_weighted_avg_strided(var, i, *var.volume, in_ptrs[f], in_strides[f]);
+                spr_volume_weighted_avg_strided(var.sup.size(i), var.sup.patch(i),
+                                                *var.volume, in_ptrs[f], in_strides[f]);
 
             out_ptrs[f][i * out_strides[f]] = temp_val;
         }
