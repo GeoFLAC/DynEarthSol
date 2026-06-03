@@ -726,7 +726,9 @@ int main(int argc, const char* argv[])
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
-        update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+        if (param.control.has_hydraulic_diffusion)
+            update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+
         update_strain_rate(var, *var.strain_rate);
         compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
