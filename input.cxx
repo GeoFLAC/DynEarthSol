@@ -393,6 +393,10 @@ static void declare_parameters(po::options_description &cfg,
          ("control.use_global_velocity_scaling",
           po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
           "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
+         ("control.has_superconvergent_patch_recovery",
+          po::value<bool>(&p.control.has_superconvergent_patch_recovery)->default_value(true),
+          "Use Superconvergent Patch Recovery (SPR) to interpolate stress/strain/plstrain "
+          "during remeshing. If false, falls back to nearest-neighbor element interpolation.\n")
         ;
 
     cfg.add_options()

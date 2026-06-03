@@ -255,6 +255,7 @@ struct Control {
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
+    bool has_superconvergent_patch_recovery;
 
 };
 

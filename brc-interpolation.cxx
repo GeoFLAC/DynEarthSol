@@ -359,8 +359,11 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     array_t *new_coord0 = new array_t(n);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
-    tensor_t *new_stress_n = new tensor_t(n);
-    interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
+    tensor_t *new_stress_n = nullptr;
+    if (param.control.has_superconvergent_patch_recovery) {
+        new_stress_n = new tensor_t(n);
+        interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
+    }
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -384,10 +387,12 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     delete var.coord0;
     var.coord0 = new_coord0;
 
-    delete var.stress_n;
-    var.stress_n = new_stress_n;
+    if (param.control.has_superconvergent_patch_recovery) {
+        delete var.stress_n;
+        var.stress_n = new_stress_n;
+    }
 
-    if (param.mat.is_plane_strain) {
+    if (param.control.has_superconvergent_patch_recovery && param.mat.is_plane_strain) {
         double_vec *new_stressyy_n = new double_vec(n);
         interpolate_field(brc, el, old_connectivity,
                           *var.stressyy_n, *new_stressyy_n, n);

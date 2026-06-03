@@ -651,6 +651,27 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
+
+        if (!is_surface && !param.control.has_superconvergent_patch_recovery) {
+            const int e = var.nelem;
+
+            tensor_t *new_stress = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
+
+            #pragma acc wait
+
+            delete var.stress;
+            var.stress = new_stress;
+
+            if (param.mat.is_plane_strain) {
+                double_vec *new_stressyy = new double_vec(e);
+                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec,
+                             *var.stressyy, *new_stressyy, e);
+                #pragma acc wait
+                delete var.stressyy;
+                var.stressyy = new_stressyy;
+            }
+        }
     }
 
 #ifdef NPROF_DETAIL

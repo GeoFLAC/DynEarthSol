@@ -2899,11 +2899,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         (*var.volume_old)[e] = (*var.volume)[e] / (*var.volume_old)[e] - 1.0;
 
     // superconvergen patch recovery for stress before remeshing
-    var.stress_n = new tensor_t(var.nnode);
-    if (param.mat.is_plane_strain)
-        var.stressyy_n = new double_vec(var.nnode);
-
-    spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
+    if (param.control.has_superconvergent_patch_recovery) {
+        var.stress_n = new tensor_t(var.nnode);
+        if (param.mat.is_plane_strain)
+            var.stressyy_n = new double_vec(var.nnode);
+        spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
+    }
 
     {
         // creating a "copy" of mesh pointer so that they are not deleted
@@ -3039,11 +3040,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
      * create_support(var);
      */
 
-    spr_node_to_elem(param, var, var.stress, var.stressyy);
+    if (param.control.has_superconvergent_patch_recovery) {
+        spr_node_to_elem(param, var, var.stress, var.stressyy);
 
-    delete var.stress_n;
-    if (param.mat.is_plane_strain)
-        delete var.stressyy_n;
+        delete var.stress_n;
+        if (param.mat.is_plane_strain)
+            delete var.stressyy_n;
+    }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 

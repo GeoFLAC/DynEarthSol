@@ -176,12 +176,14 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
-    delete var.stress;
-    var.stress = new tensor_t(e);
+    if (param.control.has_superconvergent_patch_recovery) {
+        delete var.stress;
+        var.stress = new tensor_t(e);
 
-    // TODO: keep this reallocation because rheology always reads double& syy
-    delete var.stressyy;
-    var.stressyy = new double_vec(var.nelem);
+        // TODO: keep this reallocation because rheology always reads double& syy
+        delete var.stressyy;
+        var.stressyy = new double_vec(var.nelem);
+    }
 
     if (param.control.has_hydraulic_diffusion) {
         delete var.old_mean_stress;
