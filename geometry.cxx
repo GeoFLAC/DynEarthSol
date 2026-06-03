@@ -447,55 +447,59 @@ static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
 // Used as fallback when the SPR normal matrix is near-singular, and as a
 // clamp range for the polynomial result to prevent out-of-range extrapolation.
 #pragma acc routine seq
-template<typename T>
-static double spr_volume_weighted_avg(const Variables &var, const int node,
-                                      const double_vec &elem_volume,
-                                      const T sigma)
+static double spr_volume_weighted_avg_strided(const Variables &var, 
+                                              int node_idx, 
+                                              const double_vec &elem_volume, 
+                                              const double* ptr, 
+                                              int stride) 
 {
     double sum_w = 0.0, sum_ws = 0.0;
-    const int nsup = get_sup_size(var, node);
-    for (int i = 0; i < nsup; ++i) {
-        const int e = get_support(var, node, i);
-        const double w = elem_volume[e];
-        sum_ws += w * sigma[e];
+    int npatch = get_sup_size(var, node_idx);
+    for (int jp = 0; jp < npatch; ++jp) {
+        int e = get_support(var, node_idx, jp);
+        double w = elem_volume[e];
+        sum_ws += w * ptr[e * stride]; 
         sum_w  += w;
     }
     return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
 }
 
-// Compute SPR nodal value for one scalar field sigma[0..nelem-1].
-template<typename T>
-static void spr_scalar_field(const Variables &var, const T sigma, T out)
+// # of max spr fields, 4 for 2D, 6 for 3D
+#define MAX_SPR_FIELDS (NDIMS*2)
+
+// Compute SPR nodal values
+static void spr_fused_fields(const Variables &var, 
+                             const double* const in_ptrs[], const int in_strides[],
+                             double* const out_ptrs[], const int out_strides[], 
+                             int num_fields)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, sigma, out)
+    #pragma omp parallel for default(none) shared(var, in_ptrs, in_strides, out_ptrs, \
+                out_strides, num_fields)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
+                in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
     for (int i = 0; i < var.nnode; ++i) {
         const int npatch = get_sup_size(var, i);
 
-        const ConstArrayAccessor ci = (*var.coord)[i];
-        const double xi = ci[0];
-        const double yi = ci[1];
-#ifdef THREED
-        const double zi = ci[2];
-#endif
-
-        if (npatch == 0) {
-            out[i] = spr_volume_weighted_avg(var, i, *var.volume, sigma);
-            continue;
-        }
+        double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
+        const int e0 = get_support(var, i, 0);
         
-        double smin = sigma[get_support(var, i, 0)], smax = smin;
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            smin[f] = smax[f] = in_ptrs[f][e0 * in_strides[f]];
+        }
+
         double x0 = 0.0, y0 = 0.0;
 #ifdef THREED
         double z0 = 0.0;
 #endif
 
+        // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
         #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = get_support(var, i, jp);
@@ -521,21 +525,22 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
             z0 += cz;
 #endif
 
-            const double sj = sigma[e];
-            if (sj < smin) smin = sj;
-            if (sj > smax) smax = sj;
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                if (s < smin[f]) smin[f] = s;
+                if (s > smax[f]) smax[f] = s;
+            }
         }
-        x0 /= npatch;
-        y0 /= npatch;
+        x0 /= npatch; y0 /= npatch;
 #ifdef THREED
         z0 /= npatch;
-        double A[4][4] = {};
-        double b[4]    = {};
-#else
-        double A[3][3] = {};
-        double b[3]    = {};
 #endif
+        double A[NODES_PER_ELEM][NODES_PER_ELEM] = {};
+        double b_vec[MAX_SPR_FIELDS][NODES_PER_ELEM] = {};
 
+        // build A and b_vec for all fields in the patch, 
+        // with shared loops and Stride-aware access
         #pragma acc loop seq
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = get_support(var, i, jp);
@@ -563,7 +568,6 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
 #ifdef THREED
             const double dz = cz - z0;
 #endif
-            const double sj = sigma[e];
 
             A[0][0] += 1.0;
             A[0][1] += dx;    A[1][0] = A[0][1];
@@ -578,32 +582,45 @@ static void spr_scalar_field(const Variables &var, const T sigma, T out)
             A[3][3] += dz*dz;
 #endif
 
-            b[0] += sj;
-            b[1] += dx * sj;
-            b[2] += dy * sj;
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                b_vec[f][0] += s;
+                b_vec[f][1] += dx * s;
+                b_vec[f][2] += dy * s;
 #ifdef THREED
-            b[3] += dz * sj;
+                b_vec[f][3] += dz * s;
 #endif
+            }
         }
 
-        const double dxi = xi - x0;
-        const double dyi = yi - y0;
+        const ConstArrayAccessor ci = (*var.coord)[i];
+        const double dxi = ci[0] - x0;
+        const double dyi = ci[1] - y0;
 #ifdef THREED
-        const double dzi = zi - z0;
+        const double dzi = ci[2] - z0;
 #endif
 
-        double val;
+        // solve A for all fields in the patch, with fallback and clamping
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            double temp_val;
+
 #ifdef THREED
-        if (!spr_solve_centered_3d(A, b, dxi, dyi, dzi, val)) {
+            bool solve_success = spr_solve_centered_3d(A, b_vec[f], dxi, dyi, dzi, temp_val);
 #else
-        if (!spr_solve_centered(A, b, dxi, dyi, val)) {
+            bool solve_success = spr_solve_centered(A, b_vec[f], dxi, dyi, temp_val);
 #endif
-            val = spr_volume_weighted_avg(var, i, *var.volume, sigma);
-        } else {
-            val = fmax(smin, fmin(smax, val));
-        }
 
-        out[i] = val;
+            temp_val = solve_success ?
+                fmax(smin[f], fmin(smax[f], temp_val)) :
+                // if the matrix is degenerate, the polynomial fit is unreliable. 
+                // Fall back to volume-weighted average, which is stable but less accurate. 
+                // The clamping range is still valid since it's based on the patch values.
+                spr_volume_weighted_avg_strided(var, i, *var.volume, in_ptrs[f], in_strides[f]);
+
+            out_ptrs[f][i * out_strides[f]] = temp_val;
+        }
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -651,15 +668,39 @@ void spr_elem_to_node(const Param &param, const Variables &var,
             (*var.stressyy)[e] += p_ref_old;
     }
 
-    // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
-    // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
-    // nodal_stress_out: flat SoA array, size nnode_old * NSTR, indexed as [d * nnode_old + n]
-    // nodal_stressyy_out: flat array, size nnode_old (plane-strain out-of-plane component)
+    // dynamic registration of all fields involved in SPR
+    const double* in_ptrs[MAX_SPR_FIELDS];
+    int in_strides[MAX_SPR_FIELDS];
+    double* out_ptrs[MAX_SPR_FIELDS];
+    int out_strides[MAX_SPR_FIELDS];
+    int num_fields = 0;
+
+    auto add_field_acc = [&](tensor_t::ConstComponentAccessor in_acc, tensor_t::ComponentAccessor out_acc) {
+        in_ptrs[num_fields]     = in_acc.ptr_;
+        in_strides[num_fields]  = in_acc.stride_;
+        out_ptrs[num_fields]    = out_acc.ptr_;
+        out_strides[num_fields] = out_acc.stride_;
+        num_fields++;
+    };
+
+    auto add_field_ptr = [&](const double* in_p, double* out_p) {
+        in_ptrs[num_fields]     = in_p;
+        in_strides[num_fields]  = 1;
+        out_ptrs[num_fields]    = out_p;
+        out_strides[num_fields] = 1;
+        num_fields++;
+    };
+
     for (int d = 0; d < NSTR; ++d)
-        spr_scalar_field(var, var.stress->component(d), stress_n->component(d));
+        add_field_acc(var.stress->component_const(d), stress_n->component(d));
 
     if (param.mat.is_plane_strain)
-        spr_scalar_field(var, var.stressyy->data(), stressyy_n->data());
+        add_field_ptr(var.stressyy->data(), stressyy_n->data());
+
+    // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
+    // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
+    // call the fused SPR kernel for all registered fields
+    spr_fused_fields(var, in_ptrs, in_strides, out_ptrs, out_strides, num_fields);
 
     #pragma acc wait
 
