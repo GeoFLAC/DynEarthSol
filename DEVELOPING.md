@@ -22,7 +22,6 @@ Low priority:
 * Internal heating
 * Volume changed induced stress
 
-
 ## Design notes:
 
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
@@ -34,6 +33,18 @@ Low priority:
   10: Triangulation/tetrahedralization error
   11: Runtime error
   12: Assertion error (due to programming)
+
+## Development and release workflow
+
+1. **Prepare feature branch**: Develop your feature and ensure all local tests pass.
+2. **Update Changelog**: Document the new features, bug fixes, and breaking changes in `CHANGELOG.md`.
+3. **Acquire a draft DOI**: Go to [Zenodo](https://zenodo.org) and acquire a draft DOI for the new version (currently maintained by @chaseshyu).
+4. **Update Versioning**:
+   - Update `version`, `doi`, and `date-released` in `CITATION.cff`.
+   - Update `description` in `.zenodo.json` for the release description on Zenodo.
+5. **Create and Review PR**: Create a Pull Request against the master branch. Ensure CI/CD tests pass and request a code review from at least one other developer.
+6. **Merge PR**: Once approved, merge the feature branch into master.
+7. **Create Release**: Create a Release on GitHub, using the version number as the tag and summarizing the changelog in the release notes. Publishing the release will trigger a GitHub Actions workflow that automatically packages the source code—specifically including all submodules—and uploads it to Zenodo with provide draft DOI in `CITATION.cff`.
 
 ## Git Submodule Workflow
 
