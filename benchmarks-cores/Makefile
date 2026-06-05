@@ -26,6 +26,7 @@ MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); 
 IS_RESTARTING := $(shell awk -F '=' '/^is_restarting/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
 RESTARTING_FROM_MODELNAME := $(shell awk -F '=' '/^[ \t]*restarting_from_modelname/ {gsub(/^[ \t]+|[ \t]+$$/, "", $$2); print $$2}' $(CASE))
 JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
+CASENAME = $(notdir $(CASE))
 
 GITID = $(shell git rev-parse HEAD | cut -c1-7)
 
@@ -89,14 +90,14 @@ cmp: detect-orig
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
 	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
-	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
+	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
 
 restart: detect-orig
 	${RESTART_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
 	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
-	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
+	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
 
 # restart reproducibility test; config file with restart information is needed
 IS_RESTART_EXISTS := $(shell grep -i "^[[:space:]\#]*is_restarting[[:space:]]*=" $(CASE))
