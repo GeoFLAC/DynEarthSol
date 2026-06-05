@@ -43,6 +43,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.reference_frame_time = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -324,15 +325,17 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
         bin_chkpt.read_scaler(var.dt, "dt");
         bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
+        bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
 #else
-        double_vec tmp(6);
-        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag");
+        double_vec tmp(7);
+        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time");
         var.time = tmp[0];
         var.info_display_next_step = tmp[1];
         var.compensation_pressure = tmp[2];
         var.bottom_temperature = tmp[3];
         var.dt = tmp[4];
         var.max_global_vel_mag = tmp[5];
+        var.reference_frame_time = tmp[6];
 #endif
     }
 
@@ -706,9 +709,11 @@ int main(int argc, const char* argv[])
 
     // int rheol_type_old = param.mat.rheol_type;
 
-    double starting_time = var.time; // var.time & var.steps might be set in restart()
-    double starting_step = var.steps;
+    const double starting_time = var.reference_frame_time;
+    var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
+    const double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
@@ -894,6 +899,9 @@ int main(int argc, const char* argv[])
                 var.output->write(var);
 
                 next_regular_frame ++;
+                var.reference_frame_time = starting_time +
+                    next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
+
             }
         }
 
