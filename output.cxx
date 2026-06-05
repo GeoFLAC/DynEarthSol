@@ -170,6 +170,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.strain, "strain", var.strain->size());
     bin.write_array(*var.stress, "stress", var.stress->size());
 
+    bin.write_array(*var.viscosity, "viscosity", var.viscosity->size());
+
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
         double tmp = 1.0 / (average_interval + 1);
@@ -192,12 +194,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         tmp[e] = elem_quality(*var.coord, *var.connectivity, *var.volume, e);
     }
     bin.write_array(tmp, "mesh quality", tmp.size());
-
-    #pragma omp parallel for default(none) shared(var, tmp)
-    for (int e=0; e<var.nelem; ++e) {
-        tmp[e] = var.mat->visc(e);
-    }
-    bin.write_array(tmp, "viscosity", tmp.size());
 
     if (var.mat->rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.dyn_fric_coeff, "dynamic friction coefficient", var.dyn_fric_coeff->size());

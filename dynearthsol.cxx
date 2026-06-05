@@ -211,6 +211,11 @@ void init(const Param& param, Variables& var)
         initial_state_variable(param, var, *var.state_variable);
     }
 
+    // init viscosity
+    #pragma omp parallel for default(none) shared(var)
+    for (int e=0; e<var.nelem; ++e)
+        (*var.viscosity)[e] = var.mat->visc(e);
+
     report_mesh_info(var, "initial");
 
 #ifdef NPROF_DETAIL
