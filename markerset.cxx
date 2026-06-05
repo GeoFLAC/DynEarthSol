@@ -146,8 +146,8 @@ void MarkerSet::random_eta_seed_surface( double *eta, int seed )
         eta[n] /= sum;
 }
 
-
-void MarkerSet::random_eta_seed( ShapefnAccessor eta, int seed )
+template <typename T>
+void MarkerSet::random_eta_seed( T eta, int seed )
 {
     std::mt19937 gen(seed);
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -493,10 +493,10 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
     inc = 0;
 }
 
-void MarkerSet::append_random_marker_in_elem( int el, int mt, int genesis)
+void MarkerSet::append_random_marker_in_elem( int el, int mt, int genesis, int seed)
 {
     double eta[NODES_PER_ELEM];
-    random_eta(eta);
+    random_eta_seed(eta, seed);
     append_marker(eta, el, mt, 0., 0., 0., 0., genesis);
 }
 
@@ -1157,7 +1157,8 @@ namespace {
 
             while( num_marker_in_elem < param.markers.min_num_markers_in_element ) {
                 const int mt = 0;
-                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis);
+                int seed = e + num_marker_in_elem + var.steps;
+                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis, seed);
                 if (DEBUG) {
                     std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
                 }
@@ -1229,7 +1230,8 @@ namespace {
                 // Determine new marker's matttype based on cpdf
                 auto upper = std::upper_bound(cpdf.begin(), cpdf.end(), rand()/(double)RAND_MAX);
                 const int mt = upper - cpdf.begin();
-                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis);
+                int seed = e + num_marker_in_elem + var.steps;
+                var.markersets[0]->append_random_marker_in_elem(e, mt, genesis, seed);
                 if (DEBUG) {
                     std::cout << "Add marker with mattype " << mt << " in element " << e << '\n';
                 }
