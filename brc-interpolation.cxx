@@ -70,6 +70,34 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 }
 
 
+void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connectivity,
+                       const tensor_t &source, tensor_t &target, int ntarget)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+
+#ifndef ACC
+    #pragma omp parallel for default(none) \
+        shared(brc, el, connectivity, source, target, ntarget)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < ntarget; i++) {
+        int e = el[i];
+        ConstConnAccessor conn = connectivity[e];
+        for (int d = 0; d < NSTR; d++) {
+            double result = 0;
+            for (int j = 0; j < NODES_PER_ELEM; j++)
+                result += source[conn[j]][d] * brc[i][j];
+            target[i][d] = result;
+        }
+    }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
 void prepare_interpolation(const Param& param, const Variables &var,
                            const Barycentric_transformation &bary,
                            const array_t &old_coord,
@@ -303,11 +331,11 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    int_vec el(var.nnode);
-    brc_t brc(var.nnode);
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
-
     const int n = var.nnode;
+
+    int_vec el(n);
+    brc_t brc(n);
+    prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
 
     double_vec *new_temperature = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
@@ -319,7 +347,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure, n);
 
 #ifdef USEMMG
-    double_vec *new_init_elem_size_n = new double_vec(var.nnode);
+    double_vec *new_init_elem_size_n = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n, n);
 #endif
 
@@ -330,6 +358,9 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     array_t *new_coord0 = new array_t(n);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
+
+    tensor_t *new_stress_n = new tensor_t(n);
+    interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -352,6 +383,20 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.coord0;
     var.coord0 = new_coord0;
+
+    delete var.stress_n;
+    var.stress_n = new_stress_n;
+
+    if (param.mat.is_plane_strain) {
+        double_vec *new_stressyy_n = new double_vec(n);
+        interpolate_field(brc, el, old_connectivity,
+                          *var.stressyy_n, *new_stressyy_n, n);
+
+        #pragma acc wait
+
+        delete var.stressyy_n;
+        var.stressyy_n = new_stressyy_n;
+    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();

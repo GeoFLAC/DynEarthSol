@@ -23,20 +23,18 @@ namespace {
 #endif
 
         double eps = 1e-15;
-        int nqueries;
-
-        if (is_surface)
-            nqueries = var.bfacets[iboundz1]->size();
-        else
-            nqueries = var.nelem;
+        int nqueries = is_surface ? var.bfacets[iboundz1]->size() : var.nelem;
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
+        conn_t *connectivity = is_surface ? var.connectivity_surface : var.connectivity;
 
         array_t queries(nqueries);
 
-        if (is_surface) {
-            facet_center(*var.coord, *var.connectivity_surface, queries);
-        } else {
-            elem_center(*var.coord, *var.connectivity, queries);
-        }
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(var.coord->component_const(d), *connectivity, nqueries, queries.component(d), is_surface);
+
+        if (is_surface) queries.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
         {
             printf(is_surface ? "    Top surface:      "
@@ -350,13 +348,17 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush("create kdtree for old elements");
 #endif
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
 
         array_t points(old_npoint);
-        if (is_surface) {
-            facet_center(old_coord, old_connectivity, points);
-        } else {
-            elem_center(old_coord, old_connectivity, points);
-        }
+
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(old_coord.component_const(d), old_connectivity,
+                                  old_npoint, points.component(d), is_surface);
+
+        if (is_surface) points.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
 #ifdef ACC
         array_t point_tmp(1);
@@ -570,14 +572,17 @@ namespace {
 
             #pragma acc wait
 
-            tensor_t *new_stress = new tensor_t(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
+            double_vec *new_radiogenic_source = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
 
-            double_vec *new_stressyy = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
+            double_vec *new_dyn_fric_coeff = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
 
-            double_vec *new_old_mean_stress = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
+            double_vec *new_state_variable = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
+
+            double_vec *new_volume_old = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
 
             delete var.plstrain;
             var.plstrain = new_plstrain;
@@ -590,26 +595,6 @@ namespace {
 
             #pragma acc wait
 
-            double_vec *new_radiogenic_source = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
-
-            double_vec *new_dyn_fric_coeff = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
-
-            double_vec *new_state_variable = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
-
-            delete var.stress;
-            var.stress = new_stress;
-
-            delete var.stressyy;
-            var.stressyy = new_stressyy;
-
-            delete var.old_mean_stress;
-            var.old_mean_stress = new_old_mean_stress;
-
-            #pragma acc wait
-
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
 
@@ -618,6 +603,9 @@ namespace {
 
             delete var.state_variable;
             var.state_variable = new_state_variable;
+
+            delete var.volume_old;
+            var.volume_old = new_volume_old;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);

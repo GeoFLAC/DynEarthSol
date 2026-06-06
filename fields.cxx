@@ -59,7 +59,6 @@ void allocate_variables(const Param &param, Variables& var)
     const int e = var.nelem;
 
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     var.mass = new double_vec(n);
@@ -68,10 +67,13 @@ void allocate_variables(const Param &param, Variables& var)
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
 
-//    var.marker_in_elem = new int_vec2D(e);
+    var.stress = new tensor_t(e, 0);
+    var.stressyy = new double_vec(e, 0);
+    var.old_mean_stress = new double_vec(e, 0);
 
     {
         // these fields are reallocated during remeshing interpolation
+        var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
         var.dppressure = new double_vec(n);
@@ -80,9 +82,6 @@ void allocate_variables(const Param &param, Variables& var)
         var.delta_plstrain = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
-        var.stress = new tensor_t(e, 0);
-        var.stressyy = new double_vec(e, 0);
-        var.old_mean_stress = new double_vec(e, 0);
         // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
         var.dyn_fric_coeff = new double_vec(e);
@@ -146,10 +145,8 @@ void reallocate_variables(const Param& param, Variables& var)
     const int e = var.nelem;
 
     delete var.volume;
-    delete var.volume_old;
     delete var.volume_n;
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     delete var.mass;
@@ -179,7 +176,17 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
+    delete var.stress;
+    var.stress = new tensor_t(e);
 
+    // TODO: keep this reallocation because rheology always reads double& syy
+    delete var.stressyy;
+    var.stressyy = new double_vec(var.nelem);
+
+    if (param.control.has_hydraulic_diffusion) {
+        delete var.old_mean_stress;
+        var.old_mean_stress = new double_vec(var.nelem);
+    }
 
     delete var.mat;
     var.mat = new MatProps(param, var);

@@ -3236,19 +3236,6 @@ void create_boundary_facets(Variables& var)
 }
 
 
-int get_support(const Variables& var, const int inode, const int isup)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    return (*var.support_arr)[start + isup];
-}
-
-int get_sup_size(const Variables& var, const int inode)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    const int end = (*var.support_idx)[inode];
-    return end - start;
-}
-
 
 void create_support(Variables& var)
 {
@@ -3256,32 +3243,35 @@ void create_support(Variables& var)
     nvtxRangePush(__FUNCTION__);
 #endif
     var.support = new int_vec2D(var.nnode);
-    var.support_idx = new int_vec(var.nnode, 0);
+    // CSR row-pointer format: size nnode+1, support_idx[n] = start of node n
+    var.support_idx = new int_vec(var.nnode + 1, 0);
 
     // create the inverse mapping of connectivity
     for (int e=0; e<var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             (*var.support)[conn[i]].push_back(e);
-            (*var.support_idx)[conn[i]]++;
+            (*var.support_idx)[conn[i] + 1]++;
         }
     }
-    // create suppert 1D for ACC
-    for (int n=1; n<var.nnode; ++n)
-        (*var.support_idx)[n] = (*var.support_idx)[n-1] + (*var.support_idx)[n];
+    // prefix-sum counts into start offsets
+    for (int n=1; n<=var.nnode; ++n)
+        (*var.support_idx)[n] += (*var.support_idx)[n-1];
 
-    int nsup = (*var.support_idx)[var.nnode-1];
+    int nsup = (*var.support_idx)[var.nnode];
 
-    var.support_arr = new int_vec((*var.support_idx)[var.nnode-1]);
+    var.support_arr = new int_vec(nsup);
 
     // fill support_arr
     for (int n=0; n<var.nnode; ++n) {
-        int start = (n == 0) ? 0 : (*var.support_idx)[n-1];
-        int end = (*var.support_idx)[n];
+        int start = (*var.support_idx)[n];
+        int end   = (*var.support_idx)[n+1];
         for (int i=start; i<end; ++i) {
             (*var.support_arr)[i] = (*var.support)[n][i-start];
         }
     }
+    var.sup = {var.support_arr->data(), var.support_idx->data()};
+
     // std::cout << "support:\n";
     // print(std::cout, *var.support);
     // std::cout << "\n";
@@ -3462,69 +3452,42 @@ void create_new_mesh(const Param& param, Variables& var)
     // std::cout << '\n';
 }
 
-
-void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
+// Average per-node scalar values to element centroids (simple arithmetic mean over vertices).
+template<typename T_in, typename T_out>
+void average_nodal_to_elem(T_in nodal, const conn_t &connectivity,
+                                   int nelem, T_out elem, bool is_surface)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    int nelem = connectivity.size();
+
+    int nnodes_per_elem = is_surface ? NODES_PER_FACET : NODES_PER_ELEM;
 
 #ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        // const int* conn = connectivity[e];
-        for(int d=0; d<NDIMS; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_ELEM; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_ELEM;
-        }
-    }
-
-    #pragma acc wait
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
-void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    int nelem = connectivity.size();
-
-#ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        for(int d=0; d<NDIMS-1; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_FACET; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_FACET;
-        }
-    }
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(nelem, center)
+    #pragma omp parallel for default(none) \
+            shared(nodal, connectivity, nelem, elem, nnodes_per_elem)
 #endif
     #pragma acc parallel loop gang vector async
-    for(int e=0; e<nelem; e++)
-        center[e][NDIMS-1] = 0.;
-
-    #pragma acc wait
-
+    for (int e = 0; e < nelem; ++e) {
+        ConstConnAccessor conn = connectivity[e];
+        double avg = 0.0;
+        for (int k = 0; k < nnodes_per_elem; ++k)
+            avg += nodal[conn[k]];
+        elem[e] = avg / nnodes_per_elem;
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
+
+template
+void average_nodal_to_elem<array_t::ConstComponentAccessor, array_t::ComponentAccessor>(
+    array_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, array_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<tensor_t::ConstComponentAccessor, tensor_t::ComponentAccessor>(
+    tensor_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, tensor_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<const double*, double*>(const double* nodal, 
+    const conn_t &connectivity, int nelem, double* elem, bool);

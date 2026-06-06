@@ -726,7 +726,9 @@ int main(int argc, const char* argv[])
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
-        update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+        if (param.control.has_hydraulic_diffusion)
+            update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+
         update_strain_rate(var, *var.strain_rate);
         compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
@@ -736,9 +738,9 @@ int main(int argc, const char* argv[])
             *var.ppressure, *var.dppressure, *var.vel,
             *var.dyn_fric_coeff, *var.state_variable);
 
-	// Nodal Mixed Discretization For Stress
+        // Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
-            NMD_stress(param, var, *var.ntmp, *var.stress, *var.etmp);
+            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
             
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);

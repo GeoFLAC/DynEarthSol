@@ -310,8 +310,6 @@ static void declare_parameters(po::options_description &cfg,
 //         "and force the 1st invariant to zero.")
         ("control.is_using_mixed_stress", po::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
-        ("control.mixed_stress_reference_viscosity", po::value<double>(&p.control.mixed_stress_reference_viscosity)->default_value(1.e19),
-         "The reference viscosity for appling mixed stress.")
 
         ("control.surface_process_option", po::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "

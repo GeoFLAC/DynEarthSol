@@ -93,6 +93,27 @@ public:
     };
 
     //
+    // Component accessor — access all elements for one dimension
+    //
+    struct ComponentAccessor {
+        T*  ptr_;    // a_[d*n_] (SOA) or a_[d] (AoS)
+        int stride_; // 1 (SOA) or N (AoS)
+        int n_;
+
+        T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    struct ConstComponentAccessor {
+        const T* ptr_;
+        int stride_;
+        int n_;
+
+        const T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    //
     // View
     //
     struct ConstIndirectAccessor {
@@ -349,6 +370,34 @@ public:
         n_ = 0;
     }
 
+    void fill_component(int d, const T& val = T(0)) {
+        if (!a_ || n_ == 0 || d < 0 || d >= N) return;
+
+        T* ptr = a_;
+        int stride;
+        int offset;
+
+#ifdef SOA
+        stride = 1;
+        offset = d * n_;
+#else
+        stride = N;
+        offset = d;
+#endif
+
+#ifndef ACC
+        #pragma omp parallel for if(n_ > 10000)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int i = 0; i < n_; ++i) {
+            ptr[offset + i * stride] = val;
+        }
+    }
+
+    void zero_component(int d) {
+        fill_component(d, T(0));
+    }
+
     //
     // index accessing
     //
@@ -382,6 +431,22 @@ public:
         return ConstAccessor{ a_ + i, n_ };
 #else
         return ConstAccessor{ a_ + i*N, 1 };
+#endif
+    }
+
+    ComponentAccessor component(int d) {
+#ifdef SOA
+        return ComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ComponentAccessor{ a_ + d, N, n_ };
+#endif
+    }
+
+    ConstComponentAccessor component_const(int d) const {
+#ifdef SOA
+        return ConstComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ConstComponentAccessor{ a_ + d, N, n_ };
 #endif
     }
 

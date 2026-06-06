@@ -276,48 +276,13 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 }
 
 
-void NMD_stress(const Param& param, const Variables &var,
-    double_vec &dp_nd, tensor_t& stress, double_vec &etmp)
+void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
     // dp_nd is the pressure change, weighted by the element volume,
     // lumped onto the nodes.
-
-//    double **centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-/*
-    // weight with inverse distance
-    if(false) {
-        #pragma omp parallel for default(none) shared(var,centroid,tmp_result)
-        for (int e=0;e<var.nelem;e++) {
-            const auto conn = (*var.connectivity)[e];
-            for (int i=0; i<NODES_PER_ELEM; ++i) {
-                const double *d = (*var.coord)[conn[i]];
-                tmp_result[i][e] = 1. / sqrt( dist2(d, centroid[e])  );
-                tmp_result[i + NODES_PER_ELEM][e] = tmp_result[i][e] * (*var.dpressure)[e];
-            }
-        }
-
-        #pragma omp parallel for default(none) shared(var,dp_nd,tmp_result)
-        for (int n=0;n<var.nnode;n++) {
-            double dist_inv_sum = 0.;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const auto conn = (*var.connectivity)[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        dist_inv_sum += tmp_result[ i ][*e];
-                        dp_nd[n] += tmp_result[i + NODES_PER_ELEM][*e];
-                        break;
-                    }
-                }
-            }
-            dp_nd[n] /= dist_inv_sum;
-        }
-
-    // weight with volumn
-    } else {
-        */
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp)
@@ -337,30 +302,13 @@ void NMD_stress(const Param& param, const Variables &var,
             dp_nd[n] += etmp[*e];
         dp_nd[n] /= (*var.volume_n)[n];
     }
-//    }
 
-    /* dp_el is the averaged (i.e. smoothed) dp_nd on the element.
-     */
+    // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-
-        double factor;
-        switch (param.mat.rheol_type) {
-        case MatProps::rh_viscous:
-        case MatProps::rh_maxwell:
-        case MatProps::rh_evp:
-            if ((*var.viscosity)[e] < param.control.mixed_stress_reference_viscosity)
-                factor = 0.;
-            else
-                factor = std::min((*var.viscosity)[e] / (param.control.mixed_stress_reference_viscosity * 10.), 1.);
-            break;
-        default:
-            factor = 1;
-        }
-
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -371,16 +319,436 @@ void NMD_stress(const Param& param, const Variables &var,
 
     	TensorAccessor s = stress[e];
 
-
 	    double dp_orig = (*var.dpressure)[e];
-        double ddp = ( - dp_orig + dp_el ) / NDIMS * factor;
+        double ddp = ( - dp_orig + dp_el ) / NDIMS;
 	    for (int i=0; i<NDIMS; ++i)
             s[i] += ddp;
     }
 
-//    delete [] centroid[0];
-//    delete [] centroid;
 #ifdef NPROF
+    nvtxRangePop();
+#endif
+}
+
+// ============================================================
+// SPR (Superconvergent Patch Recovery) stress computation
+// ============================================================
+
+// Fit a linear polynomial sigma*(dx, dy) = a0 + a1*dx + a2*dy to the stress
+// values at element centroids in a node's patch, using RELATIVE coordinates
+// (centroid of the patch's element centroids as origin).  Evaluate at the
+// node's relative coordinates.
+//
+// Use relative coordinates to lower the matrix condition number
+// and prevent numerical precision loss in double precision.
+//
+// Returns true if the Cramer solve succeeded; false if degenerate (fallback).
+#pragma acc routine seq
+static bool spr_solve_centered(const double A[3][3], const double b[3],
+                               const double dxi, const double dyi,
+                               double &result)
+{
+    const double M00 = A[1][1]*A[2][2] - A[1][2]*A[1][2];
+    const double M01 = A[0][1]*A[2][2] - A[1][2]*A[0][2];
+    const double M02 = A[0][1]*A[1][2] - A[1][1]*A[0][2];
+    const double det = A[0][0]*M00 - A[0][1]*M01 + A[0][2]*M02;
+
+    // Scale-adaptive singularity threshold: A[1][1] ~ Σdx², A[2][2] ~ Σdz²
+    // both O(h²) with patch-relative coords — well-conditioned.
+    const double scale = A[0][0] * (A[1][1] > A[2][2] ? A[1][1] : A[2][2]);
+    if (scale == 0.0 || fabs(det) < 1e-6 * scale)
+        return false;
+
+    const double inv_det = 1.0 / det;
+
+    const double a0 = inv_det * (
+          b[0]    * M00
+        - A[0][1] * (b[1]*A[2][2] - A[1][2]*b[2])
+        + A[0][2] * (b[1]*A[1][2] - A[1][1]*b[2]));
+
+    const double a1 = inv_det * (
+          A[0][0] * (b[1]*A[2][2] - A[1][2]*b[2])
+        - b[0]    * M01
+        + A[0][2] * (A[0][1]*b[2] - b[1]*A[0][2]));
+
+    const double a2 = inv_det * (
+          A[0][0] * (A[1][1]*b[2] - b[1]*A[1][2])
+        - A[0][1] * (A[0][1]*b[2] - b[1]*A[0][2])
+        + b[0]    * M02);
+
+    result = a0 + a1*dxi + a2*dyi;
+    return true;
+}
+
+#ifdef THREED
+// Fit linear polynomial sigma*(dx,dy,dz) = a0 + a1*dx + a2*dy + a3*dz to element
+// centroid values in the patch.  Uses Gaussian elimination with partial pivoting
+// on the 4×4 normal system.  Returns true on success; false if the patch is
+// degenerate (fewer than 4 independent directions → fallback).
+#pragma acc routine seq
+static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
+                                   const double dxi, const double dyi, const double dzi,
+                                   double &result)
+{
+    // Per-column ∞-norms of the original A, used as per-step singularity thresholds.
+    // Column 0 scale ~ n (count); columns 1–3 scale ~ n·h² (patch-relative coords).
+    double col_scale[4] = {};
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) {
+            const double v = fabs(A[i][j]);
+            if (v > col_scale[j]) col_scale[j] = v;
+        }
+    if (col_scale[0] == 0.0) return false;
+
+    // Augmented system [A | b]
+    double M[4][5];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) M[i][j] = A[i][j];
+        M[i][4] = b[i];
+    }
+
+    for (int col = 0; col < 4; ++col) {
+        int pivot_row = col;
+        double pval = fabs(M[col][col]);
+        for (int row = col+1; row < 4; ++row) {
+            const double v = fabs(M[row][col]);
+            if (v > pval) { pval = v; pivot_row = row; }
+        }
+        // col_scale[col]==0 means that entire column of A was zero (degenerate patch,
+        // e.g. all centroids at the same depth) → rank-deficient → fall back.
+        if (col_scale[col] == 0.0 || pval < 1e-6 * col_scale[col]) return false;
+
+        if (pivot_row != col)
+            for (int j = 0; j <= 4; ++j) {
+                double tmp = M[col][j]; M[col][j] = M[pivot_row][j]; M[pivot_row][j] = tmp;
+            }
+
+        const double inv_pivot = 1.0 / M[col][col];
+        for (int row = col+1; row < 4; ++row) {
+            const double factor = M[row][col] * inv_pivot;
+            for (int j = col; j <= 4; ++j) M[row][j] -= factor * M[col][j];
+        }
+    }
+
+    double x[4];
+    for (int i = 3; i >= 0; --i) {
+        double s = M[i][4];
+        for (int j = i+1; j < 4; ++j) s -= M[i][j] * x[j];
+        x[i] = s / M[i][i];
+    }
+
+    result = x[0] + x[1]*dxi + x[2]*dyi + x[3]*dzi;
+    return true;
+}
+#endif // THREED
+
+// Volume-weighted average of element stress values in the patch.
+// Used as fallback when the SPR normal matrix is near-singular, and as a
+// clamp range for the polynomial result to prevent out-of-range extrapolation.
+#pragma acc routine seq
+static double spr_volume_weighted_avg_strided(const int npatch, const int* patch, 
+                                              const double_vec &elem_volume, 
+                                              const double* ptr, 
+                                              int stride) 
+{
+    double sum_w = 0.0, sum_ws = 0.0;
+    for (int jp = 0; jp < npatch; ++jp) {
+        int e = patch[jp];
+        double w = elem_volume[e];
+        sum_ws += w * ptr[e * stride]; 
+        sum_w  += w;
+    }
+    return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
+}
+
+// # of max spr fields, 4 for 2D, 6 for 3D
+#define MAX_SPR_FIELDS (NDIMS*2)
+
+// Compute SPR nodal values
+static void spr_fused_fields(const Variables &var, 
+                             const double* const in_ptrs[], const int in_strides[],
+                             double* const out_ptrs[], const int out_strides[], 
+                             int num_fields)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, in_ptrs, in_strides, out_ptrs, \
+                out_strides, num_fields)
+#endif
+    #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
+                in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
+    for (int i = 0; i < var.nnode; ++i) {
+        const int npatch = var.sup.size(i);
+
+        double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
+        const int* patch = var.sup.patch(i);
+        const int e0 = patch[0];
+        
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            smin[f] = smax[f] = in_ptrs[f][e0 * in_strides[f]];
+        }
+
+        double x0 = 0.0, y0 = 0.0;
+#ifdef THREED
+        double z0 = 0.0;
+#endif
+
+        // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
+        #pragma acc loop seq
+        for (int jp = 0; jp < npatch; ++jp) {
+            const int e = patch[jp];
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
+            double cx = 0.0, cy = 0.0;
+#ifdef THREED
+            double cz = 0.0;
+#endif
+            #pragma acc loop seq
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                cx += ck[k][0];
+                cy += ck[k][1];
+#ifdef THREED
+                cz += ck[k][2];
+#endif
+            }
+            cx /= NODES_PER_ELEM;
+            cy /= NODES_PER_ELEM;
+            x0 += cx;
+            y0 += cy;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+            z0 += cz;
+#endif
+
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                if (s < smin[f]) smin[f] = s;
+                if (s > smax[f]) smax[f] = s;
+            }
+        }
+        x0 /= npatch; y0 /= npatch;
+#ifdef THREED
+        z0 /= npatch;
+#endif
+        double A[NODES_PER_ELEM][NODES_PER_ELEM] = {};
+        double b_vec[MAX_SPR_FIELDS][NODES_PER_ELEM] = {};
+
+        // build A and b_vec for all fields in the patch, 
+        // with shared loops and Stride-aware access
+        #pragma acc loop seq
+        for (int jp = 0; jp < npatch; ++jp) {
+            const int e = patch[jp];
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
+            double cx = 0.0, cy = 0.0;
+#ifdef THREED
+            double cz = 0.0;
+#endif
+            #pragma acc loop seq
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                cx += ck[k][0];
+                cy += ck[k][1];
+#ifdef THREED
+                cz += ck[k][2];
+#endif
+            }
+            cx /= NODES_PER_ELEM;
+            cy /= NODES_PER_ELEM;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+#endif
+
+            const double dx = cx - x0;
+            const double dy = cy - y0;
+#ifdef THREED
+            const double dz = cz - z0;
+#endif
+
+            A[0][0] += 1.0;
+            A[0][1] += dx;    A[1][0] = A[0][1];
+            A[0][2] += dy;    A[2][0] = A[0][2];
+            A[1][1] += dx*dx;
+            A[1][2] += dx*dy; A[2][1] = A[1][2];
+            A[2][2] += dy*dy;
+#ifdef THREED
+            A[0][3] += dz;    A[3][0] = A[0][3];
+            A[1][3] += dx*dz; A[3][1] = A[1][3];
+            A[2][3] += dy*dz; A[3][2] = A[2][3];
+            A[3][3] += dz*dz;
+#endif
+
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                b_vec[f][0] += s;
+                b_vec[f][1] += dx * s;
+                b_vec[f][2] += dy * s;
+#ifdef THREED
+                b_vec[f][3] += dz * s;
+#endif
+            }
+        }
+
+        const ConstArrayAccessor ci = (*var.coord)[i];
+        const double dxi = ci[0] - x0;
+        const double dyi = ci[1] - y0;
+#ifdef THREED
+        const double dzi = ci[2] - z0;
+#endif
+
+        // solve A for all fields in the patch, with fallback and clamping
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            double temp_val;
+
+#ifdef THREED
+            bool solve_success = spr_solve_centered_3d(A, b_vec[f], dxi, dyi, dzi, temp_val);
+#else
+            bool solve_success = spr_solve_centered(A, b_vec[f], dxi, dyi, temp_val);
+#endif
+
+            temp_val = solve_success ?
+                fmax(smin[f], fmin(smax[f], temp_val)) :
+                // if the matrix is degenerate, the polynomial fit is unreliable. 
+                // Fall back to volume-weighted average, which is stable but less accurate. 
+                // The clamping range is still valid since it's based on the patch values.
+                spr_volume_weighted_avg_strided(var.sup.size(i), var.sup.patch(i),
+                                                *var.volume, in_ptrs[f], in_strides[f]);
+
+            out_ptrs[f][i * out_strides[f]] = temp_val;
+        }
+    }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+void spr_elem_to_node(const Param &param, const Variables &var,
+                      tensor_t *stress_n, double_vec *stressyy_n)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // ----------------------------------------------------------------
+    // Step A: SPR — recover smooth nodal stresses on the OLD mesh.
+    // Must happen before prepare_interpolation (reads old var.stress,
+    // *var.support, old_coord, old_connectivity — all still old here).
+    //
+    // Pressure-centering: subtract ref_pressure from each old element's
+    // diagonal stress components before SPR, so the polynomial fits the
+    // small deviatoric residual rather than the large lithostatic pressure.
+    // Without centering, independent polynomial fits for σxx and σzz on a
+    // one-sided surface-node patch differ by the amount of the actual
+    // deviatoric stress, but the large-pressure background amplifies any
+    // extrapolation error at boundary nodes. Cold surface ice (η≈visc_max)
+    // has a Maxwell relaxation time of ~250 Myr, so even a tiny artifact
+    // persists throughout the simulation.
+    // ----------------------------------------------------------------
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var)
+#endif
+    #pragma acc parallel loop gang vector async    
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double z = 0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            z += (*var.coord)[conn[k]][NDIMS-1];
+        z /= NODES_PER_ELEM;
+        double p_ref_old = ref_pressure(param, z);
+        TensorAccessor s = (*var.stress)[e];
+        // Shift diagonal components: add p_ref so stress becomes small deviatoric
+        for (int d = 0; d < NDIMS; ++d) s[d] += p_ref_old;
+
+        if (param.mat.is_plane_strain)
+            (*var.stressyy)[e] += p_ref_old;
+    }
+
+    // dynamic registration of all fields involved in SPR
+    const double* in_ptrs[MAX_SPR_FIELDS];
+    int in_strides[MAX_SPR_FIELDS];
+    double* out_ptrs[MAX_SPR_FIELDS];
+    int out_strides[MAX_SPR_FIELDS];
+    int num_fields = 0;
+
+    auto add_field_acc = [&](tensor_t::ConstComponentAccessor in_acc, tensor_t::ComponentAccessor out_acc) {
+        in_ptrs[num_fields]     = in_acc.ptr_;
+        in_strides[num_fields]  = in_acc.stride_;
+        out_ptrs[num_fields]    = out_acc.ptr_;
+        out_strides[num_fields] = out_acc.stride_;
+        num_fields++;
+    };
+
+    auto add_field_ptr = [&](const double* in_p, double* out_p) {
+        in_ptrs[num_fields]     = in_p;
+        in_strides[num_fields]  = 1;
+        out_ptrs[num_fields]    = out_p;
+        out_strides[num_fields] = 1;
+        num_fields++;
+    };
+
+    for (int d = 0; d < NSTR; ++d)
+        add_field_acc(var.stress->component_const(d), stress_n->component(d));
+
+    if (param.mat.is_plane_strain)
+        add_field_ptr(var.stressyy->data(), stressyy_n->data());
+
+    // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
+    // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
+    // call the fused SPR kernel for all registered fields
+    spr_fused_fields(var, in_ptrs, in_strides, out_ptrs, out_strides, num_fields);
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+void spr_node_to_elem(const Param &param, const Variables &var, 
+                      tensor_t *stress, double_vec *stressyy)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // ----------------------------------------------------------------
+    // Step C: Average SPR nodal stresses -> new element stresses.
+    // ----------------------------------------------------------------
+    for (int d = 0; d < NSTR; ++d)
+        average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
+                              var.nelem, stress->component(d));
+
+    if (param.mat.is_plane_strain)
+        average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
+                                var.nelem, stressyy->data());
+
+    // Step C': Restore reference pressure at new element centroids.
+    // The SPR operated on pressure-centered stress; add back p_ref at each
+    // new element's depth to recover the correct total stress.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double z = 0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            z += (*var.coord)[conn[k]][NDIMS-1];
+        z /= NODES_PER_ELEM;
+        double p_ref = ref_pressure(param, z);
+        TensorAccessor s = (*stress)[e];
+        for (int d = 0; d < NDIMS; ++d) s[d] -= p_ref;
+
+        if (param.mat.is_plane_strain)
+            (*stressyy)[e] -= p_ref;
+    }
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
