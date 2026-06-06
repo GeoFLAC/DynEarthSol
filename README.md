@@ -1,8 +1,14 @@
+<!-- Citation & License -->
+[![DOI](https://zenodo.org/badge/838469917.svg)](https://doi.org/10.5281/zenodo.20293557)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+<br> <!-- Core Platforms & Compilers -->
 [![Basic build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml)
-[![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
-[![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
 [![macOS build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/macos-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/macos-build.yml)
 [![nvc build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/nvc-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/nvc-build.yml)
+<br> <!-- External Modules & Integrations -->
+[![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
+[![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
+[![GoSPL build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml)
 
 # Overview
 

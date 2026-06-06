@@ -19,4 +19,8 @@ authors:
 
 title: "DynEarthSol"
 version: 2.0.0
+doi: 10.5281/zenodo.20293558
+date-released: 2026-05-19
 url: "https://geoflac.github.io/DynEarthSol/"
+repository-code: "https://github.com/GeoFLAC/DynEarthSol"
+license: "MIT"
