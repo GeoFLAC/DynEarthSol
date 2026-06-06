@@ -47,6 +47,29 @@ void Output::write_info(const Variables& var, double dt)
                   var.nnode, var.nelem, var.nseg);
 
     std::string filename(modelname + ".info");
+
+    // On the first output of a same-name restart, back up the old .info and
+    // rewrite it with only the rows for frames before start_frame_, so there
+    // are no duplicate or stale entries when the new frame row is appended.
+    if (may_overwrite_ && frame == start_frame_) {
+        std::vector<std::string> kept_lines;
+        if (std::FILE *r = std::fopen(filename.c_str(), "r")) {
+            char line[256];
+            while (std::fgets(line, sizeof(line), r)) {
+                int f_col;
+                if (std::sscanf(line, "%d", &f_col) == 1 && f_col < start_frame_)
+                    kept_lines.push_back(line);
+            }
+            std::fclose(r);
+        }
+        rename_to_old_backup(filename.c_str());
+        if (std::FILE *w = std::fopen(filename.c_str(), "w")) {
+            for (const auto& line : kept_lines)
+                std::fputs(line.c_str(), w);
+            std::fclose(w);
+        }
+    }
+
     std::FILE* f;
     if (frame == 0)
         f = std::fopen(filename.c_str(), "w");

@@ -40,7 +40,7 @@ namespace {
 
 /* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
 
-static void rename_to_old_backup(const char *filename) {
+void rename_to_old_backup(const char *filename) {
     // Find the highest-numbered existing backup (.old, .old2, .old3, ...) and
     // rename filename to max+1, so new backups always append after the largest
     // rather than filling gaps left by manual deletions.

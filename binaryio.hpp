@@ -13,6 +13,8 @@
 #endif
 #include "array2d.hpp"
 
+void rename_to_old_backup(const char *filename);
+
 #ifndef HDF5
 
 class BinaryOutput
