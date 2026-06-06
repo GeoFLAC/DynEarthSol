@@ -339,9 +339,8 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 // (centroid of the patch's element centroids as origin).  Evaluate at the
 // node's relative coordinates.
 //
-// Using relative coordinates reduces the absolute magnitudes from ~50,000 m
-// to ~300 m (one mesh element), dropping the 3×3 normal-matrix condition
-// number from ~2.5e9 to ~2.3e4 — numerically safe for double precision.
+// Use relative coordinates to lower the matrix condition number
+// and prevent numerical precision loss in double precision.
 //
 // Returns true if the Cramer solve succeeded; false if degenerate (fallback).
 #pragma acc routine seq
