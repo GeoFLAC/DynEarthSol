@@ -89,14 +89,14 @@ cmp: detect-orig
 	${RUN_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
+	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
 
 restart: detect-orig
 	${RESTART_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
+	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
 
 # restart reproducibility test; config file with restart information is needed
@@ -128,7 +128,7 @@ setjob:
 	ln -s ~/data/jobs/${CASE} orig-job
 
 cmpjob:
-	python ./compare.py orig-job ${CURR} ${FRAME} ${MODELNAME}
+	python ./compare.py orig-job/${MODELNAME} ${CURR}/${MODELNAME} ${FRAME}
 
 vtk:
 	python ../2vtk.py -m  ${MODELNAME}

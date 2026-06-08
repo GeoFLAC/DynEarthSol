@@ -135,31 +135,32 @@ def compare(old, new):
     return n_fail, n_nonzero
 
 
-olddir = sys.argv[1]
-curdir = os.getcwd()
-
-if len(sys.argv) > 4:
+if len(sys.argv) == 4:
+    oldmodelname = sys.argv[1]
+    modelname = sys.argv[2]
     frame = int(sys.argv[3])
-    newdir = sys.argv[2]
-    modelname = 'result'
 else:
-    frame = int(sys.argv[2])
-    newdir = curdir
-    modelname = sys.argv[3]
+    print("Usage:")
+    print("  python compare.py <path/to/old-modelname> <path/to/new-modelname> <frame>")
+    sys.exit(1)
 
 markersetname = 'markerset'
 
 # read old and new results
 
 try:
-    des_old = Dynearthsol(olddir + '/' + modelname)
+    des_old = Dynearthsol(oldmodelname)
 except OSError:
-    print("Error: Directory of old results doesn't exist:", olddir)
+    print("Error: Directory of old results doesn't exist:", oldmodelname)
     sys.exit(1)
 old = read_data(des_old, frame)
 fmt_old = des_old.format
 
-des_new = Dynearthsol(newdir + '/' + modelname)
+try:
+    des_new = Dynearthsol(modelname)
+except OSError:
+    print("Error: Directory of new results doesn't exist:", modelname)
+    sys.exit(1)
 new = read_data(des_new, frame)
 fmt_new = des_new.format
 
