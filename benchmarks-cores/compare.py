@@ -1,4 +1,38 @@
 #!/usr/bin/env python
+"""Compare two DynEarthSol output snapshots field-by-field.
+
+Usage
+-----
+::
+
+    python compare.py <path/to/old-modelname> <path/to/new-modelname> <frame>
+
+    <path/to/old-modelname>  path including the model name prefix for the reference run
+                             (e.g. orig-test-3d-equ-tiny.cfg/result)
+    <path/to/new-modelname>  path including the model name prefix for the new run
+                             (e.g. result  or  ~/data/jobs/test/result)
+    <frame>                  output frame index to compare (integer, e.g. 4)
+
+Exit codes
+----------
+0  no serious differences (bit-exact or round-off only)
+1  at least one field has relative difference >= 1e-8, or a NaN/Inf was found
+
+Restart troubleshooting
+-----------------------
+If a restarted run produces unexpected results, use compare.py to isolate
+which field first diverges from the original run.  A same-name restart
+(``modelname == restarting_from_modelname``) backs up the restart frame's
+save file to ``<model>.<frame>.save.vtkhdf.old`` before overwriting it.
+To compare that backed-up frame against the restarted output, rename or
+copy the ``.old`` file to the expected name in a separate directory, then::
+
+    python compare.py <dir-with-original>/result result <restart-frame>
+
+A ``Status: BIT-EXACT`` result rules out restart divergence as the cause;
+the first field with a large relative difference is the starting point for
+debugging.
+"""
 
 from __future__ import print_function
 import sys, os

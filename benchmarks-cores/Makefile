@@ -1,3 +1,42 @@
+# -*- Makefile -*-
+#
+# Regression-test driver for DynEarthSol benchmarks.
+#
+# Quick start
+# -----------
+#   make set                        # run once and store as reference
+#   make cmp                        # re-run and compare against reference
+#   make fresh-restart-cmp          # full restart determinism check
+#
+# Key variables (override on the command line)
+# --------------------------------------------
+#   CASE    Config file to use          (default: test-3d-equ-tiny.cfg)
+#   FRAME   Output frame to compare     (default: 4)
+#   OMP     OMP_NUM_THREADS             (default: 1)
+#   NDIMS   2 or 3 — picks dynearthsol2d / dynearthsol3d  (default: 3)
+#   ACC     1 = GPU build via OpenACC   (default: 0)
+#   DEBUG   1 = run under valgrind/CUDA memcheck            (default: 0)
+#   NSYS    1 = profile with nsys                           (default: 0)
+#   VTK     1 = also convert output to VTK after run        (default: 0)
+#
+# Targets
+# -------
+#   test              Run the simulation without comparing.
+#   set               Run and store output as the reference (creates orig-<CASE>/).
+#   cmp               Re-run and compare against the stored reference.
+#   restart           Resume from an existing checkpoint and compare.
+#   fresh-restart-cmp Full determinism check: fresh run → checkpoint → restart → diff.
+#                     Requires is_restarting / restarting_from_frame /
+#                     restarting_from_modelname to be present in CASE.
+#   store             Move current output into orig-<CASE>/ (called by 'set').
+#   job               Run in the background; copy config with a timestamped name.
+#   cmpjob            Compare orig-job/ against ~/data/jobs/<CASE>/ (Form 2 compare).
+#   vtk               Convert current output to VTK via 2vtk.py.
+#
+# Comparison exit codes (from compare.py)
+# ----------------------------------------
+#   0  No serious differences (bit-exact or round-off only).
+#   1  At least one field has relative diff >= 1e-8, or contains NaN/Inf.
 
 CASE := test-3d-equ-tiny.cfg
 #CASE := test-tiny-long.cfg

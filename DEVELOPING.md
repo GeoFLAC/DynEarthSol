@@ -34,6 +34,24 @@ Low priority:
   11: Runtime error
   12: Assertion error (due to programming)
 
+## Benchmarks and regression testing
+
+Regression tests live in `benchmarks-cores/`. All targets run from inside that
+directory; see the comment block at the top of `benchmarks-cores/Makefile` for
+the full variable and target reference.
+
+```bash
+make set                # run once and store as reference (creates orig-<CASE>/)
+make cmp                # re-run and diff against reference  (most common)
+make fresh-restart-cmp  # fresh run → checkpoint → restart → diff (determinism check)
+```
+
+`compare.py` is called automatically by `cmp`, `restart`, and
+`fresh-restart-cmp`. It prints the relative difference (max, stddev) for every
+field and exits 1 if any field exceeds 1e-8 or contains NaN/Inf. Run
+`python compare.py --help` (or read its module docstring) for manual usage and
+restart-troubleshooting instructions.
+
 ## Development and release workflow
 
 1. **Prepare feature branch**: Develop your feature and ensure all local tests pass.
