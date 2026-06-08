@@ -27,6 +27,9 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
+    may_overwrite_(param.sim.is_restarting
+        && param.sim.modelname == param.sim.restarting_from_modelname),
+    start_frame_(start_frame),
     frame(start_frame),
     time0(0)
 {}
@@ -44,6 +47,29 @@ void Output::write_info(const Variables& var, double dt)
                   var.nnode, var.nelem, var.nseg);
 
     std::string filename(modelname + ".info");
+
+    // On the first output of a same-name restart, back up the old .info and
+    // rewrite it with only the rows for frames before start_frame_, so there
+    // are no duplicate or stale entries when the new frame row is appended.
+    if (may_overwrite_ && frame == start_frame_) {
+        std::vector<std::string> kept_lines;
+        if (std::FILE *r = std::fopen(filename.c_str(), "r")) {
+            char line[256];
+            while (std::fgets(line, sizeof(line), r)) {
+                int f_col;
+                if (std::sscanf(line, "%d", &f_col) == 1 && f_col < start_frame_)
+                    kept_lines.push_back(line);
+            }
+            std::fclose(r);
+        }
+        rename_to_old_backup(filename.c_str());
+        if (std::FILE *w = std::fopen(filename.c_str(), "w")) {
+            for (const auto& line : kept_lines)
+                std::fputs(line.c_str(), w);
+            std::fclose(w);
+        }
+    }
+
     std::FILE* f;
     if (frame == 0)
         f = std::fopen(filename.c_str(), "w");
@@ -83,7 +109,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     char filename[256];
 #ifdef HDF5
     std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
-    HDF5Output bin(filename, hdf5_compression_level);
+    HDF5Output bin(filename, hdf5_compression_level, false,
+                   may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
     bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
@@ -91,7 +118,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_fieldData(double(run_time_ns) * 1e-9, "walltime_sec");
 #else
     std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename);
+    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
@@ -143,6 +170,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.strain, "strain", var.strain->size());
     bin.write_array(*var.stress, "stress", var.stress->size());
 
+    bin.write_array(*var.viscosity, "viscosity", var.viscosity->size());
+
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
         double tmp = 1.0 / (average_interval + 1);
@@ -165,12 +194,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         tmp[e] = elem_quality(*var.coord, *var.connectivity, *var.volume, e);
     }
     bin.write_array(tmp, "mesh quality", tmp.size());
-
-    #pragma omp parallel for default(none) shared(var, tmp)
-    for (int e=0; e<var.nelem; ++e) {
-        tmp[e] = var.mat->visc(e);
-    }
-    bin.write_array(tmp, "viscosity", tmp.size());
 
     if (var.mat->rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.dyn_fric_coeff, "dynamic friction coefficient", var.dyn_fric_coeff->size());
@@ -325,22 +348,31 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     char filename[256];
 #ifdef HDF5
     std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
-    HDF5Output bin(filename, hdf5_compression_level, true);
+    HDF5Output bin(filename, hdf5_compression_level, true,
+                   may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
 
     bin.write_scalar(var.time, "time");
+    bin.write_scalar(var.info_display_next_step, "info_display_next_step");
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
+    bin.write_scalar(var.dt, "dt");
+    bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
+    bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 #else
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename);
+    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 
-    double_vec tmp(3);
+    double_vec tmp(7);
     tmp[0] = var.time;
-    tmp[1] = var.compensation_pressure;
-    tmp[2] = var.bottom_temperature;
-    bin.write_array(tmp, "time compensation_pressure bottom_temperature", tmp.size());
+    tmp[1] = var.info_display_next_step;
+    tmp[2] = var.compensation_pressure;
+    tmp[3] = var.bottom_temperature;
+    tmp[4] = var.dt;
+    tmp[5] = var.max_global_vel_mag;
+    tmp[6] = var.reference_frame_time;
+    bin.write_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time", tmp.size());
 #endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
@@ -349,6 +381,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     // bin.write_array(*var.regattr, "regattr", var.regattr->size());
 
     bin.write_array(*var.surfinfo.edvacc_surf, "dv surface acc", var.surfinfo.edvacc_surf->size());
+    bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
 #ifdef USEMMG

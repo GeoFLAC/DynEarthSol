@@ -43,6 +43,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.reference_frame_time = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -210,6 +211,11 @@ void init(const Param& param, Variables& var)
         initial_state_variable(param, var, *var.state_variable);
     }
 
+    // init viscosity
+    #pragma omp parallel for default(none) shared(var)
+    for (int e=0; e<var.nelem; ++e)
+        (*var.viscosity)[e] = var.mat->visc(e);
+
     report_mesh_info(var, "initial");
 
 #ifdef NPROF_DETAIL
@@ -315,24 +321,44 @@ void restart(const Param& param, Variables& var)
 
     bin_save.read_array(*var.coord0, "coord0");
 
-    compute_volume(*var.coord, *var.connectivity, *var.volume);
-    bin_chkpt.read_array(*var.volume_old, "volume_old");
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+    // Misc. items
+    {
+#ifdef HDF5
+        bin_chkpt.read_scaler(var.time, "time");
+        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
+        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scaler(var.dt, "dt");
+        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
+        bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
+#else
+        double_vec tmp(7);
+        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time");
+        var.time = tmp[0];
+        var.info_display_next_step = tmp[1];
+        var.compensation_pressure = tmp[2];
+        var.bottom_temperature = tmp[3];
+        var.dt = tmp[4];
+        var.max_global_vel_mag = tmp[5];
+        var.reference_frame_time = tmp[6];
+#endif
+    }
 
     // Initializing field variables
     {
         bin_save.read_array(*var.vel, "velocity");
         bin_save.read_array(*var.temperature, "temperature");
-        bin_save.read_array(*var.strain_rate, "strain-rate");
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        // previous-step volume for volumetric strain rate.
+        bin_chkpt.read_array(*var.volume_old, "volume_old");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+        // for surface marker correction after surface processes
+        bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
 #endif
@@ -340,23 +366,21 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Misc. items
+    // the following fields are not required for restarting, yet
     {
-#ifdef HDF5
-        bin_chkpt.read_scaler(var.time, "time");
-        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
-        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
-#else
-        double_vec tmp(3);
-        bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
-        var.time = tmp[0];
-        var.compensation_pressure = tmp[1];
-        // Set bottom temperature
-        var.bottom_temperature = tmp[2];
-#endif
-        // the following fields are not required for restarting
+        // for shear heating
+        bin_save.read_array(*var.strain_rate, "strain-rate");
+        // for tidal heating
+        bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
     }
+
+    compute_volume(*var.coord, *var.connectivity, *var.volume);
+    // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
+    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+
     apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
@@ -587,18 +611,23 @@ int main(int argc, const char* argv[])
 
     if (! param.sim.is_restarting) {
         init(param, var);
-
+        var.info_display_next_step = param.sim.info_display_step_interval;
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
             // output.write_exact(var);
             isostasy_adjustment(param, var);
         }
+
+        var.dt = compute_dt(param, var);
+
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
     }
+
+    var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -679,9 +708,6 @@ int main(int argc, const char* argv[])
     }
 #endif
 
-    var.dt = compute_dt(param, var);
-    var.dt_PT = compute_dt(param, var);
-
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
@@ -689,9 +715,11 @@ int main(int argc, const char* argv[])
 
     // int rheol_type_old = param.mat.rheol_type;
 
-    double starting_time = var.time; // var.time & var.steps might be set in restart()
-    double starting_step = var.steps;
+    const double starting_time = var.reference_frame_time;
+    var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
+    const double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
@@ -714,7 +742,7 @@ int main(int argc, const char* argv[])
     std::cout << "  Showing model progress every "
               << param.sim.info_display_step_interval
               << " steps.\n";
-    int info_display_next_step = param.sim.info_display_step_interval;
+
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
@@ -877,6 +905,9 @@ int main(int argc, const char* argv[])
                 var.output->write(var);
 
                 next_regular_frame ++;
+                var.reference_frame_time = starting_time +
+                    next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
+
             }
         }
 
@@ -902,7 +933,7 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            if (var.steps >= info_display_next_step) {
+            if (var.steps >= var.info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
                 std::cout << "              Step = " << var.steps
                     << ", time = " << std::scientific << std::setprecision(5)
@@ -915,7 +946,7 @@ int main(int argc, const char* argv[])
                 std::cout << "\n";
 
 
-                info_display_next_step = var.steps + param.sim.info_display_step_interval;
+                var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }
         }
 #ifdef NPROF_DETAIL

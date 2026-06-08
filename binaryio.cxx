@@ -40,10 +40,31 @@ namespace {
 
 /* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
 
+void rename_to_old_backup(const char *filename) {
+    // Find the highest-numbered existing backup (.old, .old2, .old3, ...) and
+    // rename filename to max+1, so new backups always append after the largest
+    // rather than filling gaps left by manual deletions.
+    // fopen on a nonexistent file returns NULL immediately (ENOENT, no disk IO),
+    // so probing 200 past the last found is effectively free.
+    std::string fpath(filename);
+    int max_n = 0;
+    for (int n = 1; n <= max_n + 200; ++n) {
+        std::string candidate = fpath + ".old" + (n == 1 ? "" : std::to_string(n));
+        std::FILE *f = std::fopen(candidate.c_str(), "r");
+        if (f) { std::fclose(f); max_n = n; }
+    }
+    int next_n = max_n + 1;
+    std::string backup = fpath + ".old" + (next_n == 1 ? "" : std::to_string(next_n));
+    if (std::rename(filename, backup.c_str()) == 0)
+        std::cerr << "[Runtime][IO] Renamed '" << filename << "' -> '" << backup
+                  << "' (preserving previous output)\n";
+}
+
 #ifndef HDF5
 
-BinaryOutput::BinaryOutput(const char *filename)
+BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
 {
+    if (rename_if_exists) rename_to_old_backup(filename);
     f = std::fopen(filename, "wb");
     if (f == NULL) {
         std::cerr << "Error: cannot open file: " << filename << '\n';
@@ -292,7 +313,7 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
         std::exit(1);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 }
 
 
@@ -320,9 +341,12 @@ void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::si
 
 #else
 
-HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt)
+HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
+                       const bool is_chkpt, const bool rename_if_exists)
     : compression_level(hdf5_compression_level), is_checkpoint(is_chkpt)
 {
+    if (rename_if_exists) rename_to_old_backup(filename);
+
     hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
     file_id = H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, fapl_id);
     H5Pclose(fapl_id);
@@ -1060,7 +1084,7 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
         std::exit(1);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 
     H5Sclose(mspace_id);
     H5Sclose(space_id);

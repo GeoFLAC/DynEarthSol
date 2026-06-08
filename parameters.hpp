@@ -648,9 +648,11 @@ struct Variables {
     double dt;
     double dt_PT;
     double l2_residual;
+    double reference_frame_time;
     int steps;
     int nremesh;
     int noutput;
+    int info_display_next_step;
     Time func_time;
     Output *output;
 

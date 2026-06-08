@@ -1,3 +1,42 @@
+# -*- Makefile -*-
+#
+# Regression-test driver for DynEarthSol benchmarks.
+#
+# Quick start
+# -----------
+#   make set                        # run once and store as reference
+#   make cmp                        # re-run and compare against reference
+#   make fresh-restart-cmp          # full restart determinism check
+#
+# Key variables (override on the command line)
+# --------------------------------------------
+#   CASE    Config file to use          (default: test-3d-equ-tiny.cfg)
+#   FRAME   Output frame to compare     (default: 4)
+#   OMP     OMP_NUM_THREADS             (default: 1)
+#   NDIMS   2 or 3 — picks dynearthsol2d / dynearthsol3d  (default: 3)
+#   ACC     1 = GPU build via OpenACC   (default: 0)
+#   DEBUG   1 = run under valgrind/CUDA memcheck            (default: 0)
+#   NSYS    1 = profile with nsys                           (default: 0)
+#   VTK     1 = also convert output to VTK after run        (default: 0)
+#
+# Targets
+# -------
+#   test              Run the simulation without comparing.
+#   set               Run and store output as the reference (creates orig-<CASE>/).
+#   cmp               Re-run and compare against the stored reference.
+#   restart           Resume from an existing checkpoint and compare.
+#   fresh-restart-cmp Full determinism check: fresh run → checkpoint → restart → diff.
+#                     Requires is_restarting / restarting_from_frame /
+#                     restarting_from_modelname to be present in CASE.
+#   store             Move current output into orig-<CASE>/ (called by 'set').
+#   job               Run in the background; copy config with a timestamped name.
+#   cmpjob            Compare orig-job/ against ~/data/jobs/<CASE>/ (Form 2 compare).
+#   vtk               Convert current output to VTK via 2vtk.py.
+#
+# Comparison exit codes (from compare.py)
+# ----------------------------------------
+#   0  No serious differences (bit-exact or round-off only).
+#   1  At least one field has relative diff >= 1e-8, or contains NaN/Inf.
 
 CASE := test-3d-equ-tiny.cfg
 #CASE := test-tiny-long.cfg
@@ -23,7 +62,10 @@ ifeq ($(ACC), 1)
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+IS_RESTARTING := $(shell awk -F '=' '/^is_restarting/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+RESTARTING_FROM_MODELNAME := $(shell awk -F '=' '/^[ \t]*restarting_from_modelname/ {gsub(/^[ \t]+|[ \t]+$$/, "", $$2); print $$2}' $(CASE))
 JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
+CASENAME = $(notdir $(CASE))
 
 GITID = $(shell git rev-parse HEAD | cut -c1-7)
 
@@ -46,6 +88,15 @@ endif
 # Use single cpu for omp to avoid round-off errors
 RUN_TEST = rm -f ${MODELNAME}.*; OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
 RESTART_TEST = OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
+
+ifeq ($(IS_RESTARTING),yes)
+  ifeq ($(MODELNAME),$(RESTARTING_FROM_MODELNAME))
+    define RUN_TEST
+      @echo "Warning: MODELNAME & RESTARTING_FROM_MODELNAME are both '$(MODELNAME)': Avoid rm -f"
+      ${RESTART_TEST}
+    endef
+  endif
+endif
 
 ORIG = orig-${CASE}
 CURR = ~/data/jobs/${CASE}
@@ -70,19 +121,39 @@ set:
 	${RUN_TEST}
 	${MAKE} store
 
-cmp:
+detect-orig:
+	$(if $(wildcard ${ORIG}),,$(error Error: Original results directory '${ORIG}' doesn't exist. Please run 'make set' first.))
+
+cmp: detect-orig
 	${RUN_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
-	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
+	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
+	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
 
-restart:
+restart: detect-orig
 	${RESTART_TEST}
 	${NSYSSUM} > /dev/null
 	${VTKFLAG}
-	python ./compare.py ${ORIG} ${FRAME} ${MODELNAME}
-	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASE}.${OMP}.info
+	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
+	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
+
+# restart reproducibility test; config file with restart information is needed
+IS_RESTART_EXISTS := $(shell grep -i "^[[:space:]\#]*is_restarting[[:space:]]*=" $(CASE))
+RESTART_FRAME := $(shell awk -F '=' '/^[[:space:]]*restarting_from_frame/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+MODELNAME_EXISTS := $(shell grep -i "^[[:space:]\#]*restarting_from_modelname[[:space:]]*=" $(CASE))
+FRC_CASE = $(CASE:%.cfg=%-frc.cfg)
+fresh-restart-cmp:
+	$(if $(strip $(IS_RESTART_EXISTS)),,$(error Error: 'sim.is_restarting' does not exist in ${CASE}...))
+	$(if $(strip $(RESTART_FRAME)),,$(error Error: 'sim.restarting_from_frame' is not set in ${CASE}...))
+	$(if $(strip $(MODELNAME_EXISTS)),,$(error Error: 'sim.restarting_from_modelname' does not exist in ${CASE}...))
+	@sed 's|^[[:space:]\#]*is_restarting[[:space:]]*=.*|is_restarting = no|' ${CASE} > ${FRC_CASE}
+	${MAKE} set CASE=${FRC_CASE}
+	@sed 's|^[[:space:]\#]*is_restarting[[:space:]]*=.*|is_restarting = yes|' ${CASE} > ${FRC_CASE}
+	@sed 's|^[[:space:]\#]*restarting_from_modelname[[:space:]]*=.*|restarting_from_modelname = orig-${FRC_CASE}/${MODELNAME}|' ${FRC_CASE} > ${FRC_CASE}.tmp
+	@mv ${FRC_CASE}.tmp ${FRC_CASE}
+	${MAKE} CASE=${FRC_CASE}
+	rm -f ${FRC_CASE}
 
 store:
 	rm -rf ${ORIG}
@@ -96,9 +167,9 @@ setjob:
 	ln -s ~/data/jobs/${CASE} orig-job
 
 cmpjob:
-	python ./compare.py orig-job ${CURR} ${FRAME} ${MODELNAME}
+	python ./compare.py orig-job/${MODELNAME} ${CURR}/${MODELNAME} ${FRAME}
 
 vtk:
 	python ../2vtk.py -m  ${MODELNAME}
 
-.PHONY: all set cmp store
+.PHONY: all set cmp store test job fresh-restart-cmp
