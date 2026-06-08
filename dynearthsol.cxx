@@ -617,12 +617,17 @@ int main(int argc, const char* argv[])
             // output.write_exact(var);
             isostasy_adjustment(param, var);
         }
+
+        var.dt = compute_dt(param, var);
+
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
     }
+
+    var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -703,10 +708,6 @@ int main(int argc, const char* argv[])
     }
 #endif
 
-    if (!param.sim.is_restarting) {
-       var.dt = compute_dt(param, var);
-        var.dt_PT = compute_dt(param, var);
-    }
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
