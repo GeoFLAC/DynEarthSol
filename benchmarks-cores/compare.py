@@ -81,6 +81,9 @@ def show_msg(kind, max, sigma):
     nonzero=1 if max+sigma > 0   (any difference, even round-off)
     Both zero means the field is bit-identical.
     """
+    if not np.isfinite(max) or not np.isfinite(sigma):
+        print('  %s:\t\t%s %s (NaN/Inf — field corrupt)' % (kind, max, sigma))
+        return 1, 1
     if max + sigma > 1.e-8:
         print('  %s:\t\t%.3e %.3e (> 1.e-8)' % (kind, max, sigma))
         return 1, 1
