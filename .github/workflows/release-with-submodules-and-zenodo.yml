@@ -1,0 +1,83 @@
+name: Release with submodules and Zenodo
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 1
+
+    # 1. Create a complete Tarball containing all submodules
+    # GITHUB_REF_NAME will automatically be the Tag name (e.g., v1.2.3) during a release event
+    # For PRs, it will use the short commit SHA
+    - name: create source tarball with submodules and shallow .git
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+          LABEL="${GITHUB_REF_NAME}"
+        else
+          LABEL="${GITHUB_SHA::8}"
+        fi
+        ARCHIVE_NAME="dynearthsol-${LABEL}-full"
+        mkdir -p /tmp/${ARCHIVE_NAME}
+
+        rsync -a . /tmp/${ARCHIVE_NAME}/ \
+          --exclude='.github' \
+          --exclude='output_files' \
+          --exclude='*.tar.gz'
+
+        tar -czf /tmp/${ARCHIVE_NAME}.tar.gz -C /tmp ${ARCHIVE_NAME}
+        echo "TARBALL=/tmp/${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+        echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+
+    # 2. Upload artifact during PR for testing (Does not trigger Zenodo or GitHub Release Asset)
+    - name: upload artifact (PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARCHIVE_NAME }}
+        path: ${{ env.TARBALL }}
+
+    # 3. Upload the full Tarball to the newly published GitHub Release
+    # It automatically attaches the asset to the release that triggered this workflow
+    - name: upload release asset (Release)
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ env.TARBALL }}
+
+    # ===================================================
+    # Zenodo Upload Section (Only runs on Release events)
+    # ===================================================
+
+    - name: Prepare Zenodo Upload Directory
+      if: github.event_name == 'release'
+      run: |
+        mkdir -p output_files
+        cp ${{ env.TARBALL }} output_files/
+
+    - name: Setup Python
+      if: github.event_name == 'release'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      if: github.event_name == 'release'
+      run: pip install requests
+
+    # 4. Invoke Python script to update the manually opened Zenodo Draft
+    - name: Upload to Existing Zenodo Draft
+      if: github.event_name == 'release'
+      env:
+        ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+      run: python .github/workflows/scripts/upload_to_zenodo.py

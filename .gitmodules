@@ -2,3 +2,9 @@
 	path = knn-bvh
 	url = https://github.com/GeoFLAC/knn-bvh.git
 	ignore = dirty
+[submodule "mmg"]
+	path = mmg
+	url = https://github.com/MmgTools/mmg.git
+[submodule "nanoflann"]
+	path = nanoflann
+	url = https://github.com/jlblancoc/nanoflann.git
