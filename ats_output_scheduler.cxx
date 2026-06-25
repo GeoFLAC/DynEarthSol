@@ -34,7 +34,8 @@ void handle_ats_output(const Param& param,
         state.allow_earthquake_output &&
         output_allowed) {
 
-        if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+        if (param.sim.checkpoint_frame_interval > 0 &&
+            next_regular_frame % param.sim.checkpoint_frame_interval == 0)
             output.write_checkpoint(param, var);
 
         const int64_t t0 = get_nanoseconds();

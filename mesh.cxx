@@ -2463,7 +2463,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
             const int side_num = side_list[i][j] - 1;
             for (int k=0; k<NODES_PER_FACET; k++) { // 3 nodes per triangular facet
                 const int local_node_number = local_node_list[side_num][k] - 1;
-                (*var.segment)[ start + j][k] = (*var.connectivity)[elem_num][local_node_number] - 1;
+                (*var.segment)[ start + j][k] = (*var.connectivity)[elem_num][local_node_number];
             }
             (*var.segflag)[start + j][0] = ids[i];
         }

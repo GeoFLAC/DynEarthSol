@@ -25,14 +25,14 @@
 
 ndims = 3
 opt = 2
-openacc = 0
-openmp = 1
+openacc = 1
+openmp = 0
 nprof = 0
 gprof = 0
-usemmg = 0
+usemmg = 1
 adaptive_time_step = 0
 use_R_S = 0
-useexo = 0
+useexo = 1
 use_gospl = 0
 hdf5 = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
@@ -67,8 +67,8 @@ endif
 CXX_BACKEND = ${CXX}
 
 ## path to HDF5's base directory, if not in standard system location
-HDF5_INCLUDE_DIR = #/path/to/include/hdf5/serial
-HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
+HDF5_INCLUDE_DIR = /home/echoi2/opt/DynEarthSol/seacas/include
+HDF5_LIB_DIR = /home/echoi2/opt/DynEarthSol/seacas/lib
 
 ## path to cuda's base directory
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
@@ -132,10 +132,10 @@ endif
 
 ifeq ($(useexo), 1)
 	# path to exodus header files
-	EXO_INCLUDE = ./seacas/include
+	EXO_INCLUDE = /home/echoi2/opt/DynEarthSol/seacas/include
 
 	# path of exodus library files, if not in standard system location
-	EXO_LIB_DIR = ./seacas/lib
+	EXO_LIB_DIR = /home/echoi2/opt/DynEarthSol/seacas/lib
 
 	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
 	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
@@ -197,7 +197,7 @@ endif
 
 
 ifneq (, $(findstring clang++, $(CXX)))
-	CXXFLAGS = -g -std=c++0x -DGPP1X
+	CXXFLAGS = -g -std=c++14 -DGPP1X
 	LDFLAGS = -lm
 	TETGENFLAG = 
 	
@@ -233,7 +233,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
-	CXXFLAGS = -g -std=c++0x
+	CXXFLAGS = -g -std=c++14
 	LDFLAGS = -lm
 	TETGENFLAG = -Wno-unused-but-set-variable -Wno-int-to-pointer-cast
 
@@ -268,7 +268,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	endif
 
 else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tested with v14
-	CXXFLAGS = -g -std=c++0x
+	CXXFLAGS = -g -std=c++14
 	LDFLAGS = -lm
 
 	ifeq ($(opt), 1)
@@ -548,7 +548,7 @@ ifeq ($(usemmg), 1)
 	@mkdir -p mmg/build
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DUSE_ELAS=OFF -DUSE_POINTMAP=OFF -DUSE_SCOTCH=OFF -DUSE_VTK=OFF ..; \
 	fi
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		$(MAKE) -C mmg/build; \
