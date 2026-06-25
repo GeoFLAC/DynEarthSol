@@ -200,7 +200,14 @@ void init(const Param& param, Variables& var)
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
-    initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
+    switch (param.ic.stress_ic_option) {
+    case 1:
+        initial_stress_state_from_spatialdb(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
+        break;
+    default:
+        initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
+        break;
+    }
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
@@ -899,7 +906,8 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                if (param.sim.checkpoint_frame_interval > 0 &&
+                    next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
 
                 var.output->write(var);

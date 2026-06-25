@@ -412,6 +412,9 @@ struct IC {
 
     double excess_pore_pressure;
     bool has_body_force_adjustment;
+
+    int stress_ic_option;
+    std::vector<std::string> spatialdb_stress_filenames;
 };
 
 struct Mat {

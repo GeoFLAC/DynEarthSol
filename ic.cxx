@@ -1,5 +1,9 @@
 #include <array>
+#include <fstream>
 #include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -435,6 +439,152 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
 
     compensation_pressure = ref_pressure(param, -param.mesh.zlength);
 }
+
+namespace {
+
+// Minimal nanoflann point-cloud adapter for a vector of 3D points.
+struct SDBCloud {
+    const std::vector<std::array<double,3>> &pts;
+    SDBCloud(const std::vector<std::array<double,3>> &p) : pts(p) {}
+    inline size_t kdtree_get_point_count() const { return pts.size(); }
+    inline double kdtree_get_pt(size_t idx, size_t d) const { return pts[idx][d]; }
+    template<class BBOX> bool kdtree_get_bbox(BBOX&) const { return false; }
+};
+using SDBKDTree = nanoflann::KDTreeSingleIndexAdaptor<
+    nanoflann::L2_Simple_Adaptor<double, SDBCloud>, SDBCloud, 3>;
+
+// Read a PyLith SimpleDB spatialdb file.
+// Data lines follow the "} // SimpleDB" header terminator and have the layout:
+//   x y z  density vs vp  s_xx s_yy s_zz s_xy s_yz s_xz  e_xx e_yy e_zz e_xy e_yz e_xz
+// Populates pts (3-D positions), stress and strain in DynEarthSol Voigt order {xx,yy,zz,xy,xz,yz}.
+static void read_spatialdb_refstate(const std::string &filename,
+                                    std::vector<std::array<double,3>> &pts,
+                                    std::vector<std::array<double,6>> &stress,
+                                    std::vector<std::array<double,6>> &strain)
+{
+    std::ifstream f(filename.c_str());
+    if (!f) {
+        std::cerr << "Error: cannot open spatialdb file '" << filename << "'.\n";
+        std::exit(1);
+    }
+
+    // spatialdb order: xx yy zz xy yz xz  →  DES Voigt: xx yy zz xy xz yz
+    // spatialdb index:  0  1  2  3  4  5       DES index:  0  1  2  3  4  5
+    //   sdb[0]→des[0]  sdb[1]→des[1]  sdb[2]→des[2]
+    //   sdb[3]→des[3]  sdb[4]→des[5]  sdb[5]→des[4]
+    static const int sdb2des[6] = {0, 1, 2, 3, 5, 4};
+
+    bool in_data = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!in_data) {
+            if (line.find("} // SimpleDB") != std::string::npos)
+                in_data = true;
+            continue;
+        }
+        if (line.empty() || line[0] == '/' || line[0] == '#')
+            continue;
+
+        std::istringstream iss(line);
+        double x, y, z, density, vs, vp;
+        double s[6], e[6];
+        if (!(iss >> x >> y >> z >> density >> vs >> vp
+                  >> s[0] >> s[1] >> s[2] >> s[3] >> s[4] >> s[5]
+                  >> e[0] >> e[1] >> e[2] >> e[3] >> e[4] >> e[5]))
+            continue;
+
+        pts.push_back({x, y, z});
+
+        std::array<double,6> sv{}, ev{};
+        for (int i = 0; i < 6; ++i) {
+            sv[sdb2des[i]] = s[i];
+            ev[sdb2des[i]] = e[i];
+        }
+        stress.push_back(sv);
+        strain.push_back(ev);
+    }
+
+    if (pts.empty()) {
+        std::cerr << "Error: no data points read from spatialdb file '" << filename << "'.\n";
+        std::exit(1);
+    }
+}
+
+} // anonymous namespace
+
+
+void initial_stress_state_from_spatialdb(const Param &param, const Variables &var,
+                                          tensor_t &stress, double_vec &stressyy,
+                                          double_vec &old_mean_stress, tensor_t &strain,
+                                          double &compensation_pressure)
+{
+    if (param.control.gravity == 0) {
+        compensation_pressure = 0;
+        return;
+    }
+
+    const int nmat = param.mat.nmat;
+    const std::vector<std::string> &filenames = param.ic.spatialdb_stress_filenames;
+
+    // --- Load per-material spatialdb data and build KD-trees ---
+    std::vector<std::vector<std::array<double,3>>> clouds(nmat);
+    std::vector<std::vector<std::array<double,6>>> sdb_stress(nmat);
+    std::vector<std::vector<std::array<double,6>>> sdb_strain(nmat);
+
+    std::vector<std::unique_ptr<SDBCloud>>  cloud_wrappers(nmat);
+    std::vector<std::unique_ptr<SDBKDTree>> kdtrees(nmat);
+
+    for (int m = 0; m < nmat; ++m) {
+        std::cout << "  Reading spatialdb for material " << m
+                  << ": " << filenames[m] << " ... " << std::flush;
+        read_spatialdb_refstate(filenames[m], clouds[m], sdb_stress[m], sdb_strain[m]);
+        std::cout << clouds[m].size() << " points\n";
+
+        cloud_wrappers[m] = std::make_unique<SDBCloud>(clouds[m]);
+        kdtrees[m] = std::make_unique<SDBKDTree>(
+            3, *cloud_wrappers[m],
+            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* leaf size */));
+        kdtrees[m]->buildIndex();
+    }
+
+    // --- Assign stress and strain to each element ---
+    for (int e = 0; e < var.nelem; ++e) {
+        // Dominant material: material with the most markers in this element
+        const int_vec &mk = (*var.elemmarkers)[e];
+        int dom_mat = 0;
+        for (int m = 1; m < nmat; ++m)
+            if (mk[m] > mk[dom_mat]) dom_mat = m;
+
+        // Element centroid
+        double qp[3] = {0, 0, 0};
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            for (int d = 0; d < NDIMS; ++d)
+                qp[d] += coord[i][d];
+        }
+        for (int d = 0; d < NDIMS; ++d) qp[d] /= NODES_PER_ELEM;
+
+        // Nearest-neighbour lookup
+        size_t nn_idx;
+        double nn_dist2;
+        nanoflann::KNNResultSet<double> result(1);
+        result.init(&nn_idx, &nn_dist2);
+        kdtrees[dom_mat]->findNeighbors(result, qp, nanoflann::SearchParameters());
+
+        // Copy stress and strain
+        for (int i = 0; i < NSTR; ++i) {
+            stress[e][i] = sdb_stress[dom_mat][nn_idx][i];
+            strain[e][i] = sdb_strain[dom_mat][nn_idx][i];
+        }
+
+        old_mean_stress[e] = trace(stress[e]) / NDIMS;
+        if (param.mat.is_plane_strain)
+            stressyy[e] = stress[e][1]; // yy component
+    }
+
+    compensation_pressure = ref_pressure(param, -param.mesh.zlength);
+}
+
 
 // Function to check if a node is a boundary node
 inline bool is_boundary_node_for_pp(const int n, const Variables &var) {

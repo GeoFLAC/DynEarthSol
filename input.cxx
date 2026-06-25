@@ -730,6 +730,13 @@ static void declare_parameters(po::options_description &cfg,
          "Initial excess_pore_pressure except for boundary.\n")
          ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
+        ("ic.stress_ic_option", po::value<int>(&p.ic.stress_ic_option)->default_value(0),
+         "Initial stress state option.\n"
+         "0: lithostatic (default).\n"
+         "1: interpolated from per-material PyLith spatialdb files.\n")
+        ("ic.spatialdb_stress_filenames", po::value<std::string>()->default_value(""),
+         "Semicolon-separated list of spatialdb file paths (one per material, in material-index order).\n"
+         "Required when ic.stress_ic_option = 1.\n")
 
         ;
 
@@ -1467,6 +1474,30 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                     std::exit(1);
                 }
             }
+        }
+    }
+
+    // Parse spatialdb stress filenames (semicolon-separated) when stress_ic_option == 1
+    if (p.ic.stress_ic_option == 1) {
+        std::string raw = vm["ic.spatialdb_stress_filenames"].as<std::string>();
+        if (raw.empty()) {
+            std::cerr << "Error: ic.spatialdb_stress_filenames must be provided when ic.stress_ic_option = 1.\n";
+            std::exit(1);
+        }
+        std::istringstream ss(raw);
+        std::string tok;
+        while (std::getline(ss, tok, ';')) {
+            // trim leading/trailing whitespace
+            size_t a = tok.find_first_not_of(" \t");
+            size_t b = tok.find_last_not_of(" \t");
+            if (a != std::string::npos)
+                p.ic.spatialdb_stress_filenames.push_back(tok.substr(a, b - a + 1));
+        }
+        if ((int)p.ic.spatialdb_stress_filenames.size() != p.mat.nmat) {
+            std::cerr << "Error: ic.spatialdb_stress_filenames must contain " << p.mat.nmat
+                      << " semicolon-separated paths (one per material), got "
+                      << p.ic.spatialdb_stress_filenames.size() << ".\n";
+            std::exit(1);
         }
     }
 
