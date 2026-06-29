@@ -226,7 +226,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 		ifeq ($(filter /%,$(OPENMP_ROOT_DIR)),$(OPENMP_ROOT_DIR))
 			OPENMP_RPATH := $(OPENMP_ROOT_DIR)/lib
 		else
-			OPENMP_RPATH := @executable_path/$(OPENMP_ROOT_DIR)/lib
+			OPENMP_RPATH := $(CURDIR)/$(OPENMP_ROOT_DIR)/lib
 		endif
 		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
 		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
