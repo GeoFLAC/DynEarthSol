@@ -18,6 +18,7 @@
 #   DEBUG   1 = run under valgrind/CUDA memcheck            (default: 0)
 #   NSYS    1 = profile with nsys                           (default: 0)
 #   VTK     1 = also convert output to VTK after run        (default: 0)
+#   INDIR   1 = run in a subdirectory (model-<CASE>-<MODELNAME>) to avoid overwriting output from other runs (default: 0)
 #
 # Targets
 # -------
@@ -50,6 +51,7 @@ DEBUG := 0
 NSYS := 0
 VTK := 0
 NDIMS := 3
+INDIR := 0
 EXE := ../dynearthsol$(NDIMS)d
 FUNC := compute_mass
 NUM := 0
@@ -104,7 +106,18 @@ CURR = ~/data/jobs/${CASE}
 all: cmp
 
 test:
+ifeq ($(INDIR), 1)
+	@echo "Test in directory: model-${CASE}-${MODELNAME} ..."
+	mkdir -p model-${CASE}-${MODELNAME}
+	cp $(CURDIR)/${EXE} model-${CASE}-${MODELNAME}/
+	cp $(CURDIR)/${CASE} model-${CASE}-${MODELNAME}/
+	cp $(CURDIR)/../snapshot.diff model-${CASE}-${MODELNAME}/
+	cd model-${CASE}-${MODELNAME} && \
+	rm -f ${MODELNAME}.* && \
+	OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ./$(notdir ${EXE}) $(notdir ${CASE})
+else
 	${RUN_TEST}
+endif
 
 job:
 	# run jobs on server
