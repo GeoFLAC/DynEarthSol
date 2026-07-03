@@ -1,8 +1,10 @@
 #include <algorithm>  // For std::max_element
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iterator>  // For std::distance
 #include <iostream>
+#include <sys/stat.h>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -20,6 +22,22 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
+// Create all directories in path (equivalent to mkdir -p).
+static void mkdir_p(const std::string &path)
+{
+    for (size_t pos = 1; pos <= path.size(); ++pos) {
+        if (pos == path.size() || path[pos] == '/') {
+            std::string sub = path.substr(0, pos);
+#ifdef WIN32
+            _mkdir(sub.c_str());
+#else
+            mkdir(sub.c_str(), 0755);
+#endif
+        }
+    }
+}
+
+
 Output::Output(const Param& param, int64_t start_time, int start_frame) :
     modelname(param.sim.modelname),
     start_time(start_time),
@@ -32,7 +50,11 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
     start_frame_(start_frame),
     frame(start_frame),
     time0(0)
-{}
+{
+    size_t slash = modelname.rfind('/');
+    if (slash != std::string::npos)
+        mkdir_p(modelname.substr(0, slash));
+}
 
 
 Output::~Output()

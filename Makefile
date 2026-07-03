@@ -34,7 +34,7 @@ adaptive_time_step = 0
 use_R_S = 0
 useexo = 1
 use_gospl = 0
-hdf5 = 0
+hdf5 = 1
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
 ifeq ($(ndims), 2)

@@ -1786,7 +1786,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
-        if ( var.steps % param.mesh.quality_check_step_interval == 0) {
+        if (param.mesh.quality_check_step_interval > 0 &&
+            var.steps % param.mesh.quality_check_step_interval == 0) {
             markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
 
 #ifndef ACC
@@ -1804,7 +1805,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifdef THREED
     // todo
 #else
-    if (!(var.steps % param.mesh.quality_check_step_interval &&  var.steps != 0))
+    if (param.mesh.quality_check_step_interval == 0 ||
+        !(var.steps % param.mesh.quality_check_step_interval && var.steps != 0))
         // correct the plastic strain of urface element for preventing surface landslide.
         surface_plstrain_diffusion(param,var,plstrain);
 

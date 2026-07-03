@@ -18,7 +18,8 @@ void handle_ats_output(const Param& param,
 {
     const bool output_allowed =
         (!param.sim.is_outputting_averaged_fields ||
-         (var.steps % param.mesh.quality_check_step_interval == 0));
+         (param.mesh.quality_check_step_interval > 0 &&
+          var.steps % param.mesh.quality_check_step_interval == 0));
 
     const bool regular_output_due =
         (((param.sim.output_step_interval != std::numeric_limits<int>::max() &&

@@ -536,17 +536,16 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
     nvtxRangePush(__FUNCTION__);
 #endif
     
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    
     // pseudo transient (PT) loop
     var.l2_residual = calculate_residual_force(var, *var.force_residual);
-    residual_old = var.l2_residual;
     if (param.control.has_PT)
-    {   
+    {
+        const double residual_initial_init = var.l2_residual;
+        if (param.control.PT_info_interval > 0)
+            std::cout << "  PT (init) start: initial residual = " << residual_initial_init << "\n";
         // var.dt = compute_dt_PT(param, var);
         param.control.PT_jump = true;
-        for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
+        for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
         {
             apply_vbcs(param, var, *var.vel);
             if (param.control.has_moving_mesh)
@@ -563,11 +562,19 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
-            double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-            if (relative_change < param.control.PT_relative_tolerance) {
-            break;  // Exit the loop if relative change is small enough
+            double rel_residual = var.l2_residual / residual_initial_init;
+            if (param.control.PT_info_interval > 0 &&
+                pt_step % param.control.PT_info_interval == 0)
+                std::cout << "  PT (init) iter " << pt_step
+                          << ": residual = " << var.l2_residual
+                          << ", residual/residual_0 = " << rel_residual << "\n";
+            if (rel_residual < param.control.PT_relative_tolerance) {
+                if (param.control.PT_info_interval > 0)
+                    std::cout << "  PT (init) converged at iter " << pt_step
+                              << ": residual = " << var.l2_residual
+                              << " (residual/residual_0 = " << rel_residual << ")\n";
+                break;
             }
-            residual_old = var.l2_residual;
         }
         param.control.PT_jump = false;
     }
@@ -730,8 +737,6 @@ int main(int argc, const char* argv[])
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
     double dt_copy = 0.0;
     bool hydraulic_diffusion_switch = false;
 
@@ -782,9 +787,11 @@ int main(int argc, const char* argv[])
 
         // pseudo transient (PT) loop
         var.l2_residual = calculate_residual_force(var, *var.force_residual);
-        residual_old = var.l2_residual;
         if (param.control.has_PT)
-        {   
+        {
+            const double residual_initial_step = var.l2_residual;
+            if (param.control.PT_info_interval > 0)
+                std::cout << "  PT start: initial residual = " << residual_initial_step << "\n";
             // var.dt = compute_dt_PT(param, var);
             if (param.control.has_hydraulic_diffusion) {
                 param.control.has_hydraulic_diffusion = false;
@@ -792,7 +799,7 @@ int main(int argc, const char* argv[])
             }
 
             param.control.PT_jump = true;
-            for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
+            for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
             {
                 apply_vbcs(param, var, *var.vel);
                 if (param.control.has_moving_mesh)
@@ -809,15 +816,23 @@ int main(int argc, const char* argv[])
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);
                 var.l2_residual = calculate_residual_force(var, *var.force_residual);
-                double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-                if (relative_change < param.control.PT_relative_tolerance) {
-                    // std::cout << "tolerance reached " << pt_step << std::endl;
-                break;  // Exit the loop if relative change is small enough
+                double rel_residual = var.l2_residual / residual_initial_step;
+                if (param.control.PT_info_interval > 0 &&
+                    pt_step % param.control.PT_info_interval == 0)
+                    std::cout << "  PT iter " << pt_step
+                              << ": residual = " << var.l2_residual
+                              << ", residual/residual_0 = " << rel_residual << "\n";
+                if (rel_residual < param.control.PT_relative_tolerance) {
+                    if (param.control.PT_info_interval > 0)
+                        std::cout << "  PT converged at iter " << pt_step
+                                  << ": residual = " << var.l2_residual
+                                  << " (residual/residual_0 = " << rel_residual << ")\n";
+                    break;
                 }
-                residual_old = var.l2_residual;
                 // var.dt = std::min({var.dt*1.01, dt_copy});
 
-                if (pt_step % param.mesh.quality_check_step_interval == 0) {
+                if (param.mesh.quality_check_step_interval > 0 &&
+                    pt_step % param.mesh.quality_check_step_interval == 0) {
                     if (param.control.has_moving_mesh)
                     {
                         int quality_is_bad, bad_quality_index;
@@ -902,7 +917,8 @@ int main(int argc, const char* argv[])
             &&
             ((! param.sim.is_outputting_averaged_fields) ||
                 (param.sim.is_outputting_averaged_fields &&
-                    (var.steps % param.mesh.quality_check_step_interval == 0)))
+                    (param.mesh.quality_check_step_interval > 0 &&
+                     var.steps % param.mesh.quality_check_step_interval == 0)))
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
@@ -919,7 +935,8 @@ int main(int argc, const char* argv[])
             }
         }
 
-        if (var.steps % param.mesh.quality_check_step_interval == 0) {
+        if (param.mesh.quality_check_step_interval > 0 &&
+            var.steps % param.mesh.quality_check_step_interval == 0) {
             double min_quality = 1.0;
             if (param.control.has_moving_mesh)
             {

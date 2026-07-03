@@ -387,6 +387,8 @@ static void declare_parameters(po::options_description &cfg,
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
          "tolerance for relative change for breaking PT loop")
+        ("control.PT_info_interval", po::value<int>(&p.control.PT_info_interval)->default_value(0),
+         "Print PT loop progress every N iterations (0 = silent).")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
@@ -1012,7 +1014,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
     }
 
-    if (p.sim.is_outputting_averaged_fields == true)
+    if (p.sim.is_outputting_averaged_fields == true &&
+        p.mesh.quality_check_step_interval > 0)
         if (vm.count("sim.output_step_interval") &&
             p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
             std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
@@ -1020,6 +1023,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     // Ensure info_display_step_interval is a multiple of quality_check_step_interval
+    // (skipped when quality_check_step_interval == 0, meaning quality checks are disabled)
+    if (p.mesh.quality_check_step_interval > 0) {
     if (p.sim.info_display_step_interval <= 0)
         p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
@@ -1031,6 +1036,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << q << ")\n";
         std::exit(1);
     }
+    } // end if (quality_check_step_interval > 0)
     if (p.sim.earthquake_output_step_interval < 1) {
         std::cerr << "Error: sim.earthquake_output_step_interval must be >= 1.\n";
         std::exit(1);

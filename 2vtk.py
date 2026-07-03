@@ -844,7 +844,7 @@ if __name__ == '__main__':
     if '-t' in sys.argv:
         output_tensor_components = True
     if '-m' in sys.argv:
-        output_markers = True
+        output_markers = False
     if '-u' in sys.argv or '--update-vtkhdf' in sys.argv:
         update_vtkhdf = True
     if '-melt' in sys.argv:

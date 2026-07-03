@@ -252,6 +252,7 @@ struct Control {
     mutable bool PT_jump;
     int PT_max_iter;
     double PT_relative_tolerance;
+    int PT_info_interval;
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
