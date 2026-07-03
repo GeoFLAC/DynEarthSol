@@ -543,7 +543,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         const double residual_initial_init = var.l2_residual;
         if (param.control.PT_info_interval > 0)
             std::cout << "  PT (init) start: initial residual = " << residual_initial_init << "\n";
-        // var.dt = compute_dt_PT(param, var);
+        update_pt_params(param, var);
         param.control.PT_jump = true;
         for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
         {
@@ -559,8 +559,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
                 *var.ppressure, *var.dppressure, *var.vel,
                 *var.dyn_fric_coeff, *var.state_variable);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-            // update_velocity_PT(var, *var.vel);
-            update_velocity(var, *var.vel);
+            update_velocity_PT(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
             double rel_residual = var.l2_residual / residual_initial_init;
             if (param.control.PT_info_interval > 0 &&
@@ -792,7 +791,7 @@ int main(int argc, const char* argv[])
             const double residual_initial_step = var.l2_residual;
             if (param.control.PT_info_interval > 0)
                 std::cout << "  PT start: initial residual = " << residual_initial_step << "\n";
-            // var.dt = compute_dt_PT(param, var);
+            update_pt_params(param, var);
             if (param.control.has_hydraulic_diffusion) {
                 param.control.has_hydraulic_diffusion = false;
                 hydraulic_diffusion_switch = true;
@@ -813,8 +812,7 @@ int main(int argc, const char* argv[])
                     *var.ppressure, *var.dppressure, *var.vel,
                     *var.dyn_fric_coeff, *var.state_variable);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-                // update_velocity_PT(var, *var.vel);
-                update_velocity(var, *var.vel);
+                update_velocity_PT(param, var, *var.vel);
                 var.l2_residual = calculate_residual_force(var, *var.force_residual);
                 double rel_residual = var.l2_residual / residual_initial_step;
                 if (param.control.PT_info_interval > 0 &&

@@ -746,17 +746,37 @@ void update_velocity(const Variables& var, array_t& vel)
 #endif
 }
 
-void update_velocity_PT(const Variables& var, array_t& vel)
+void update_velocity_PT(const Param& param, const Variables& var, array_t& vel)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
+    // Accelerated PT velocity update — Räss et al. (2022), Sec. 2.4, Eqs. 25 & 28.
+    //
+    // Optimal numerical density: ρ̃ = Re · μ^ve / (V̂ · L)
+    // Pseudo-time step:          Δτ = CFL · h_min / V̂
+    // Velocity increment:        vel[i] += (Δτ/ρ̃) · force[i] / V_node[i]
+    //
+    // V̂ cancels between Δτ and ρ̃, giving the computable per-node coefficient:
+    //   dτ_ρ[i] = CFL · h_min · L · NODES_PER_ELEM / (Re · μ^ve_max · volume_n[i])
+    //
+    // μ^ve = 1/(1/(G·Δt) + 1/μ_s)  is pre-computed in var.PT_mu_ve_max.
+    // h_min is pre-computed in var.PT_h_min.
+    // L = PT_char_length (or auto: max mesh dimension).
 
-    #pragma omp parallel for default(none) shared(var, vel)
-    // #pragma acc parallel loop
-    for (int i=0; i<var.nnode; ++i)
-        for (int j=0;j<NDIMS;j++)
-            vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
+    double L = param.control.PT_char_length;
+    if (L <= 0)
+        L = std::max({param.mesh.xlength, param.mesh.ylength, param.mesh.zlength});
+
+    const double coeff = param.control.PT_CFL * var.PT_h_min * L
+                         * NODES_PER_ELEM / (param.control.PT_Re * var.PT_mu_ve_max);
+
+    #pragma omp parallel for default(none) shared(var, vel, coeff)
+    for (int i = 0; i < var.nnode; ++i) {
+        const double dtau_rho = coeff / (*var.volume_n)[i];
+        for (int j = 0; j < NDIMS; ++j)
+            vel[i][j] += dtau_rho * (*var.force)[i][j];
+    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();

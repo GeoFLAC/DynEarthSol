@@ -1017,6 +1017,64 @@ double compute_dt_PT(const Param& param, const Variables& var)
     return dt;
 }
 
+void update_pt_params(const Param& param, Variables& var)
+{
+    // Pre-compute per-PT-loop constants needed by update_velocity_PT():
+    //   var.PT_h_min     = minimum element height over all elements
+    //   var.PT_mu_ve_max = max effective visco-elastic viscosity (Sec. 2.4, Eq. 35):
+    //                      μ^ve = 1 / (1/(G·Δt) + 1/μ_s)
+    //
+    // In the viscous limit (G·Δt >> μ_s), μ^ve ≈ μ_s.
+    // In the elastic limit (G·Δt << μ_s), μ^ve ≈ G·Δt.
+
+    double h_min    = std::numeric_limits<double>::max();
+    double mu_ve_max = 0.0;
+
+    #pragma omp parallel for reduction(min:h_min) reduction(max:mu_ve_max) \
+        default(none) shared(param, var)
+    for (int e = 0; e < var.nelem; ++e) {
+        // --- minimum element height (same geometry as compute_dt_PT) ---
+        int n0 = (*var.connectivity)[e][0];
+        int n1 = (*var.connectivity)[e][1];
+        int n2 = (*var.connectivity)[e][2];
+        ConstArrayAccessor a = (*var.coord)[n0];
+        ConstArrayAccessor b = (*var.coord)[n1];
+        ConstArrayAccessor c = (*var.coord)[n2];
+        double minh;
+#ifdef THREED
+        {
+            int n3 = (*var.connectivity)[e][3];
+            ConstArrayAccessor d = (*var.coord)[n3];
+            double maxa = std::max(std::max(triangle_area(a, b, c),
+                                            triangle_area(a, b, d)),
+                                   std::max(triangle_area(c, d, a),
+                                            triangle_area(c, d, b)));
+            minh = 3.0 * (*var.volume)[e] / maxa;
+        }
+#else
+        {
+            double maxl = std::sqrt(std::max(std::max(dist2(a, b),
+                                                      dist2(b, c)),
+                                             dist2(a, c)));
+            minh = 2.0 * (*var.volume)[e] / maxl;
+        }
+#endif
+        h_min = std::min(h_min, minh);
+
+        // --- effective visco-elastic viscosity (Räss et al. 2022, Eq. 35) ---
+        double G_e  = var.mat->shearm(e);
+        double mu_e = (*var.viscosity)[e];
+        // Guard against G=0 (purely viscous material) or dt=0
+        double mu_ve_e = (G_e > 0.0 && var.dt > 0.0)
+            ? 1.0 / (1.0 / (G_e * var.dt) + 1.0 / mu_e)
+            : mu_e;
+        mu_ve_max = std::max(mu_ve_max, mu_ve_e);
+    }
+
+    var.PT_h_min     = h_min;
+    var.PT_mu_ve_max = mu_ve_max;
+}
+
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)

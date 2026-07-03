@@ -253,6 +253,11 @@ struct Control {
     int PT_max_iter;
     double PT_relative_tolerance;
     int PT_info_interval;
+    // Accelerated PT parameters (Räss et al. 2022, Sec. 2.4)
+    double PT_Re;          // numerical Reynolds number (default: 3*sqrt(10)/2*pi ≈ 14.93)
+    double PT_CFL;         // CFL-like stability factor (default: 0.9/sqrt(NDIMS))
+    double PT_r;           // K̃/G̃ ratio (default: 0.5)
+    double PT_char_length; // characteristic domain length L (0 = auto: max(xlength,ylength,zlength))
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
@@ -652,6 +657,9 @@ struct Variables {
     double dt;
     double dt_PT;
     double l2_residual;
+    // Accelerated PT state (updated by update_pt_params() before each PT loop)
+    double PT_h_min;      // minimum element height across all elements
+    double PT_mu_ve_max;  // max effective visco-elastic viscosity: mu^ve = 1/(1/(G*dt) + 1/mu)
     double reference_frame_time;
     int steps;
     int nremesh;

@@ -389,6 +389,18 @@ static void declare_parameters(po::options_description &cfg,
          "tolerance for relative change for breaking PT loop")
         ("control.PT_info_interval", po::value<int>(&p.control.PT_info_interval)->default_value(0),
          "Print PT loop progress every N iterations (0 = silent).")
+        ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
+         "Accelerated PT numerical Reynolds number Re (Räss et al. 2022, Eq. 31).\n"
+         "Optimal value for 2D/3D Stokes: 3*sqrt(10)/2*pi ≈ 14.93.\n")
+        ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.9/std::sqrt((double)NDIMS)),
+         "Accelerated PT CFL-like stability factor (Räss et al. 2022, Eq. 8).\n"
+         "Default: 0.9/sqrt(NDIMS).\n")
+        ("control.PT_r", po::value<double>(&p.control.PT_r)->default_value(0.5),
+         "Accelerated PT bulk-to-shear pseudo-modulus ratio K̃/G̃ (Räss et al. 2022, Eq. 32).\n"
+         "Optimal value: 0.5.\n")
+        ("control.PT_char_length", po::value<double>(&p.control.PT_char_length)->default_value(0),
+         "Accelerated PT characteristic domain length L [m].\n"
+         "0 = auto: max(xlength, ylength, zlength).\n")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
