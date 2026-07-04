@@ -47,14 +47,38 @@ only then advances the physical state.
 
 ### 2.1 First-order vs. second-order pseudo-transient iteration
 
-The two variants differ in one place only: what the *stress* (or, in a
-diffusion problem, the flux) does between iterations.  The "order" refers to
+**Where the "order" hides.**  The classification cannot be read off the
+momentum equation alone.  Both variants can be written in the same form,
+
+```
+ρ̃ ∂v/∂τ = ∇·σ + f,
+```
+
+which is first order in time and second order in space *as written* — yet
+one variant is parabolic and the other hyperbolic.  The "order" refers to
 the highest pseudo-time derivative acting on the primary field in the
-equivalent single-field equation.
+equivalent single-field equation, i.e. **after the stress has been
+eliminated** — and what elimination yields depends entirely on what σ
+depends on:
+
+- If σ is **memoryless** — recomputed fresh each iteration as an algebraic
+  function of the *current* field — elimination introduces no new time
+  derivative.  One time derivative survives: parabolic.
+- If σ has **memory** — updated from its *own previous value* by its own
+  evolution equation — eliminating it (differentiate the momentum equation
+  in pseudo-time, substitute the stress update) produces a second time
+  derivative: hyperbolic.
+
+Equivalently, count the independent state variables marched in pseudo-time.
+One (the field itself, stress slaved to it) → first order.  Two (field
+*and* stress, each carrying history) → second order.  Two coupled
+first-order ODEs are one second-order system.
 
 **First-order PT: the constitutive law is enforced exactly, every iteration.**
 The stress is algebraically slaved to the current velocity — recomputed in
-full as `σ = τ_old + C:ε̇(v^k)Δt` each iteration.  Substituting this into the
+full as `σ = τ_old + C:ε̇(v^k)Δt` each iteration (`τ_old` is the converged
+stress of the *previous physical step*, a constant during the iteration —
+it contributes no pseudo-time dynamics).  Substituting this into the
 momentum update leaves a single pseudo-time derivative,
 
 ```
@@ -63,23 +87,27 @@ momentum update leaves a single pseudo-time derivative,
 
 a **parabolic** (diffusion) equation in pseudo-time with diffusivity
 `D ~ GΔt/ρ̃`.  There is no wave: the stress has no independent dynamics, so
-nothing stores and returns kinetic information.  Explicit stability caps the
-step at `Δτ ≤ h²/(2d·D)`; the slowest error mode (`k_min = π/L`) then decays
-by only `~(h/L)²` per iteration, so the iteration count scales as
-`O((L/h)² · ln(1/tol))` — prohibitive for fine meshes.  Information spreads
-the way diffusion spreads: incoherently, over a radius `~h√k` after `k`
-iterations.
+nothing stores and returns kinetic information.  This is the natural form
+for Stokes flow (the setting of Räss et al.), where velocity *is* the
+equilibrium unknown and `τ = 2μ ε̇(v)` is instantaneous; the analogue for
+an elastic problem is moving each node in proportion to its current
+out-of-balance force with σ rebuilt from the total strain — steepest
+descent.  Explicit stability caps the step at `Δτ ≤ h²/(2d·D)`; the slowest
+error mode (`k_min = π/L`) then decays by only `~(h/L)²` per iteration, so
+the iteration count scales as `O((L/h)² · ln(1/tol))` — prohibitive for
+fine meshes.  Information spreads the way diffusion spreads: incoherently,
+over a radius `~h√k` after `k` iterations.
 
 **Second-order PT: the stress gets its own pseudo-time evolution.**  Instead
 of enforcing the constitutive law, each iteration *relaxes toward* it (the
-θ-update of §2.4 — a Maxwell element in pseudo-time).  Because the stress now
-carries a `∂σ/∂τ` of its own, eliminating it produces a **second**
-pseudo-time derivative of the primary field: the telegraph (damped wave)
-equation analyzed in §2.2.  Information travels coherently — one element per
-iteration, radius `~h·k·CFL` — so a domain crossing costs `O(L/h)`
-iterations, and a correctly tuned damping makes the total count
-`O((L/h) · ln(1/tol))`, achieved with purely local, explicitly parallel
-updates (ideal for GPUs).
+θ-update of §2.4 — a Maxwell element in pseudo-time).  The stress now
+depends on its own previous value — it has memory — so eliminating it
+produces a **second** pseudo-time derivative of the primary field: the
+telegraph (damped wave) equation analyzed in §2.2.  Information travels
+coherently — one element per iteration, radius `~h·k·CFL` — so a domain
+crossing costs `O(L/h)` iterations, and a correctly tuned damping makes the
+total count `O((L/h) · ln(1/tol))`, achieved with purely local, explicitly
+parallel updates (ideal for GPUs).
 
 In the optimization analogy: first-order PT is Richardson iteration /
 gradient descent, needing `~κ` iterations with condition number
@@ -87,15 +115,29 @@ gradient descent, needing `~κ` iterations with condition number
 heavy-ball momentum, needing `~√κ = L/h`.  The stress's pseudo-inertia is
 literally the momentum term.
 
-Note that FLAC-style dynamic relaxation — DynEarthSol's native mode — is
-*also* a second-order method in this taxonomy: stress accumulates across
-pseudo-steps and the momentum equation has inertia, so it too is a damped
-wave.  What distinguishes *accelerated* PT is not the wave character but the
-parameter choice.  Dynamic relaxation runs with the physical moduli and
-heuristic damping (`inertial_scaling`, local damping), generally far from
-optimal; the accelerated method derives `ρ̃`, `G̃` and the damping rate
-analytically from the dispersion relation so that the slowest mode is
-critically damped (§2.2).
+**Why FLAC-style dynamic relaxation is second-order despite its first-order
+momentum equation.**  DynEarthSol's native mode marches
+`ρ ∂v/∂t = ∇·σ + f` — first order in v as written.  But its hypoelastic
+update `∂σ/∂t = C:ε̇(v)` makes σ a second history-carrying state variable,
+not a function of the current field.  Differentiating the momentum equation
+in time and substituting gives
+
+```
+ρ ∂²v/∂t² = ∇·( C:∇ˢv ),
+```
+
+a genuine wave equation (equivalently `ρ ü = ∇·(C:∇ˢu)` in displacement):
+the second time derivative was hidden in the stress memory.  So dynamic
+relaxation is *also* a second-order method in this taxonomy, and what
+distinguishes *accelerated* PT is not the wave character but the parameter
+choice.  Dynamic relaxation runs with the physical moduli and heuristic
+damping (`inertial_scaling`, local damping), generally far from optimal;
+the accelerated method derives `ρ̃`, `G̃` and the damping rate analytically
+from the dispersion relation so that the slowest mode is critically damped
+(§2.2).  In that sense Räss et al.'s "acceleration" of the Stokes solver
+consists of promoting τ from a slaved quantity to a second state variable —
+recovering the structure FLAC-style codes had all along — and then tuning
+it.
 
 ### 2.2 Dispersion analysis: how critical damping is enforced
 
