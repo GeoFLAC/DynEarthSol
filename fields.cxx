@@ -68,6 +68,9 @@ void allocate_variables(const Param &param, Variables& var)
     var.edvoldt = new double_vec(e);
 
     var.stress = new tensor_t(e, 0);
+    var.stress_old = new tensor_t(e, 0);
+    var.PT_dtau_rho = new double_vec(n, 0);
+    var.PT_Gdtau_e = new double_vec(e, 0);
     var.stressyy = new double_vec(e, 0);
     var.old_mean_stress = new double_vec(e, 0);
 
@@ -82,7 +85,6 @@ void allocate_variables(const Param &param, Variables& var)
         var.delta_plstrain = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
-        // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
         var.dyn_fric_coeff = new double_vec(e);
         var.state_variable = new double_vec(e);
@@ -178,6 +180,9 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.stress;
     var.stress = new tensor_t(e);
+
+    delete var.stress_old;
+    var.stress_old = new tensor_t(e, 0);
 
     // TODO: keep this reallocation because rheology always reads double& syy
     delete var.stressyy;
@@ -609,6 +614,25 @@ static double rho(const conn_t &var_connectivity, \
 }
 */
 
+#pragma acc routine seq
+static void constrained_dofs(int vbc_type, int normal_dim, bool* fix)
+{
+    // Mark velocity components constrained by a vbc of the given type on a
+    // boundary whose normal is along normal_dim (see apply_vbcs for types).
+    if (vbc_type <= 0) return;
+    if (vbc_type == 1) {
+        fix[normal_dim] = true;
+    } else if (vbc_type == 2) {
+        for (int j = 0; j < NDIMS; ++j)
+            if (j != normal_dim) fix[j] = true;
+    } else {
+        // type 3 fixes all components; special modes 4/5 are treated
+        // conservatively as fully constrained.
+        for (int j = 0; j < NDIMS; ++j)
+            fix[j] = true;
+    }
+}
+
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, elem_cache& tmp_result)
 {
 #ifdef NPROF
@@ -662,8 +686,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
         for (int n=0;n<var.nnode;n++) {
             ArrayAccessor f = force[n];
             f = 0;
-            ArrayAccessor f_residual = force_residual[n];
-            f_residual = 0;
             for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
                 ConstConnAccessor conn = (*var.connectivity)[*e];
                 ConstElemCacheAccessor tr = tmp_result[*e];
@@ -672,7 +694,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                         for (int j=0;j<NDIMS;j++)
                         {
                             f[j] -= tr[i+NODES_PER_ELEM*j];
-                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
                         }
                         break;
                     }
@@ -693,13 +714,102 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     // }
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
-    apply_damping(param, var, force);
-    
+
+    // The residual is the true out-of-balance force: everything accumulated
+    // in `force` so far — internal stress divergence, gravity, AND the
+    // boundary-condition forces (Winkler foundation, water loading,
+    // Neumann/stress BCs) — but taken BEFORE the artificial damping below,
+    // and zeroed on velocity-constrained DOFs, whose reactions are not
+    // out-of-balance forces.  (Without the Winkler term, a free bottom
+    // boundary resting on the foundation carries its full gravity-column
+    // reaction in the residual forever and the PT convergence metric stalls.)
+    // vbc types (see apply_vbcs): 1 fixes the normal component, 2 fixes the
+    // shear components, 3 fixes all; special modes 4/5 are treated
+    // conservatively as fully constrained.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, force, force_residual)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n = 0; n < var.nnode; ++n) {
+        uint flag = (*var.bcflag)[n];
+
+        bool fix[NDIMS];
+        for (int j = 0; j < NDIMS; ++j) fix[j] = false;
+
+        if (flag & BOUND_ANY) {
+            if (flag & BOUNDX0) constrained_dofs(param.bc.vbc_x0, 0, fix);
+            if (flag & BOUNDX1) constrained_dofs(param.bc.vbc_x1, 0, fix);
+#ifdef THREED
+            if (flag & BOUNDY0) constrained_dofs(param.bc.vbc_y0, 1, fix);
+            if (flag & BOUNDY1) constrained_dofs(param.bc.vbc_y1, 1, fix);
+#endif
+            if (flag & BOUNDZ0) constrained_dofs(param.bc.vbc_z0, NDIMS-1, fix);
+            if (flag & BOUNDZ1) constrained_dofs(param.bc.vbc_z1, NDIMS-1, fix);
+        }
+
+        for (int j = 0; j < NDIMS; ++j)
+            force_residual[n][j] = fix[j] ? 0.0 : force[n][j];
+    }
+
+    // During PT iterations damping is provided by the Maxwell-type stress
+    // relaxation in update_stress_PT(); FLAC-style local damping on top of
+    // it distorts the tuned pseudo-wave dynamics.
+    if (!param.control.PT_jump)
+        apply_damping(param, var, force);
+
     #pragma acc wait
 
 #ifdef NPROF
     nvtxRangePop();
 #endif
+}
+
+double calculate_characteristic_force(const Variables& var, elem_cache& tmp_result)
+{
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Characteristic (gross) force scale for the PT convergence test:
+    // RMS over DOFs of Σ_e |element nodal contribution| (internal tractions
+    // + gravity), read from the tmp_result cache filled by the immediately
+    // preceding update_force() call.  The out-of-balance residual is judged
+    // relative to this scale (FLAC-style unbalanced force ratio).
+    // Normalizing by the initial residual instead fails whenever a step
+    // starts at (or near) equilibrium — e.g. boundary-driven problems —
+    // where residual_0 is round-off noise and residual/residual_0 can never
+    // reach the tolerance.
+
+    double l2 = 0.0;
+    double num = var.nnode * NDIMS;
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, tmp_result, num) reduction(+:l2)
+#endif
+    #pragma acc parallel loop gang vector reduction(+:l2) async
+    for (int n = 0; n < var.nnode; ++n) {
+        double g[NDIMS];
+        for (int j = 0; j < NDIMS; ++j) g[j] = 0;
+        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
+            ConstConnAccessor conn = (*var.connectivity)[*e];
+            ConstElemCacheAccessor tr = tmp_result[*e];
+            for (int i = 0; i < NODES_PER_ELEM; i++) {
+                if (n == conn[i]) {
+                    for (int j = 0; j < NDIMS; j++)
+                        g[j] += std::fabs(tr[i+NODES_PER_ELEM*j]);
+                    break;
+                }
+            }
+        }
+        for (int j = 0; j < NDIMS; ++j)
+            l2 += g[j] * g[j] / num;
+    }
+
+    #pragma acc wait
+
+#ifdef NPROF
+    nvtxRangePop();
+#endif
+    return std::sqrt(l2);
 }
 
 double calculate_residual_force(const Variables& var, array_t& force_residual)
@@ -746,34 +856,55 @@ void update_velocity(const Variables& var, array_t& vel)
 #endif
 }
 
+void copy_stress_PT(const tensor_t& src, tensor_t& dst)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Used by the PT predictor–corrector scheme: to save τ_old (the stress
+    // at the start of the physical time step, the anchor of the Eq. 36
+    // relaxation target in update_stress_PT()) and to restore it before the
+    // post-PT physical constitutive update.
+
+    if (dst.size() != src.size())
+        dst.resize((int) src.size(), false);
+
+    double* d = dst.data();
+    const double* s = src.data();
+    const int ntot = src.num_elements();
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(d, s, ntot)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < ntot; ++i)
+        d[i] = s[i];
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
 void update_velocity_PT(const Param& param, const Variables& var, array_t& vel)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // Accelerated PT velocity update — Räss et al. (2022), Sec. 2.4, Eqs. 25 & 28.
+    // Accelerated PT velocity update — Räss et al. (2022), Sec. 2.4, Eqs. 25 & 28,
+    // with LOCAL pseudo-time stepping:
     //
-    // Optimal numerical density: ρ̃ = Re · μ^ve / (V̂ · L)
-    // Pseudo-time step:          Δτ = CFL · h_min / V̂
-    // Velocity increment:        vel[i] += (Δτ/ρ̃) · force[i] / V_node[i]
+    //   vel[i] += dtau_rho[i] · force[i],
+    //   dtau_rho[i] = CFL·h_i·L·NODES_PER_ELEM / (Re·μ^ve_i·volume_n[i])
     //
-    // V̂ cancels between Δτ and ρ̃, giving the computable per-node coefficient:
-    //   dτ_ρ[i] = CFL · h_min · L · NODES_PER_ELEM / (Re · μ^ve_max · volume_n[i])
-    //
-    // μ^ve = 1/(1/(G·Δt) + 1/μ_s)  is pre-computed in var.PT_mu_ve_max.
-    // h_min is pre-computed in var.PT_h_min.
-    // L = PT_char_length (or auto: max mesh dimension).
+    // pre-computed per node in update_pt_params() from the local element
+    // height h_i and effective visco-elastic viscosity μ^ve_i.
 
-    double L = param.control.PT_char_length;
-    if (L <= 0)
-        L = std::max({param.mesh.xlength, param.mesh.ylength, param.mesh.zlength});
-
-    const double coeff = param.control.PT_CFL * var.PT_h_min * L
-                         * NODES_PER_ELEM / (param.control.PT_Re * var.PT_mu_ve_max);
-
-    #pragma omp parallel for default(none) shared(var, vel, coeff)
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, vel)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.nnode; ++i) {
-        const double dtau_rho = coeff / (*var.volume_n)[i];
+        const double dtau_rho = (*var.PT_dtau_rho)[i];
         for (int j = 0; j < NDIMS; ++j)
             vel[i][j] += dtau_rho * (*var.force)[i][j];
     }

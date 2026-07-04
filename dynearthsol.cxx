@@ -537,31 +537,43 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 #endif
     
     // pseudo transient (PT) loop
+    // Compute force/tmp_result here so this function does not depend on a
+    // preceding update_force() call (e.g. isostasy_adjustment being enabled).
+    update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     var.l2_residual = calculate_residual_force(var, *var.force_residual);
     if (param.control.has_PT)
     {
         const double residual_initial_init = var.l2_residual;
+        // FLAC-style unbalanced-force normalization (see main loop).
+        const double force_scale = calculate_characteristic_force(var, *var.tmp_result);
+        const double residual_scale = (force_scale > 0) ? force_scale
+                                                        : residual_initial_init;
         if (param.control.PT_info_interval > 0)
-            std::cout << "  PT (init) start: initial residual = " << residual_initial_init << "\n";
+            std::cout << "  PT (init) start: initial residual = " << residual_initial_init
+                      << ", force scale = " << force_scale << "\n";
         update_pt_params(param, var);
+        if (param.control.PT_info_interval > 0)
+            std::cout << "  PT (init) params: h_min=" << var.PT_h_min
+                      << " m, mu_ve_max=" << var.PT_mu_ve_max
+                      << " Pa*s, Gdtau=" << var.PT_Gdtau << " Pa*s\n";
+        // τ_old = current (initial-condition) stress; PT relaxes toward
+        // τ_old + C:ε̇Δt, i.e. a single static elastic adjustment solve.
+        copy_stress_PT(*var.stress, *var.stress_old);
         param.control.PT_jump = true;
         for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
         {
             apply_vbcs(param, var, *var.vel);
-            if (param.control.has_moving_mesh)
-                update_mesh(param, var);
+            // NOTE: the mesh is intentionally NOT moved during PT iterations.
+            // The PT velocity is a relaxation iterate, not a physical velocity;
+            // advecting the mesh with it distorts elements and destabilizes
+            // the iteration.  The Lagrangian update happens once after
+            // convergence, in the caller.
             update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.etmp);
-            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel,
-                *var.dyn_fric_coeff, *var.state_variable);
+            update_stress_PT(param, var, *var.stress);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             update_velocity_PT(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
-            double rel_residual = var.l2_residual / residual_initial_init;
+            double rel_residual = var.l2_residual / residual_scale;
             if (param.control.PT_info_interval > 0 &&
                 pt_step % param.control.PT_info_interval == 0)
                 std::cout << "  PT (init) iter " << pt_step
@@ -768,30 +780,55 @@ int main(int argc, const char* argv[])
         if (param.control.has_hydraulic_diffusion)
             update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
 
-        update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.etmp);
-        compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-        update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-            *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-            *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel,
-            *var.dyn_fric_coeff, *var.state_variable);
+        if (param.control.has_PT) {
+            // PT predictor–corrector: save τ_old now and compute the initial
+            // residual of the τ_old state.  The physical constitutive update
+            // (strain/plstrain/viscosity bookkeeping) is applied exactly once
+            // per step, AFTER the PT loop, with the converged velocity — a
+            // predictor update here would accumulate plastic strain from the
+            // stale (previous-step) velocity and be double-counted.
+            copy_stress_PT(*var.stress, *var.stress_old);
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+        }
+        else {
+            update_strain_rate(var, *var.strain_rate);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
+            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
+                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
+                *var.strain_rate,
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
 
-        // Nodal Mixed Discretization For Stress
-        if (param.control.is_using_mixed_stress)
-            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
-            
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-        update_velocity(var, *var.vel);
+            // Nodal Mixed Discretization For Stress
+            if (param.control.is_using_mixed_stress)
+                NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
+
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+            update_velocity(var, *var.vel);
+        }
 
         // pseudo transient (PT) loop
         var.l2_residual = calculate_residual_force(var, *var.force_residual);
         if (param.control.has_PT)
         {
             const double residual_initial_step = var.l2_residual;
+            // FLAC-style unbalanced-force normalization: judge the residual
+            // against the characteristic gross force (internal tractions +
+            // gravity), not the initial imbalance — residual_0 is round-off
+            // noise whenever a step starts at equilibrium (e.g. boundary-
+            // driven problems) and can never shrink by the tolerance factor.
+            const double force_scale = calculate_characteristic_force(var, *var.tmp_result);
+            const double residual_scale = (force_scale > 0) ? force_scale
+                                                            : residual_initial_step;
             if (param.control.PT_info_interval > 0)
-                std::cout << "  PT start: initial residual = " << residual_initial_step << "\n";
+                std::cout << "  PT start: initial residual = " << residual_initial_step
+                          << ", force scale = " << force_scale << "\n";
             update_pt_params(param, var);
+            if (param.control.PT_info_interval > 0)
+                std::cout << "  PT params: h_min=" << var.PT_h_min
+                          << " m, mu_ve_max=" << var.PT_mu_ve_max
+                          << " Pa*s, Gdtau=" << var.PT_Gdtau << " Pa*s\n";
             if (param.control.has_hydraulic_diffusion) {
                 param.control.has_hydraulic_diffusion = false;
                 hydraulic_diffusion_switch = true;
@@ -801,20 +838,16 @@ int main(int argc, const char* argv[])
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
             {
                 apply_vbcs(param, var, *var.vel);
-                if (param.control.has_moving_mesh)
-                    update_mesh(param, var);
+                // NOTE: the mesh is intentionally NOT moved during PT
+                // iterations (see initial_body_force_adjustment).  The
+                // outer loop advects the mesh once with the converged
+                // velocity right after this PT block.
                 update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.etmp);
-                compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-                update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                    *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                    *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel,
-                    *var.dyn_fric_coeff, *var.state_variable);
+                update_stress_PT(param, var, *var.stress);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 update_velocity_PT(param, var, *var.vel);
                 var.l2_residual = calculate_residual_force(var, *var.force_residual);
-                double rel_residual = var.l2_residual / residual_initial_step;
+                double rel_residual = var.l2_residual / residual_scale;
                 if (param.control.PT_info_interval > 0 &&
                     pt_step % param.control.PT_info_interval == 0)
                     std::cout << "  PT iter " << pt_step
@@ -846,6 +879,12 @@ int main(int argc, const char* argv[])
                             remesh(param, var, quality_is_bad);
                             monitor_remesh_update(param, var);
 
+                            // Mesh (and element count) changed: refresh the
+                            // PT constants and re-anchor τ_old to the
+                            // interpolated stress.
+                            update_pt_params(param, var);
+                            copy_stress_PT(*var.stress, *var.stress_old);
+
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
                             }
@@ -857,6 +896,26 @@ int main(int argc, const char* argv[])
             // var.dt = dt_copy;
             param.control.PT_jump = false;
 
+            // Corrector: restore τ_old and apply the physical constitutive
+            // update exactly once, with the converged velocity.  This is the
+            // only place strain, plstrain, delta_plstrain and viscosity are
+            // updated for this time step, so the bookkeeping is consistent
+            // with the equilibrated velocity field (the PT loop itself only
+            // relaxes/projects the stress and discards plastic increments).
+            apply_vbcs(param, var, *var.vel);
+            copy_stress_PT(*var.stress_old, *var.stress);
+            update_strain_rate(var, *var.strain_rate);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
+            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
+                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
+                *var.strain_rate,
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
+
+            // Nodal Mixed Discretization For Stress
+            if (param.control.is_using_mixed_stress)
+                NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
         }
 
 

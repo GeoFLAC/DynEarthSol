@@ -990,6 +990,102 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 }
 
+void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Räss et al. (2022), Sec. 2.4, Eq. 36 — PT relaxation of the physical
+    // elastic constitutive update, followed by a plastic return map.
+    //
+    // The physical (elastic trial) target for this time step is
+    //   τ* = τ_old + C : ε̇ Δt,   C:ε̇Δt = λ Δt tr(ε̇) I + 2 G Δt ε̇,
+    // and each PT iteration relaxes the current stress toward it:
+    //   τ^{k+1} = (τ^k + θ_e τ*) / (1 + θ_e),   θ_e = G̃Δτ|_e / (G_e Δt),
+    // then projects τ^{k+1} back onto the yield surface (Mohr-Coulomb +
+    // tension cutoff) so the converged state satisfies both equilibrium and
+    // the yield condition.
+    //
+    // θ_e must be built from the NUMERICAL modulus G̃, not the physical one:
+    // G̃Δτ|_e = Re·CFL·h_e·μ^ve_e/((r+2)·L) (var.PT_Gdtau_e, local per-element
+    // pseudo-stepping — see update_pt_params()), so θ_e ~ h_e/L ≪ 1.
+    // The slow stress build-up is what turns the PT iteration into a damped
+    // wave and permits the large velocity step of update_velocity_PT().
+    // Applying the full physical increment C:ε̇Δt every PT iteration (as
+    // update_stress() does) violates the pseudo-wave CFL by ~L/h → divergence.
+    //
+    // The projection is a PURE return map (zero strain increment) and does
+    // NOT accumulate plastic strain: strain/plstrain/delta_plstrain
+    // bookkeeping is done once per time step by the post-PT corrector call
+    // of update_stress() with the converged velocity (see the main loop).
+    //
+    // NOTE: viscous (Maxwell) relaxation and rate-and-state friction are not
+    // applied during the PT iterations.
+
+    const double dt = var.dt;
+    const bool apply_plastic = (param.mat.rheol_type & MatProps::rh_plastic)
+                            && !(param.mat.rheol_type & MatProps::rh_rsf);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, dt, apply_plastic)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        const double G   = var.mat->shearm(e);
+        const double Gdt = G * dt;
+        if (Gdt <= 0) continue;  // no elastic stiffness; leave stress as is
+
+        const double bulkm  = var.mat->bulkm(e);
+        const double lambda = bulkm - 2.0 / 3.0 * G;
+        const double theta  = (*var.PT_Gdtau_e)[e] / Gdt;
+        const double w0     = 1.0 / (1.0 + theta);
+        const double w1     = theta * w0;
+
+        TensorAccessor s = stress[e];
+
+        double dev = 0;
+        #pragma acc loop seq
+        for (int d = 0; d < NDIMS; ++d)
+            dev += (*var.strain_rate)[e][d];
+        dev *= dt;
+
+        #pragma acc loop seq
+        for (int i = 0; i < NSTR; ++i) {
+            double target = (*var.stress_old)[e][i]
+                            + 2 * Gdt * (*var.strain_rate)[e][i]
+                            + (i < NDIMS ? lambda * dev : 0.0);
+            s[i] = w0 * s[i] + w1 * target;
+        }
+
+        if (apply_plastic) {
+            // Return map with zero strain increment: elasto_plastic() adds
+            // C:de = 0 to the (relaxed) stress and projects it back to the
+            // yield surface if it violates yield; depls is discarded.
+            double amc, anphi, anpsi, hardn, ten_max;
+            var.mat->plastic_props(e, (*var.plstrain)[e],
+                                   amc, anphi, anpsi, hardn, ten_max);
+            const double de0[NSTR] = {0};
+            double depls = 0, dpp = 0;
+            int failure_mode;
+            if (var.mat->is_plane_strain) {
+                double& syy = (*var.stressyy)[e];
+                elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                                 de0, depls, s, syy, failure_mode,
+                                 false, dpp);
+            }
+            else {
+                elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                               de0, depls, s, failure_mode,
+                               false, dpp);
+            }
+        }
+    }
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
 {

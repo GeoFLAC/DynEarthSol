@@ -1019,21 +1019,54 @@ double compute_dt_PT(const Param& param, const Variables& var)
 
 void update_pt_params(const Param& param, Variables& var)
 {
-    // Pre-compute per-PT-loop constants needed by update_velocity_PT():
-    //   var.PT_h_min     = minimum element height over all elements
-    //   var.PT_mu_ve_max = max effective visco-elastic viscosity (Sec. 2.4, Eq. 35):
-    //                      μ^ve = 1 / (1/(G·Δt) + 1/μ_s)
+    // Pre-compute LOCAL pseudo-time-stepping factors (Räss et al. 2022,
+    // Sec. 2.4, localized).  With a single global Δτ the whole domain is
+    // throttled by the smallest element (h_min/L can be ~1e-4 on graded
+    // meshes) and convergence takes O(L/h_min) iterations; with local
+    // factors each region relaxes at its own optimal rate and convergence
+    // is set by the typical element size instead.
     //
+    //   per element: μ^ve_e   = 1 / (1/(G_e·Δt) + 1/μ_s_e)         (Eq. 35)
+    //                G̃Δτ|_e  = Re·CFL·h_e·μ^ve_e / ((r+2)·L)
+    //   per node:    Δτ/ρ̃|_i = CFL·h_i·L / (Re·μ^ve_i), and
+    //                dtau_rho[i] = (Δτ/ρ̃|_i)·NODES_PER_ELEM/volume_n[i]
+    //                with h_i = min h_e and μ^ve_i = max μ^ve_e over the
+    //                adjacent elements (conservative choices that keep the
+    //                local pseudo-wave CFL satisfied at material/size jumps).
+    //
+    // (G̃ = ρ̃·V̂²/(r+2), ρ̃ = Re·μ^ve/(V̂·L), Δτ = CFL·h/V̂; V̂ cancels.)
     // In the viscous limit (G·Δt >> μ_s), μ^ve ≈ μ_s.
     // In the elastic limit (G·Δt << μ_s), μ^ve ≈ G·Δt.
+    //
+    // The global h_min/μ^ve_max/G̃Δτ scalars are kept as diagnostics.
+    //
+    // This is called immediately after calculate_residual_force() which contains
+    // #pragma acc wait, so managed memory is coherent on the host.
 
-    double h_min    = std::numeric_limits<double>::max();
+    const double Re  = param.control.PT_Re;
+    const double CFL = param.control.PT_CFL;
+    const double rp2 = param.control.PT_r + 2.0;
+
+    double L = param.control.PT_char_length;
+    if (L <= 0)
+        L = std::max({param.mesh.xlength, param.mesh.ylength, param.mesh.zlength});
+
+    // resize after remeshing
+    if ((int) var.PT_Gdtau_e->size() != var.nelem)
+        var.PT_Gdtau_e->resize(var.nelem);
+    if ((int) var.PT_dtau_rho->size() != var.nnode)
+        var.PT_dtau_rho->resize(var.nnode);
+
+    double_vec h_e_vec(var.nelem);
+    double_vec mu_ve_vec(var.nelem);
+
+    double h_min     = std::numeric_limits<double>::max();
     double mu_ve_max = 0.0;
 
     #pragma omp parallel for reduction(min:h_min) reduction(max:mu_ve_max) \
-        default(none) shared(param, var)
+        default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L)
     for (int e = 0; e < var.nelem; ++e) {
-        // --- minimum element height (same geometry as compute_dt_PT) ---
+        // --- minimum element height ---
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
@@ -1069,10 +1102,29 @@ void update_pt_params(const Param& param, Variables& var)
             ? 1.0 / (1.0 / (G_e * var.dt) + 1.0 / mu_e)
             : mu_e;
         mu_ve_max = std::max(mu_ve_max, mu_ve_e);
+
+        h_e_vec[e]   = minh;
+        mu_ve_vec[e] = mu_ve_e;
+        (*var.PT_Gdtau_e)[e] = Re * CFL * minh * mu_ve_e / (rp2 * L);
+    }
+
+    // --- nodal Δτ/ρ̃: conservative min-h / max-μ^ve over adjacent elements ---
+    #pragma omp parallel for default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, L)
+    for (int i = 0; i < var.nnode; ++i) {
+        double h_i  = std::numeric_limits<double>::max();
+        double mu_i = 0.0;
+        for (auto e = (*var.support)[i].begin(); e < (*var.support)[i].end(); ++e) {
+            h_i  = std::min(h_i, h_e_vec[*e]);
+            mu_i = std::max(mu_i, mu_ve_vec[*e]);
+        }
+        (*var.PT_dtau_rho)[i] = (mu_i > 0.0)
+            ? CFL * h_i * L * NODES_PER_ELEM / (Re * mu_i * (*var.volume_n)[i])
+            : 0.0;
     }
 
     var.PT_h_min     = h_min;
     var.PT_mu_ve_max = mu_ve_max;
+    var.PT_Gdtau     = Re * CFL * h_min * mu_ve_max / (rp2 * L);
 }
 
 void compute_mass(const Param &param, const Variables &var,

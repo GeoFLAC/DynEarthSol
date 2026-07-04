@@ -658,8 +658,12 @@ struct Variables {
     double dt_PT;
     double l2_residual;
     // Accelerated PT state (updated by update_pt_params() before each PT loop)
-    double PT_h_min;      // minimum element height across all elements
-    double PT_mu_ve_max;  // max effective visco-elastic viscosity: mu^ve = 1/(1/(G*dt) + 1/mu)
+    double PT_h_min;      // minimum element height across all elements (diagnostic)
+    double PT_mu_ve_max;  // max effective visco-elastic viscosity: mu^ve = 1/(1/(G*dt) + 1/mu) (diagnostic)
+    double PT_Gdtau;      // global numerical G~*dtau = Re*CFL*h_min*mu_ve_max/((r+2)*L) (diagnostic)
+    // Local pseudo-time stepping factors (recomputed by update_pt_params()):
+    double_vec *PT_dtau_rho;  // per-node dtau/(rho~*V_node) for update_velocity_PT()
+    double_vec *PT_Gdtau_e;   // per-element numerical G~*dtau for update_stress_PT()
     double reference_frame_time;
     int steps;
     int nremesh;
@@ -775,7 +779,9 @@ struct Variables {
     tensor_t *stress_n;
     double_vec *stressyy_n;
 
-    // tensor_t *stress_old;
+    // Stress at the start of the physical time step; relaxation target
+    // reference for the accelerated PT stress update (Räss et al. 2022, Eq. 36)
+    tensor_t *stress_old;
 
     MatProps *mat;
 
