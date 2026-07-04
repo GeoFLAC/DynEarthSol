@@ -47,28 +47,178 @@ only then advances the physical state.
 
 ### 2.1 First-order vs. second-order pseudo-transient iteration
 
-The naive ("first-order") PT method augments the static equation with a
-pseudo-time derivative, `ρ̃ ∂v/∂τ = ∇·σ + ρg`, and integrates in pseudo-time
-`τ` until the right-hand side vanishes. This is a diffusion-like process: an
-error of wavelength `L` decays on the pseudo-time scale `L²`, so the iteration
-count scales as `O((L/h)²)` — prohibitive for fine meshes.
+The two variants differ in one place only: what the *stress* (or, in a
+diffusion problem, the flux) does between iterations.  The "order" refers to
+the highest pseudo-time derivative acting on the primary field in the
+equivalent single-field equation.
 
-The *accelerated* (second-order) method instead makes the system a **damped
-wave equation**: errors propagate through the domain at a pseudo-wave speed
-(crossing it in `O(L/h)` iterations) while being damped at a rate tuned so the
-slowest, longest-wavelength mode decays optimally. The damping is not applied
-to the momentum equation; it enters through a Maxwell-type relaxation in the
-pseudo-time evolution of the stress. The iteration count then scales as
-`O(L/h)` — the same scaling that makes multigrid-like methods fast, achieved
-with purely local, explicitly parallel updates (ideal for GPUs).
+**First-order PT: the constitutive law is enforced exactly, every iteration.**
+The stress is algebraically slaved to the current velocity — recomputed in
+full as `σ = τ_old + C:ε̇(v^k)Δt` each iteration.  Substituting this into the
+momentum update leaves a single pseudo-time derivative,
 
-### 2.2 Optimal numerical parameters
+```
+ρ̃ ∂v/∂τ = ∇·( CΔt : ε̇(v) ) + (known terms),
+```
+
+a **parabolic** (diffusion) equation in pseudo-time with diffusivity
+`D ~ GΔt/ρ̃`.  There is no wave: the stress has no independent dynamics, so
+nothing stores and returns kinetic information.  Explicit stability caps the
+step at `Δτ ≤ h²/(2d·D)`; the slowest error mode (`k_min = π/L`) then decays
+by only `~(h/L)²` per iteration, so the iteration count scales as
+`O((L/h)² · ln(1/tol))` — prohibitive for fine meshes.  Information spreads
+the way diffusion spreads: incoherently, over a radius `~h√k` after `k`
+iterations.
+
+**Second-order PT: the stress gets its own pseudo-time evolution.**  Instead
+of enforcing the constitutive law, each iteration *relaxes toward* it (the
+θ-update of §2.4 — a Maxwell element in pseudo-time).  Because the stress now
+carries a `∂σ/∂τ` of its own, eliminating it produces a **second**
+pseudo-time derivative of the primary field: the telegraph (damped wave)
+equation analyzed in §2.2.  Information travels coherently — one element per
+iteration, radius `~h·k·CFL` — so a domain crossing costs `O(L/h)`
+iterations, and a correctly tuned damping makes the total count
+`O((L/h) · ln(1/tol))`, achieved with purely local, explicitly parallel
+updates (ideal for GPUs).
+
+In the optimization analogy: first-order PT is Richardson iteration /
+gradient descent, needing `~κ` iterations with condition number
+`κ ~ (L/h)²` for the elliptic operator; second-order PT is Polyak's
+heavy-ball momentum, needing `~√κ = L/h`.  The stress's pseudo-inertia is
+literally the momentum term.
+
+Note that FLAC-style dynamic relaxation — DynEarthSol's native mode — is
+*also* a second-order method in this taxonomy: stress accumulates across
+pseudo-steps and the momentum equation has inertia, so it too is a damped
+wave.  What distinguishes *accelerated* PT is not the wave character but the
+parameter choice.  Dynamic relaxation runs with the physical moduli and
+heuristic damping (`inertial_scaling`, local damping), generally far from
+optimal; the accelerated method derives `ρ̃`, `G̃` and the damping rate
+analytically from the dispersion relation so that the slowest mode is
+critically damped (§2.2).
+
+### 2.2 Dispersion analysis: how critical damping is enforced
+
+Strip the scheme to its 1D scalar essence (elastic limit, `μ_ve = GΔt`).
+Per unit pseudo-time, the two updates read
+
+```
+ρ̃ ∂v/∂τ = ∂σ/∂x                        (momentum — no damping here)
+∂σ/∂τ   = G̃ ∂v/∂x  −  η (σ − τ*)       (stress relaxation)
+```
+
+The second line is the discrete θ-update of §2.4 in continuous form, with
+relaxation rate `η = θ/Δτ = G̃/(GΔt)`.  The numerical modulus `G̃` plays two
+roles at once: it is the spring of the pseudo-wave *and*, through η, the
+dial on the Maxwell-type dissipation.  That is the structural trick of the
+method — all dissipation lives in the constitutive update, none in the
+momentum equation.
+
+**Telegraph equation.**  Differentiate the stress equation in τ, substitute
+`∂v/∂τ` from momentum (the target τ* is constant for the error), and the
+perturbation about the converged state obeys
+
+```
+∂²σ/∂τ² + η ∂σ/∂τ = V̂² ∂²σ/∂x² ,      V̂² ∝ G̃/ρ̃ .
+```
+
+**Dispersion relation.**  A Fourier mode `σ ∝ e^{λτ} e^{ikx}` gives
+
+```
+λ² + η λ + V̂²k² = 0    ⟹    λ = −η/2 ± √( η²/4 − V̂²k² ) .
+```
+
+Each error component, labeled by its wavenumber `k`, decays as:
+
+- **underdamped** (`η < 2V̂k`): complex roots, `Re(λ) = −η/2` — the mode
+  oscillates (a wave sloshing through the domain) while decaying at rate
+  `η/2`, *independent of k*;
+- **overdamped** (`η > 2V̂k`): the slow real root is `λ ≈ −V̂²k²/η` — a
+  diffusive rate `−Dk²` with `D = V̂²/η`.  Overdamping does not merely slow
+  a mode down; it reverts that mode to first-order (parabolic) behavior.
+  In the limit `η → ∞` (stress slaved to velocity) the whole spectrum is
+  diffusive and the `O((L/h)²)` method of §2.1 is recovered;
+- **critical** (`η = 2V̂k`): double root `λ = −V̂k` — the fastest decay that
+  wavenumber can achieve.
+
+**Critical damping as a min–max choice.**  There is one knob, η, and a
+spectrum of modes from `k_min = π/L` (the largest error structure the domain
+can hold) up to `k_max ~ π/h`; one η can critically damp only one k.  The
+iteration converges at the pace of its *slowest* mode, so η is chosen to
+maximize the minimum decay rate.  Underdamped modes (`k > η/2V̂`) decay at
+`η/2` — raising η helps them; overdamped modes decay at `V̂²k²/η` — raising η
+hurts them.  The optimum places the boundary between the regimes exactly at
+the smallest wavenumber:
+
+```
+η* = 2 V̂ k_min = 2π V̂ / L .
+```
+
+Then the `k_min` mode is exactly critical (rate `V̂ k_min`) and every other
+mode is underdamped with the *same* rate `η*/2 = V̂ k_min`: the entire
+spectrum decays uniformly, the best achievable bound.  Nudge η either way
+and the minimum drops.
+
+**Iteration count.**  The discrete scheme must also resolve the fastest wave
+stably — that is where CFL enters: `Δτ = CFL·h/V̂`.  The decay per iteration
+of every mode is then
+
+```
+|λ| Δτ = V̂ k_min · CFL·h/V̂ = π · CFL · h / L ,
+```
+
+so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations — the
+`O(L/h)` scaling, now with its constant.  Note that V̂ cancels here exactly
+as it does in the implementation: only the combinations `Δτ/ρ̃` and `G̃Δτ`
+are ever needed, which is why the code never chooses a wave speed.
+
+**Where Re comes from.**  From the definitions in §2.3,
+
+```
+η = G̃/(GΔt) = [ ρ̃V̂²/(r+2) ] / μ_ve = Re · V̂ / ((r+2)·L) .
+```
+
+Setting this equal to `η* = 2πV̂/L` gives
+
+```
+Re* = 2π (r+2) ≈ 15.7      (r = 0.5) ,
+```
+
+within 5% of the default `Re = 3√10·π/2 ≈ 14.93`, which comes from the same
+analysis carried out for the full coupled vector system (velocity +
+pressure, with r-dependent P- and S-wave branches) instead of the scalar
+telegraph equation.  The identity is the point: **`Re` is the
+damping-to-wave-crossing ratio `η·L/V̂` (up to the `(r+2)` factor), and its
+optimal value is the one that places the slowest mode at critical damping.**
+
+Three practical consequences follow directly:
+
+- **`PT_char_length` *is* `k_min`.**  Set L twice too large and η is half
+  the critical value: every mode is underdamped, convergence is ~2× slower,
+  and the residual *rings* (oscillates) as the error wave sloshes across
+  the domain.  Set L too small and the true `k_min` mode goes overdamped:
+  the residual drops fast at first (short modes die) and then crawls
+  through a long, smooth diffusive tail.  These two log signatures tell you
+  which way L (or Re) is mistuned — see §3.4.
+- **The momentum update must stay undamped.**  Adding FLAC local damping to
+  the velocity update moves the root structure the analysis assumes; that
+  is why `apply_damping` is gated out during PT iterations — it is not
+  merely redundant, it detunes the root locus that Re was chosen to
+  produce.
+- **Enforcing the constitutive law exactly (θ = 1, i.e. `ηΔτ = 1`) while
+  stepping the velocity at the wave-sized Δτ is not a slow scheme but an
+  unstable one.**  Discrete stability of the damped-wave update requires
+  the per-step damping `ηΔτ ~ 2πh/L ≪ 1` alongside `V̂Δτ ≤ CFL·h`.  A
+  parabolic operator advanced at hyperbolic step sizes leaves the unit
+  circle — this was the original divergence on this branch.
+
+### 2.3 Optimal numerical parameters
 
 The scheme has three numerical parameters (Räss et al. 2022, Sec. 2.4):
 
 | symbol | meaning | control name | default |
 |---|---|---|---|
-| `Re`  | numerical "Reynolds number": ratio of pseudo-inertia to viscous relaxation; sets the damping of the slowest mode | `control.PT_Re` | `3√10/2·π ≈ 14.93` (optimal for the Stokes-like problem) |
+| `Re`  | numerical "Reynolds number": ratio of pseudo-inertia to viscous relaxation; sets the damping of the slowest mode at its critical value (derivation in §2.2) | `control.PT_Re` | `3√10/2·π ≈ 14.93` (optimal for the Stokes-like problem) |
 | `CFL` | pseudo-wave Courant number | `control.PT_CFL` | `0.9/√NDIMS` |
 | `r`   | ratio of numerical bulk to shear modulus `K̃/G̃` | `control.PT_r` | `0.5` |
 
@@ -99,7 +249,7 @@ one time step (Räss et al. Eq. 35):
 For DynEarthSol's elastic and elasto-plastic rheologies (`μ_s` effectively
 infinite) this reduces to `μ_ve = G·Δt`.
 
-### 2.3 The two updates
+### 2.4 The two updates
 
 Each PT iteration `k` performs, in order:
 
@@ -132,7 +282,7 @@ projected back onto the yield surface (Mohr–Coulomb + tension cutoff) by
 calling the standard return map with a *zero* strain increment. The projection
 is non-expansive, so it does not destabilize the iteration, and its fixed
 point satisfies both equilibrium and the yield condition. Plastic strain is
-**not** accumulated during PT iterations (see §2.6).
+**not** accumulated during PT iterations (see §2.7).
 
 **Velocity update** (`update_velocity_PT()`, fields.cxx):
 
@@ -147,7 +297,7 @@ volume. There is *no* velocity damping and *no* FLAC local damping in this
 update — all dissipation comes from the stress relaxation, whose rate the
 optimal `Re` controls.
 
-### 2.4 Local pseudo-time stepping
+### 2.5 Local pseudo-time stepping
 
 Räss et al. derive the parameters for a uniform grid spacing `h`. On graded
 unstructured meshes a single global `h = h_min` throttles the entire domain to
@@ -167,7 +317,7 @@ relaxes at its own optimal rate, and the iteration count is governed by the
 *typical* element count across the domain, not by the smallest element. In
 practice this reduced a >50 000-iteration solve to a few hundred iterations.
 
-### 2.5 What is (deliberately) frozen during PT iterations
+### 2.6 What is (deliberately) frozen during PT iterations
 
 - **The mesh.** The PT velocity is a relaxation iterate, not a physical
   velocity; advecting nodes with it (`coord += v Δt`) progressively distorts
@@ -179,13 +329,13 @@ practice this reduced a >50 000-iteration solve to a few hundred iterations.
 - **Surface processes, thermal/hydraulic diffusion, plastic-strain
   bookkeeping** — all applied once per physical step, outside the PT loop.
 
-### 2.6 Predictor–corrector structure of a time step
+### 2.7 Predictor–corrector structure of a time step
 
 For `control.has_PT = yes` the main loop executes each step as:
 
 1. Save `τ_old` (`copy_stress_PT` → `var.stress_old`).
 2. Assemble forces of the `τ_old` state; record the initial residual and the
-   characteristic force scale (§2.7).
+   characteristic force scale (§2.8).
 3. `update_pt_params()` — recompute the local PT factors.
 4. **PT loop** (up to `PT_max_iter`): `apply_vbcs → update_strain_rate →
    update_stress_PT (relax + project) → update_force → update_velocity_PT →
@@ -203,7 +353,7 @@ For `control.has_PT = yes` the main loop executes each step as:
 The corrector's stress is (up to the relaxation tolerance) the same operation
 the PT loop converged on, so the post-correction imbalance remains small.
 
-### 2.7 Convergence criterion: unbalanced-force ratio
+### 2.8 Convergence criterion: unbalanced-force ratio
 
 The residual is the L2 (RMS-per-DOF) norm of the **true out-of-balance
 force**: everything assembled into `force` — internal tractions, gravity,
@@ -254,9 +404,14 @@ PT_r = 0.5             # K~/G~ ratio
 PT_char_length = 0     # characteristic length L; 0 = max(xlength,ylength,zlength)
 ```
 
-You should rarely need to change these. If a model shows late-stage residual
-oscillation or a very slow tail, the first thing to try is lowering `PT_CFL`
-(e.g. 0.3); the second is increasing `PT_Re` slightly.
+You should rarely need to change these.  The one parameter worth a conscious
+choice is `PT_char_length`: it stands for the longest error wavelength the
+damping is tuned to (`k_min = π/L`, §2.2), so it should approximate the
+largest linear dimension of the *deforming* region.  The default (largest
+mesh dimension) is right unless deformation is confined to a small part of a
+large domain.  `PT_CFL` is a stability margin — lower it (e.g. 0.3) only if
+the residual grows.  For the under-/over-damping symptoms and which way to
+move `PT_char_length` or `PT_Re`, see §3.4.
 
 ### 3.2 Reading the log
 
@@ -297,6 +452,13 @@ geometric), so this is cheap.
   relax their own neighborhood more carefully). Still, near-degenerate
   elements harm stress accuracy locally; if the log reports an `h_min` orders
   of magnitude below your nominal resolution, inspect the mesh.
+- **Residual oscillates ("rings") while decaying slowly** → the slow modes
+  are underdamped: `PT_char_length` is larger than the actual deforming
+  region (or `PT_Re` is too small).  **Residual drops fast at first, then
+  crawls through a long smooth tail** → the slowest mode is overdamped:
+  `PT_char_length` is too small (or `PT_Re` too large).  These are the two
+  sides of the critical-damping optimum of §2.2; adjust `PT_char_length`
+  first, `PT_Re` second.
 - **Residual stalls at a plateau well above tolerance.** Likely causes, in
   order: (a) large regions at plastic yield — the coupled
   equilibrium-with-yield problem is genuinely harder; consider more steps
