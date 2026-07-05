@@ -73,6 +73,8 @@ public:
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
                                  int state_model) const;
+    #pragma acc routine seq
+    double pls_weakening_allowance(int e, double pls, double f) const;
 
     const bool is_plane_strain;
     const double visc_min;

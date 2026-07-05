@@ -455,21 +455,33 @@ entirely, and crossing a segment boundary (`pls0` or `pls1`) invalidates
 even that linearization.  Under DR the tiny `dt_elastic` masked all of
 this; with the PT step, an advection-bound `Δt` can push a nucleating
 shear band across its *entire* ramp in one step using intact-strength
-parameters.  The cap is adaptive:
+parameters.  The cap is adaptive and evaluated **per element**:
 
 ```
-dt ≤ PT_dpls_fraction · (pls1−pls0)_min · Δt_prev / max_e(Δε_pl,e)
+dt ≤ Δt_prev · min_e( A_e / Δε_pl,e )
 ```
 
-where `Δε_pl,e` is the previous step's `delta_plstrain` and the max runs
-only over elements still on a ramp (`plstrain < max pls1` — saturated
-bands keep straining but their parameters no longer change).  Since
-`Δε_pl ≈ rate·Δt_prev`, the cap settles directly at
-`Δt ≈ f·w/rate` — it tightens while a band actively weakens and relaxes
-once the band saturates.  Zero-width ramps (`pls0 = pls1`) are parameter
-jumps no step size can resolve and are skipped.  The one-step reaction lag
-at band *initiation* is absorbed by the safety fraction
-(`PT_dpls_fraction`, default 0.1; 0 disables).
+where `Δε_pl,e` is the previous step's `delta_plstrain` (elements with
+none impose no limit) and `A_e` is the element's *allowance* — the
+admissible increment given where it sits on the weakening curves of its
+constituent materials (`pls_weakening_allowance()`, evaluated per material
+present in the element via `elemmarkers`, so mixed-material elements whose
+effective curve has breakpoints from several ramps are handled):
+
+- **on a ramp** (`pls0 ≤ pls < pls1`): `A = f·(pls1−pls0)` — at most a
+  fraction `f` of the ramp per step;
+- **below a ramp** (`pls < pls0`): `A = (pls0−pls) + f·(pls1−pls0)` — the
+  flat run-up is free, plus the same entry allowance, so distant elements
+  never throttle `dt` and the cap can never collapse to zero at a
+  breakpoint;
+- **saturated** (`pls ≥ pls1`) or **zero-width ramp** (`pls0 = pls1`, a
+  parameter jump no step size can resolve): no limit from that material.
+
+Since `Δε_pl ≈ rate·Δt_prev`, the cap settles directly at
+`Δt ≈ A/rate` for the tightest element — it tightens while a band
+actively weakens and relaxes once the band saturates.  The one-step
+reaction lag at band *initiation* is absorbed by the safety fraction
+(`f = PT_dpls_fraction`, default 0.1; 0 disables).
 
 The resulting `Δt` is typically orders of magnitude larger than the DR step
 (×`inertial_scaling` when advection binds).  This is safe for the *solver*

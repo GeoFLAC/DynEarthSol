@@ -397,11 +397,13 @@ static void declare_parameters(po::options_description &cfg,
          "-1 = auto (two pseudo-wave domain crossings, 2*L/(CFL*h_mean));\n"
          "0 = disabled (iterate until tolerance or PT_max_iter).\n")
         ("control.PT_dpls_fraction", po::value<double>(&p.control.PT_dpls_fraction)->default_value(0.1),
-         "PT mode only: cap dt so that no element still on its piecewise-linear\n"
-         "weakening ramp gains more plastic strain per step than this fraction\n"
-         "of the ramp width (pls1 - pls0).  The increment is estimated from the\n"
-         "previous step's delta_plstrain, so the cap adapts to the fastest\n"
-         "active shear band.  0 = disabled.\n")
+         "PT mode only: cap dt so that no element traverses more than this\n"
+         "fraction of its piecewise-linear weakening ramp (pls1 - pls0) per\n"
+         "step.  Evaluated per element against the curves of its constituent\n"
+         "materials: saturated elements impose no limit, and elements below a\n"
+         "ramp get the flat run-up to pls0 for free.  The increment is\n"
+         "estimated from the previous step's delta_plstrain, so the cap adapts\n"
+         "to the fastest active shear band.  0 = disabled.\n")
         ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
          "Accelerated PT numerical Reynolds number Re (Räss et al. 2022, Eq. 31).\n"
          "Optimal value for 2D/3D Stokes: 3*sqrt(10)/2*pi ≈ 14.93.\n")

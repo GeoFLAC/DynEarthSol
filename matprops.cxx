@@ -528,6 +528,29 @@ void MatProps::plastic_props(int e, double pls,
     ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
+double MatProps::pls_weakening_allowance(int e, double pls, double f) const
+{
+    // Allowed plastic-strain increment for this element before the
+    // piecewise-linear weakening curve becomes under-resolved (the yield
+    // parameters are evaluated at the start-of-step pls; see the weakening
+    // dt limit in compute_dt_PT()).  Per constituent material: on the ramp
+    // a step may traverse at most f*(pls1-pls0); below the ramp the flat
+    // run-up to pls0 is free on top of that.  Saturated materials and
+    // zero-width ramps (parameter jumps no step size resolves) impose no
+    // limit.
+    double allow = 1e308;
+    for (int m=0; m<nmat; m++) {
+        if (elemmarkers[e][m] == 0) continue;
+        double w = pls1[m] - pls0[m];
+        if (w <= 0) continue;
+        if (pls >= pls1[m]) continue;
+        double a = f * w;
+        if (pls < pls0[m]) a += pls0[m] - pls;
+        allow = std::min(allow, a);
+    }
+    return allow;
+}
+
 void MatProps::plastic_props_rsf(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
                              double& hardn, double& ten_max, double& slip_rate,
