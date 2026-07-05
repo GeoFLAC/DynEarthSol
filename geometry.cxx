@@ -1095,9 +1095,10 @@ void update_pt_params(const Param& param, Variables& var)
     double_vec mu_ve_vec(var.nelem);
 
     double h_min     = std::numeric_limits<double>::max();
+    double h_sum     = 0.0;
     double mu_ve_max = 0.0;
 
-    #pragma omp parallel for reduction(min:h_min) reduction(max:mu_ve_max) \
+    #pragma omp parallel for reduction(min:h_min) reduction(+:h_sum) reduction(max:mu_ve_max) \
         default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L)
     for (int e = 0; e < var.nelem; ++e) {
         // --- minimum element height ---
@@ -1127,6 +1128,7 @@ void update_pt_params(const Param& param, Variables& var)
         }
 #endif
         h_min = std::min(h_min, minh);
+        h_sum += minh;
 
         // --- effective visco-elastic viscosity (Räss et al. 2022, Eq. 35) ---
         double G_e  = var.mat->shearm(e);
@@ -1157,6 +1159,8 @@ void update_pt_params(const Param& param, Variables& var)
     }
 
     var.PT_h_min     = h_min;
+    var.PT_h_mean    = h_sum / var.nelem;
+    var.PT_L         = L;
     var.PT_mu_ve_max = mu_ve_max;
     var.PT_Gdtau     = Re * CFL * h_min * mu_ve_max / (rp2 * L);
 }

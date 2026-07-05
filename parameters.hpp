@@ -253,6 +253,7 @@ struct Control {
     int PT_max_iter;
     double PT_relative_tolerance;
     int PT_info_interval;
+    int PT_stagnation_window;
     // Accelerated PT parameters (Räss et al. 2022, Sec. 2.4)
     double PT_Re;          // numerical Reynolds number (default: 3*sqrt(10)/2*pi ≈ 14.93)
     double PT_CFL;         // CFL-like stability factor (default: 0.9/sqrt(NDIMS))
@@ -658,6 +659,8 @@ struct Variables {
     double l2_residual;
     // Accelerated PT state (updated by update_pt_params() before each PT loop)
     double PT_h_min;      // minimum element height across all elements (diagnostic)
+    double PT_h_mean;     // mean element height (sets the stagnation-check window)
+    double PT_L;          // characteristic domain length L actually used
     double PT_mu_ve_max;  // max effective visco-elastic viscosity: mu^ve = 1/(1/(G*dt) + 1/mu) (diagnostic)
     double PT_Gdtau;      // global numerical G~*dtau = Re*CFL*h_min*mu_ve_max/((r+2)*L) (diagnostic)
     // Local pseudo-time stepping factors (recomputed by update_pt_params()):

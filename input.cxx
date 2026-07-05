@@ -389,6 +389,13 @@ static void declare_parameters(po::options_description &cfg,
          "tolerance for relative change for breaking PT loop")
         ("control.PT_info_interval", po::value<int>(&p.control.PT_info_interval)->default_value(0),
          "Print PT loop progress every N iterations (0 = silent).")
+        ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(-1),
+         "Exit the PT loop early if the best residual improves by less than 0.1%\n"
+         "over two consecutive windows of this many iterations (nonlinear\n"
+         "stagnation, e.g. the plastic projection floor).  A warning reports\n"
+         "the achieved residual level.\n"
+         "-1 = auto (two pseudo-wave domain crossings, 2*L/(CFL*h_mean));\n"
+         "0 = disabled (iterate until tolerance or PT_max_iter).\n")
         ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
          "Accelerated PT numerical Reynolds number Re (Räss et al. 2022, Eq. 31).\n"
          "Optimal value for 2D/3D Stokes: 3*sqrt(10)/2*pi ≈ 14.93.\n")

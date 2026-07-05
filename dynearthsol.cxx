@@ -533,6 +533,20 @@ void isostasy_adjustment(const Param &param, Variables &var)
 #endif
 }
 
+// Iteration window for the PT stagnation check.  Auto (<0): two pseudo-wave
+// domain crossings, 2*L/(CFL*h_mean).  The best-so-far residual of an
+// underdamped iteration improves only when an oscillation dips to a new
+// low — roughly once per crossing — so a fixed short window misreads
+// healthy ringing as stagnation.  Must be called after update_pt_params().
+static int pt_stagnation_window(const Param& param, const Variables& var)
+{
+    int w = param.control.PT_stagnation_window;
+    if (w < 0)
+        w = std::max(500, (int)(2.0 * var.PT_L /
+                                (param.control.PT_CFL * var.PT_h_mean)));
+    return w;
+}
+
 void initial_body_force_adjustment(const Param &param, Variables &var)
 {
 #ifdef NPROF_DETAIL
@@ -562,6 +576,11 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         // τ_old = current (initial-condition) stress; PT relaxes toward
         // τ_old + C:ε̇Δt, i.e. a single static elastic adjustment solve.
         copy_stress_PT(*var.stress, *var.stress_old);
+        // Stagnation detection (see main loop).
+        const int stag_window = pt_stagnation_window(param, var);
+        double best_residual = std::numeric_limits<double>::max();
+        double best_at_last_check = std::numeric_limits<double>::max();
+        int stag_strikes = 0;
         param.control.PT_jump = true;
         for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
         {
@@ -588,6 +607,22 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
                               << ": residual = " << var.l2_residual
                               << " (residual/residual_0 = " << rel_residual << ")\n";
                 break;
+            }
+            best_residual = std::min(best_residual, var.l2_residual);
+            if (stag_window > 0 && pt_step > 0 && pt_step % stag_window == 0) {
+                if (best_residual > 0.999 * best_at_last_check) {
+                    if (++stag_strikes >= 2) {
+                        std::cout << "  PT (init) stagnated at iter " << pt_step
+                                  << ": residual = " << var.l2_residual
+                                  << " (residual/residual_0 = " << rel_residual
+                                  << " > tolerance " << param.control.PT_relative_tolerance
+                                  << "); accepting current state.\n";
+                        break;
+                    }
+                }
+                else
+                    stag_strikes = 0;
+                best_at_last_check = best_residual;
             }
         }
         param.control.PT_jump = false;
@@ -836,6 +871,15 @@ int main(int argc, const char* argv[])
                 hydraulic_diffusion_switch = true;
             }
 
+            // Stagnation detection: with large physical steps the nonsmooth
+            // plastic projection can floor the residual above the tolerance;
+            // stop iterating once the best residual stops improving instead
+            // of burning the rest of PT_max_iter.  Two consecutive stagnant
+            // windows are required (hysteresis against ringing).
+            const int stag_window = pt_stagnation_window(param, var);
+            double best_residual = std::numeric_limits<double>::max();
+            double best_at_last_check = std::numeric_limits<double>::max();
+            int stag_strikes = 0;
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
             {
@@ -862,6 +906,22 @@ int main(int argc, const char* argv[])
                                   << " (residual/residual_0 = " << rel_residual << ")\n";
                     break;
                 }
+                best_residual = std::min(best_residual, var.l2_residual);
+                if (stag_window > 0 && pt_step > 0 && pt_step % stag_window == 0) {
+                    if (best_residual > 0.999 * best_at_last_check) {
+                        if (++stag_strikes >= 2) {
+                            std::cout << "  PT stagnated at iter " << pt_step
+                                      << ": residual = " << var.l2_residual
+                                      << " (residual/residual_0 = " << rel_residual
+                                      << " > tolerance " << param.control.PT_relative_tolerance
+                                      << "); accepting current state.\n";
+                            break;
+                        }
+                    }
+                    else
+                        stag_strikes = 0;
+                    best_at_last_check = best_residual;
+                }
                 // var.dt = std::min({var.dt*1.01, dt_copy});
 
                 if (param.mesh.quality_check_step_interval > 0 &&
@@ -886,6 +946,12 @@ int main(int argc, const char* argv[])
                             // interpolated stress.
                             update_pt_params(param, var);
                             copy_stress_PT(*var.stress, *var.stress_old);
+
+                            // The residual legitimately jumps after remesh;
+                            // restart the stagnation trackers.
+                            best_residual = std::numeric_limits<double>::max();
+                            best_at_last_check = std::numeric_limits<double>::max();
+                            stag_strikes = 0;
 
                             if (param.sim.has_output_during_remeshing) {
                                 var.output->write_exact(var);
