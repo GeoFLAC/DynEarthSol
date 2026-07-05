@@ -425,6 +425,85 @@ can never decrease by the tolerance factor and the loop spins for
 remain. The attainable floor of the new ratio is machine precision
 (`~10⁻¹⁶`), so tolerances down to `~10⁻¹²` are meaningful.
 
+### 2.9 The physical time step in PT mode
+
+In dynamic relaxation the physical step `Δt` does double duty: it is the
+*stability* step of the pseudo-time march (the mass-scaled wave CFL,
+`dt_elastic = 0.5·h_min/(v_bc·inertial_scaling)`, usually the binding limit
+in quasi-static runs) **and** the *physical* step for constitutive updates
+and mesh advection.  PT separates those roles: the iteration's stability
+comes entirely from its own pseudo-time parameters, so `dt_elastic` no
+longer has a job.
+
+In PT mode, `compute_dt_PT()` therefore caps `Δt` only by the physics the
+outer loop integrates explicitly:
+
+- **mesh advection** — `0.5·h_min / max(v_actual, v_bc)`, so no node moves
+  more than half the smallest element per step;
+- **Maxwell relaxation** — `0.5·visc_min/G`;
+- **thermal / hydraulic diffusion** when those (explicit) updates are on;
+- times `dt_fraction`; `fixed_dt` overrides everything.  If no finite limit
+  applies, it falls back to the DR step.
+
+The resulting `Δt` is typically orders of magnitude larger than the DR step
+(×`inertial_scaling` when advection binds).  This is safe for the *solver*
+because `Δt` cancels out of the PT convergence rate by construction: both
+pseudo-time factors contain `μ_ve` in opposite positions
+(`Δτ/ρ̃ ∝ 1/μ_ve`, `G̃Δτ ∝ μ_ve`), so the pseudo-wave CFL and the
+per-iteration decay `~π·CFL·h/L` (§2.2) are `Δt`-free, as is the
+relaxation weight `θ_e = Re·CFL·h_e/((r+2)L)`.  A larger `Δt` only enlarges
+the load increment per step, which costs iterations *logarithmically* (a
+larger starting residual relative to the gross force) — the rate is
+untouched.  What a large `Δt` does affect is **accuracy**: the plastic
+path is resolved in coarser stress increments (see §2.10 for the
+consequence), and viscoelastic elements shift along the `μ_ve` spectrum
+between `GΔt` and `μ`.  Throttle with `dt_fraction` when that matters.
+
+Dynamic-relaxation mode is untouched: all of this is gated on `has_PT`,
+and `isostasy_adjustment` (which marches DR internally) keeps the DR step
+even in PT runs.
+
+### 2.10 Stagnation exit: the nonlinear residual floor
+
+The convergence theory of §2.2 is linear.  With plasticity, each iteration
+ends in a non-expansive yield projection (§2.4), and when the load
+increment per step is large — precisely the regime the PT time step of
+§2.9 enables — a sizeable population of elements sits *at* yield.  The
+iteration can then enter a **limit cycle**: elements alternate between the
+elastic relaxation pulling stress outside the yield surface and the
+projection snapping it back, and the residual oscillates on a plateau
+instead of decaying.  The plateau level (typically `10⁻⁶`–`10⁻⁴` of gross
+force, rising with increment size) is the accuracy the nonsmooth problem
+admits at that increment; iterating past it accomplishes nothing, and
+without an exit every such step burns all of `PT_max_iter`.
+
+The loop therefore detects stagnation: it tracks the best residual seen
+and, at the end of each *check window*, tests whether it improved by at
+least 0.1%; two consecutive failed windows end the loop with a warning
+that reports the achieved level.  Two design points matter:
+
+- **The window is measured in domain crossings, not iterations.**  A
+  near-critically damped iteration *rings*: the residual oscillates while
+  its envelope decays, so the best-so-far improves in bursts, roughly once
+  per ring period — which is of the order of a pseudo-wave domain
+  crossing, `L/(CFL·h)` iterations.  A short fixed window (say 200
+  iterations) reads the flat stretch between bursts as stagnation and
+  exits while the envelope is still falling (observed: exits during 4%-
+  per-200-iterations decay).  The auto window is two crossings,
+  `2L/(CFL·h_mean)`, with `h_mean` the mean element height — not `h_min`,
+  because with local pseudo-time stepping (§2.5) the crossing time is set
+  by typical elements, not the worst sliver.
+- **The trackers reset after an in-PT remesh**, where the residual
+  legitimately jumps.
+
+The exit is controlled by `control.PT_stagnation_window`
+(`-1` = auto as above, `0` = disabled, `N` = fixed window of `N`
+iterations).  Steps that can reach the tolerance still do — the exit needs
+at least two windows of no progress to fire.  If the reported stagnation
+levels are higher than you can accept, reduce the increment size
+(`dt_fraction`): smaller steps mean smaller excursions past yield and a
+lower floor.
+
 ## 3. Practical usage
 
 ### 3.1 Minimal configuration
@@ -440,11 +519,19 @@ PT_info_interval = 100       # print residual every N PT iterations (0 = quiet)
 Everything else has sensible defaults. The optional tuning knobs:
 
 ```ini
-PT_Re = 14.93          # numerical Reynolds number (default 3*sqrt(10)/2*pi)
-PT_CFL = 0.5196        # pseudo-wave CFL (default 0.9/sqrt(NDIMS))
-PT_r = 0.5             # K~/G~ ratio
-PT_char_length = 0     # characteristic length L; 0 = max(xlength,ylength,zlength)
+PT_Re = 14.93              # numerical Reynolds number (default 3*sqrt(10)/2*pi)
+PT_CFL = 0.5196            # pseudo-wave CFL (default 0.9/sqrt(NDIMS))
+PT_r = 0.5                 # K~/G~ ratio
+PT_char_length = 0         # characteristic length L; 0 = max(xlength,ylength,zlength)
+PT_stagnation_window = -1  # early exit on residual plateau (§2.10);
+                           # -1 = auto (2L/(CFL*h_mean)), 0 = off, N = fixed
 ```
+
+Note that in PT mode the physical time step is no longer limited by the
+dynamic-relaxation stability step (§2.9) — expect `Δt` (and hence the load
+increment per step) to be orders of magnitude larger than in a DR run of
+the same model.  `dt_fraction` and `fixed_dt` still apply and are the way
+to trade step size against plastic-path accuracy.
 
 You should rarely need to change these.  The one parameter worth a conscious
 choice is `PT_char_length`: it stands for the longest error wavelength the
@@ -475,6 +562,17 @@ PT converged at iter 193: residual = 7.53511e+08 (residual/residual_0 = 0.000001
 - A healthy run converges in `O(100)` iterations per step (a few hundred for
   strongly graded meshes or after large load changes). If steps routinely hit
   `PT_max_iter`, see §3.4.
+- A step may instead end with
+
+  ```
+  PT stagnated at iter 8000: residual = 2.83557e+09 (residual/residual_0 = 0.000004 > tolerance 1e-06); accepting current state.
+  ```
+
+  — the residual plateaued (§2.10) and the loop accepted the achieved
+  level, here `4·10⁻⁶` of gross force.  Occasional stagnation slightly
+  above the tolerance is normal for elasto-plastic runs with large steps;
+  if the reported levels are too high for your purposes, reduce
+  `dt_fraction`.
 
 ### 3.3 Choosing the tolerance
 
@@ -504,16 +602,23 @@ geometric), so this is cheap.
 - **Residual stalls at a plateau well above tolerance.** Likely causes, in
   order: (a) large regions at plastic yield — the coupled
   equilibrium-with-yield problem is genuinely harder; consider more steps
-  (smaller `Δt`) or slightly relaxed tolerance; (b) an unbalanced boundary
-  condition the residual legitimately measures (e.g. a traction BC
-  inconsistent with the interior state).
+  (smaller `Δt` via `dt_fraction`) or slightly relaxed tolerance; (b) an
+  unbalanced boundary condition the residual legitimately measures (e.g. a
+  traction BC inconsistent with the interior state).  The stagnation exit
+  (§2.10) detects case (a) and ends the step at the plateau instead of
+  burning `PT_max_iter`; watch the reported levels across steps — a slow
+  upward drift tracks the growth of the localized plastic zone.
 - **Residual grows.** Should not happen with default parameters; if it does,
   reduce `PT_CFL`. Persistent growth indicates a configuration the stability
   analysis does not cover — please report it.
 - **Steps that hit `PT_max_iter` leave the last (unconverged) velocity
   iterate in `vel`**, which then advects the mesh. A run where many steps do
   this will produce distorted meshes and remeshing failures — treat
-  `PT_max_iter` as a safety net, not an operating mode.
+  `PT_max_iter` as a safety net, not an operating mode.  With the
+  stagnation exit enabled (the default) this should essentially never
+  happen: plateaued steps end at the plateau with a near-equilibrated
+  velocity.  If you disabled the exit (`PT_stagnation_window = 0`) and see
+  `PT_max_iter` hits, re-enable it or lower `dt_fraction`.
 
 ### 3.5 Interaction with other features
 
@@ -539,6 +644,8 @@ geometric), so this is cheap.
 | `calculate_characteristic_force()` | fields.cxx | gross-force scale for convergence test |
 | `calculate_residual_force()` | fields.cxx | RMS out-of-balance force |
 | `update_force()` (residual section) | fields.cxx | BC-inclusive, DOF-masked residual assembly |
+| `compute_dt_PT()` | geometry.cxx | physical `Δt` without the DR stability limit (§2.9) |
+| `pt_stagnation_window()` | dynearthsol.cxx | auto check window, `2L/(CFL·h_mean)` (§2.10) |
 | PT loops + predictor–corrector | dynearthsol.cxx | step orchestration |
 
 ## 4. References
