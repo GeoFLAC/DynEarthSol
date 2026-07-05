@@ -3075,8 +3075,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (1.0 + (*var.volume_old)[e]);
 
-    if(param.control.use_global_velocity_scaling)
-        var.dt = compute_dt(param, var);
+    // Refresh dt on the NEW mesh unconditionally. dt is otherwise only recomputed every
+    // slow_updates_interval (10) steps in the main loop, so a remesh that refines the mesh
+    // (smaller minl -> smaller stable dt) would run up to 10 steps on the stale, too-large
+    // dt -- enough for an explicit CFL runaway to invert elements (then the step-10
+    // compute_dt hits negative volumes and dies with "dt <= 0"). compute_mass below
+    // consumes var.dt, so the refresh must come first.
+    var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 
