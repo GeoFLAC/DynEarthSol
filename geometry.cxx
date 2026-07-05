@@ -922,7 +922,13 @@ double compute_dt(const Param& param, Variables& var)
     return dt;
 }
 
-double compute_dt_PT(const Param& param, const Variables& var)
+// Physical time step for PT mode.  The PT loop supplies its own pseudo-time
+// stability (update_pt_params), so the dynamic-relaxation dt_elastic limit
+// (mass-scaled wave CFL) is deliberately dropped: dt is capped only by the
+// physics that the outer loop integrates explicitly — mesh advection, Maxwell
+// relaxation and (if enabled) thermal/hydraulic diffusion.  DR mode keeps
+// using compute_dt() unchanged.
+double compute_dt_PT(const Param& param, Variables& var)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -935,14 +941,36 @@ double compute_dt_PT(const Param& param, const Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
+    double global_max_vem = 0.0;
 
-    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-        default(none) shared(param,var)
-    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
+#ifndef ACC
+    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) \
+        reduction(max:global_max_vem) default(none) shared(param,var)
+#endif
+    #pragma acc parallel loop gang vector reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) \
+        reduction(max:global_max_vem) async
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
+
+        // mean velocity magnitude of this element (mesh advection speed)
+        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
+        double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
+        double weight = 1.0 / NODES_PER_ELEM;
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            vx_element += v[j][0] * weight;
+            vy_element += v[j][1] * weight;
+#ifdef THREED
+            vz_element += v[j][2] * weight;
+#endif
+        }
+#ifdef THREED
+        double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element + vz_element*vz_element);
+#else
+        double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element);
+#endif
+        global_max_vem = std::max(global_max_vem, max_vem);
 
         ConstArrayAccessor a = (*var.coord)[n0];
         ConstArrayAccessor b = (*var.coord)[n1];
@@ -973,23 +1001,22 @@ double compute_dt_PT(const Param& param, const Variables& var)
 #endif
         dt_maxwell = std::min(dt_maxwell,
                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
-        // if (param.control.has_thermal_diffusion)
-        //     dt_diffusion = std::min(dt_diffusion,
-        //                             0.5 * minh * minh / var.mat->therm_diff_max);
-        
-        // // Compute dt_hydro_diffusion (hydraulic)
-        // if (var.mat->hydro_diff_max > 0) {
-        //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-        //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-        // }
+        if (param.control.has_thermal_diffusion)
+            dt_diffusion = std::min(dt_diffusion,
+                                    0.5 * minh * minh / var.mat->therm_diff_max);
+        if (param.control.has_hydraulic_diffusion)
+            if (var.mat->hydro_diff_max > 0)
+                dt_hydro_diffusion = std::min(dt_hydro_diffusion,
+                                              0.5 * minh * minh / var.mat->hydro_diff_max);
         minl = std::min(minl, minh);
     }
 
+    #pragma acc wait
 
     // max_vbc_val is maximum boundary velocity
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
-        max_vbc_val = var.max_vbc_val; 
+        max_vbc_val = var.max_vbc_val;
 
         if (param.control.surface_process_option > 0)
             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
@@ -997,19 +1024,26 @@ double compute_dt_PT(const Param& param, const Variables& var)
     else
         max_vbc_val = param.control.characteristic_speed;
 
-    double dt_advection = 0.5 * minl / max_vbc_val;
-    double dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
+    // advection is limited by the faster of the actual mesh motion (the
+    // converged PT velocity is physical) and the imposed boundary velocity
+    double v_adv = std::max(global_max_vem, max_vbc_val);
+    double dt_advection = (v_adv > 0) ?
+        0.5 * minl / v_adv : std::numeric_limits<double>::max();
 
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
+    double dt = std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion})
+                * param.control.dt_fraction;
     if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
+        std::cout << "step #" << var.steps << "  dt(PT): " << dt_maxwell << " "
+                  << dt_advection << " " << dt_diffusion << " "
+                  << dt_hydro_diffusion << " sec\n";
     }
-    if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
-        std::exit(11);
+    if (dt <= 0 || dt > 1e300) {
+        // no finite physical limit (e.g. zero boundary velocity and no
+        // viscosity floor) — fall back to the DR time step instead of aborting
+#ifdef NPROF_DETAIL
+        nvtxRangePop();
+#endif
+        return compute_dt(param, var);
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();

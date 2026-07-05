@@ -655,7 +655,6 @@ class MarkerSet;
 struct Variables {
     double time;
     double dt;
-    double dt_PT;
     double l2_residual;
     // Accelerated PT state (updated by update_pt_params() before each PT loop)
     double PT_h_min;      // minimum element height across all elements (diagnostic)

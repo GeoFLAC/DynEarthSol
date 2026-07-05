@@ -186,7 +186,8 @@ void init(const Param& param, Variables& var)
 
     *var.volume_old = *var.volume;
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
-    var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
+    var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                    : compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
@@ -418,7 +419,8 @@ void restart(const Param& param, Variables& var)
     // For some reason, the following is added by Denis
     // However, it is not clear why this is needed.
     if (param.control.use_global_velocity_scaling) {
-        var.dt = compute_dt(param, var);
+        var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                        : compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
 
@@ -466,7 +468,8 @@ void update_mesh(const Param& param, Variables& var)
     compute_volume(var, *var.volume);
 
     if (param.control.use_global_velocity_scaling) {
-        var.dt = compute_dt(param, var);
+        var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                        : compute_dt(param, var);
     }
 
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
@@ -643,7 +646,8 @@ int main(int argc, const char* argv[])
             isostasy_adjustment(param, var);
         }
 
-        var.dt = compute_dt(param, var);
+        var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                        : compute_dt(param, var);
 
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
@@ -651,8 +655,6 @@ int main(int argc, const char* argv[])
     else {
         restart(param, var);
     }
-
-    var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -946,7 +948,8 @@ int main(int argc, const char* argv[])
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
-            var.dt = compute_dt(param, var);
+            var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                            : compute_dt(param, var);
         }
 
         #pragma acc wait
