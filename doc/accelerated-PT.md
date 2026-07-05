@@ -442,8 +442,34 @@ outer loop integrates explicitly:
   more than half the smallest element per step;
 - **Maxwell relaxation** — `0.5·visc_min/G`;
 - **thermal / hydraulic diffusion** when those (explicit) updates are on;
+- **plastic weakening** — see below;
 - times `dt_fraction`; `fixed_dt` overrides everything.  If no finite limit
   applies, it falls back to the DR step.
+
+The weakening limit exists because piecewise-linear strain softening is
+integrated forward-Euler in the weakening variable: the yield parameters
+are evaluated at the *start-of-step* plastic strain, the return map's
+`hardn` term linearizes only the cohesion slope *within the current
+segment*, friction-angle weakening inside the increment is ignored
+entirely, and crossing a segment boundary (`pls0` or `pls1`) invalidates
+even that linearization.  Under DR the tiny `dt_elastic` masked all of
+this; with the PT step, an advection-bound `Δt` can push a nucleating
+shear band across its *entire* ramp in one step using intact-strength
+parameters.  The cap is adaptive:
+
+```
+dt ≤ PT_dpls_fraction · (pls1−pls0)_min · Δt_prev / max_e(Δε_pl,e)
+```
+
+where `Δε_pl,e` is the previous step's `delta_plstrain` and the max runs
+only over elements still on a ramp (`plstrain < max pls1` — saturated
+bands keep straining but their parameters no longer change).  Since
+`Δε_pl ≈ rate·Δt_prev`, the cap settles directly at
+`Δt ≈ f·w/rate` — it tightens while a band actively weakens and relaxes
+once the band saturates.  Zero-width ramps (`pls0 = pls1`) are parameter
+jumps no step size can resolve and are skipped.  The one-step reaction lag
+at band *initiation* is absorbed by the safety fraction
+(`PT_dpls_fraction`, default 0.1; 0 disables).
 
 The resulting `Δt` is typically orders of magnitude larger than the DR step
 (×`inertial_scaling` when advection binds).  This is safe for the *solver*
@@ -525,6 +551,8 @@ PT_r = 0.5                 # K~/G~ ratio
 PT_char_length = 0         # characteristic length L; 0 = max(xlength,ylength,zlength)
 PT_stagnation_window = -1  # early exit on residual plateau (§2.10);
                            # -1 = auto (2L/(CFL*h_mean)), 0 = off, N = fixed
+PT_dpls_fraction = 0.1     # max fraction of the weakening ramp (pls1-pls0)
+                           # traversed per step (§2.9); 0 = off
 ```
 
 Note that in PT mode the physical time step is no longer limited by the

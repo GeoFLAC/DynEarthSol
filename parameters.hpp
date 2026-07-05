@@ -254,6 +254,7 @@ struct Control {
     double PT_relative_tolerance;
     int PT_info_interval;
     int PT_stagnation_window;
+    double PT_dpls_fraction;
     // Accelerated PT parameters (Räss et al. 2022, Sec. 2.4)
     double PT_Re;          // numerical Reynolds number (default: 3*sqrt(10)/2*pi ≈ 14.93)
     double PT_CFL;         // CFL-like stability factor (default: 0.9/sqrt(NDIMS))

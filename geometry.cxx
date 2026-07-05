@@ -943,12 +943,36 @@ double compute_dt_PT(const Param& param, Variables& var)
     double minl = std::numeric_limits<double>::max();
     double global_max_vem = 0.0;
 
+    // Plastic-weakening rate limit: the yield parameters (cohesion, friction,
+    // dilation) are evaluated at the start-of-step plastic strain, so a single
+    // step must not traverse more than a fraction of the piecewise-linear
+    // weakening ramp [pls0, pls1] — only elements still on a ramp constrain
+    // dt (saturated bands keep straining but their parameters no longer
+    // change).  The plastic strain rate is estimated from the previous step:
+    // delta_plstrain/dt.
+    double w_min    = std::numeric_limits<double>::max();
+    double pls1_max = 0.0;
+    bool check_weakening = (param.control.PT_dpls_fraction > 0) &&
+                           (param.mat.rheol_type & MatProps::rh_plastic) &&
+                           (var.dt > 0);
+    if (check_weakening) {
+        for (int m = 0; m < param.mat.nmat; ++m) {
+            double w = param.mat.pls1[m] - param.mat.pls0[m];
+            if (w > 0) w_min = std::min(w_min, w);
+            pls1_max = std::max(pls1_max, param.mat.pls1[m]);
+        }
+        // zero-width ramps are parameter jumps no dt can resolve
+        if (w_min > 1e300) check_weakening = false;
+    }
+    double dpls_max = 0.0;
+
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) \
-        reduction(max:global_max_vem) default(none) shared(param,var)
+        reduction(max:global_max_vem,dpls_max) default(none) \
+        shared(param,var) firstprivate(check_weakening,pls1_max)
 #endif
     #pragma acc parallel loop gang vector reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) \
-        reduction(max:global_max_vem) async
+        reduction(max:global_max_vem,dpls_max) async
     for (int e=0; e<var.nelem; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -1008,6 +1032,8 @@ double compute_dt_PT(const Param& param, Variables& var)
             if (var.mat->hydro_diff_max > 0)
                 dt_hydro_diffusion = std::min(dt_hydro_diffusion,
                                               0.5 * minh * minh / var.mat->hydro_diff_max);
+        if (check_weakening && (*var.plstrain)[e] < pls1_max)
+            dpls_max = std::max(dpls_max, (*var.delta_plstrain)[e]);
         minl = std::min(minl, minh);
     }
 
@@ -1030,12 +1056,20 @@ double compute_dt_PT(const Param& param, Variables& var)
     double dt_advection = (v_adv > 0) ?
         0.5 * minl / v_adv : std::numeric_limits<double>::max();
 
-    double dt = std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion})
+    // adaptive fixed point: dpls_max ~ rate*dt, so dt settles at
+    // f*w_min/rate; shrinks while a band actively weakens, relaxes after
+    // it saturates
+    double dt_weakening = (check_weakening && dpls_max > 0) ?
+        param.control.PT_dpls_fraction * w_min * var.dt / dpls_max :
+        std::numeric_limits<double>::max();
+
+    double dt = std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion,
+                          dt_weakening})
                 * param.control.dt_fraction;
     if (param.debug.dt) {
         std::cout << "step #" << var.steps << "  dt(PT): " << dt_maxwell << " "
                   << dt_advection << " " << dt_diffusion << " "
-                  << dt_hydro_diffusion << " sec\n";
+                  << dt_hydro_diffusion << " " << dt_weakening << " sec\n";
     }
     if (dt <= 0 || dt > 1e300) {
         // no finite physical limit (e.g. zero boundary velocity and no
