@@ -111,7 +111,7 @@ ifeq ($(INDIR), 1)
 	mkdir -p model-${CASE}-${MODELNAME}
 	cp $(CURDIR)/${EXE} model-${CASE}-${MODELNAME}/
 	cp $(CURDIR)/${CASE} model-${CASE}-${MODELNAME}/
-	cp $(CURDIR)/../snapshot.diff model-${CASE}-${MODELNAME}/
+	@if [ -f "$(CURDIR)/../snapshot.diff" ]; then cp "$(CURDIR)/../snapshot.diff" model-${CASE}-${MODELNAME}/; fi
 	cd model-${CASE}-${MODELNAME} && \
 	rm -f ${MODELNAME}.* && \
 	OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ./$(notdir ${EXE}) $(notdir ${CASE})
