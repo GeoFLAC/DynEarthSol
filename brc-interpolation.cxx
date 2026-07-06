@@ -238,10 +238,10 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 * The one-level expansion above fails when q lies in a large old element
                 * whose nearest node nn is not one of its vertices (common after aggressive
                 * 3D remeshing that places new nodes far from any existing node).
-                * BFS guarantees every reachable element is visited and the correct
-                * enclosing element is found.  When the frontier empties without finding
-                * q, it is outside the old domain and falls through to the nearest-node
-                * fallback below.
+                * BFS visits neighbors level-by-level (capped by MAX_LAYERS below) and will
+                * typically find the enclosing element even after aggressive remeshing. If
+                * the capped search does not find q, it may be outside the old domain and
+                * will fall through to the nearest-node fallback below.
                 */
                 std::unordered_set<int> visited(nn_elem.begin(), nn_elem.end());
                 int_vec frontier(nn_elem.begin(), nn_elem.end());
