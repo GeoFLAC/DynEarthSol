@@ -245,7 +245,6 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*NODES_PER_ELEM];
 #ifndef THREED
 
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             int idx = i * (var.nz - 1) + j;
@@ -300,7 +299,6 @@ void create_rect_node(const Param& param, const Variables& var, double *&points)
 #endif
 
 #ifndef THREED
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
             points[(j + i * var.nz)*2] = i * dx;
