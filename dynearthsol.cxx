@@ -373,6 +373,8 @@ void restart(const Param& param, Variables& var)
         // for tidal heating
         bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
+        // delta_plstrain carries per-element state across steps:
+        bin_save.read_array(*var.delta_plstrain, "plastic strain-rate");
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
