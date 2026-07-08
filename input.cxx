@@ -236,6 +236,23 @@ static void declare_parameters(po::options_description &cfg,
          "temperature, layering, coord0 reference and pristine strain (side profile), and with MMG the "
          "material interfaces in the inflow band are required edges.\n")
 
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.0),
+         "Plastic-strain-INCREMENT threshold for the (always-on) conservative-freeze REFINE condition: "
+         "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
+         "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
+         "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
+         "since the last remesh. Distorted (quality < mesh.min_quality) or tiny (< smallest_vol) elements "
+         "are always remeshed with node motion; boundary nodes are always movable (flattening). "
+         "Default 0 (any further yielding refines).")
+        ("mesh.remesh_tiny_margin", po::value<double>(&p.mesh.remesh_tiny_margin)->default_value(1.0),
+         "Hysteresis for the tiny-element remesh trigger. A remesh fires when an element measure drops "
+         "below smallest_vol / remesh_tiny_margin, where smallest_vol = smallest_size*sizefactor*"
+         "resolution^NDIMS is also the size the remesher floors elements at. margin=1 (default): trigger "
+         "sits exactly on the floor, so a just-remeshed element re-triggers under any compression (high "
+         "remesh frequency). margin>1: the element must shrink to 1/margin of the floor measure (=1/margin"
+         "^(1/NDIMS) in edge length) before triggering -- fewer remeshes, but smaller min elements (hence "
+         "smaller dt) between remeshes. Must be >= 1.")
+
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
          "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
@@ -1145,6 +1162,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         // zero or go negative, producing a NaN/negative target element size.
         std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
                      "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.remesh_tiny_margin < 1.0) {
+        // margin<1 would RAISE the trigger above the remesher's floor -> a just-remeshed element is
+        // already tiny -> immediate re-trigger / possible non-termination. margin>=1 lowers the trigger.
+        std::cerr << "Error: mesh.remesh_tiny_margin must be >= 1 (1 = trigger at the floor; larger = more hysteresis).\n";
         die(EXIT_CONFIG_VALUE);
     }
 

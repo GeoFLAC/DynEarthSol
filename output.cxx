@@ -388,6 +388,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+    // plstrain_remesh: the R2 refine baseline, checkpointed so the first post-restart remesh
+    // refines the active band like a continuous run.
+    bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
 #endif

@@ -80,6 +80,7 @@ void allocate_variables(const Param &param, Variables& var)
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
+        var.plstrain_remesh = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
         // var.stress_old = new tensor_t(e, 0);

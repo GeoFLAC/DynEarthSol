@@ -366,6 +366,9 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // plstrain_remesh (the R2 refine baseline) is restored so the first post-restart remesh
+        // refines like a continuous run.
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
