@@ -230,10 +230,13 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.remeshing_option", po::value<int>(&p.mesh.remeshing_option)->default_value(0),
          "How to deal with the boundaries during remeshing?\n"
          " 0: no modification on any boundary.\n"
-         " 1: move all bottom nodes to initial depth, other boundaries are intact.\n"
+         " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact.\n"
          " 2: create a new bottom boundary at the initial depth, other boundaries are intact (2D only).\n"
          "10: no modification on any boundary, except small boundary segments might get merged.\n"
-         "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
+         "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact, except small boundary segments might "
+         "get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
          "13: move all bottom, left, and right nodes to initial dimensions.\n")
 
@@ -256,7 +259,7 @@ static void declare_parameters(po::options_description &cfg,
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
-         "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
+         "Using it when remeshing process can modify segments (e.g. remeshing_option=1 or 11).")
 
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", po::value<int>(&p.mesh.mmg_debug)->default_value(0),

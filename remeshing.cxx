@@ -117,8 +117,12 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
             // restore edge nodes to initial depth
             qcoord[i*NDIMS + NDIMS-1] = bottom;
         }
-        else if (! is_boundary(flag) &&
-                 std::fabs(qcoord[i*NDIMS + NDIMS-1] - bottom) < min_dist) {
+        else if (qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
+            // Mark every NON-bottom node within min_dist of (or below) the bottom plane for deletion:
+            // interior nodes (they invert the adjoining elements once the boundary snaps back up) and
+            // side-wall nodes that sank below the corner (the corner snaps up, its wall neighbour
+            // would stay below and degenerate the corner elements);
+            // delete_points_and_merge_boundary (see its keep rule) removes them.
             points_to_delete.push_back(i);
         }
     }
@@ -131,7 +135,10 @@ void flatten_x0(const uint_vec &old_bcflag, double *qcoord,
         uint flag = old_bcflag[i];
         if (is_x0(flag))
             qcoord[i*NDIMS] = 0.;
-        else if (! is_boundary(flag))
+        // Delete any non-x0 node within min_dist of (or past) the plane, a top or bottom node
+        // carried past the corner too (skipping boundary nodes leaves an orphan wedge there).
+        // flatten_x1/y0/y1 do the same.
+        else if (! is_x0(flag))
             if (qcoord[i*NDIMS] < min_dist)
                 points_to_delete.push_back(i);
     }
@@ -144,7 +151,7 @@ void flatten_x1(const uint_vec &old_bcflag, double *qcoord,
         uint flag = old_bcflag[i];
         if (is_x1(flag))
             qcoord[i*NDIMS] = side;
-        else if (! is_boundary(flag))
+        else if (! is_x1(flag))
             if (qcoord[i*NDIMS] > (side - min_dist))
                 points_to_delete.push_back(i);
     }
@@ -157,7 +164,7 @@ void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
         uint flag = old_bcflag[i];
         if (is_y0(flag))
             qcoord[i*NDIMS + 1] = 0.;
-        else if (! is_boundary(flag))
+        else if (! is_y0(flag))
             if ( qcoord[i*NDIMS + 1] < min_dist)
                 points_to_delete.push_back(i);
     }
@@ -262,7 +269,7 @@ void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
         uint flag = old_bcflag[i];
         if (is_y1(flag))
             qcoord[i*NDIMS + 1] = side;
-        else if (! is_boundary(flag))
+        else if (! is_y1(flag))
             if (qcoord[i*NDIMS + 1] > (side - min_dist))
                 points_to_delete.push_back(i);
     }
@@ -572,6 +579,9 @@ void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
 }
 
 
+// Swap-delete points_to_delete. A deleted point must be in no segment (its segments would end on
+// the node moved into its slot): option 2's bottom nodes qualify, as new_bottom replaced their
+// segments; other boundary points go through delete_points_and_merge_boundary.
 void delete_points(const int_vec &points_to_delete, int &npoints,
                    int nseg, double *points, int *segment)
 {
@@ -969,11 +979,12 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
 }
 
 
-// Delete every point in points_to_delete, merging the neighbouring boundary
+// Delete the points in points_to_delete, merging the neighbouring boundary
 // segments (2D) / facets (3D) for the points that lie on a boundary so the
-// boundary stays closed. Non-boundary points are simply removed. This is the
-// deletion path for remeshing_option >= 10 (boundaries may be modified); it fully
-// handles the removal, so the caller must NOT also call delete_points().
+// boundary stays closed; in 2D a boundary point whose two segments are both longer
+// than min_size is kept. Non-boundary points are simply removed. This is the
+// deletion path for remeshing_option 1 and >= 10 (boundaries may be modified); it
+// fully handles the removal, so the caller must NOT also call delete_points().
 void delete_points_and_merge_boundary(int_vec &points_to_delete,
                                const int_vec (&bnodes)[nbdrytypes],
                                const int_vec (&bdry_polygons)[nbdrytypes],
@@ -1221,19 +1232,20 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     // delete points
     switch (param.mesh.remeshing_option) {
     case 0:
-    case 1:
     case 2:
-        // deleting non-boundary points
+        // deleting points that are in no segment (option 2: new_bottom replaced the bottom ones)
         delete_points(points_to_delete, old_nnode, old_nseg,
                       qcoord, qsegment);
         delete_facets(old_nseg, qsegment, qsegflag);
         break;
+    case 1:
     case 10:
     case 11:
     case 12:
     case 13:
-        // deleting points, some of them might be on the boundary.
-        // delete_points_and_merge_boundary() already removes every point in
+        // deleting points, some of them might be on the boundary (option 1: the side-wall nodes
+        // flatten_bottom marks).
+        // delete_points_and_merge_boundary() already removes the points in
         // points_to_delete (merging segments for the boundary ones) and reduces
         // old_nnode accordingly. Calling delete_points() again on the same list
         // would be a *second* deletion pass over an already-compacted array with
