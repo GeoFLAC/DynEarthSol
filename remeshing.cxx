@@ -18,6 +18,7 @@
 #include "geometry.hpp"
 #include "matprops.hpp"
 #include "mesh.hpp"
+#include "mmg_utils.hpp"
 #include "nn-interpolation.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
@@ -2695,20 +2696,20 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
-    int_vec qconn_vec, qsegment_vec, qconn_from_1_vec, qsegment_from_1_vec, qsegflag_vec;
+    int_vec qconn_vec, qsegment_vec, qconn_to_mmg_vec, qsegment_to_mmg_vec, qsegflag_vec;
 
     original_coord.pack_to(qcoord_vec);
     original_connectivity.pack_to(qconn_vec);
     original_segment.pack_to(qsegment_vec);
-    original_connectivity.pack_to(qconn_from_1_vec);
-    original_segment.pack_to(qsegment_from_1_vec);
+    original_connectivity.pack_to(qconn_to_mmg_vec);
+    original_segment.pack_to(qsegment_to_mmg_vec);
     original_segflag.pack_to(qsegflag_vec);
 
     double *qcoord = qcoord_vec.data();
     int *qconn = qconn_vec.data();
     int *qsegment = qsegment_vec.data();
-    int *qconn_from_1 = qconn_from_1_vec.data();
-    int *qsegment_from_1 = qsegment_from_1_vec.data();
+    int *qconn_to_mmg = qconn_to_mmg_vec.data();
+    int *qsegment_to_mmg = qsegment_to_mmg_vec.data();
     int *qsegflag = qsegflag_vec.data();
 
     int old_nnode = original_coord.size();
@@ -2766,8 +2767,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
     double *mcoord   = qcoord;
-    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
-    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *mconn1   = qconn_to_mmg;      // 0-indexed; mmg_adapt 1-indexes internally
+    int    *mseg1    = qsegment_to_mmg;   // 0-indexed; mmg_adapt 1-indexes internally
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
@@ -2795,168 +2796,30 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // --- STEP I: Initialization
-    // 1) Initialisation of mesh and sol structures
-    //   args of InitMesh:
-    //     MMG5_ARG_start: we start to give the args of a variadic func
-    //     MMG5_ARG_ppMesh: next arg will be a pointer over a MMG5_pMesh
-    //     &mmgMesh: pointer toward your MMG5_pMesh (that store your mesh)
-    //     MMG5_ARG_ppMet: next arg will be a pointer over a MMG5_pSol storing a metric
-    //     &mmgSol: pointer toward your MMG5_pSol (that store your metric) */
-    MMG5_pMesh      mmgMesh = NULL;
-    MMG5_pSol       mmgSol  = NULL;
+    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
 
-    MMG3D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh, MMG5_ARG_ppMet,
-                    &mmgSol, MMG5_ARG_end);
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, nullptr, nullptr, false };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
 
-    // 2) Build mesh in MMG5 format
-    // Manually set of the mesh 
-    //  a) give the size of the mesh: vertices, tetra, prisms, triangles, quads, edges
-    if ( MMG3D_Set_meshSize(mmgMesh, mnode, melem,
-                            0, mseg, 0, 0) != 1 )
-        die(EXIT_MESH_MMG);
-    //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG3D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-    //   c) give the connectivity (MMG is 1-indexed).
-    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
-        ++mconn1[i];
-    if( MMG3D_Set_tetrahedra(mmgMesh, mconn1, NULL) != 1 )
-        die(EXIT_MESH_MMG);
-    //   d) give the boundary facets (MMG is 1-indexed).
-    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
-        ++mseg1[i];
-    if( MMG3D_Set_triangles(mmgMesh, mseg1, msegflag) != 1 )
-        die(EXIT_MESH_MMG);
+    var.nnode = mmg_out.nnode;
+    var.nelem = mmg_out.nelem;
+    var.nseg  = mmg_out.nseg;
+    std::cerr << "New number of vertices:" << var.nnode
+              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
-    // 3) Build sol in MMG5 format
-    //      Here a 'solution' is a nodal field that becomes
-    //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation. The metric was computed above (on the clean nodes when
-    //      the sunk material was rebuilt).
-    //
-    //   a) give info for the sol structure
-    if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
-        die(EXIT_MESH_MMG);
-    if( MMG3D_Set_scalarSols(mmgSol, mmetric) != 1 )
-        die(EXIT_MESH_MMG);
-
-    /*save init mesh*/
-    //      ii) Otherwise, set a value node by node:
-    // for (int i = 0; i < var.nnode; ++i) {
-    //     if( MMG3D_Set_scalarSol(mmgSol, 100.0, i+1) != 1 )
-    //         exit(10);
-    // }
-    //      iii) If a metric field ('solution') is given, 
-    //           optimization mode should be off.
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_optim, 0) != 1 ) 
-        die(EXIT_MESH_MMG);
-
-    // 4) (not mandatory): check if the number of given entities match with mesh size
-    if( MMG3D_Chk_meshData(mmgMesh, mmgSol) != 1 ) die(EXIT_MESH_MMG);
-
-    //--- STEP  II: Remesh function
-    /* debug mode ON (default value = OFF) */
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_debug, param.mesh.mmg_debug) != 1 )
-        die(EXIT_MESH_MMG);
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_verbose, param.mesh.mmg_verbose) != 1 )
-        die(EXIT_MESH_MMG);
- 
-    /* maximal memory size (default value = 50/100*ram) */
-    //if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_mem, 600) != 1 )
-    //exit(10);
-
-    // /* Maximal mesh size (default FLT_MAX)*/
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hmax, param.mesh.mmg_hmax_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Minimal mesh size (default 0)*/
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hmin, param.mesh.mmg_hmin_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Global hausdorff value (default value = 0.01) applied on the whole boundary */
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hausd, param.mesh.mmg_hausd_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // /* Gradation control*/
-    // if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hgrad, 3.0) != 1 )
-    // exit(10);
-
-    // /* Gradation requirement */
-    // if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hgradreq, -1.0) != 1 )
-    // exit(10);
-
-    const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
-    if ( ier == MMG5_STRONGFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
-        die(EXIT_MESH_MMG);
-    } else if ( ier == MMG5_LOWFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB\n");
-        die(EXIT_MESH_MMG);
-    }
-
-    //--- STEP III: Get results
-    // 1) Preparations
-    //   a) get the size of the mesh: vertices, tetra, triangles, edges */
-    int na;
-    if ( MMG3D_Get_meshSize(mmgMesh, &(var.nnode), &(var.nelem), NULL, &(var.nseg), NULL, &na) !=1 )
-        die(EXIT_MESH_MMG);
-    std::cerr << "Updated mesh size\n";
-    std::cerr << "New number of vertices:" << var.nnode << std::endl;
-    std::cerr << "New number of elements:" << var.nelem << std::endl;
-    std::cerr << "New number of segments:" << var.nseg << std::endl;
-
-    //   b) Create mesh-defining arrays of new sizes
-    array_t new_coord( var.nnode );
-    conn_t new_connectivity( var.nelem );
-    segment_t new_segment( var.nseg );
-    segflag_t new_segflag( var.nseg );
-    std::cerr << "Resized arrays\n";
-
-    // double *ncoord = new_coord.data();
-    // int *nconn = new_connectivity.data();
-    // int *nsegment = new_segment.data();
-    // int *nsegflag = new_segflag.data();
-
-    // 2) Pupolate DES mesh-defining arrays
-    //   a) Vertex recovering
-    for (int i = 0; i < var.nnode; ++i) {
-        if ( MMG3D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), &(new_coord[i][2]), NULL, NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-    }
-    std::cerr << "New coordinates populated\n";
-
-    //   b) Tetra recovering
-    for (int i = 0; i < var.nelem; ++i) {
-        if ( MMG3D_Get_tetrahedron(mmgMesh, &(new_connectivity[i][0]), &(new_connectivity[i][1]), &(new_connectivity[i][2]), &(new_connectivity[i][3]), NULL, NULL) != 1 )  
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_ELEM; ++j)
-            new_connectivity[i][j] -= 1;
-    }
-    std::cerr << "New connectivity populated\n";
-
-    //   c) segments recovering
-    for (int i = 0; i < var.nseg; ++i) {
-        if ( MMG3D_Get_triangle(mmgMesh, &(new_segment[i][0]), &(new_segment[i][1]), &(new_segment[i][2]),&(new_segflag.data()[i]), NULL) != 1 )
-            die(EXIT_MESH_MMG);
-        for(int j = 0; j < NODES_PER_FACET; ++j)
-            new_segment[i][j] -= 1;
-    }     
-    std::cerr << "New segments populated\n";
-
-    //   d) Let the DES arrays point to the newly populated data 
+    array_t   new_coord(var.nnode);
+    conn_t    new_connectivity(var.nelem);
+    segment_t new_segment(var.nseg);
+    segflag_t new_segflag(var.nseg);
+    new_coord.load_from_buffer(mmg_out.coord.data(), var.nnode);
+    new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
+    new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
+    new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-    std::cerr << "Arrays transferred." << std::endl;
-
-    // 3) Free the MMG3D5 structures
-    MMG3D_Free_all(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh,&mmgMesh,MMG5_ARG_ppMet,&mmgSol,
-                    MMG5_ARG_end);
-    std::cerr << "MMG3D freed." <<std::endl;
 
     std::cerr << "\nMesh optimization done" <<std::endl;
 }
@@ -2977,20 +2840,20 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
-    int_vec qconn_vec, qsegment_vec, qconn_from_1_vec, qsegment_from_1_vec, qsegflag_vec;
+    int_vec qconn_vec, qsegment_vec, qconn_to_mmg_vec, qsegment_to_mmg_vec, qsegflag_vec;
 
     original_coord.pack_to(qcoord_vec);
     original_connectivity.pack_to(qconn_vec);
     original_segment.pack_to(qsegment_vec);
-    original_connectivity.pack_to(qconn_from_1_vec);
-    original_segment.pack_to(qsegment_from_1_vec);
+    original_connectivity.pack_to(qconn_to_mmg_vec);
+    original_segment.pack_to(qsegment_to_mmg_vec);
     original_segflag.pack_to(qsegflag_vec);
 
     double *qcoord = qcoord_vec.data();
     int *qconn = qconn_vec.data();
     int *qsegment = qsegment_vec.data();
-    int *qconn_from_1 = qconn_from_1_vec.data();
-    int *qsegment_from_1 = qsegment_from_1_vec.data();
+    int *qconn_to_mmg = qconn_to_mmg_vec.data();
+    int *qsegment_to_mmg = qsegment_to_mmg_vec.data();
     int *qsegflag = qsegflag_vec.data();
 
     int old_nnode = original_coord.size();
@@ -3050,8 +2913,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
     double *mcoord   = qcoord;
-    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
-    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *mconn1   = qconn_to_mmg;      // 0-indexed; mmg_adapt 1-indexes internally
+    int    *mseg1    = qsegment_to_mmg;   // 0-indexed; mmg_adapt 1-indexes internally
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
@@ -3079,163 +2942,30 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // --- STEP I: Initialization
-    // 1) Initialisation of mesh and sol structures
-    //   args of InitMesh:
-    //     MMG5_ARG_start: we start to give the args of a variadic func
-    //     MMG5_ARG_ppMesh: next arg will be a pointer over a MMG5_pMesh
-    //     &mmgMesh: pointer toward your MMG5_pMesh (that store your mesh)
-    //     MMG5_ARG_ppMet: next arg will be a pointer over a MMG5_pSol storing a metric
-    //     &mmgSol: pointer toward your MMG5_pSol (that store your metric) */
-    MMG5_pMesh      mmgMesh = NULL;
-    MMG5_pSol       mmgSol  = NULL;
-  
-    MMG2D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh, MMG5_ARG_ppMet,
-                    &mmgSol, MMG5_ARG_end);
+    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
 
-    // 2) Build mesh in MMG5 format
-    // Manually set of the mesh 
-    //  a) give the size of the mesh: vertices, triangles, quads(=0), edges
-    if ( MMG2D_Set_meshSize(mmgMesh, mnode, melem, 0, mseg) != 1 )
-        die(EXIT_MESH_MMG);
-    //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG2D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-    //   c) give the connectivity (MMG is 1-indexed).
-    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
-        ++mconn1[i];
-    if( MMG2D_Set_triangles(mmgMesh, mconn1, NULL) != 1 )
-        die(EXIT_MESH_MMG);
-    //   d) give the segments (i.e., boundary edges; MMG is 1-indexed).
-    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
-        ++mseg1[i];
-    for (int i = 0; i < mseg; ++i)
-        if( MMG2D_Set_edge(mmgMesh, mseg1[i*NODES_PER_FACET],
-                mseg1[i*NODES_PER_FACET+1], msegflag[i], i+1) != 1)
-            die(EXIT_MESH_MMG);
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, nullptr, nullptr, false };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
 
-    // 3) Build sol in MMG5 format
-    //      Here a 'solution' is a nodal field that becomes
-    //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation. The metric was computed above (on the clean nodes when
-    //      the sunk material was rebuilt).
-    //
-    //   a) give info for the sol structure
-    if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
-        die(EXIT_MESH_MMG);
-    if( MMG2D_Set_scalarSols(mmgSol, mmetric) != 1 )
-        die(EXIT_MESH_MMG);
-    //      ii) Otherwise, set a value node by node:
-    // for (int i = 0; i < var.nnode; ++i) {
-    //     if( MMG2D_Set_scalarSol(mmgSol, 0.5, i+1) != 1 )
-    //         exit(10);
-    // }
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_optim, 0) != 1 )
-    die(EXIT_MESH_MMG);
+    var.nnode = mmg_out.nnode;
+    var.nelem = mmg_out.nelem;
+    var.nseg  = mmg_out.nseg;
+    std::cerr << "New number of vertices:" << var.nnode
+              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
-    // 4) (not mandatory): check if the number of given entities match with mesh size
-    if( MMG2D_Chk_meshData(mmgMesh, mmgSol) != 1 ) die(EXIT_MESH_MMG);
-
-    //--- STEP  II: Remesh function
-    /* debug mode ON (default value = OFF) */
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_debug, param.mesh.mmg_debug) != 1 )
-    die(EXIT_MESH_MMG);
-
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_verbose, param.mesh.mmg_verbose) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_iso, 1) != 1 )
-    // exit(10);
- 
-    /* maximal memory size (default value = 50/100*ram) */
-    //if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_mem, 600) != 1 )
-    //exit(10);
-
-    /* Maximal mesh size (default FLT_MAX)*/
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hmax, param.mesh.mmg_hmax_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Minimal mesh size (default 0)*/
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hmin, param.mesh.mmg_hmin_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Global hausdorff value (default value = 0.01) applied on the whole boundary */
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hausd, param.mesh.mmg_hausd_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // /* Gradation control*/
-    // if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hgrad, 3.0) != 1 )
-    // exit(10);
-
-    // /* Gradation requirement */
-    // if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hgradreq, 3.0) != 1 )
-    // exit(10);
-
-    const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
-    if ( ier == MMG5_STRONGFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
-        die(EXIT_MESH_MMG);
-    } else if ( ier == MMG5_LOWFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB\n");
-        die(EXIT_MESH_MMG);
-    }    
-
-    //--- STEP III: Get results
-    // 1) Preparations
-    //   a) get the size of the mesh: vertices, tetra, triangles, edges */
-    if ( MMG2D_Get_meshSize(mmgMesh, &(var.nnode), &(var.nelem), NULL, &(var.nseg)) !=1 )
-        die(EXIT_MESH_MMG);
-    std::cerr << "Updated mesh size\n";
-    std::cerr << "New number of vertices:" << var.nnode << std::endl;
-    std::cerr << "New number of elements:" << var.nelem << std::endl;
-    std::cerr << "New number of segments:" << var.nseg << std::endl;
-
-    //   b) Create mesh-defining arrays of new sizes
-    array_t new_coord( var.nnode );
-    conn_t new_connectivity( var.nelem );
-    segment_t new_segment( var.nseg );
-    segflag_t new_segflag( var.nseg );
-    std::cerr << "Resized arrays\n";
-
-    // 2) Pupolate DES mesh-defining arrays
-    //   a) Vertexes recovering
-    for (int i = 0; i < var.nnode; ++i) {
-        if ( MMG2D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), NULL, NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-    }
-    std::cerr << "New coordinates populated\n";
-
-    //   b) Triangles recovering
-    for (int i = 0; i < var.nelem; ++i) {
-        if ( MMG2D_Get_triangle(mmgMesh, &(new_connectivity[i][0]), &(new_connectivity[i][1]), &(new_connectivity[i][2]), NULL, NULL) != 1 )  
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_ELEM; ++j)
-            new_connectivity[i][j] -= 1;
-    }
-    std::cerr << "New connectivity populated\n";
-
-    //   c) segments recovering
-    for (int i = 0; i < var.nseg; ++i) {
-        if ( MMG2D_Get_edge(mmgMesh, &(new_segment[i][0]), &(new_segment[i][1]), &(new_segflag.data()[i]), NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_FACET; ++j)
-            new_segment[i][j] -= 1;
-    }
-    std::cerr << "New segments populated\n";
-
-    //   d) Let the DES arrays point to the newly populated data 
+    array_t   new_coord(var.nnode);
+    conn_t    new_connectivity(var.nelem);
+    segment_t new_segment(var.nseg);
+    segflag_t new_segflag(var.nseg);
+    new_coord.load_from_buffer(mmg_out.coord.data(), var.nnode);
+    new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
+    new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
+    new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-    std::cerr << "Arrays transferred." << std::endl;
-
-    // 3) Free the MMG3D5 structures
-    MMG2D_Free_all(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh,&mmgMesh,MMG5_ARG_ppMet,&mmgSol,
-                    MMG5_ARG_end);
-    std::cerr << "MMG2D freed." <<std::endl;
 
     std::cerr << "\nMesh optimization done" <<std::endl;
 }

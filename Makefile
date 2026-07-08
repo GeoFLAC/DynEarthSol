@@ -7,7 +7,7 @@
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
-## - A flag rebuilds only what it reaches (hdf5: 4 of 23 units; LDFLAGS: relink
+## - A flag rebuilds only what it reaches (hdf5: a few units; LDFLAGS: relink
 ##   only). `make feature-map` prints the reach; `make config` summarises it.
 ## Common configuration variables (set on the make command line or edit below):
 ##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
@@ -718,6 +718,7 @@ SRCS =	\
 	input.cxx \
 	matprops.cxx \
 	mesh.cxx \
+	mmg_utils.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -751,6 +752,7 @@ INCS =	\
 	markerset.hpp \
 	matprops.hpp \
 	mesh.hpp \
+	mmg_utils.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
@@ -862,7 +864,7 @@ all: prepare
 ## differ, so a changed flag rebuilds and an unchanged one costs one `cmp`.
 ##
 ## One stamp per configuration (key $(ndims)d$(suffix)), split three ways:
-##   BUILD_STAMP    flags every object sees -- rebuild all 23.
+##   BUILD_STAMP    flags every object sees -- rebuild every unit.
 ##   FEATURE_STAMPS one per FEATURES macro -- rebuild only what it reaches.
 ##   LINK_STAMP     LDFLAGS -- relink only, never recompile.
 BUILD_STAMP  = .build-flags.$(ndims)d$(suffix)
