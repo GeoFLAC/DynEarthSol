@@ -235,7 +235,10 @@ static void declare_parameters(po::options_description &cfg,
          "10: no modification on any boundary, except small boundary segments might get merged.\n"
          "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions.\n")
+         "13: move all bottom, left, and right nodes to initial dimensions. A side wall that receives "
+         "material (inflow vbc) keeps its run-start column: the incoming material gets the wall's "
+         "temperature, layering, coord0 reference and pristine strain (side profile), and with MMG the "
+         "material interfaces in the inflow band are required edges.\n")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
