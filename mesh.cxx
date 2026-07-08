@@ -43,6 +43,7 @@
 #include "sortindex.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
+#include "mmg_utils.hpp"
 #include "markerset.hpp"
 
 #ifdef WIN32
@@ -947,102 +948,29 @@ static void mmg_refine_init_mesh_3d(
     double_vec cra(pregattr ? pregattr : nullptr,
                             pregattr ? pregattr + ce : nullptr);
 
-    // --- Initialize MMG3D ---
-    MMG5_pMesh mmgMesh = NULL;
-    MMG5_pSol  mmgSol  = NULL;
-    MMG3D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh,
-                    MMG5_ARG_ppMet,  &mmgSol,
-                    MMG5_ARG_end);
-
-    if (MMG3D_Set_meshSize(mmgMesh, cn, ce, 0, cs, 0, 0) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Vertices: pcoord is already AoS x0,y0,z0,... as produced by TetGen
-    if (MMG3D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Tetrahedra: MMG is 1-indexed
-    int_vec conn1(ce * NODES_PER_ELEM);
-    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
-        conn1[i] = pconn[i] + 1;
-    if (MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Boundary triangles: MMG is 1-indexed
-    int_vec seg1(cs * NODES_PER_FACET);
-    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
-        seg1[i] = pseg[i] + 1;
-    if (MMG3D_Set_triangles(mmgMesh, seg1.data(), psegflag) != 1)
-        die(EXIT_MESH_MMG);
-
-    // --- Compute uniform or per-region metric ---
-    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
     compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        die(EXIT_MESH_MMG);
-    if (MMG3D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        die(EXIT_MESH_MMG);
+    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true };
+    MMGOutput mmg_out;
+    mmg_adapt(mesh, mmg_in, mmg_out);
 
-    // --- MMG parameters ---
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_verbose,  mesh.mmg_verbose);
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_debug,    mesh.mmg_debug);
-    // Size band from mesh.largest_size / mesh.smallest_size (relative element volumes):
-    // edge = resolution * size^(1/NDIMS).
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmax,
-                         std::pow(mesh.largest_size,  1.0/NDIMS) * mesh.resolution);
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmin,
-                         std::pow(mesh.smallest_size, 1.0/NDIMS) * mesh.resolution);
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hausd,
-                         mesh.mmg_hausd_factor * mesh.resolution);
-
-    // --- Run ---
-    const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
-    if (ier == MMG5_STRONGFAILURE) {
-        die(EXIT_MESH_MMG, "MMG init mesh refinement failed (strong failure)");
-    }
-
-    // --- Free old coarse arrays ---
-    delete [] pcoord;    pcoord    = nullptr;
-    delete [] pconn;     pconn     = nullptr;
-    delete [] pseg;      pseg      = nullptr;
-    delete [] psegflag;  psegflag  = nullptr;
-    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
-
-    // --- Extract fine mesh ---
-    int na;
-    MMG3D_Get_meshSize(mmgMesh, &nnode, &nelem, NULL, &nseg, NULL, &na);
-
+    // --- Free old coarse arrays; reallocate outputs from the adapted mesh ---
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
     pcoord   = new double[nnode * NDIMS];
     pconn    = new int   [nelem * NODES_PER_ELEM];
     pseg     = new int   [nseg  * NODES_PER_FACET];
     psegflag = new int   [nseg];
     pregattr = new double[nelem];
-
-    for (int i = 0; i < nnode; ++i)
-        MMG3D_Get_vertex(mmgMesh,
-            pcoord + i*3, pcoord + i*3+1, pcoord + i*3+2,
-            NULL, NULL, NULL);
-
-    for (int i = 0; i < nelem; ++i) {
-        MMG3D_Get_tetrahedron(mmgMesh,
-            pconn + i*4, pconn + i*4+1, pconn + i*4+2, pconn + i*4+3,
-            NULL, NULL);
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            pconn[i*NODES_PER_ELEM+j] -= 1;  // back to 0-indexed
-    }
-
-    for (int i = 0; i < nseg; ++i) {
-        MMG3D_Get_triangle(mmgMesh,
-            pseg + i*3, pseg + i*3+1, pseg + i*3+2,
-            psegflag + i, NULL);
-        for (int j = 0; j < NODES_PER_FACET; ++j)
-            pseg[i*NODES_PER_FACET+j] -= 1;  // back to 0-indexed
-    }
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
 
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     // Propagate coarse REGION INDICES (from cra) to fine elements, then project to nodes.
@@ -1083,11 +1011,6 @@ static void mmg_refine_init_mesh_3d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    MMG3D_Free_all(MMG5_ARG_start,
-                   MMG5_ARG_ppMesh, &mmgMesh,
-                   MMG5_ARG_ppMet,  &mmgSol,
-                   MMG5_ARG_end);
-
     std::cerr << "MMG init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
@@ -1114,101 +1037,29 @@ static void mmg_refine_init_mesh_2d(
     double_vec cra(pregattr ? pregattr : nullptr,
                             pregattr ? pregattr + ce : nullptr);
 
-    // --- Initialize MMG2D ---
-    MMG5_pMesh mmgMesh = NULL;
-    MMG5_pSol  mmgSol  = NULL;
-    MMG2D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh,
-                    MMG5_ARG_ppMet,  &mmgSol,
-                    MMG5_ARG_end);
-
-    if (MMG2D_Set_meshSize(mmgMesh, cn, ce, 0, cs) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Vertices
-    if (MMG2D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Triangles
-    int_vec conn1(ce * NODES_PER_ELEM);
-    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
-        conn1[i] = pconn[i] + 1;
-    if (MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Edges
-    int_vec seg1(cs * NODES_PER_FACET);
-    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
-        seg1[i] = pseg[i] + 1;
-    if (MMG2D_Set_edges(mmgMesh, seg1.data(), psegflag) != 1)
-        die(EXIT_MESH_MMG);
-
-    // --- Compute metric ---
-    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
     compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        die(EXIT_MESH_MMG);
-    if (MMG2D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        die(EXIT_MESH_MMG);
+    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true };
+    MMGOutput mmg_out;
+    mmg_adapt(mesh, mmg_in, mmg_out);
 
-    // --- Run ---
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose,  mesh.mmg_verbose);
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_debug,    mesh.mmg_debug);
-    // Size band from mesh.largest_size / mesh.smallest_size (relative element volumes):
-    // edge = resolution * size^(1/NDIMS).
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmax,
-                         std::pow(mesh.largest_size,  1.0/NDIMS) * mesh.resolution);
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmin,
-                         std::pow(mesh.smallest_size, 1.0/NDIMS) * mesh.resolution);
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hausd,
-                         mesh.mmg_hausd_factor * mesh.resolution);
-
-    const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
-    if (ier == MMG5_STRONGFAILURE) {
-        die(EXIT_MESH_MMG, "MMG2D init mesh refinement failed (strong failure)");
-    }
-
-    // --- Free old coarse arrays ---
-    delete [] pcoord;    pcoord    = nullptr;
-    delete [] pconn;     pconn     = nullptr;
-    delete [] pseg;      pseg      = nullptr;
-    delete [] psegflag;  psegflag  = nullptr;
-    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
-
-    // --- Extract fine mesh ---
-    int nquad;
-    MMG2D_Get_meshSize(mmgMesh, &nnode, &nelem, &nquad, &nseg);
-
+    // --- Free old coarse arrays; reallocate outputs from the adapted mesh ---
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
     pcoord   = new double[nnode * NDIMS];
     pconn    = new int   [nelem * NODES_PER_ELEM];
     pseg     = new int   [nseg  * NODES_PER_FACET];
     psegflag = new int   [nseg];
     pregattr = new double[nelem];
-
-    for (int i = 0; i < nnode; ++i)
-        MMG2D_Get_vertex(mmgMesh,
-            pcoord + i*2, pcoord + i*2+1,
-            NULL, NULL, NULL);
-
-    for (int i = 0; i < nelem; ++i) {
-        MMG2D_Get_triangle(mmgMesh,
-            pconn + i*3, pconn + i*3+1, pconn + i*3+2,
-            NULL, NULL);
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            pconn[i*NODES_PER_ELEM+j] -= 1;
-    }
-
-    for (int i = 0; i < nseg; ++i) {
-        MMG2D_Get_edge(mmgMesh,
-            pseg + i*2, pseg + i*2+1,
-            psegflag + i, NULL, NULL);
-        for (int j = 0; j < NODES_PER_FACET; ++j)
-            pseg[i*NODES_PER_FACET+j] -= 1;
-    }
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
 
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     if (fine_init_metric_n && !cra.empty()) {
@@ -1242,10 +1093,6 @@ static void mmg_refine_init_mesh_2d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    MMG2D_Free_all(MMG5_ARG_start,
-                   MMG5_ARG_ppMesh, &mmgMesh,
-                   MMG5_ARG_ppMet,  &mmgSol,
-                   MMG5_ARG_end);
     std::cerr << "MMG2D init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }

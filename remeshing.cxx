@@ -15,6 +15,7 @@
 #include "geometry.hpp"
 #include "matprops.hpp"
 #include "mesh.hpp"
+#include "mmg_utils.hpp"
 #include "nn-interpolation.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
@@ -42,6 +43,24 @@ const double sizefactor = 0.118;
 #else
 const double sizefactor = 0.433;
 #endif
+
+// Shared refine-policy size floors, derived in ONE place so the triangle decimation, the MMG
+// size band, the tiny-element remesh trigger, and the boundary-merge distance cannot drift apart.
+// (These were previously spelled out at ~8 sites with subtly different sizefactor placement -- the
+// exact class of bug that caused earlier over/under-refinement.) All are in the mesh's own units.
+struct RefineFloors {
+    double hmin;          // min edge length      = smallest_size^(1/NDIMS) * resolution
+    double smallest_vol;  // min element measure  = smallest_size * sizefactor * resolution^NDIMS
+    double min_dist;      // boundary-merge dist  = (smallest_size*sizefactor)^(1/NDIMS) * resolution
+};
+RefineFloors refine_floors(const Mesh &m)
+{
+    RefineFloors f;
+    f.hmin         = std::pow(m.smallest_size, 1.0/NDIMS) * m.resolution;
+    f.smallest_vol = m.smallest_size * sizefactor * std::pow(m.resolution, NDIMS);
+    f.min_dist     = std::pow(m.smallest_size * sizefactor, 1.0/NDIMS) * m.resolution;
+    return f;
+}
 
 const int DELETED_FACET = -1;
 const int DEBUG = 0;
@@ -510,7 +529,7 @@ void assemble_bdry_polygons(const Variables &var, const array_t &old_coord,
 void find_tiny_element(const Param &param, const double_vec &volume,
                        int_vec &tiny_elems)
 {
-    const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+    const double smallest_vol = refine_floors(param.mesh).smallest_vol;
 
     for (std::size_t e=0; e<volume.size(); e++) {
         if (volume[e] < smallest_vol)
@@ -1110,6 +1129,116 @@ void refine_surface_elem(const Param &param, const Variables &var,
 }
 
 
+#ifdef USEMMG
+// Refine-policy CRITERION for MMG. Two per-element conditions, treated DIFFERENTLY:
+//   REPAIR = distorted (elem_quality < min_quality) OR tiny (measure < smallest_vol). MMG must be free
+//            to MOVE the nodes and split/collapse/swap these (repairing them needs node motion). The
+//            tiny term is MANDATORY -- the return-3 trigger is an MMG hard-failure independent of quality.
+//   REFINE = yielded further since the last remesh (plstrain - plstrain_remesh > mmg_remesh_active_plstrain).
+//            MMG ADDS resolution here (splits the element) but WITHOUT moving the existing nodes, so their
+//            plastic-strain values are carried verbatim (not re-interpolated/diffused) and only
+//            newly-inserted nodes get interpolated.
+// Two output masks, consumed by mark_quiet_required:
+//   node_movable[n]   = MMG may move node n : set by REPAIR elements (repair needs node motion) and by
+//                       boundary nodes (boundary flattening moves them). REFINE does NOT move nodes.
+//   elem_modifiable[e]= MMG may split/remesh element e : set by REPAIR or REFINE.
+// Quiet elements (neither) with no movable node are fully frozen and carried across the remesh verbatim.
+void compute_active_mask(const Param &param, const Variables &var,
+                         const array_t &coord, const conn_t &connectivity,
+                         int nnode, int nelem,
+                         std::vector<char> &node_movable, std::vector<char> &elem_modifiable)
+{
+    const double q_thr = param.mesh.min_quality;
+    const double smallest_vol = refine_floors(param.mesh).smallest_vol;
+    const double pls_thr = param.mesh.mmg_remesh_active_plstrain;
+
+    node_movable.assign(nnode, 0);
+    elem_modifiable.assign(nelem, 0);
+    for (int e = 0; e < nelem; ++e) {
+        // Match bad_mesh_quality's quality convention: normalize by 1/NDIMS in 3D before the
+        // min_quality comparison, so the freeze test and the remesh trigger use the same scale.
+        double q = elem_quality(coord, connectivity, *var.volume, e);
+#ifdef THREED
+        q = std::pow(q, 1.0 / 3);
+#endif
+        const bool repair = q < q_thr || (*var.volume)[e] < smallest_vol;
+        const bool refine = ((*var.plstrain)[e] - (*var.plstrain_remesh)[e]) > pls_thr;
+        elem_modifiable[e] = repair || refine;   // MMG may split/remesh either
+        if (repair) {                             // only REPAIR frees the nodes to move
+            ConstConnAccessor conn = connectivity[e];
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                node_movable[conn[i]] = 1;
+        }
+    }
+    for (int n = 0; n < nnode; ++n)
+        if ((*var.bcflag)[n] != 0)
+            node_movable[n] = 1;              // boundary nodes always movable (flattening)
+}
+#endif // USEMMG (compute_active_mask)
+
+// Give the Triangle path MMG's size floor hmin = resolution * smallest_size^(1/NDIMS): drop
+// INTERIOR nodes within hmin of a retained node so re-triangulation of the advected point cloud
+// cannot form a sub-hmin element and thrash the tiny-element trigger. Boundary nodes are kept
+// (their spacing is the flatten logic's job). Uniform grid of cell hmin -> O(nnode).
+// Do not exempt "active" (shear-band) nodes: it lowered the peak plastic strain and added
+// elements and tiny-element remeshes.
+void decimate_below_hmin(const Param &param, const array_t &coord, int nnode,
+                         const uint_vec &bcflag, int_vec &points_to_delete)
+{
+    const double hmin = refine_floors(param.mesh).hmin;
+    if (hmin <= 0.0 || nnode <= 0) return;
+    const double inv_h = 1.0/hmin, h2 = hmin*hmin;
+    const long long OFF = 1LL<<20, BITS = 21;   // cell index range ~[-1M, 1M) -> fits domains up to ~1M*hmin
+
+    auto cell = [&](int i, long long c[NDIMS]) {
+        for (int d=0; d<NDIMS; ++d) c[d] = (long long)std::floor(coord[i][d]*inv_h);
+    };
+    auto pack = [&](const long long c[NDIMS]) -> long long {
+        long long k = c[0] + OFF;
+        for (int d=1; d<NDIMS; ++d) k = (k<<BITS) | (c[d] + OFF);
+        return k;
+    };
+    std::unordered_map<long long, int_vec> grid;   // cell -> retained node ids
+
+    auto probe = [&](const long long nb[NDIMS], int i) -> bool {
+        auto it = grid.find(pack(nb));
+        if (it == grid.end()) return false;
+        for (int j : it->second) {
+            double d2 = 0;
+            for (int d=0; d<NDIMS; ++d) { double dd = coord[i][d]-coord[j][d]; d2 += dd*dd; }
+            if (d2 < h2) return true;
+        }
+        return false;
+    };
+    auto near_retained = [&](int i) -> bool {
+        long long c[NDIMS]; cell(i, c);
+        long long nb[NDIMS];
+#ifdef THREED
+        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
+          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
+            for (int e=-1;e<=1;++e){ nb[2]=c[2]+e;
+              if (probe(nb, i)) return true;
+            }}}
+#else
+        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
+          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
+            if (probe(nb, i)) return true;
+          }}
+#endif
+        return false;
+    };
+    auto retain = [&](int i) { long long c[NDIMS]; cell(i, c); grid[pack(c)].push_back(i); };
+    // Pass 1: retain all boundary nodes (never decimated) so interior nodes crowding them are removed.
+    for (int i=0; i<nnode; ++i) if (is_boundary(bcflag[i])) retain(i);
+    // Pass 2: greedily thin interior nodes to >= hmin spacing.
+    for (int i=0; i<nnode; ++i) {
+        if (is_boundary(bcflag[i])) continue;
+        if (near_retained(i)) points_to_delete.push_back(i);
+        else retain(i);
+    }
+}
+
+
 void new_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
               const segment_t &original_segment, const segflag_t &original_segflag)
@@ -1175,7 +1304,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
     /* choosing which way to remesh the boundary */
     int_vec points_to_delete;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     switch (param.mesh.remeshing_option) {
     case 0:
     case 10:
@@ -1218,6 +1347,9 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                                      excl_func);
         }
     }
+
+    // Triangle path: enforce MMG's hmin floor so no sub-hmin (tiny) element is emitted.
+    decimate_below_hmin(param, array_t_qcoord, old_nnode, old_bcflag, points_to_delete);
 
     // sort points_to_delete and remove duplicates
     {
@@ -1316,7 +1448,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
         #pragma acc wait
 
-        const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+        const double smallest_vol = refine_floors(param.mesh).smallest_vol;
         bad_quality = 0;
         for (int e=0; e<new_nelem; e++) {
             if (new_volume[e] < smallest_vol) {
@@ -2180,6 +2312,14 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
      * The base size is init_elem_size_n (the frozen initial nodal element size), so away
      * from plastic strain element sizes are MAINTAINED across remeshing (metric == base).
      *
+     * NOTE (2026-07-08): a "maintain CURRENT size" base (Design A of the refine-unification
+     * experiment) was tried and REVERTED. Empirically it either left the shear band coarse
+     * (coeff=0: MMG regenerates a uniform mesh, it does not preserve Triangle's Lagrangian node
+     * crowding) or ran away (coeff>0: re-anchoring to the just-refined size makes the count ratchet
+     * unboundedly -- the same over-refinement runaway the frozen init anchor exists to prevent).
+     * The frozen init base is the bounding anchor; keep it. To sharpen MMG's band, raise
+     * mmg_metric_refine_coeff (bounded, reaches peak plstrain ~3.8 at coeff~50).
+     *
      * Where plastic strain has accumulated, the target is reduced to refine the mesh,
      * following Triangle's area/volume-constraint convention: the target element VOLUME is
      * scaled by 1/(1 + coeff*plstrain), so the target EDGE LENGTH that MMG consumes is that
@@ -2253,6 +2393,7 @@ void collapse_outside_nodes(const int_vec &pts, int nnode, int nelem, int nseg,
                             double zlen, double xlen, double ylen, double min_dist,
                             double_vec &ncoord, int_vec &nconn,
                             int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
+                            int_vec &new_to_old_node, int_vec &new_to_old_elem,
                             int &nn, int &ne, int &ns)
 {
     // crossed-plane bitmask per node (BOUND* convention, so a boundary node m lies on a plane
@@ -2393,13 +2534,15 @@ void collapse_outside_nodes(const int_vec &pts, int nnode, int nelem, int nseg,
         }
     }
 
-    // renumber survivors, rebuild coord + metric.
+    // renumber survivors, rebuild coord + metric. new_to_old_node[new] = the survivor's old id,
+    // so the caller can look up per-node old-mesh state (bcflag, freeze masks) after renumbering.
     int_vec node_map(nnode, -1);
-    ncoord.clear(); nmetric.clear();
+    ncoord.clear(); nmetric.clear(); new_to_old_node.clear();
     nn = 0;
     for (int n = 0; n < nnode; ++n) {
         if (!alive(n)) continue;
         node_map[n] = nn++;
+        new_to_old_node.push_back(n);
         for (int d = 0; d < NDIMS; ++d) ncoord.push_back(coord[n*NDIMS + d]);
         nmetric.push_back(metric[n]);
     }
@@ -2420,7 +2563,8 @@ void collapse_outside_nodes(const int_vec &pts, int nnode, int nelem, int nseg,
 
     // rebuild connectivity, dropping elements that collapse onto a boundary: a repeated node,
     // OR near-null / inverted measure (all nodes land on the flat boundary, or orientation flip).
-    nconn.clear();
+    // new_to_old_elem[new] = the surviving element's old id (same map purpose as new_to_old_node).
+    nconn.clear(); new_to_old_elem.clear();
     ne = 0;
     for (int e = 0; e < nelem; ++e) {
         const int *el = conn + e*NODES_PER_ELEM;
@@ -2434,6 +2578,7 @@ void collapse_outside_nodes(const int_vec &pts, int nnode, int nelem, int nseg,
         double m = signed_elem_measure(ncoord.data(), v);
         if (ref != 0.0 && m * ref <= 1e-6 * ref * ref) continue;
         for (int k = 0; k < NODES_PER_ELEM; ++k) nconn.push_back(v[k]);
+        new_to_old_elem.push_back(e);
         ++ne;
     }
 
@@ -2487,6 +2632,131 @@ bool has_outside_material(const Param &param, const array_t &coord, const uint_v
 }
 
 
+// Conservative remeshing: mark the "quiet" part of the mesh as MMG-required so MMG leaves it
+// untouched and only remeshes the active region. This mirrors the triangle path, which
+// re-triangulates existing points and does not disturb elements without plastic strain or
+// deformation -- avoiding needless node motion and field interpolation in quiet regions.
+//
+// The criterion is plastic strain that is still INCREASING, not accumulated plastic strain.
+// Every MMG remesh re-interpolates the elements it re-adapts (inject_field's weighted average),
+// which numerically diffuses their fields; keying on accumulated strain would re-adapt the whole
+// shear band every remesh and smear the localization (peak plstrain decays vs the triangle path).
+// Instead we compare against plstrain_remesh (the snapshot taken at the previous remesh): an
+// element is ACTIVE only if it yielded MORE since then (plstrain - plstrain_remesh >
+// mmg_remesh_active_plstrain). A fossil band that has stopped growing is therefore frozen and its
+// sharp plstrain is carried across the remesh verbatim (is_changed==0 -> direct copy), exactly
+// like the triangle path preserves untouched points.
+//
+// An element is also ACTIVE if it is distorted (elem_quality < min_quality) or tiny. A node is
+// active if ANY incident element is active;
+// this leaves a one-element-thick free transition layer around active zones so MMG has room to
+// repair them. Quiet nodes are marked required (not moved) and all-quiet elements are marked
+// required (not split/collapsed). MMG entity ids are 1-based and, on the non-collapse path,
+// match the old-mesh node/element order 1:1 (vertices = packed old_coord, triangles/tets built
+// from old connectivity in order). Only call when !outside_material (the collapse path renumbers).
+// Fills required_node[mnode] / required_elem[melem] (1 = frozen); mmg_adapt applies them to MMG.
+void mark_quiet_required(const Param &param, const Variables &var,
+                         const array_t &old_coord, const conn_t &old_connectivity,
+                         int mnode, int melem,
+                         std::vector<char> &required_node, std::vector<char> &required_elem)
+{
+    // compute_active_mask returns node_movable (MMG may move) + elem_modifiable (MMG may split/remesh).
+    // MMG freezes the complement:
+    //   required_node[n]  = node NOT movable  -> MMG holds it fixed.
+    //   required_elem[e]  = element NOT modifiable AND all its nodes fixed -> MMG leaves it untouched.
+    // A mode-2 REFINE element is modifiable (splittable) yet has fixed nodes: MMG adds new nodes to
+    // refine it without moving the existing ones. A quiet element next to a movable node is left
+    // non-required (one-element transition layer) so MMG can adjust it when the neighbour moves.
+    std::vector<char> node_movable, elem_modifiable;
+    compute_active_mask(param, var, old_coord, old_connectivity, mnode, melem, node_movable, elem_modifiable);
+
+    required_node.assign(mnode, 0);
+    required_elem.assign(melem, 0);
+    int n_req_node = 0, n_req_elem = 0;
+    for (int n = 0; n < mnode; ++n)
+        if (!node_movable[n]) { required_node[n] = 1; ++n_req_node; }
+    for (int e = 0; e < melem; ++e) {
+        if (elem_modifiable[e]) continue;   // repair/refine element: MMG may split/remesh it
+        ConstConnAccessor conn = old_connectivity[e];
+        bool all_fixed = true;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            if (node_movable[conn[i]]) { all_fixed = false; break; }
+        if (all_fixed) { required_elem[e] = 1; ++n_req_elem; }
+    }
+    std::cout << "    Conservative remesh: froze " << n_req_elem << "/" << melem
+              << " elements (" << (melem - n_req_elem) << " modifiable), "
+              << n_req_node << "/" << mnode << " nodes required.\n";
+}
+
+// Collapse-path variant of mark_quiet_required. On the collapse path the mesh handed to MMG has
+// been RENUMBERED by collapse_outside_nodes (sunk material merged out, elements dropped), so the
+// old<->MMG id map is no longer 1:1 and mark_quiet_required's direct indexing is invalid. Here we
+//   (1) compute the freeze policy on the OLD mesh (compute_active_mask -- its var fields match old
+//       ids exactly), then
+//   (2) TRANSLATE the movable/modifiable masks through the collapse renumbering (new_to_old_*), then
+//   (3) additionally FREE the collapse region: any new element whose source old element referenced a
+//       collapsed (pts) node was reshaped by the collapse; mark it and its nodes movable, plus one
+//       ring of connected elements. Those freed nodes carry the init_elem_size_n-based metric
+//       (compute_metric_field's base), so MMG re-refines the collapsed region back to the initial
+//       element size instead of leaving it coarse. Finally
+//   (4) required = complement (same rule as mark_quiet_required), evaluated on the NEW connectivity.
+void mark_quiet_required_collapse(const Param &param, const Variables &var,
+                                  const array_t &old_coord, const conn_t &old_connectivity,
+                                  int old_nnode, int old_nelem, const int_vec &pts,
+                                  const int *c_conn, int mnode, int melem,
+                                  const int_vec &new_to_old_node, const int_vec &new_to_old_elem,
+                                  std::vector<char> &required_node, std::vector<char> &required_elem)
+{
+    // (1) far-field freeze policy on the OLD mesh
+    std::vector<char> old_movable, old_modifiable;
+    compute_active_mask(param, var, old_coord, old_connectivity, old_nnode, old_nelem,
+                        old_movable, old_modifiable);
+
+    // (2) translate OLD masks -> NEW (collapsed) masks
+    std::vector<char> movable(mnode, 0), modifiable(melem, 0);
+    for (int n = 0; n < mnode; ++n) movable[n]    = old_movable[new_to_old_node[n]];
+    for (int e = 0; e < melem; ++e) modifiable[e] = old_modifiable[new_to_old_elem[e]];
+
+    // (3) free the collapse region. A new element whose source old element touched a collapsed
+    //     (pts) node was reshaped -> free it + its nodes; then one ring of connected elements.
+    std::vector<char> is_pts(old_nnode, 0);
+    for (std::size_t i = 0; i < pts.size(); ++i) is_pts[pts[i]] = 1;
+    std::vector<char> collapse_node(mnode, 0);
+    for (int e = 0; e < melem; ++e) {
+        ConstConnAccessor oc = old_connectivity[new_to_old_elem[e]];
+        bool touched = false;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) if (is_pts[oc[i]]) { touched = true; break; }
+        if (!touched) continue;
+        modifiable[e] = 1;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) { int nn = c_conn[e*NODES_PER_ELEM + i]; movable[nn] = 1; collapse_node[nn] = 1; }
+    }
+    for (int e = 0; e < melem; ++e) {
+        bool touch = false;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) if (collapse_node[c_conn[e*NODES_PER_ELEM + i]]) { touch = true; break; }
+        if (!touch) continue;
+        modifiable[e] = 1;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) movable[c_conn[e*NODES_PER_ELEM + i]] = 1;
+    }
+
+    // (4) required = complement, on the NEW connectivity
+    required_node.assign(mnode, 0);
+    required_elem.assign(melem, 0);
+    int n_req_node = 0, n_req_elem = 0;
+    for (int n = 0; n < mnode; ++n)
+        if (!movable[n]) { required_node[n] = 1; ++n_req_node; }
+    for (int e = 0; e < melem; ++e) {
+        if (modifiable[e]) continue;
+        bool all_fixed = true;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            if (movable[c_conn[e*NODES_PER_ELEM + i]]) { all_fixed = false; break; }
+        if (all_fixed) { required_elem[e] = 1; ++n_req_elem; }
+    }
+    std::cout << "    Conservative remesh (collapse path): froze " << n_req_elem << "/" << melem
+              << " elements (" << (melem - n_req_elem) << " modifiable), "
+              << n_req_node << "/" << mnode << " nodes required.\n";
+}
+
+
 #ifdef THREED
 void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
@@ -2496,7 +2766,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -2582,8 +2852,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
     double *mcoord   = qcoord;
-    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
-    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *mconn1   = qconn_from_1;      // 0-indexed; mmg_adapt 1-indexes internally
+    int    *mseg1    = qsegment_from_1;   // 0-indexed; mmg_adapt 1-indexes internally
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
@@ -2593,6 +2863,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // whole-domain Triangle/Tetgen remesh. Only fires in this pathological case.
     double_vec c_coord, c_metric;
     int_vec c_conn, c_seg, c_segflag;
+    int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
     bool outside_material = has_outside_material(param, original_coord, old_bcflag,
                                                  old_nnode, min_dist);
     if (outside_material) {
@@ -2602,7 +2873,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
                                param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
-                               c_coord, c_conn, c_seg, c_segflag, c_metric, cn, ce, cs);
+                               c_coord, c_conn, c_seg, c_segflag, c_metric,
+                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
         mnode = cn; melem = ce; mseg = cs;
         mcoord = c_coord.data();
         mconn1 = c_conn.data();
@@ -2611,171 +2883,43 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // --- STEP I: Initialization
-    // 1) Initialisation of mesh and sol structures
-    //   args of InitMesh:
-    //     MMG5_ARG_start: we start to give the args of a variadic func
-    //     MMG5_ARG_ppMesh: next arg will be a pointer over a MMG5_pMesh
-    //     &mmgMesh: pointer toward your MMG5_pMesh (that store your mesh)
-    //     MMG5_ARG_ppMet: next arg will be a pointer over a MMG5_pSol storing a metric
-    //     &mmgSol: pointer toward your MMG5_pSol (that store your metric) */
-    MMG5_pMesh      mmgMesh = NULL;
-    MMG5_pSol       mmgSol  = NULL;
+    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
+    // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
+    // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
+    // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
+    std::vector<char> req_node, req_elem;
+    if (!outside_material)   // 1:1 old<->MMG id map: mark directly on the original mesh
+        mark_quiet_required(param, var, original_coord, original_connectivity,
+                            mnode, melem, req_node, req_elem);
+    else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
+        mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
+                                     old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
+                                     c_new_to_old_node, c_new_to_old_elem, req_node, req_elem);
+    const char *rn = req_node.data();
+    const char *re = req_elem.data();
 
-    MMG3D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh, MMG5_ARG_ppMet,
-                    &mmgSol, MMG5_ARG_end);
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
 
-    // 2) Build mesh in MMG5 format
-    // Manually set of the mesh 
-    //  a) give the size of the mesh: vertices, tetra, prisms, triangles, quads, edges
-    if ( MMG3D_Set_meshSize(mmgMesh, mnode, melem,
-                            0, mseg, 0, 0) != 1 )
-        die(EXIT_MESH_MMG);
-    //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG3D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-    //   c) give the connectivity (MMG is 1-indexed).
-    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
-        ++mconn1[i];
-    if( MMG3D_Set_tetrahedra(mmgMesh, mconn1, NULL) != 1 )
-        die(EXIT_MESH_MMG);
-    //   d) give the boundary facets (MMG is 1-indexed).
-    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
-        ++mseg1[i];
-    if( MMG3D_Set_triangles(mmgMesh, mseg1, msegflag) != 1 )
-        die(EXIT_MESH_MMG);
+    var.nnode = mmg_out.nnode;
+    var.nelem = mmg_out.nelem;
+    var.nseg  = mmg_out.nseg;
+    std::cerr << "New number of vertices:" << var.nnode
+              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
-    // 3) Build sol in MMG5 format
-    //      Here a 'solution' is a nodal field that becomes
-    //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation. The metric was computed above (on the clean nodes when
-    //      the sunk material was rebuilt).
-    //
-    //   a) give info for the sol structure
-    if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
-        die(EXIT_MESH_MMG);
-    if( MMG3D_Set_scalarSols(mmgSol, mmetric) != 1 )
-        die(EXIT_MESH_MMG);
-
-    /*save init mesh*/
-    //      ii) Otherwise, set a value node by node:
-    // for (int i = 0; i < var.nnode; ++i) {
-    //     if( MMG3D_Set_scalarSol(mmgSol, 100.0, i+1) != 1 )
-    //         exit(10);
-    // }
-    //      iii) If a metric field ('solution') is given, 
-    //           optimization mode should be off.
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_optim, 0) != 1 ) 
-        die(EXIT_MESH_MMG);
-
-    // 4) (not mandatory): check if the number of given entities match with mesh size
-    if( MMG3D_Chk_meshData(mmgMesh, mmgSol) != 1 ) die(EXIT_MESH_MMG);
-
-    //--- STEP  II: Remesh function
-    /* debug mode ON (default value = OFF) */
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_debug, param.mesh.mmg_debug) != 1 )
-        die(EXIT_MESH_MMG);
-    if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_verbose, param.mesh.mmg_verbose) != 1 )
-        die(EXIT_MESH_MMG);
- 
-    /* maximal memory size (default value = 50/100*ram) */
-    //if ( MMG3D_Set_iparameter(mmgMesh,mmgSol,MMG3D_IPARAM_mem, 600) != 1 )
-    //exit(10);
-
-    // Element-size band. The remesh size band comes solely from mesh.largest_size /
-    // mesh.smallest_size -- the same relative-element-volume convention as the tiny-element
-    // quality check; an equilateral element of that volume has edge = resolution *
-    // size^(1/NDIMS), the same unit as the metric (init_elem_size_n) it must bracket.
-    const double hmax = std::pow(param.mesh.largest_size,  1.0/NDIMS) * param.mesh.resolution;
-    const double hmin = std::pow(param.mesh.smallest_size, 1.0/NDIMS) * param.mesh.resolution;
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hmax, hmax) != 1 )
-    die(EXIT_MESH_MMG);
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hmin, hmin) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Global hausdorff value (default value = 0.01) applied on the whole boundary */
-    if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hausd, param.mesh.mmg_hausd_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // /* Gradation control*/
-    // if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hgrad, 3.0) != 1 )
-    // exit(10);
-
-    // /* Gradation requirement */
-    // if ( MMG3D_Set_dparameter(mmgMesh,mmgSol,MMG3D_DPARAM_hgradreq, -1.0) != 1 )
-    // exit(10);
-
-    const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
-    if ( ier == MMG5_STRONGFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
-        die(EXIT_MESH_MMG);
-    } else if ( ier == MMG5_LOWFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB\n");
-        die(EXIT_MESH_MMG);
-    }
-
-    //--- STEP III: Get results
-    // 1) Preparations
-    //   a) get the size of the mesh: vertices, tetra, triangles, edges */
-    int na;
-    if ( MMG3D_Get_meshSize(mmgMesh, &(var.nnode), &(var.nelem), NULL, &(var.nseg), NULL, &na) !=1 )
-        die(EXIT_MESH_MMG);
-    std::cerr << "Updated mesh size\n";
-    std::cerr << "New number of vertices:" << var.nnode << std::endl;
-    std::cerr << "New number of elements:" << var.nelem << std::endl;
-    std::cerr << "New number of segments:" << var.nseg << std::endl;
-
-    //   b) Create mesh-defining arrays of new sizes
-    array_t new_coord( var.nnode );
-    conn_t new_connectivity( var.nelem );
-    segment_t new_segment( var.nseg );
-    segflag_t new_segflag( var.nseg );
-    std::cerr << "Resized arrays\n";
-
-    // double *ncoord = new_coord.data();
-    // int *nconn = new_connectivity.data();
-    // int *nsegment = new_segment.data();
-    // int *nsegflag = new_segflag.data();
-
-    // 2) Pupolate DES mesh-defining arrays
-    //   a) Vertex recovering
-    for (int i = 0; i < var.nnode; ++i) {
-        if ( MMG3D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), &(new_coord[i][2]), NULL, NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-    }
-    std::cerr << "New coordinates populated\n";
-
-    //   b) Tetra recovering
-    for (int i = 0; i < var.nelem; ++i) {
-        if ( MMG3D_Get_tetrahedron(mmgMesh, &(new_connectivity[i][0]), &(new_connectivity[i][1]), &(new_connectivity[i][2]), &(new_connectivity[i][3]), NULL, NULL) != 1 )  
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_ELEM; ++j)
-            new_connectivity[i][j] -= 1;
-    }
-    std::cerr << "New connectivity populated\n";
-
-    //   c) segments recovering
-    for (int i = 0; i < var.nseg; ++i) {
-        if ( MMG3D_Get_triangle(mmgMesh, &(new_segment[i][0]), &(new_segment[i][1]), &(new_segment[i][2]),&(new_segflag.data()[i]), NULL) != 1 )
-            die(EXIT_MESH_MMG);
-        for(int j = 0; j < NODES_PER_FACET; ++j)
-            new_segment[i][j] -= 1;
-    }     
-    std::cerr << "New segments populated\n";
-
-    //   d) Let the DES arrays point to the newly populated data 
+    array_t   new_coord(var.nnode);
+    conn_t    new_connectivity(var.nelem);
+    segment_t new_segment(var.nseg);
+    segflag_t new_segflag(var.nseg);
+    new_coord.load_from_buffer(mmg_out.coord.data(), var.nnode);
+    new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
+    new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
+    new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-    std::cerr << "Arrays transferred." << std::endl;
-
-    // 3) Free the MMG3D5 structures
-    MMG3D_Free_all(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh,&mmgMesh,MMG5_ARG_ppMet,&mmgSol,
-                    MMG5_ARG_end);
-    std::cerr << "MMG3D freed." <<std::endl;
 
     std::cerr << "\nMesh optimization done" <<std::endl;
 }
@@ -2790,7 +2934,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -2878,8 +3022,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
     double *mcoord   = qcoord;
-    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
-    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *mconn1   = qconn_from_1;      // 0-indexed; mmg_adapt 1-indexes internally
+    int    *mseg1    = qsegment_from_1;   // 0-indexed; mmg_adapt 1-indexes internally
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
@@ -2889,6 +3033,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // whole-domain Triangle/Tetgen remesh. Only fires in this pathological case.
     double_vec c_coord, c_metric;
     int_vec c_conn, c_seg, c_segflag;
+    int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
     bool outside_material = has_outside_material(param, original_coord, old_bcflag,
                                                  old_nnode, min_dist);
     if (outside_material) {
@@ -2898,7 +3043,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
                                param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
-                               c_coord, c_conn, c_seg, c_segflag, c_metric, cn, ce, cs);
+                               c_coord, c_conn, c_seg, c_segflag, c_metric,
+                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
         mnode = cn; melem = ce; mseg = cs;
         mcoord = c_coord.data();
         mconn1 = c_conn.data();
@@ -2907,167 +3053,43 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // --- STEP I: Initialization
-    // 1) Initialisation of mesh and sol structures
-    //   args of InitMesh:
-    //     MMG5_ARG_start: we start to give the args of a variadic func
-    //     MMG5_ARG_ppMesh: next arg will be a pointer over a MMG5_pMesh
-    //     &mmgMesh: pointer toward your MMG5_pMesh (that store your mesh)
-    //     MMG5_ARG_ppMet: next arg will be a pointer over a MMG5_pSol storing a metric
-    //     &mmgSol: pointer toward your MMG5_pSol (that store your metric) */
-    MMG5_pMesh      mmgMesh = NULL;
-    MMG5_pSol       mmgSol  = NULL;
-  
-    MMG2D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh, MMG5_ARG_ppMet,
-                    &mmgSol, MMG5_ARG_end);
+    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
+    // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
+    // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
+    // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
+    std::vector<char> req_node, req_elem;
+    if (!outside_material)   // 1:1 old<->MMG id map: mark directly on the original mesh
+        mark_quiet_required(param, var, original_coord, original_connectivity,
+                            mnode, melem, req_node, req_elem);
+    else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
+        mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
+                                     old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
+                                     c_new_to_old_node, c_new_to_old_elem, req_node, req_elem);
+    const char *rn = req_node.data();
+    const char *re = req_elem.data();
 
-    // 2) Build mesh in MMG5 format
-    // Manually set of the mesh 
-    //  a) give the size of the mesh: vertices, triangles, quads(=0), edges
-    if ( MMG2D_Set_meshSize(mmgMesh, mnode, melem, 0, mseg) != 1 )
-        die(EXIT_MESH_MMG);
-    //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG2D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-    //   c) give the connectivity (MMG is 1-indexed).
-    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
-        ++mconn1[i];
-    if( MMG2D_Set_triangles(mmgMesh, mconn1, NULL) != 1 )
-        die(EXIT_MESH_MMG);
-    //   d) give the segments (i.e., boundary edges; MMG is 1-indexed).
-    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
-        ++mseg1[i];
-    for (int i = 0; i < mseg; ++i)
-        if( MMG2D_Set_edge(mmgMesh, mseg1[i*NODES_PER_FACET],
-                mseg1[i*NODES_PER_FACET+1], msegflag[i], i+1) != 1)
-            die(EXIT_MESH_MMG);
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
 
-    // 3) Build sol in MMG5 format
-    //      Here a 'solution' is a nodal field that becomes
-    //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation. The metric was computed above (on the clean nodes when
-    //      the sunk material was rebuilt).
-    //
-    //   a) give info for the sol structure
-    if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
-        die(EXIT_MESH_MMG);
-    if( MMG2D_Set_scalarSols(mmgSol, mmetric) != 1 )
-        die(EXIT_MESH_MMG);
-    //      ii) Otherwise, set a value node by node:
-    // for (int i = 0; i < var.nnode; ++i) {
-    //     if( MMG2D_Set_scalarSol(mmgSol, 0.5, i+1) != 1 )
-    //         exit(10);
-    // }
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_optim, 0) != 1 )
-    die(EXIT_MESH_MMG);
+    var.nnode = mmg_out.nnode;
+    var.nelem = mmg_out.nelem;
+    var.nseg  = mmg_out.nseg;
+    std::cerr << "New number of vertices:" << var.nnode
+              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
-    // 4) (not mandatory): check if the number of given entities match with mesh size
-    if( MMG2D_Chk_meshData(mmgMesh, mmgSol) != 1 ) die(EXIT_MESH_MMG);
-
-    //--- STEP  II: Remesh function
-    /* debug mode ON (default value = OFF) */
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_debug, param.mesh.mmg_debug) != 1 )
-    die(EXIT_MESH_MMG);
-
-    if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_verbose, param.mesh.mmg_verbose) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_iso, 1) != 1 )
-    // exit(10);
- 
-    /* maximal memory size (default value = 50/100*ram) */
-    //if ( MMG2D_Set_iparameter(mmgMesh,mmgSol,MMG2D_IPARAM_mem, 600) != 1 )
-    //exit(10);
-
-    /* Element-size band (default FLT_MAX / 0). The remesh size band comes solely from
-     * mesh.largest_size / mesh.smallest_size -- the same relative-element-volume convention
-     * as the tiny-element quality check (smallest_vol = smallest_size*sizefactor*res^NDIMS):
-     * an equilateral element of that volume has edge = resolution * size^(1/NDIMS), which is
-     * also the unit of the metric (init_elem_size_n), so these cleanly bracket the metric. */
-    const double hmax = std::pow(param.mesh.largest_size,  1.0/NDIMS) * param.mesh.resolution;
-    const double hmin = std::pow(param.mesh.smallest_size, 1.0/NDIMS) * param.mesh.resolution;
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hmax, hmax) != 1 )
-    die(EXIT_MESH_MMG);
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hmin, hmin) != 1 )
-    die(EXIT_MESH_MMG);
-
-    /* Global hausdorff value (default value = 0.01) applied on the whole boundary */
-    if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hausd, param.mesh.mmg_hausd_factor*param.mesh.resolution) != 1 )
-    die(EXIT_MESH_MMG);
-
-    // /* Gradation control*/
-    // if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hgrad, 3.0) != 1 )
-    // exit(10);
-
-    // /* Gradation requirement */
-    // if ( MMG2D_Set_dparameter(mmgMesh,mmgSol,MMG2D_DPARAM_hgradreq, 3.0) != 1 )
-    // exit(10);
-
-    const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
-    if ( ier == MMG5_STRONGFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
-        die(EXIT_MESH_MMG);
-    } else if ( ier == MMG5_LOWFAILURE ) {
-        fprintf(stdout,"BAD ENDING OF MMG3DLIB\n");
-        die(EXIT_MESH_MMG);
-    }    
-
-    //--- STEP III: Get results
-    // 1) Preparations
-    //   a) get the size of the mesh: vertices, tetra, triangles, edges */
-    if ( MMG2D_Get_meshSize(mmgMesh, &(var.nnode), &(var.nelem), NULL, &(var.nseg)) !=1 )
-        die(EXIT_MESH_MMG);
-    std::cerr << "Updated mesh size\n";
-    std::cerr << "New number of vertices:" << var.nnode << std::endl;
-    std::cerr << "New number of elements:" << var.nelem << std::endl;
-    std::cerr << "New number of segments:" << var.nseg << std::endl;
-
-    //   b) Create mesh-defining arrays of new sizes
-    array_t new_coord( var.nnode );
-    conn_t new_connectivity( var.nelem );
-    segment_t new_segment( var.nseg );
-    segflag_t new_segflag( var.nseg );
-    std::cerr << "Resized arrays\n";
-
-    // 2) Pupolate DES mesh-defining arrays
-    //   a) Vertexes recovering
-    for (int i = 0; i < var.nnode; ++i) {
-        if ( MMG2D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), NULL, NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-    }
-    std::cerr << "New coordinates populated\n";
-
-    //   b) Triangles recovering
-    for (int i = 0; i < var.nelem; ++i) {
-        if ( MMG2D_Get_triangle(mmgMesh, &(new_connectivity[i][0]), &(new_connectivity[i][1]), &(new_connectivity[i][2]), NULL, NULL) != 1 )  
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_ELEM; ++j)
-            new_connectivity[i][j] -= 1;
-    }
-    std::cerr << "New connectivity populated\n";
-
-    //   c) segments recovering
-    for (int i = 0; i < var.nseg; ++i) {
-        if ( MMG2D_Get_edge(mmgMesh, &(new_segment[i][0]), &(new_segment[i][1]), &(new_segflag.data()[i]), NULL, NULL) != 1 )
-            die(EXIT_MESH_MMG);
-        for(std::size_t j = 0; j < NODES_PER_FACET; ++j)
-            new_segment[i][j] -= 1;
-    }
-    std::cerr << "New segments populated\n";
-
-    //   d) Let the DES arrays point to the newly populated data 
+    array_t   new_coord(var.nnode);
+    conn_t    new_connectivity(var.nelem);
+    segment_t new_segment(var.nseg);
+    segflag_t new_segflag(var.nseg);
+    new_coord.load_from_buffer(mmg_out.coord.data(), var.nnode);
+    new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
+    new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
+    new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-    std::cerr << "Arrays transferred." << std::endl;
-
-    // 3) Free the MMG3D5 structures
-    MMG2D_Free_all(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh,&mmgMesh,MMG5_ARG_ppMet,&mmgSol,
-                    MMG5_ARG_end);
-    std::cerr << "MMG2D freed." <<std::endl;
 
     std::cerr << "\nMesh optimization done" <<std::endl;
 }
@@ -3149,8 +3171,10 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
      *    of side = mesh.resolution]).
      */
 
-    // check tiny elements
-    const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+    // Tiny-element trigger at smallest_vol / remesh_tiny_margin, BELOW the size the remesher floors
+    // elements at: margin == 1 puts the floor on the trigger and remeshing thrashes; margin > 1
+    // opens a hysteresis gap.
+    const double smallest_vol = refine_floors(param.mesh).smallest_vol / param.mesh.remesh_tiny_margin;
     for (int e=0; e<var.nelem; e++) {
         if ((*var.volume)[e] < smallest_vol) {
             index = e;
@@ -3480,6 +3504,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     // Timescale reference for the next remesh's Deborah-number stress blend.
     var.last_remesh_time = var.time;
+
+    // Snapshot plastic strain on the new mesh: the baseline the NEXT remesh's R2 test compares
+    // against, so a fossil band that stops growing is frozen. After the interpolation set the
+    // new-mesh var.plstrain; sized to the new var.nelem.
+    delete var.plstrain_remesh;
+    var.plstrain_remesh = new double_vec(*var.plstrain);
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 
