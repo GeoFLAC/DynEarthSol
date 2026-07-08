@@ -262,10 +262,6 @@ static void declare_parameters(po::options_description &cfg,
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
-         "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
-         "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
@@ -275,6 +271,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
+        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+         "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
+         "is scaled by 1/(1 + coeff*plastic_strain) (Triangle max_area convention), so the "
+         "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
+         "(elements keep their frozen initial size everywhere). Default: 5.")
         ;
 
     cfg.add_options()
@@ -1137,6 +1138,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
+    }
+
+    if (p.mesh.mmg_metric_refine_coeff < 0) {
+        // A negative coeff makes the MMG metric denominator (1 + coeff*plstrain) reach
+        // zero or go negative, producing a NaN/negative target element size.
+        std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
+                     "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
     }
 
     if (p.mesh.remesh_deborah_min <= 0 ||
