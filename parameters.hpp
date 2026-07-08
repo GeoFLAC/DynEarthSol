@@ -196,6 +196,12 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // Conservative MMG remeshing (always on): freeze (mark "required") elements that have neither
+    // plastic strain nor distortion, so MMG only remeshes the active region (like the triangle path,
+    // which leaves quiet elements undisturbed). mmg_remesh_active_plstrain is the refine threshold.
+    double mmg_remesh_active_plstrain;
+    double mmg_remesh_defensive_tiny_ratio;
+
     // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
     double remesh_deborah_min;
     double remesh_deborah_max;
@@ -772,6 +778,9 @@ struct Variables {
     double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
     double_vec *temperature, *plstrain, *delta_plstrain;
+    // REFINE baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so
+    // a fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
+    double_vec *plstrain_remesh;
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
     double_vec *ntmp;

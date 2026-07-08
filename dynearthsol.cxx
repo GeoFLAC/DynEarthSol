@@ -210,6 +210,7 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not REFINE growth
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
@@ -378,6 +379,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // the REFINE baseline, so the first remesh after a restart refines as in a continuous run
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -414,7 +417,11 @@ void restart(const Param& param, Variables& var)
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
+        const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
+        // Shift the REFINE baseline by the re-seed only; growth since the last remesh still counts.
+        for (int e = 0; e < var.nelem; ++e)
+            (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];
     }
 
     // Restore the RSF state variable when available, then rebuild the derived

@@ -173,7 +173,13 @@ static void declare_parameters(po::options_description &cfg,
          "Spatial resolution (in meters)")
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
          "The size of smallest element relative to an element with typical resolution. With MMG "
-         "it also sets the minimum edge length, smallest_size^(1/NDIMS) * resolution")
+         "it also sets the minimum edge length, (smallest_size*mmg_remesh_defensive_tiny_ratio)"
+         "^(1/NDIMS) * resolution (and the other MMG thresholds listed under that ratio). "
+         "With Triangle/TetGen remeshing (a build without MMG, "
+         "meshing_elem_shape = 0) it also sets the node-spacing floor: a remesh deletes interior "
+         "nodes closer than smallest_size^(1/NDIMS) * resolution to a retained node (the floor "
+         "never deletes a boundary node, nor with is_discarding_internal_segments = no a node of "
+         "an internal segment).")
         ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
          "The size of largest element relative to an element with typical resolution, which also "
          "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
@@ -248,6 +254,33 @@ static void declare_parameters(po::options_description &cfg,
          "13: move all bottom, left, and right nodes to initial dimensions. REQUIRES MMG when "
          "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
          "collapse.\n")
+
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
+         "Plastic-strain-INCREMENT threshold for the (always-on) conservative-freeze REFINE condition: "
+         "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
+         "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
+         "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
+         "since the last remesh. Distorted (quality < mesh.min_quality) or tiny (< smallest_vol * "
+         "mmg_remesh_defensive_tiny_ratio) elements "
+         "are always remeshed with node motion; boundary nodes are always movable (flattening). "
+         "Must be > 0 in practice: at 0, every element that yielded at all since the last remesh, "
+         "incidental yielding included, is handed to MMG as splittable/"
+         "swappable, letting it re-tessellate quiet far-field and corner elements for no reason. "
+         "Default 0.01, heuristic: meant to sit above the increment of incidental yielding and "
+         "below a localizing band's increment over a remesh interval.")
+        ("mesh.mmg_remesh_defensive_tiny_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
+         "Gap, in element measure, between the tiny-element remesh trigger and the smallest "
+         "elements MMG builds (MMG remeshing and MMG-built initial meshes: usemmg=1 and "
+         "meshing_elem_shape = 0). The trigger is smallest_vol = "
+         "smallest_size*sizefactor*resolution^NDIMS for every mesher. MMG's minimum edge length is "
+         "raised to hmin*ratio^(1/NDIMS) (hmin = smallest_size^(1/NDIMS)*resolution), so MMG aims "
+         "to build every element at smallest_vol*ratio or more, which must shrink by that factor "
+         "before it re-triggers; a remesh also rebuilds any element below smallest_vol*ratio. "
+         "ratio=1: MMG builds at the trigger, so a just-remeshed element re-triggers under any "
+         "compression (remesh thrash). A ratio at or above largest_size/smallest_size (MMG's size "
+         "ceiling) is capped just below it, with a warning; when largest_size equals "
+         "smallest_size the cap is 1 - 1e-9 (round-off, in effect 1). Default 1.5: a 2/3 "
+         "measure gap, heuristic. Must be >= 1 as set.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -1211,6 +1244,26 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
                      "(0 disables plastic-strain refinement).\n";
         die(EXIT_CONFIG_VALUE);
+    }
+
+    // ratio < 1 puts MMG's floor below the trigger: a just-remeshed element re-triggers at once.
+    if (p.mesh.mmg_remesh_defensive_tiny_ratio < 1.0)
+        die(EXIT_CONFIG_VALUE, "mesh.mmg_remesh_defensive_tiny_ratio must be >= 1 "
+            "(1 = MMG builds at the trigger; larger = a wider gap above it).");
+
+    // MMG needs hmin < hmax: cap the ratio just under largest_size/smallest_size. 1e-9 clears the
+    // round-off of mmg_adapt's pow() products (~1e-16) and changes no size that matters. Equal
+    // sizes cap it at 1 - 1e-9 < 1, so the >= 1 check must stay above this cap.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.smallest_size * p.mesh.mmg_remesh_defensive_tiny_ratio >= p.mesh.largest_size) {
+        const double cap = (1 - 1e-9) * p.mesh.largest_size / p.mesh.smallest_size;
+        std::cerr << "Warning: mesh.mmg_remesh_defensive_tiny_ratio = "
+                  << p.mesh.mmg_remesh_defensive_tiny_ratio << " puts MMG's size floor "
+                  << "(smallest_size x ratio) at or above largest_size; capped just below "
+                  << "largest_size / smallest_size = " << p.mesh.largest_size / p.mesh.smallest_size
+                  << ". MMG builds closer to the tiny-element trigger: expect frequent "
+                  << "tiny-element remeshes unless smallest_size < largest_size / ratio.\n";
+        p.mesh.mmg_remesh_defensive_tiny_ratio = cap;
     }
 #endif
 

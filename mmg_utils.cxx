@@ -26,11 +26,12 @@
 
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 {
-    // Element-size band from the largest_size/smallest_size convention:
-    // an equilateral element of the target volume has edge = resolution * size^(1/NDIMS).
+    // The size band of the contract (mmg_utils.hpp); validate_parameters caps the ratio so that
+    // hmin < hmax.
     const double res   = mesh.resolution;
     const double hmax  = std::pow(mesh.largest_size,  1.0 / NDIMS) * res;
-    const double hmin  = std::pow(mesh.smallest_size, 1.0 / NDIMS) * res;
+    const double hmin  = std::pow(mesh.smallest_size, 1.0 / NDIMS) * res
+                         * std::pow(mesh.mmg_remesh_defensive_tiny_ratio, 1.0 / NDIMS);
     const double hausd = mesh.mmg_hausd_factor * res;
 
     // A required element is carried verbatim, so each of its nodes must be required too.
