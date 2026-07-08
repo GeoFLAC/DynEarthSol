@@ -44,6 +44,24 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
+// Shared refine-policy size floors, derived in ONE place so the tiny-element remesh trigger and
+// the boundary-merge distance cannot drift apart.
+// (These were previously spelled out at six sites with subtly different sizefactor placement -- the
+// exact class of bug that caused earlier over/under-refinement.) All are in the mesh's own units.
+struct RefineFloors {
+    double hmin;          // min edge length      = smallest_size^(1/NDIMS) * resolution
+    double smallest_vol;  // min element measure  = smallest_size * sizefactor * resolution^NDIMS
+    double min_dist;      // boundary-merge dist  = (smallest_size*sizefactor)^(1/NDIMS) * resolution
+};
+RefineFloors refine_floors(const Mesh &m)
+{
+    RefineFloors f;
+    f.hmin         = std::pow(m.smallest_size, 1.0/NDIMS) * m.resolution;
+    f.smallest_vol = m.smallest_size * sizefactor * std::pow(m.resolution, NDIMS);
+    f.min_dist     = std::pow(m.smallest_size * sizefactor, 1.0/NDIMS) * m.resolution;
+    return f;
+}
+
 const int DELETED_FACET = -1;
 const int DEBUG = 0;
 
@@ -408,7 +426,7 @@ struct hash1
 void find_tiny_element(const Param &param, const double_vec &volume,
                        int_vec &tiny_elems)
 {
-    const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+    const double smallest_vol = refine_floors(param.mesh).smallest_vol;
 
     for (std::size_t e=0; e<volume.size(); e++) {
         if (volume[e] < smallest_vol)
@@ -1159,7 +1177,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
     /* choosing which way to remesh the boundary */
     int_vec points_to_delete;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     switch (param.mesh.remeshing_option) {
     case 0:
     case 10:
@@ -1315,7 +1333,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
         #pragma acc wait
 
-        const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+        const double smallest_vol = refine_floors(param.mesh).smallest_vol;
         bad_quality = 0;
         for (int e=0; e<new_nelem; e++) {
             if (new_volume[e] < smallest_vol) {
@@ -2602,7 +2620,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -2884,7 +2902,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = std::pow(param.mesh.smallest_size*sizefactor, 1./NDIMS) * param.mesh.resolution;
+    const double min_dist = refine_floors(param.mesh).min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -3223,7 +3241,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
      */
 
     // check tiny elements
-    const double smallest_vol = param.mesh.smallest_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
+    const double smallest_vol = refine_floors(param.mesh).smallest_vol;
     for (int e=0; e<var.nelem; e++) {
         if ((*var.volume)[e] < smallest_vol) {
             index = e;
