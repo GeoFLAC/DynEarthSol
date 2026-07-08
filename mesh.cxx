@@ -1822,7 +1822,10 @@ void new_mesh_refined_zone(const Param& param, Variables& var)
 #else
     const double area1 = 0.7 * (d*d*d);
 #endif
-    const double area0 = area1 * m.largest_size;
+    // Coarse-region max area in mesh.largest_size's relative-volume convention (volume =
+    // largest_size * sizefactor * resolution^NDIMS, the convention of smallest_size and the
+    // tiny-element trigger); area1 above keeps its own fixed factor.
+    const double area0 = m.largest_size * sizefactor * std::pow(d, NDIMS);
     int pos = 0;
     region0[pos] = +d/2;  region1[pos++] = +x0*Lx+d/2; // x
 #if THREED
