@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <numeric>
 #include <limits>
+#include <map>
 #include <unordered_map>
 
 #include "constants.hpp"
@@ -128,11 +130,10 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
             die(EXIT_MESH_QUALITY);   // terminal physical state reached in the mesh-repair path
         }
         else if (qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
-            // Mark every NON-bottom node within min_dist of (or below) the bottom plane for deletion:
-            // interior nodes (they invert the adjoining elements once the boundary snaps back up) and
-            // side-wall nodes that sank below the corner (the corner snaps up, its wall neighbour
-            // would stay below and degenerate the corner elements);
-            // delete_points_and_merge_boundary (see its keep rule) removes them.
+            // Delete every non-bottom node within min_dist of (or below) the bottom: an interior
+            // one inverts its elements once the bottom snaps back up, a side-wall one below the
+            // corner degenerates the corner elements. The MMG collapse or
+            // delete_points_and_merge_boundary (see its keep rule) removes it.
             points_to_delete.push_back(i);
         }
     }
@@ -2222,6 +2223,404 @@ void compute_metric_field(const Variables &var, double_vec &metric, double_vec &
     }
 }
 
+
+// Signed measure of an element (2x area in 2D, 6x volume in 3D) from packed node coords.
+double signed_elem_measure(const double *coord, const int *elem)
+{
+#ifdef THREED
+    const double *a = coord + elem[0]*3, *b = coord + elem[1]*3;
+    const double *c = coord + elem[2]*3, *d = coord + elem[3]*3;
+    double bx=b[0]-a[0], by=b[1]-a[1], bz=b[2]-a[2];
+    double cx=c[0]-a[0], cy=c[1]-a[1], cz=c[2]-a[2];
+    double dx=d[0]-a[0], dy=d[1]-a[1], dz=d[2]-a[2];
+    return bx*(cy*dz-cz*dy) - by*(cx*dz-cz*dx) + bz*(cx*dy-cy*dx);
+#else
+    const double *a = coord + elem[0]*2, *b = coord + elem[1]*2, *c = coord + elem[2]*2;
+    return (b[0]-a[0])*(c[1]-a[1]) - (c[0]-a[0])*(b[1]-a[1]);
+#endif
+}
+
+// Orientation + scale reference for a flat/inverted-element test: the measure of the first element
+// `pristine` accepts that is wound like the majority. Not simply the first: flatten_* can turn an
+// untouched element inside out, which would invert the whole test.
+template <typename Pristine, typename Measure>
+static double majority_reference(int nelem, const Pristine &pristine, const Measure &measure)
+{
+    double first_pos = 0.0, first_neg = 0.0;
+    int npos = 0, nneg = 0;
+    for (int e = 0; e < nelem; ++e) {
+        if (!pristine(e)) continue;
+        const double m = measure(e);
+        if (m > 0.0) { if (npos++ == 0) first_pos = m; }
+        else if (m < 0.0) { if (nneg++ == 0) first_neg = m; }
+    }
+    return (npos >= nneg) ? first_pos : first_neg;
+}
+
+// Rebuild a collapsed mesh's boundary segments to match its surviving elements (nconn, new ids):
+// drop a segment collapsed to a point and a flagged one that is no longer the face of exactly one
+// survivor. A face a dropped flat/inverted element exposed is new boundary, on the one boundary its
+// nodes share (left unflagged, MMG re-adds it with ref 0: a hole in the flagged boundary). A face
+// on no single boundary means the dropped element was a fold, not a sliver on a wall: stop.
+template <typename Remap>
+static void rebuild_collapsed_segments(int nseg, const int *segment, const int *segflag,
+                                       const Remap &remap, int ne, const int_vec &nconn,
+                                       const int_vec &new_to_old_node, const uint_vec &bcflag,
+                                       const double_vec &ncoord,
+                                       int_vec &nsegment, int_vec &nsegflag, int &ns)
+{
+    // faces of the surviving elements: sorted node set -> {owner count, the owner's node order}
+    typedef std::array<int, NODES_PER_FACET> Facet;
+    std::map<Facet, std::pair<int, Facet>> faces;
+    for (int e = 0; e < ne; ++e)
+        for (int f = 0; f < FACETS_PER_ELEM; ++f) {
+            Facet v, key;
+            for (int k = 0; k < NODES_PER_FACET; ++k) v[k] = nconn[e*NODES_PER_ELEM + NODE_OF_FACET[f][k]];
+            key = v;
+            std::sort(key.begin(), key.end());
+            auto &fc = faces[key];
+            ++fc.first;
+            fc.second = v;
+        }
+
+    nsegment.clear(); nsegflag.clear();
+    ns = 0;
+    int n_orphan = 0, n_exposed = 0;
+    for (int s = 0; s < nseg; ++s) {
+        int v[NODES_PER_FACET];
+        bool degenerate = false;
+        for (int k = 0; k < NODES_PER_FACET; ++k) {
+            v[k] = remap(segment[s*NODES_PER_FACET + k]);
+            for (int j = 0; j < k; ++j) if (v[j] == v[k]) degenerate = true;
+        }
+        if (degenerate) continue;
+        if (segflag[s] != 0) {
+            Facet key;
+            std::copy(v, v + NODES_PER_FACET, key.begin());
+            std::sort(key.begin(), key.end());
+            auto it = faces.find(key);
+            if (it == faces.end() || it->second.first != 1) { ++n_orphan; continue; }
+            it->second.first = 0;   // covered
+        }
+        for (int k = 0; k < NODES_PER_FACET; ++k) nsegment.push_back(v[k]);
+        nsegflag.push_back(segflag[s]);
+        ++ns;
+    }
+
+    for (const auto &kv : faces) {
+        if (kv.second.first != 1) continue;
+        uint flag = BOUND_ANY;
+        for (int n : kv.first) flag &= bcflag[new_to_old_node[n]];
+        const uint wall = flag & ~BOUNDZ1;   // every node on a wall's top edge: the face lies in the
+        if ((flag & BOUNDZ1) && wall && !(wall & (wall - 1))) flag = wall;   // wall (the top is no plane)
+        if (flag == 0 || (flag & (flag - 1)) != 0) {
+            std::cerr << "Error: a collapse before MMG left the mesh folded at (";
+            for (int d = 0; d < NDIMS; ++d) std::cerr << (d ? ", " : "") << ncoord[kv.first[0]*NDIMS + d];
+            std::cerr << "): a face exposed by a dropped flat/inverted element lies on no single"
+                         " boundary.\n";
+            die(EXIT_MESH_QUALITY);
+        }
+        for (int n : kv.second.second) nsegment.push_back(n);
+        nsegflag.push_back(flag);
+        ++ns;
+        ++n_exposed;
+    }
+    if (n_orphan || n_exposed)
+        std::cout << "      [collapse] boundary: dropped " << n_orphan << " orphan segment(s), flagged "
+                  << n_exposed << " exposed face(s).\n";
+}
+
+// MMG-native handling of material that moved OUTSIDE a restored boundary. flatten_* snapped the
+// boundary nodes back onto their planes and collected the nodes past, or within min_dist of, a
+// restored plane (`pts`, called outside nodes here); those past it would invert the adjoining
+// elements. Remove them by edge collapse instead of falling back to a whole-domain
+// Triangle/TetGen remesh:
+//   * CORNER-AWARE: each node flatten_* marked records the planes it is past or within min_dist
+//     of (BOUND* bitmask `crossed`: the restored plane it was marked for and any other plane near
+//     it) and only collapses onto a boundary node of one of them, never onto a node of the top
+//     surface alone.
+//   * ITERATIVE: each pass merges only the outside nodes currently touching such a boundary node,
+//     peeling deep stacks one layer at a time (mapping a deep node straight to the boundary tangled).
+//   * STRANDED: a last pass merges any node left without a surviving element, outside or not,
+//     onto its nearest well-connected node (a boundary node: one on a shared plane), whatever
+//     its mask.
+// Builds fresh 0-indexed output arrays; inputs untouched. Survivor node order is preserved so the
+// metric maps by renumbering; segments are rebuilt to match the surviving elements.
+void collapse_outside_nodes(const int_vec &pts, int nnode, int nelem, int nseg,
+                            const double *coord, const uint_vec &bcflag,
+                            const int *conn, const int *segment, const int *segflag,
+                            const double_vec &metric,
+                            double zlen, double xlen, double ylen, double min_dist,
+                            double_vec &ncoord, int_vec &nconn,
+                            int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
+                            int &nn, int &ne, int &ns)
+{
+    // crossed-plane bitmask per node (BOUND* convention, so a boundary node m lies on a plane
+    // that s crossed iff (bcflag[m] & crossed[s]) != 0; a corner node matches on either bit).
+    std::vector<uint> crossed(nnode, 0);
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        int s = pts[i];
+        const double *p = coord + s*NDIMS;
+        uint c = 0;
+        if (p[0]       <  0.0  + min_dist) c |= BOUNDX0;
+        if (p[0]       >  xlen - min_dist) c |= BOUNDX1;
+#ifdef THREED
+        if (p[1]       <  0.0  + min_dist) c |= BOUNDY0;
+        if (p[1]       >  ylen - min_dist) c |= BOUNDY1;
+#endif
+        if (p[NDIMS-1] < -zlen + min_dist) c |= BOUNDZ0;
+        if (!c)   // flatten_* marks a node only past a restored plane, whose test is one of these
+            die(EXIT_INTERNAL_ASSERT, "collapse_outside_nodes: marked node crossed no plane");
+        crossed[s] = c;
+    }
+
+    // merged_to[n] = the node n was collapsed onto, or -1 if alive. Peel and stalemate never merge
+    // onto an outside node (merges apply after the scan: a cycle could close); the stranded pass can
+    // merge a node others were merged onto, so resolve() follows the chain to its alive end.
+    int_vec merged_to(nnode, -1);
+    auto alive   = [&](int n) { return merged_to[n] < 0; };
+    auto resolve = [&](int n) {
+        for (int hops = 0; merged_to[n] >= 0; n = merged_to[n])
+            if (++hops > nnode) die(EXIT_INTERNAL_ASSERT, "collapse_outside_nodes: merge cycle");
+        return n;
+    };
+
+    auto dist2 = [&](int s, int m) {
+        double d2 = 0.0;
+        for (int d = 0; d < NDIMS; ++d) { double dd = coord[s*NDIMS+d] - coord[m*NDIMS+d]; d2 += dd*dd; }
+        return d2;
+    };
+    // an element no outside and no merged node touches: its shape is the pre-collapse one
+    auto pristine = [&](int e) {
+        const int *el = conn + e*NODES_PER_ELEM;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (crossed[el[k]] || !alive(el[k])) return false;
+        return true;
+    };
+
+    // A merge must not invert an element: the nearest crossed-plane node can lie beyond the element's
+    // far face (a wall corner above the subsided free surface), and the rebuild would drop it and
+    // leave a fold. An element the snap already inverted does not count. An outside node's elements
+    // are its original ones (no node merges onto an outside node).
+    int_vec slot(nnode, -1);
+    for (std::size_t i = 0; i < pts.size(); ++i) slot[pts[i]] = (int)i;
+    std::vector<int_vec> elems_of(pts.size());
+    for (int e = 0; e < nelem; ++e)
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            const int i = slot[conn[e*NODES_PER_ELEM + k]];
+            if (i >= 0) elems_of[i].push_back(e);
+        }
+    const double refp = majority_reference(nelem, pristine, [&](int e) {
+        return signed_elem_measure(coord, conn + e*NODES_PER_ELEM); });
+    std::vector<char> passed_over(pts.size(), 0);   // the nearest target would have inverted
+    auto keeps_orientation = [&](int s, int m) {   // merging s onto m inverts none of s's elements
+        for (int e : elems_of[slot[s]]) {
+            int r[NODES_PER_ELEM], q[NODES_PER_ELEM];
+            bool degen = false;
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                r[k] = resolve(conn[e*NODES_PER_ELEM + k]);
+                q[k] = (r[k] == s) ? m : r[k];
+                for (int j = 0; j < k; ++j) if (q[j] == q[k]) degen = true;
+            }
+            if (degen) continue;   // collapses with the merged edge, as intended
+            // refuse a real inversion only: a merge that leaves the element flat passes, and the
+            // rebuild's flat cut (m/ref <= 1e-6) then drops it, as the collapse intends
+            if (signed_elem_measure(coord, r) * refp > 0.0 &&
+                signed_elem_measure(coord, q) * refp < -1e-6 * refp * refp)
+                return false;
+        }
+        return true;
+    };
+
+    // PEEL: each pass merges every outside node touching a boundary node of a crossed plane onto the
+    // nearest such node that keeps its elements oriented (one the re-check below rejects waits a
+    // pass), one layer at a time: mapping a deep node straight to the boundary tangles the mesh.
+    for (int pass = 0; pass < nnode; ++pass) {
+        int_vec    tgt(nnode, -1);
+        double_vec best(nnode, std::numeric_limits<double>::max()), nearest(best);
+        for (int e = 0; e < nelem; ++e) {
+            const int *el = conn + e*NODES_PER_ELEM;
+            for (int a = 0; a < NODES_PER_ELEM; ++a) {
+                int s = resolve(el[a]);
+                if (!crossed[s]) continue;                       // only still-outside nodes
+                for (int b = 0; b < NODES_PER_ELEM; ++b) {
+                    int m = resolve(el[b]);
+                    if (m == s || crossed[m]) continue;          // never onto an outside node
+                    if (is_boundary(bcflag[m]) && (bcflag[m] & crossed[s])) {  // on a crossed plane
+                        double d2 = dist2(s, m);
+                        nearest[s] = std::min(nearest[s], d2);
+                        if (d2 < best[s] && keeps_orientation(s, m)) { best[s] = d2; tgt[s] = m; }
+                    }
+                }
+            }
+        }
+        // applied one by one, each re-checked against this pass's earlier merges: two outside nodes
+        // of one element can each keep it oriented alone and invert it together
+        bool progress = false;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            int s = pts[i];
+            if (!alive(s) || !crossed[s]) continue;
+            if (tgt[s] >= 0 && !keeps_orientation(s, tgt[s])) { tgt[s] = -1; passed_over[slot[s]] = 1; }
+            if (nearest[s] < best[s]) passed_over[slot[s]] = 1;
+            if (tgt[s] >= 0) { merged_to[s] = tgt[s]; progress = true; }
+        }
+        if (!progress) break;
+    }
+
+    // STALEMATE: an outside node the peel could not reach merges onto the nearest orientation-keeping
+    // boundary node of a crossed plane, searched globally (rare); sweep again while a sweep merges (a
+    // merge can make a target valid for a node passed before). With none it stays (logged).
+    for (bool again = true; again; ) {
+        again = false;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            int s = pts[i];
+            if (!alive(s) || !crossed[s]) continue;
+            double best = std::numeric_limits<double>::max(), nearest = best; int tg = -1;
+            for (int m = 0; m < nnode; ++m) {
+                if (!alive(m) || crossed[m] || !is_boundary(bcflag[m]) || !(bcflag[m] & crossed[s]))
+                    continue;
+                double d2 = dist2(s, m);
+                nearest = std::min(nearest, d2);
+                if (d2 < best && keeps_orientation(s, m)) { best = d2; tg = m; }
+            }
+            if (nearest < best) passed_over[slot[s]] = 1;
+            if (tg >= 0) { merged_to[s] = tg; again = true; }
+        }
+    }
+    int n_passed = 0, n_left = 0;
+    for (char c : passed_over) n_passed += c;
+    for (int n = 0; n < nnode; ++n) n_left += (crossed[n] && alive(n));
+    if (n_passed)
+        std::cout << "      [collapse] " << n_passed << " outside node(s) deferred or redirected a merge "
+                     "that would invert an element; " << n_left
+                  << " left unmerged by the crossed-plane passes.\n";
+
+    // STRANDED: a node alive but with no surviving element, outside or not. A sunk blob collapsing
+    // onto its plane can leave a boundary node whose elements all degenerate while its segments
+    // survive; MMG would keep it as an isolated 0-mass vertex -> NaN. Merge each onto its nearest
+    // well-connected node, ignoring `crossed` (the dangling segment collapses with it); iterate,
+    // since absorbing one node can strand the next.
+    {
+        // Reference measure (orientation + scale), computed on `coord` like the connectivity
+        // rebuild's so the flat/inverted test matches exactly.
+        const double refm = majority_reference(nelem, pristine, [&](int e) {
+            return signed_elem_measure(coord, conn + e*NODES_PER_ELEM); });
+        for (int pass = 0; pass < nnode; ++pass) {
+            int_vec live_deg(nnode, 0);
+            std::vector<char> in_mesh(nnode, 0);
+            for (int e = 0; e < nelem; ++e) {
+                const int *el = conn + e*NODES_PER_ELEM;
+                int r[NODES_PER_ELEM];
+                bool degen = false;
+                for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                    r[k] = resolve(el[k]);
+                    in_mesh[el[k]] = 1;
+                    for (int j = 0; j < k; ++j) if (r[j] == r[k]) degen = true;
+                }
+                if (degen) continue;
+                double m = signed_elem_measure(coord, r);
+                // same flat/inverted cut as the rebuild below (reason there)
+                if (refm != 0.0 && m*refm <= 1e-6*refm*refm) continue;   // flat/inverted -> dropped
+                for (int k = 0; k < NODES_PER_ELEM; ++k) live_deg[r[k]]++;
+            }
+            bool progress = false;
+            for (int s = 0; s < nnode; ++s) {
+                if (!alive(s) || !in_mesh[s] || live_deg[s] > 0) continue;   // stranded node
+                const uint sflag = bcflag[s];
+                double best = std::numeric_limits<double>::max(); int tg = -1;
+                for (int m = 0; m < nnode; ++m) {
+                    if (m == s || !alive(m) || live_deg[m] == 0) continue;   // target must be well-connected
+                    // keep boundary continuity: a boundary node merges only onto a node sharing a plane.
+                    if (is_boundary(sflag) && !(is_boundary(bcflag[m]) && (bcflag[m] & sflag))) continue;
+                    double d2 = dist2(s, m);
+                    if (d2 < best) { best = d2; tg = m; }
+                }
+                if (tg >= 0) { merged_to[s] = tg; progress = true; }
+            }
+            if (!progress) break;
+        }
+    }
+
+    // renumber survivors, rebuild coord + metric.
+    int_vec node_map(nnode, -1);
+    ncoord.clear(); nmetric.clear();
+    nn = 0;
+    for (int n = 0; n < nnode; ++n) {
+        if (!alive(n)) continue;
+        node_map[n] = nn++;
+        for (int d = 0; d < NDIMS; ++d) ncoord.push_back(coord[n*NDIMS + d]);
+        nmetric.push_back(metric[n]);
+    }
+    auto remap = [&](int n) { return node_map[resolve(n)]; };
+
+    // reference orientation/scale from the pristine elements, after the stranded pass
+    const double ref = majority_reference(nelem, pristine, [&](int e) {
+        int v[NODES_PER_ELEM];
+        for (int k = 0; k < NODES_PER_ELEM; ++k) v[k] = node_map[conn[e*NODES_PER_ELEM + k]];
+        return signed_elem_measure(ncoord.data(), v); });
+
+    // rebuild connectivity, dropping elements that collapse onto a boundary: a repeated node,
+    // OR near-null / inverted measure (all nodes land on the flat boundary, or orientation flip).
+    nconn.clear();
+    ne = 0;
+    for (int e = 0; e < nelem; ++e) {
+        const int *el = conn + e*NODES_PER_ELEM;
+        int v[NODES_PER_ELEM];
+        bool degenerate = false;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            v[k] = remap(el[k]);
+            for (int j = 0; j < k; ++j) if (v[j] == v[k]) degenerate = true;
+        }
+        if (degenerate) continue;
+        double m = signed_elem_measure(ncoord.data(), v);
+        // Flat/inverted: m/ref <= 1e-6 (ref = a pristine element's measure). An element flattened
+        // onto an axis-aligned restored plane measures exactly 0, and 1e-6 stays below the
+        // tiny-element trigger up to largest_size/smallest_size ~1e5: no valid element is dropped.
+        if (ref != 0.0 && m * ref <= 1e-6 * ref * ref) continue;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) nconn.push_back(v[k]);
+        ++ne;
+    }
+
+    int_vec old_id(nn);   // a survivor's old node id
+    for (int n = 0; n < nnode; ++n)
+        if (node_map[n] >= 0) old_id[node_map[n]] = n;
+    rebuild_collapsed_segments(nseg, segment, segflag, remap, ne, nconn, old_id, bcflag, ncoord,
+                               nsegment, nsegflag, ns);
+}
+
+// True if any node lies beyond a boundary plane this remeshing option snaps back (bottom for
+// 1/11/13; all sides for 13): material outside the fixed domain, to be collapsed before MMG.
+// Mirrors what flatten_* marks for deletion: non-bottom nodes below the base, and for a side every
+// node NOT on that side's own plane that crossed it (adjacent-boundary nodes included). Excluding a
+// plane's own wall nodes keeps genuine extension inert. Option 12 is excluded; option 2 never
+// reaches MMG.
+bool has_outside_material(const Param &param, const array_t &coord, const uint_vec &bcflag,
+                          int nnode, double min_dist)
+{
+    const int opt = param.mesh.remeshing_option;
+    const bool restore_bottom = (opt==1 || opt==11 || opt==13);
+    const bool restore_sides  = (opt==13);
+    if (!restore_bottom && !restore_sides) return false;
+    const double zb = -param.mesh.zlength;
+    for (int i = 0; i < nnode; ++i) {
+        const uint f = bcflag[i];
+        // Thresholds MUST match the flatten_* deletion tests exactly (`z < bottom + min_dist`,
+        // `x < min_dist`, ...): a stricter test here left a marked node in the mesh, and the
+        // element inverted when flatten snapped a neighbour past it.
+        if (restore_bottom && !is_bottom(f) && coord[i][NDIMS-1] < zb + min_dist) return true;
+        if (restore_sides) {
+            if (!is_x0(f) && coord[i][0] < min_dist) return true;
+            if (!is_x1(f) && coord[i][0] > param.mesh.xlength - min_dist) return true;
+#ifdef THREED
+            if (!is_y0(f) && coord[i][1] < min_dist) return true;
+            if (!is_y1(f) && coord[i][1] > param.mesh.ylength - min_dist) return true;
+#endif
+        }
+    }
+    return false;
+}
+
+
 #ifdef THREED
 void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
@@ -2305,6 +2704,42 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         die(EXIT_CONFIG_VALUE);
     }
 
+    // --- Prepare the mesh + metric handed to MMG ---------------------------------
+    // Compute the nodal metric (target element size) on the current mesh.
+    compute_metric_field(var, *var.ntmp, *var.etmp);
+
+    // By default MMG adapts the current mesh in place.
+    int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
+    double *mcoord   = qcoord;
+    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
+    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *msegflag = qsegflag;
+    double *mmetric  = (*var.ntmp).data();
+
+    // Material outside a restored boundary (sunk below the fixed bottom; with option 13 also past
+    // a side wall): flatten_* snaps the boundary back and the elements beyond invert, which MMG
+    // cannot adapt. Collapse the marked nodes onto their boundary plane and let MMG adapt
+    // the result; no fallback to a whole-domain Triangle/TetGen remesh (has_outside_material).
+    double_vec c_coord, c_metric;
+    int_vec c_conn, c_seg, c_segflag;
+    bool outside_material = has_outside_material(param, original_coord, old_bcflag,
+                                                 old_nnode, min_dist);
+    if (outside_material) {
+        std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
+                     "the boundary before MMG.\n";
+        int cn = 0, ce = 0, cs = 0;
+        collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
+                               qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               c_coord, c_conn, c_seg, c_segflag, c_metric, cn, ce, cs);
+        mnode = cn; melem = ce; mseg = cs;
+        mcoord = c_coord.data();
+        mconn1 = c_conn.data();
+        mseg1 = c_seg.data();
+        msegflag = c_segflag.data();
+        mmetric = c_metric.data();
+    }
+
     // --- STEP I: Initialization
     // 1) Initialisation of mesh and sol structures
     //   args of InitMesh:
@@ -2315,7 +2750,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     //     &mmgSol: pointer toward your MMG5_pSol (that store your metric) */
     MMG5_pMesh      mmgMesh = NULL;
     MMG5_pSol       mmgSol  = NULL;
-  
+
     MMG3D_Init_mesh(MMG5_ARG_start,
                     MMG5_ARG_ppMesh, &mmgMesh, MMG5_ARG_ppMet,
                     &mmgSol, MMG5_ARG_end);
@@ -2323,35 +2758,33 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // 2) Build mesh in MMG5 format
     // Manually set of the mesh 
     //  a) give the size of the mesh: vertices, tetra, prisms, triangles, quads, edges
-    if ( MMG3D_Set_meshSize(mmgMesh, old_nnode, old_nelem,
-                            0,old_nseg,0,0) != 1 )
+    if ( MMG3D_Set_meshSize(mmgMesh, mnode, melem,
+                            0, mseg, 0, 0) != 1 )
         die(EXIT_MESH_MMG);
     //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG3D_Set_vertices(mmgMesh, qcoord, NULL) != 1)
+    if( MMG3D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
         die(EXIT_MESH_MMG);
-    //   c) give the connectivity. References are NULL but can be an integer array for boundary flag etc.
-    for (int i = 0; i < old_nelem*NODES_PER_ELEM; ++i)
-        ++qconn_from_1[i];
-    if( MMG3D_Set_tetrahedra(mmgMesh, qconn_from_1, NULL) != 1 )
+    //   c) give the connectivity (MMG is 1-indexed).
+    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
+        ++mconn1[i];
+    if( MMG3D_Set_tetrahedra(mmgMesh, mconn1, NULL) != 1 )
         die(EXIT_MESH_MMG);
-    //   d) give the segments (i.e., boundary facet)
-    for (int i = 0; i < old_nseg*NODES_PER_FACET; ++i)
-        ++qsegment_from_1[i];
-    if( MMG3D_Set_triangles(mmgMesh, qsegment_from_1, qsegflag) != 1 )
+    //   d) give the boundary facets (MMG is 1-indexed).
+    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
+        ++mseg1[i];
+    if( MMG3D_Set_triangles(mmgMesh, mseg1, msegflag) != 1 )
         die(EXIT_MESH_MMG);
 
     // 3) Build sol in MMG5 format
     //      Here a 'solution' is a nodal field that becomes
     //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation.
+    //      mesh adaptation. The metric was computed above (on the clean nodes when
+    //      the sunk material was rebuilt).
     //
     //   a) give info for the sol structure
-    if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
+    if( MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
         die(EXIT_MESH_MMG);
-    //   b) give solutions values and positions
-    compute_metric_field(var, *var.ntmp, *var.etmp);
-    //      i) If sol array is available:
-    if( MMG3D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
+    if( MMG3D_Set_scalarSols(mmgSol, mmetric) != 1 )
         die(EXIT_MESH_MMG);
 
     /*save init mesh*/
@@ -2546,9 +2979,53 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     case 12:
         flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
         break;
+    case 13:
+        // restore the bottom AND both side walls to their initial planes
+        excl_func = &is_corner;
+        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
+                       points_to_delete, min_dist);
+        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
+        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
+        break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
         die(EXIT_CONFIG_VALUE);
+    }
+
+    // --- Prepare the mesh + metric handed to MMG ---------------------------------
+    // Compute the nodal metric (target element size) on the current mesh.
+    compute_metric_field(var, *var.ntmp, *var.etmp);
+
+    // By default MMG adapts the current mesh in place.
+    int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
+    double *mcoord   = qcoord;
+    int    *mconn1   = qconn_from_1;      // 1-indexed for MMG below
+    int    *mseg1    = qsegment_from_1;   // 1-indexed for MMG below
+    int    *msegflag = qsegflag;
+    double *mmetric  = (*var.ntmp).data();
+
+    // Material outside a restored boundary (sunk below the fixed bottom; with option 13 also past
+    // a side wall): flatten_* snaps the boundary back and the elements beyond invert, which MMG
+    // cannot adapt. Collapse the marked nodes onto their boundary plane and let MMG adapt
+    // the result; no fallback to a whole-domain Triangle/TetGen remesh (has_outside_material).
+    double_vec c_coord, c_metric;
+    int_vec c_conn, c_seg, c_segflag;
+    bool outside_material = has_outside_material(param, original_coord, old_bcflag,
+                                                 old_nnode, min_dist);
+    if (outside_material) {
+        std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
+                     "the boundary before MMG.\n";
+        int cn = 0, ce = 0, cs = 0;
+        collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
+                               qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               c_coord, c_conn, c_seg, c_segflag, c_metric, cn, ce, cs);
+        mnode = cn; melem = ce; mseg = cs;
+        mcoord = c_coord.data();
+        mconn1 = c_conn.data();
+        mseg1 = c_seg.data();
+        msegflag = c_segflag.data();
+        mmetric = c_metric.data();
     }
 
     // --- STEP I: Initialization
@@ -2569,38 +3046,34 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // 2) Build mesh in MMG5 format
     // Manually set of the mesh 
     //  a) give the size of the mesh: vertices, triangles, quads(=0), edges
-    if ( MMG2D_Set_meshSize(mmgMesh, old_nnode, old_nelem, 0, old_nseg) != 1 )
+    if ( MMG2D_Set_meshSize(mmgMesh, mnode, melem, 0, mseg) != 1 )
         die(EXIT_MESH_MMG);
     //   b) give the vertex coordinates. References are NULL but can be an integer array for boundary flag etc.
-    if( MMG2D_Set_vertices(mmgMesh, qcoord, NULL) != 1)
+    if( MMG2D_Set_vertices(mmgMesh, mcoord, NULL) != 1)
         die(EXIT_MESH_MMG);
-    //   c) give the connectivity. References are NULL but can be an integer array for boundary flag etc.
-    for (int i = 0; i < old_nelem*NODES_PER_ELEM; ++i)
-        ++qconn_from_1[i];
-    if( MMG2D_Set_triangles(mmgMesh, qconn_from_1, NULL) != 1 )
+    //   c) give the connectivity (MMG is 1-indexed).
+    for (int i = 0; i < melem*NODES_PER_ELEM; ++i)
+        ++mconn1[i];
+    if( MMG2D_Set_triangles(mmgMesh, mconn1, NULL) != 1 )
         die(EXIT_MESH_MMG);
-    //   d) give the segments (i.e., boundary edges)
-    for (int i = 0; i < old_nseg*NODES_PER_FACET; ++i)
-        ++qsegment_from_1[i];
-    for (int i = 0; i < old_nseg; ++i)        
-        if( MMG2D_Set_edge(mmgMesh, qsegment_from_1[i*NODES_PER_FACET], 
-                qsegment_from_1[i*NODES_PER_FACET+1], qsegflag[i], i+1) != 1)
+    //   d) give the segments (i.e., boundary edges; MMG is 1-indexed).
+    for (int i = 0; i < mseg*NODES_PER_FACET; ++i)
+        ++mseg1[i];
+    for (int i = 0; i < mseg; ++i)
+        if( MMG2D_Set_edge(mmgMesh, mseg1[i*NODES_PER_FACET],
+                mseg1[i*NODES_PER_FACET+1], msegflag[i], i+1) != 1)
             die(EXIT_MESH_MMG);
-    // if( MMG2D_Set_edges(mmgMesh, qsegment_from_1, qsegflag) != 1 )
-    //     exit(10);
 
     // 3) Build sol in MMG5 format
     //      Here a 'solution' is a nodal field that becomes
     //      the basis for metric tensor for isotropic and anisotropic
-    //      mesh adaptation.
+    //      mesh adaptation. The metric was computed above (on the clean nodes when
+    //      the sunk material was rebuilt).
     //
     //   a) give info for the sol structure
-    if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, old_nnode, MMG5_Scalar) != 1 )
+    if( MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, mnode, MMG5_Scalar) != 1 )
         die(EXIT_MESH_MMG);
-    //   b) give solutions values and positions
-    compute_metric_field(var, *var.ntmp, *var.etmp);
-    //      i) If sol array is available:
-    if( MMG2D_Set_scalarSols(mmgSol, (*var.ntmp).data()) != 1 )
+    if( MMG2D_Set_scalarSols(mmgSol, mmetric) != 1 )
         die(EXIT_MESH_MMG);
     //      ii) Otherwise, set a value node by node:
     // for (int i = 0; i < var.nnode; ++i) {
@@ -3190,7 +3663,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
-
     if (param.sim.has_output_during_remeshing) {
         // the following variables need to be re-computed only when we are
         // outputing right after remeshing
