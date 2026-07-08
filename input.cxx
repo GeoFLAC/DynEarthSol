@@ -172,9 +172,12 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.resolution", po::value<double>(&p.mesh.resolution)->required(),
          "Spatial resolution (in meters)")
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
-         "The size of smallest element relative to an element with typical resolution")
+         "The size of smallest element relative to an element with typical resolution. With MMG "
+         "it also sets the minimum edge length, smallest_size^(1/NDIMS) * resolution")
         ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
-         "The size of largest element relative to an element with typical resolution")
+         "The size of largest element relative to an element with typical resolution, which also "
+         "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
+         "length, hmax = largest_size^(1/NDIMS) * resolution")
         ("mesh.sediment_size", po::value<double>(&p.mesh.sediment_size)->default_value(1.),
          "The size threshold of the refined sediment elements")
         // for 2D only
@@ -272,10 +275,6 @@ static void declare_parameters(po::options_description &cfg,
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
-         "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
-         "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
@@ -285,6 +284,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
+        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+         "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
+         "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
+         "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
+         "(elements keep their frozen initial size everywhere). Default: 5.")
         ;
 
     cfg.add_options()
@@ -1199,6 +1203,16 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
     }
+
+#ifdef USEMMG
+    // Only MMG reads the mmg_* keys checked in this block.
+    if (p.mesh.mmg_metric_refine_coeff < 0) {
+        // 1 + coeff*plstrain divides the target volume: it must stay positive.
+        std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
+                     "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {

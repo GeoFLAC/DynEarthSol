@@ -29,7 +29,7 @@ struct MMGOutput {
 };
 
 // Run one MMG (2D or 3D, per build) adaptation of `in` into `out`. The size band and solver
-// parameters come from `mesh` (mmg_hmin_factor/mmg_hmax_factor/mmg_hausd_factor/resolution/
+// parameters come from `mesh` (largest_size/smallest_size/mmg_hausd_factor/resolution/
 // mmg_verbose/mmg_debug): the single owner of the MMG lifecycle, shared by mesh init and
 // remeshing. Dies with EXIT_MESH_MMG on any MMG failure, except MMG5_LOWFAILURE when
 // in.tolerate_low_failure (init).

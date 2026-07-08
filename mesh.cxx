@@ -851,8 +851,33 @@ static void propagate_regattr_nearest(
 }
 
 
+// Measure (area in 2D, volume in 3D) of element e of a raw mesh.
+static double elem_measure(const double *coord, const int *conn, int e)
+{
+    const int *c = conn + e * NODES_PER_ELEM;
+    const double *a = coord + c[0] * NDIMS;
+    const double *b = coord + c[1] * NDIMS;
+    const double *d = coord + c[2] * NDIMS;
+#ifdef THREED
+    const double *f = coord + c[3] * NDIMS;
+    double ab[3], ad[3], af[3];
+    for (int i = 0; i < 3; ++i) {
+        ab[i] = b[i] - a[i];
+        ad[i] = d[i] - a[i];
+        af[i] = f[i] - a[i];
+    }
+    return std::fabs(ab[0] * (ad[1]*af[2] - ad[2]*af[1])
+                   - ab[1] * (ad[0]*af[2] - ad[2]*af[0])
+                   + ab[2] * (ad[0]*af[1] - ad[1]*af[0])) / 6.0;
+#else
+    return 0.5 * std::fabs((b[0] - a[0]) * (d[1] - a[1])
+                         - (d[0] - a[0]) * (b[1] - a[1]));
+#endif
+}
+
 static void compute_init_metric(
     int nnode, int nelem,
+    const double *coord,           // node coordinates [nnode × NDIMS]
     const int *conn,               // coarse connectivity [nelem × NODES_PER_ELEM]
     const double *elem_region,     // coarse pregattr [nelem]: region indices when per-region, ignored when uniform
     int n_regions, const double *regattr,  // original region attrs (NDIMS+2 per region)
@@ -882,7 +907,11 @@ static void compute_init_metric(
             int r = (int)elem_region[e];
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
-            double target = (vol > 0) ? std::pow(vol / sizefactor, 1.0 / NDIMS) : resolution;
+            // A region without a size constraint (.poly size <= 0) keeps each element's as-meshed
+            // size, as on the non-MMG path (a mesh.resolution fallback would refine the region).
+            double target = (vol > 0)
+                ? std::pow(vol / sizefactor, 1.0 / NDIMS)
+                : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
 
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 int ni = conn[e * NODES_PER_ELEM + k];
@@ -919,7 +948,7 @@ static void mmg_refine_init_mesh_3d(
 
     // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
@@ -951,7 +980,7 @@ static void mmg_refine_init_mesh_3d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, max_elem_size, mesh.resolution, *fine_init_metric_n);
         } else {
             // Uniform case: exact constant metric
@@ -1008,7 +1037,7 @@ static void mmg_refine_init_mesh_2d(
 
     // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
@@ -1036,7 +1065,7 @@ static void mmg_refine_init_mesh_2d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, 0.0, mesh.resolution, *fine_init_metric_n);
         } else {
             const double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);

@@ -46,8 +46,8 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
-// Shared refine-policy size floors, derived in ONE place so the triangle decimation, the
-// tiny-element remesh trigger, and the boundary-merge distance cannot drift apart.
+// Shared refine-policy size floors, derived in ONE place so the triangle decimation, the MMG
+// size band, the tiny-element remesh trigger, and the boundary-merge distance cannot drift apart.
 // (These were previously spelled out at six sites with subtly different sizefactor placement -- the
 // exact class of bug that caused earlier over/under-refinement.) All are in the mesh's own units.
 struct RefineFloors {
@@ -2260,26 +2260,47 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 }
 
 #ifdef USEMMG
-void compute_metric_field(const Variables &var, double_vec &metric, double_vec &etmp)
+void compute_metric_field(const Param &param, const Variables &var, double_vec &metric, double_vec &etmp)
 {
-    /* Compute the desired element size (metric) for MMG remeshing.
-     * Uses init_elem_size_n (frozen initial element size) as the base, and only
-     * refines where plastic strain is present.
+    /* Compute the desired element size (nodal metric = edge length) for MMG remeshing.
+     *
+     * The base size is init_elem_size_n (the frozen initial nodal element size), so away
+     * from plastic strain element sizes are MAINTAINED across remeshing (metric == base).
+     *
+     * Where plastic strain has accumulated, the target is reduced to refine the mesh,
+     * following Triangle's area/volume-constraint convention: the target element VOLUME is
+     * scaled by 1/(1 + coeff*plstrain), so the target EDGE LENGTH that MMG consumes is that
+     * volume ratio raised to 1/NDIMS. (The earlier form scaled the edge length by the
+     * volume ratio directly -- i.e. treated a volume ratio as a length ratio -- which was
+     * ~NDIMS times too aggressive and refined the whole domain to the floor whenever
+     * yielding was broad, ratcheting the element count up at every remesh.)
+     *
+     * coeff = mmg_metric_refine_coeff makes the refinement sensitivity easy to manage.
      */
+    // Not const-qualified on purpose: a const scalar is predetermined-shared in OpenMP and
+    // may not appear in a shared() clause on some toolchains (gcc<=10, icpc) -- see the
+    // #ifdef GPP1X dance used for sizefactor elsewhere. A plain local sidesteps that.
+    double coeff = param.mesh.mmg_metric_refine_coeff;
     std::fill_n(metric.begin(), var.nnode, 0);
 
-    // Refine where plastic strain is present
-    #pragma omp parallel for default(none) shared(var, etmp)
+    // volume-based refinement target where plastic strain is present (Triangle max_area style)
+    #pragma omp parallel for default(none) shared(var, etmp, coeff)
     for (int e = 0; e < var.nelem; e++)
-        etmp[e] = (*var.volume)[e] / (1.0 + 5.0 * (*var.plstrain)[e]);
+        etmp[e] = (*var.volume)[e] / (1.0 + coeff * (*var.plstrain)[e]);
 
     #pragma omp parallel for default(none) shared(var, metric, etmp)
     for (int n = 0; n < var.nnode; n++) {
+        double vol_ratio = 0.0;
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
         for (int i=0; i<npatch; ++i)
-            metric[n] += etmp[patch[i]];
-        metric[n] *= (*var.init_elem_size_n)[n] / (*var.volume_n)[n];
+            vol_ratio += etmp[patch[i]];
+        vol_ratio /= (*var.volume_n)[n];
+#ifdef THREED
+        metric[n] = (*var.init_elem_size_n)[n] * std::cbrt(vol_ratio);
+#else
+        metric[n] = (*var.init_elem_size_n)[n] * std::sqrt(vol_ratio);
+#endif
     }
 }
 
@@ -2762,7 +2783,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(var, *var.ntmp, *var.etmp);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -2908,7 +2929,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(var, *var.ntmp, *var.etmp);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -3004,13 +3025,16 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
         (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
+    // The node loop below divides by var.volume_n, which compute_mass fills first and
+    // correct_surface_element rewrites at top nodes (a call before compute_mass gives +inf sizes;
+    // the size test also catches a fill from a smaller nnode). compute_mass leaves its node kernel
+    // async: without the wait this host read sees the pre-kernel zeros.
+    #pragma acc wait
+    if (var.volume_n->size() != std::size_t(var.nnode) || (*var.volume_n)[0] <= 0.)
+        die(EXIT_INTERNAL_ASSERT, "initialize_elem_size_n ran before compute_mass filled volume_n.");
+
     init_elem_size_n.resize(var.nnode);
     std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
-
-    // var.volume_n is zero-filled until compute_mass writes it; dividing by that silently
-    // yields inf for every node and poisons the frozen MMG metric base.
-    if (var.volume_n->empty() || (*var.volume_n)[0] <= 0.0)
-        die(EXIT_INTERNAL_ASSERT, "initialize_elem_size_n() ran before compute_mass()");
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, init_elem_size_n)
