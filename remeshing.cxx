@@ -44,8 +44,8 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
-// Shared refine-policy size floors, derived in ONE place so the tiny-element remesh trigger and
-// the boundary-merge distance cannot drift apart.
+// Shared refine-policy size floors, derived in ONE place so the triangle decimation, the
+// tiny-element remesh trigger, and the boundary-merge distance cannot drift apart.
 // (These were previously spelled out at six sites with subtly different sizefactor placement -- the
 // exact class of bug that caused earlier over/under-refinement.) All are in the mesh's own units.
 struct RefineFloors {
@@ -1119,6 +1119,75 @@ void refine_surface_elem(const Param &param, const Variables &var,
 #endif
 }
 
+// Node-spacing floor of the Triangle/TetGen path (new_mesh): drop INTERIOR nodes within hmin of a
+// retained node, so re-triangulating the advected points rarely forms a tiny element (spacing
+// bounds edges, not measure: new_mesh's smallest_vol retry catches the rest). Boundary nodes stay
+// (flatten_* owns their spacing), and so do kept internal segments' nodes (deleting one misroutes
+// its segment). Uniform grid of cell hmin: O(nnode).
+// Do not exempt shear-band nodes: that lowered the peak plastic strain and added tiny-element
+// remeshes.
+void decimate_below_hmin(const Param &param, const array_t &coord, int nnode,
+                         const uint_vec &bcflag, int nseg, const int *segment,
+                         int_vec &points_to_delete)
+{
+    const double hmin = refine_floors(param.mesh).hmin;
+    if (hmin <= 0.0 || nnode <= 0) return;
+    const double inv_h = 1.0/hmin, h2 = hmin*hmin;
+    const long long OFF = 1LL<<20, BITS = 21;   // cell index range ~[-1M, 1M) -> fits domains up to ~1M*hmin
+
+    auto cell = [&](int i, long long c[NDIMS]) {
+        for (int d=0; d<NDIMS; ++d) c[d] = (long long)std::floor(coord[i][d]*inv_h);
+    };
+    auto pack = [&](const long long c[NDIMS]) -> long long {
+        long long k = c[0] + OFF;
+        for (int d=1; d<NDIMS; ++d) k = (k<<BITS) | (c[d] + OFF);
+        return k;
+    };
+    std::unordered_map<long long, int_vec> grid;   // cell -> retained node ids
+
+    auto probe = [&](const long long nb[NDIMS], int i) -> bool {
+        auto it = grid.find(pack(nb));
+        if (it == grid.end()) return false;
+        for (int j : it->second) {
+            double d2 = 0;
+            for (int d=0; d<NDIMS; ++d) { double dd = coord[i][d]-coord[j][d]; d2 += dd*dd; }
+            if (d2 < h2) return true;
+        }
+        return false;
+    };
+    auto near_retained = [&](int i) -> bool {
+        long long c[NDIMS]; cell(i, c);
+        long long nb[NDIMS];
+#ifdef THREED
+        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
+          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
+            for (int e=-1;e<=1;++e){ nb[2]=c[2]+e;
+              if (probe(nb, i)) return true;
+            }}}
+#else
+        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
+          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
+            if (probe(nb, i)) return true;
+          }}
+#endif
+        return false;
+    };
+    auto retain = [&](int i) { long long c[NDIMS]; cell(i, c); grid[pack(c)].push_back(i); };
+    // Pass 1: retain all boundary and segment nodes (never decimated) so interior nodes crowding
+    // them are removed. With discarded internal segments every segment node is a boundary node.
+    std::vector<char> kept(nnode, 0);
+    for (int i=0; i<nnode; ++i) kept[i] = is_boundary(bcflag[i]);
+    for (int k=0; k<nseg*NODES_PER_FACET; ++k)
+        if (segment[k] != DELETED_FACET) kept[segment[k]] = 1;   // new_bottom (option 2) deletes
+    for (int i=0; i<nnode; ++i) if (kept[i]) retain(i);
+    // Pass 2: greedily thin the other nodes to >= hmin spacing.
+    for (int i=0; i<nnode; ++i) {
+        if (kept[i]) continue;
+        if (near_retained(i)) points_to_delete.push_back(i);
+        else retain(i);
+    }
+}
+
 
 void new_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
@@ -1220,6 +1289,9 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                                      excl_func);
         }
     }
+
+    decimate_below_hmin(param, array_t_qcoord, old_nnode, old_bcflag, old_nseg, qsegment,
+                        points_to_delete);
 
     // sort points_to_delete and remove duplicates
     {
