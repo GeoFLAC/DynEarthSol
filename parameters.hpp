@@ -203,10 +203,9 @@ struct Mesh {
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
-    double mmg_hmax_factor;
-    double mmg_hmin_factor;
     double mmg_hausd_factor;
     double mmg_init_coarsening_factor;
+    double mmg_metric_refine_coeff;
     bool use_mmg_init;
 };
 

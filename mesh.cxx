@@ -850,8 +850,34 @@ static void propagate_regattr_nearest(
 }
 
 
+// Measure (area in 2D, volume in 3D) of element e -- the as-meshed size of elements in
+// regions without a size constraint (compute_init_metric below).
+static double elem_measure(const double *coord, const int *conn, int e)
+{
+    const int *c = conn + e * NODES_PER_ELEM;
+    const double *a = coord + c[0] * NDIMS;
+    const double *b = coord + c[1] * NDIMS;
+    const double *d = coord + c[2] * NDIMS;
+#ifdef THREED
+    const double *f = coord + c[3] * NDIMS;
+    double ab[3], ad[3], af[3];
+    for (int i = 0; i < 3; ++i) {
+        ab[i] = b[i] - a[i];
+        ad[i] = d[i] - a[i];
+        af[i] = f[i] - a[i];
+    }
+    return std::fabs(ab[0] * (ad[1]*af[2] - ad[2]*af[1])
+                   - ab[1] * (ad[0]*af[2] - ad[2]*af[0])
+                   + ab[2] * (ad[0]*af[1] - ad[1]*af[0])) / 6.0;
+#else
+    return 0.5 * std::fabs((b[0] - a[0]) * (d[1] - a[1])
+                         - (d[0] - a[0]) * (b[1] - a[1]));
+#endif
+}
+
 static void compute_init_metric(
     int nnode, int nelem,
+    const double *coord,           // node coordinates [nnode × NDIMS]
     const int *conn,               // coarse connectivity [nelem × NODES_PER_ELEM]
     const double *elem_region,     // coarse pregattr [nelem]: region indices when per-region, ignored when uniform
     int n_regions, const double *regattr,  // original region attrs (NDIMS+2 per region)
@@ -881,7 +907,12 @@ static void compute_init_metric(
             int r = (int)elem_region[e];
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
-            double target = (vol > 0) ? std::pow(vol / sizefactor, 1.0 / NDIMS) : resolution;
+            // A region without a size constraint (.poly size <= 0) means "as coarse as the mesher
+            // likes", as on the non-MMG path: target each element's OWN as-meshed size, not a fixed
+            // fallback (mesh.resolution would refine the whole region).
+            double target = (vol > 0)
+                ? std::pow(vol / sizefactor, 1.0 / NDIMS)
+                : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
 
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 int ni = conn[e * NODES_PER_ELEM + k];
@@ -948,7 +979,7 @@ static void mmg_refine_init_mesh_3d(
     // --- Compute uniform or per-region metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
@@ -960,10 +991,12 @@ static void mmg_refine_init_mesh_3d(
     MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
     MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_verbose,  mesh.mmg_verbose);
     MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_debug,    mesh.mmg_debug);
+    // Size band from mesh.largest_size / mesh.smallest_size (relative element volumes):
+    // edge = resolution * size^(1/NDIMS).
     MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmax,
-                         mesh.mmg_hmax_factor * mesh.resolution);
+                         std::pow(mesh.largest_size,  1.0/NDIMS) * mesh.resolution);
     MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmin,
-                         mesh.mmg_hmin_factor * mesh.resolution);
+                         std::pow(mesh.smallest_size, 1.0/NDIMS) * mesh.resolution);
     MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hausd,
                          mesh.mmg_hausd_factor * mesh.resolution);
 
@@ -1021,7 +1054,7 @@ static void mmg_refine_init_mesh_3d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, max_elem_size, mesh.resolution, *fine_init_metric_n);
         } else {
             // Uniform case: exact constant metric
@@ -1113,7 +1146,7 @@ static void mmg_refine_init_mesh_2d(
     // --- Compute metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
@@ -1125,10 +1158,12 @@ static void mmg_refine_init_mesh_2d(
     MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
     MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose,  mesh.mmg_verbose);
     MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_debug,    mesh.mmg_debug);
+    // Size band from mesh.largest_size / mesh.smallest_size (relative element volumes):
+    // edge = resolution * size^(1/NDIMS).
     MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmax,
-                         mesh.mmg_hmax_factor * mesh.resolution);
+                         std::pow(mesh.largest_size,  1.0/NDIMS) * mesh.resolution);
     MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmin,
-                         mesh.mmg_hmin_factor * mesh.resolution);
+                         std::pow(mesh.smallest_size, 1.0/NDIMS) * mesh.resolution);
     MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hausd,
                          mesh.mmg_hausd_factor * mesh.resolution);
 
@@ -1181,7 +1216,7 @@ static void mmg_refine_init_mesh_2d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, 0.0, mesh.resolution, *fine_init_metric_n);
         } else {
             const double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
@@ -1822,7 +1857,10 @@ void new_mesh_refined_zone(const Param& param, Variables& var)
 #else
     const double area1 = 0.7 * (d*d*d);
 #endif
-    const double area0 = area1 * m.largest_size;
+    // Coarse-region max area uses the same relative-volume convention as MMG's hmax and the
+    // tiny-element check (volume = largest_size * sizefactor * resolution^NDIMS), so the Triangle
+    // coarse zone stays inside the [smallest_size, largest_size] band MMG remeshing enforces.
+    const double area0 = m.largest_size * sizefactor * std::pow(d, NDIMS);
     int pos = 0;
     region0[pos] = +d/2;  region1[pos++] = +x0*Lx+d/2; // x
 #if THREED
