@@ -282,7 +282,9 @@ static void declare_parameters(po::options_description &cfg,
          "to build every element at smallest_vol*ratio or more, which must shrink by that factor "
          "before it re-triggers; a remesh also rebuilds any element below smallest_vol*ratio. "
          "ratio=1: MMG builds at the trigger, so a just-remeshed element re-triggers under any "
-         "compression (remesh thrash). A ratio at or above largest_size/smallest_size (MMG's size "
+         "compression (remesh thrash). The same ratio places MMG's metric floor one step higher, "
+         "at hmin*ratio^(2/NDIMS) (at most MMG's hmax), and the post-remesh quality gate at "
+         "smallest_vol*sqrt(ratio). A ratio at or above largest_size/smallest_size (MMG's size "
          "ceiling) is capped just below it, with a warning; when largest_size equals "
          "smallest_size the cap is 1 - 1e-9 (round-off, in effect 1). Default 1.5: a 2/3 "
          "measure gap, heuristic. Must be >= 1 as set.")
@@ -318,7 +320,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
-         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
+         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces. "
+         "At 0.01 MMG refines a sharply bent free surface down to its size floor and builds elements "
+         "below the tiny-element trigger there, so the trigger fires at nearly every quality check: "
+         "use 0.02-0.05 along a 3D fault scarp and 0.1 on the top/wall ridges next to restored side "
+         "walls.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
@@ -330,7 +336,7 @@ static void declare_parameters(po::options_description &cfg,
          "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
          "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
          "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
-         "(elements keep their frozen initial size everywhere). Default: 5.")
+         "(the target is then the initial size, floored at the metric floor). Default: 5.")
         ;
 
     cfg.add_options()

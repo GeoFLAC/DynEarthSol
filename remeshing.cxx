@@ -2310,6 +2310,15 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
 }
 
 #ifdef USEMMG
+// MMG metric floor: one mmg_remesh_defensive_tiny_ratio step (in measure) above MMG's hmin, two
+// above the tiny-element trigger; at most MMG's hmax (largest_size).
+static double mmg_metric_floor(const Mesh &m)
+{
+    const double r = m.mmg_remesh_defensive_tiny_ratio;
+    return std::min(refine_floors(m).hmin * std::pow(r, 2.0 / NDIMS),
+                    std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
+}
+
 void compute_metric_field(const Param &param, const Variables &var, double_vec &metric, double_vec &etmp)
 {
     /* Compute the desired element size (nodal metric = edge length) for MMG remeshing.
@@ -2360,6 +2369,14 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
         metric[n] = (*var.init_elem_size_n)[n] * std::sqrt(vol_ratio);
 #endif
     }
+    // FLOOR (mmg_metric_floor): a target at MMG's hmin puts the band where MMG's output scatter
+    // reaches the tiny-element trigger, and every remesh re-fires.
+    {
+        double metric_floor = mmg_metric_floor(param.mesh);
+        #pragma omp parallel for default(none) shared(var, metric, metric_floor)
+        for (int n = 0; n < var.nnode; n++)
+            metric[n] = std::max(metric[n], metric_floor);
+    }
 }
 
 
@@ -2409,6 +2426,175 @@ double packed_elem_quality(const double *coord, const int *elem)
     }
     return 4.0 * std::sqrt(3.0) * area / d2_sum;
 #endif
+}
+
+// Centroid + longest-edge length of a packed-coords element (locality scale for the
+// post-remesh unfreeze below).
+void elem_centroid_scale(const double *coord, const int *elem, double *centroid, double &scale)
+{
+    for (int d = 0; d < NDIMS; ++d) centroid[d] = 0.0;
+    scale = 0.0;
+    for (int k = 0; k < NODES_PER_ELEM; ++k) {
+        const double *a = coord + (std::size_t)elem[k]*NDIMS;
+        for (int d = 0; d < NDIMS; ++d) centroid[d] += a[d];
+        for (int j = 0; j < k; ++j) {
+            const double *b = coord + (std::size_t)elem[j]*NDIMS;
+            double d2 = 0.0;
+            for (int d = 0; d < NDIMS; ++d) { double dd = a[d]-b[d]; d2 += dd*dd; }
+            if (d2 > scale) scale = d2;
+        }
+    }
+    for (int d = 0; d < NDIMS; ++d) centroid[d] /= NODES_PER_ELEM;
+    scale = std::sqrt(scale);
+}
+
+// Count the MMG output elements that would soon re-trigger remeshing: bad_mesh_quality's quality
+// test, plus a tiny test stricter than its trigger (tiny_vol). When bad_c / bad_r are non-null,
+// append each bad element's centroid and radius (longest edge).
+int collect_bad_output(const Param &param, const MMGOutput &out,
+                       std::vector<double> *bad_c, std::vector<double> *bad_r)
+{
+    const double q_thr = param.mesh.min_quality;
+    // Half the gap (in log measure) from the tiny-element trigger to MMG's floor: at the trigger a
+    // constrained spot re-crosses within a few thousand steps; at MMG's floor its output scatter
+    // routinely fails.
+    const double tiny_vol = refine_floors(param.mesh).smallest_vol
+                            * std::sqrt(param.mesh.mmg_remesh_defensive_tiny_ratio);
+    int nbad = 0;
+    for (int e = 0; e < out.nelem; ++e) {
+        const int *el = &out.conn[(std::size_t)e*NODES_PER_ELEM];
+        const double m = signed_elem_measure(out.coord.data(), el);
+#ifdef THREED
+        const double vol = m / 6.0;
+#else
+        const double vol = m / 2.0;
+#endif
+        double q = packed_elem_quality(out.coord.data(), el);
+#ifdef THREED
+        if (q > 0.0) q = std::cbrt(q);   // bad_mesh_quality's normalization
+#endif
+        if (q >= q_thr && vol >= tiny_vol) continue;
+        ++nbad;
+        if (!bad_c || !bad_r) continue;
+        double c[NDIMS], r;
+        elem_centroid_scale(out.coord.data(), el, c, r);
+        for (int d = 0; d < NDIMS; ++d) bad_c->push_back(c[d]);
+        bad_r->push_back(r);
+    }
+    return nbad;
+}
+
+// Post-output gate: around each MMG output element that collect_bad_output flags (MMG repaired
+// the trigger element, frozen neighbours blocked the fix, the badness moved next door), unfreeze
+// the still-required input entities with GRADED freedom:
+//   CORE  -- the bad element's input pre-image grown to frozen contact (capped) + `attempt` rings,
+//            so a persistent failure gets more room each retry: req_elem AND req_node freed;
+//   HINGE -- the next ring: req_elem freed, req_node kept (nodal fields carried verbatim).
+// Returns the number unfreed; 0 = clean output, or nothing frozen in reach.
+int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
+                             int mnode, int melem, const double *mcoord, const int *mconn,
+                             int attempt,
+                             std::vector<char> &req_node, std::vector<char> &req_elem)
+{
+    std::vector<double> bad_c;    // bad output element centroids (NDIMS each)
+    std::vector<double> bad_r;    // matching locality radii (longest edge)
+    const int nbad = collect_bad_output(param, out, &bad_c, &bad_r);
+    if (nbad == 0) return 0;
+
+    // Node -> element support of the MMG INPUT mesh, built locally: on the collapse path the mesh
+    // is renumbered and var.support does not match mconn. Centroids/radii are cached alongside.
+    std::vector<std::vector<int>> node_elems(mnode);
+    std::vector<double> ic((std::size_t)melem * NDIMS);   // input-element centroids
+    std::vector<double> ir(melem);                        // input-element radii (longest edge)
+    for (int e = 0; e < melem; ++e) {
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        elem_centroid_scale(mcoord, el, &ic[(std::size_t)e*NDIMS], ir[e]);
+        for (int k = 0; k < NODES_PER_ELEM; ++k) node_elems[el[k]].push_back(e);
+    }
+
+    // Seed: input elements overlapping a bad output element (centroids within the summed radii),
+    // plus each bad element's single nearest input element so the seed is never empty.
+    std::vector<char> region(melem, 0);
+    std::vector<int> frontier;
+    std::vector<int> nearest(nbad, -1);
+    std::vector<double> nearest_d2(nbad, std::numeric_limits<double>::max());
+    for (int e = 0; e < melem; ++e) {
+        const double *c = &ic[(std::size_t)e*NDIMS];
+        for (int j = 0; j < nbad; ++j) {
+            double d2 = 0.0;
+            for (int d = 0; d < NDIMS; ++d) { double dd = c[d] - bad_c[(std::size_t)j*NDIMS + d]; d2 += dd*dd; }
+            if (d2 < (bad_r[j] + ir[e]) * (bad_r[j] + ir[e]) && !region[e]) { region[e] = 1; frontier.push_back(e); }
+            if (d2 < nearest_d2[j]) { nearest_d2[j] = d2; nearest[j] = e; }
+        }
+    }
+    for (int j = 0; j < nbad; ++j)
+        if (nearest[j] >= 0 && !region[nearest[j]]) { region[nearest[j]] = 1; frontier.push_back(nearest[j]); }
+
+    // Does the current region touch any frozen (still-required) entity?
+    auto region_has_frozen = [&]() {
+        for (int e = 0; e < melem; ++e) {
+            if (!region[e]) continue;
+            if (req_elem[e]) return true;
+            const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+            for (int k = 0; k < NODES_PER_ELEM; ++k) if (req_node[el[k]]) return true;
+        }
+        return false;
+    };
+
+    // Grow one node-support ring: every element sharing a node with the current frontier.
+    auto grow_ring = [&](std::vector<int> &fr) {
+        std::vector<int> next;
+        for (int e : fr) {
+            const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int nb : node_elems[el[k]])
+                    if (!region[nb]) { region[nb] = 1; next.push_back(nb); }
+        }
+        fr.swap(next);
+    };
+
+    // CORE growth. Phase A: grow to the first frozen entity (capped), so a blocking frozen band a
+    // few elements away is reached. Phase B: `attempt` extra rings per retry.
+    const int max_contact_rings = 3;   // matches brc-interpolation's BFS layer cap
+    int rings = 0;
+    while (!frontier.empty() && rings < max_contact_rings && !region_has_frozen()) {
+        grow_ring(frontier);
+        ++rings;
+    }
+    for (int r = 0; r < attempt && !frontier.empty(); ++r) {
+        grow_ring(frontier);
+        ++rings;
+    }
+
+    // Free the CORE: both entity kinds -- full repair freedom.
+    int nfreed_core = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (!region[e]) continue;
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        if (req_elem[e]) { req_elem[e] = 0; ++nfreed_core; }
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (req_node[el[k]]) { req_node[el[k]] = 0; ++nfreed_core; }
+    }
+
+    // The hinge ring: a required element that touches the core loses its required status
+    // (mmg_adapt's contract); req_node stays.
+    int nfreed_hinge = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (!req_elem[e]) continue;
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (!req_node[el[k]]) { req_elem[e] = 0; ++nfreed_hinge; break; }
+    }
+    const int nfreed = nfreed_core + nfreed_hinge;
+    std::cout << "    Post-remesh quality check: " << nbad
+              << " output element(s) below min_quality/tiny; unfroze " << nfreed_core
+              << " core entities within " << rings << " connectivity ring(s) (+"
+              << nfreed_hinge << " hinge element(s), nodes kept)"
+              << (nfreed ? "."
+                         : " -- nothing frozen in reach, keeping this mesh (a tiny element where the"
+                           " free surface meets a wall can need a larger mmg_hausd_factor).")
+              << "\n";
+    return nfreed;
 }
 
 // Orientation + scale reference for a flat/inverted-element test: the measure of the first element
@@ -2982,6 +3168,13 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
 // match the old-mesh node/element order 1:1 (vertices = packed old_coord, triangles/tets built
 // from old connectivity in order). Only call when !outside_material (the collapse path renumbers).
 // Fills required_node[mnode] / required_elem[melem] (1 = frozen); mmg_adapt applies them to MMG.
+// NOTE (2026-07-10): dissolving small REQUIRED-element islands (components < 6 elements
+// losing required-element status, nodes kept) was tried here as a preventive against the
+// post-remesh quality retries and REVERTED after an A/B/C/D comparison on the
+// subd-serp-remesh frame-30 restart window: with dissolution 14 remeshes / 17 MMG re-runs,
+// without it 10 / 8 -- re-tessellating the dissolved islands at every remesh CREATED more
+// bad output elements (and mesh churn) than the pinned islands ever did. Do not re-add.
+
 void mark_quiet_required(const Param &param, const Variables &var,
                          const array_t &old_coord, const conn_t &old_connectivity,
                          int mnode, int melem, const std::vector<char> &flatten_broken,
@@ -3278,13 +3471,32 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    mmg_adapt(param.mesh, mmg_in, mmg_out);
+    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
+    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
+    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
+    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
+    for (int attempt = 0; ; ++attempt) {
+        mmg_adapt(param.mesh, mmg_in, mmg_out);
+        if (attempt >= 3) {
+            // Retries exhausted: keep the last mesh, but say so when it is still bad --
+            // a silent bad element re-triggers remeshing a few steps later.
+            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
+            if (nbad)
+                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
+                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
+                             "where the free surface meets a wall can need a larger "
+                             "mmg_hausd_factor.\n";
+            break;
+        }
+        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
+                                     req_node, req_elem) == 0) break;
+        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << ").\n";
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
     var.nseg  = mmg_out.nseg;
-    std::cerr << "New number of vertices:" << var.nnode
-              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
     array_t   new_coord(var.nnode);
     conn_t    new_connectivity(var.nelem);
@@ -3298,8 +3510,6 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-
-    std::cerr << "\nMesh optimization done" <<std::endl;
 }
 
 #else
@@ -3500,13 +3710,32 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    mmg_adapt(param.mesh, mmg_in, mmg_out);
+    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
+    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
+    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
+    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
+    for (int attempt = 0; ; ++attempt) {
+        mmg_adapt(param.mesh, mmg_in, mmg_out);
+        if (attempt >= 3) {
+            // Retries exhausted: keep the last mesh, but say so when it is still bad --
+            // a silent bad element re-triggers remeshing a few steps later.
+            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
+            if (nbad)
+                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
+                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
+                             "where the free surface meets a wall can need a larger "
+                             "mmg_hausd_factor.\n";
+            break;
+        }
+        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
+                                     req_node, req_elem) == 0) break;
+        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << ").\n";
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
     var.nseg  = mmg_out.nseg;
-    std::cerr << "New number of vertices:" << var.nnode
-              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
     array_t   new_coord(var.nnode);
     conn_t    new_connectivity(var.nelem);
@@ -3520,8 +3749,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-
-    std::cerr << "\nMesh optimization done" <<std::endl;
 }
 #endif  // end of if THREED
 #endif // end of if USEMMG
