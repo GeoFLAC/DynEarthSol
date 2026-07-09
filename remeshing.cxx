@@ -3352,6 +3352,113 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     return 0;
 }
 
+// Fail-fast guard against a TANGLED mesh (a self-collapsed free surface that no remesh can repair):
+//   (1) FOLDED element: signed measure opposite to the mesh's dominant sign (not hard-coded CCW;
+//       the 2D solver is orientation-agnostic). It can fire only after a uniform mesher
+//       (meshing_elem_shape 1 or 2): Triangle and TetGen orient every element alike, and MMG
+//       reorients an inverted input element.
+//   (2) SELF-INTERSECTING boundary (2D only): two boundary segments sharing no node cross. MMG
+//       does not split such a crossing; Triangle splits it at a vertex the pieces share.
+// So it can stop only a uniform-mesher or a 2D MMG remesh, never a Triangle, TetGen or 3D MMG one.
+// Prints the offending geometry and dies with the mesh error code. `when` labels the call site.
+static double tangle_orient2d(const double *a, const double *b, const double *c)
+{
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+}
+void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
+                       int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
+{
+    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and the tolerance
+    // REL * maxedge^NDIMS: round-off in m is ~1e-15 of maxedge^NDIMS, a fold is O(1), so 1e-9
+    // (not tuned) ignores noise and leaves anything flatter to the tiny/quality triggers.
+    const double REL = 1e-9;
+    auto elem_measure = [&](int e, double &m, double &tol) {
+        const auto &cn = connectivity[e];
+        double maxedge2 = 0.0;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int j = 0; j < i; ++j) {
+                double d2 = 0.0;
+                for (int k = 0; k < NDIMS; ++k) { double dd = coord[cn[i]][k] - coord[cn[j]][k]; d2 += dd*dd; }
+                if (d2 > maxedge2) maxedge2 = d2;
+            }
+#ifdef THREED
+        double bx=coord[cn[1]][0]-coord[cn[0]][0], by=coord[cn[1]][1]-coord[cn[0]][1], bz=coord[cn[1]][2]-coord[cn[0]][2];
+        double cx=coord[cn[2]][0]-coord[cn[0]][0], cy=coord[cn[2]][1]-coord[cn[0]][1], cz=coord[cn[2]][2]-coord[cn[0]][2];
+        double dx=coord[cn[3]][0]-coord[cn[0]][0], dy=coord[cn[3]][1]-coord[cn[0]][1], dz=coord[cn[3]][2]-coord[cn[0]][2];
+        m = bx*(cy*dz-cz*dy) - by*(cx*dz-cz*dx) + bz*(cx*dy-cy*dx);
+        tol = REL * maxedge2 * std::sqrt(maxedge2);   // measure ~ length^3
+#else
+        double ax=coord[cn[0]][0], ay=coord[cn[0]][1];
+        m = (coord[cn[1]][0]-ax)*(coord[cn[2]][1]-ay) - (coord[cn[2]][0]-ax)*(coord[cn[1]][1]-ay);
+        tol = REL * maxedge2;                          // measure ~ length^2
+#endif
+    };
+
+    // (1) folded element -- opposite orientation to the mesh's dominant sign.
+    // Pass 1: dominant orientation sign (ignoring near-degenerate elements).
+    int npos = 0, nneg = 0;
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; elem_measure(e, m, tol);
+        if (m >  tol) ++npos;
+        else if (m < -tol) ++nneg;
+    }
+    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
+    // Pass 2: flag the first element wound against the majority.
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; elem_measure(e, m, tol);
+        if (std::fabs(m) > tol && m * ref < 0.0) {
+            const auto &cn = connectivity[e];
+            std::cerr << "Error: tangled mesh (" << when << "): element #" << e
+                      << " is folded (signed measure = " << m << ", opposite the mesh's orientation). ";
+            std::cerr << "nodes";
+            for (int k=0;k<NODES_PER_ELEM;++k) {
+                std::cerr << " (";
+                for (int dd=0; dd<NDIMS; ++dd) std::cerr << coord[cn[k]][dd] << (dd<NDIMS-1?",":"");
+                std::cerr << ")";
+            }
+            std::cerr << "\n       The mesh has folded over itself (typically a self-collapsed free "
+                         "surface) and can no longer be repaired by remeshing. Stopping.\n";
+            die(EXIT_MESH_QUALITY);
+        }
+    }
+
+#ifndef THREED
+    // (2) self-intersecting boundary (2D), O(nseg^2), remesh time only. Read coords through the
+    // Array2D accessor (SoA: components are not adjacent). A per-segment tolerance requires each
+    // endpoint clearly on one side, so exact collinearity is never a crossing.
+    auto pt = [&](int n, double p[2]) { p[0] = coord[n][0]; p[1] = coord[n][1]; };
+    auto seg_len2 = [&](const double p[2], const double q[2]) {
+        double dx=q[0]-p[0], dy=q[1]-p[1]; return dx*dx+dy*dy;
+    };
+    for (int s = 0; s < nseg; ++s) {
+        const int a0 = segment[s][0], a1 = segment[s][1];
+        double p1[2], p2[2]; pt(a0, p1); pt(a1, p2);
+        const double tolA = REL * seg_len2(p1, p2);   // scale of orient() about segment A
+        for (int t = s + 1; t < nseg; ++t) {
+            const int b0 = segment[t][0], b1 = segment[t][1];
+            if (a0==b0 || a0==b1 || a1==b0 || a1==b1) continue;   // share a node -> not a crossing
+            double p3[2], p4[2]; pt(b0, p3); pt(b1, p4);
+            const double tolB = REL * seg_len2(p3, p4);
+            double d1 = tangle_orient2d(p3, p4, p1);   // p1,p2 sides of segment B
+            double d2 = tangle_orient2d(p3, p4, p2);
+            double d3 = tangle_orient2d(p1, p2, p3);   // p3,p4 sides of segment A
+            double d4 = tangle_orient2d(p1, p2, p4);
+            bool oppB = (d1 >  tolB && d2 < -tolB) || (d1 < -tolB && d2 >  tolB);
+            bool oppA = (d3 >  tolA && d4 < -tolA) || (d3 < -tolA && d4 >  tolA);
+            if (oppA && oppB) {
+                std::cerr << "Error: tangled mesh (" << when << "): boundary segments #" << s
+                          << " [flag " << segflag[s][0] << "] (" << p1[0] << "," << p1[1] << ")-("
+                          << p2[0] << "," << p2[1] << ") and #" << t << " [flag " << segflag[t][0]
+                          << "] (" << p3[0] << "," << p3[1] << ")-(" << p4[0] << "," << p4[1]
+                          << ") cross.\n       The free surface has self-collapsed (self-intersecting "
+                             "boundary); the mesh can no longer be repaired by remeshing. Stopping.\n";
+                die(EXIT_MESH_QUALITY);
+            }
+        }
+    }
+#endif
+}
+
 
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
@@ -3505,6 +3612,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         std::cout << "    New mesh (" << remesh_engine << "): nodes " << old_nnode << " -> " << var.nnode
                   << ", elements " << old_nelem << " -> " << var.nelem
                   << ", top surface facets " << old_ntop_facets << " -> " << new_ntop_facets << "\n";
+        // Fail fast on a tangled mesh before interpolating onto it.
+        check_mesh_tangle("post-remesh", *var.coord, *var.connectivity, var.nelem,
+                          *var.segment, *var.segflag, var.nseg);
         // Drain all async GPU work before freeing/reallocating temporary arrays.
         // This gives CUDA a sync point to reclaim migrated managed-memory pages.
         #pragma acc wait
