@@ -117,6 +117,16 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
             // restore edge nodes to initial depth
             qcoord[i*NDIMS + NDIMS-1] = bottom;
         }
+        else if (flag & BOUNDZ1 && qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
+            // A TOP node within min_dist of (or below) the restored bottom: the domain has necked
+            // through. Collapsing it would weld the free surface onto the floor (garbage mesh, NaN);
+            // stop instead.
+            std::cerr << "Error: top-surface node " << i << " (z = "
+                      << qcoord[i*NDIMS + NDIMS-1] << ") has reached the bottom boundary (z = "
+                      << bottom << ").\n       The model domain has necked through; the mesh "
+                      "can no longer represent the model. Stopping.\n";
+            die(EXIT_MESH_QUALITY);   // terminal physical state reached in the mesh-repair path
+        }
         else if (qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
             // Mark every NON-bottom node within min_dist of (or below) the bottom plane for deletion:
             // interior nodes (they invert the adjoining elements once the boundary snaps back up) and
