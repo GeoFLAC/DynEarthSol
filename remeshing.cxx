@@ -1237,6 +1237,20 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         points_to_delete.resize(last - points_to_delete.begin());
     }
 
+    // Record every ORIGINAL node deleted here (interior ones included) or moved by flatten_*:
+    // barycentric_node_interpolation silences its "interior node not found" warning for a new
+    // node whose nearest old node is one of them. Before delete_points() renumbers qcoord.
+    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
+        for (int n : points_to_delete)
+            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
+        for (int n = 0; n < old_nnode; ++n)
+            for (int d = 0; d < NDIMS; ++d)
+                if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
+                    var.remesh_affected_old_node[n] = 1;
+                    break;
+                }
+    }
+
     // delete points
     switch (param.mesh.remeshing_option) {
     case 0:
@@ -2973,6 +2987,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segment.steal_ref(*var.segment);
         old_segflag.steal_ref(*var.segflag);
 
+        // Reset the per-remesh record of old nodes the remesh moved or deleted; new_mesh
+        // (Triangle/TetGen) fills it for barycentric_node_interpolation.
+        var.remesh_affected_old_node.assign(old_coord.size(), 0);
+
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
@@ -3053,6 +3071,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
+        // done with the old mesh; drop the affected-old-node record so it is never
+        // consulted against a mismatched mesh later (e.g. temperature-file interpolation).
+        var.remesh_affected_old_node.clear();
         create_support(var);
         // delete var.neighbor;
         // delete var.contact;

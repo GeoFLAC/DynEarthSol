@@ -298,11 +298,18 @@ void prepare_interpolation(const Param& param, const Variables &var,
                     bary.transform(q, e, r);
                     goto found;
                 }
-                // For all other cases, distinguish by bcflag of the new node:
-                //   bcflag == 0: interior node — might be inside old domain, BFS failure might be a bug.
+                // For all other cases the nearest-node fallback below is used; warn only for an
+                // interior node this remesh's own node moves/deletions do not explain.
                 //   bcflag != 0: boundary node — may sit just outside the old mesh after
-                //                remeshing; nearest-node fallback is correct.
-                if ((*var.bcflag)[i] == 0) {
+                //                remeshing; nearest-node fallback is correct, never warn.
+                //   bcflag == 0: interior node -- silent if its nearest old node is flagged in
+                //                var.remesh_affected_old_node (moved or deleted before meshing;
+                //                Triangle/TetGen also flags its interior deletions), else
+                //                possibly broken connectivity.
+                const bool near_affected_old_node =
+                    nn >= 0 && nn < (int)var.remesh_affected_old_node.size()
+                    && var.remesh_affected_old_node[nn];
+                if ((*var.bcflag)[i] == 0 && !near_affected_old_node) {
                     printf("Warning: prepare_interpolation: interior node %d (bcflag=0) "
                            "not found after capped BFS (MAX_LAYERS=%d; %zu/%d elements searched), "
                            "best_min_bary=%.3e. Mesh connectivity may be broken.\n",
