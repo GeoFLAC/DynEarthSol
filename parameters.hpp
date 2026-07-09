@@ -829,10 +829,11 @@ struct Variables {
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
 
-    // Per-remesh scratch: 1 for each ORIGINAL-mesh node the remesh MOVED (flatten_*) or DELETED
-    // (interior deletions included). Sized to the old node count in remesh() and filled by
-    // new_mesh (Triangle/TetGen); barycentric_node_interpolation skips its "interior node not
-    // found" warning for a new node whose nearest old node is flagged. Empty outside remeshing.
+    // Per-remesh scratch: 1 for each ORIGINAL-mesh node the remesh MOVED (flatten_*), DELETED
+    // or COLLAPSED (new_mesh's interior deletions included). Sized to the old node count in
+    // remesh() and filled by new_mesh (Triangle/TetGen) and the MMG paths;
+    // barycentric_node_interpolation skips its "interior node not found" warning for a new node
+    // whose nearest old node is flagged. Empty outside remeshing.
     std::vector<char> remesh_affected_old_node;
 
     // tensor_t *stress_old;

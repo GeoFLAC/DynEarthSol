@@ -174,7 +174,12 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
          "The size of smallest element relative to an element with typical resolution. With MMG "
          "it also sets the minimum edge length, (smallest_size*mmg_remesh_defensive_tiny_ratio)"
-         "^(1/NDIMS) * resolution (and the other MMG thresholds listed under that ratio). "
+         "^(1/NDIMS) * resolution (and the other MMG thresholds listed under that ratio), and in "
+         "2D the length, smallest_size^(1/NDIMS) * resolution, below which a remesh without "
+         "outside material merges a boundary segment's two nodes before MMG (never removing a "
+         "domain corner; a node joins "
+         "at most one such merge per remesh, and every merge is skipped when together they "
+         "would leave a flat or inverted element). "
          "With Triangle/TetGen remeshing (a build without MMG, "
          "meshing_elem_shape = 0) it also sets the node-spacing floor: a remesh deletes interior "
          "nodes closer than smallest_size^(1/NDIMS) * resolution to a retained node (the floor "
@@ -300,8 +305,12 @@ static void declare_parameters(po::options_description &cfg,
          "the switch sharper. The window width is otherwise untuned.")
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
-         "Discarding internal segments after initial mesh is created? "
-         "Using it when remeshing process can modify segments (e.g. remeshing_option=1 or 11).")
+         "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
+         "'no' keeps them as Triangle/TetGen constraints across remeshes, but a remesh that deletes "
+         "one of their nodes (tiny-element repair, node cleanup near a restored boundary) misroutes "
+         "them, which can make the mesher fail or hang; in 3D with remeshing_option 1 or 10-12 the "
+         "first remesh that deletes a boundary node drops them all. MMG remeshing (usemmg=1, "
+         "meshing_elem_shape = 0) requires 'yes': MMG keeps no internal segment.")
 
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", po::value<int>(&p.mesh.mmg_debug)->default_value(0),
@@ -1367,6 +1376,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available with MMG remeshing "
             "(usemmg=1, mesh.meshing_elem_shape = 0); use 1 or 11, or a build without MMG.");
 #endif
+    // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
+    if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
+#ifdef USEMMG
+        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available with "
+            "MMG remeshing (usemmg=1, mesh.meshing_elem_shape = 0): MMG keeps no internal "
+            "segment. Use yes, or a build without MMG.");
+#else
+        std::cerr << "Warning: mesh.is_discarding_internal_segments = no: a remesh that deletes a "
+                     "node of an internal segment (tiny-element repair, node cleanup near a "
+                     "restored boundary) misroutes it, which can make the mesher fail or hang; "
+                     "in 3D with remeshing_option 1 or 10-12, the first remesh that deletes a "
+                     "boundary node drops them all.\n";
+#endif
+    }
 
 #ifndef USEMMG
     if (p.mesh.use_mmg_init) {

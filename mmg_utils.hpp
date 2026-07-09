@@ -31,9 +31,10 @@ struct MMGOutput {
 // Run one MMG (2D or 3D, per build) adaptation of `in` into `out`. The size band and solver
 // parameters come from `mesh` (largest_size/smallest_size/mmg_remesh_defensive_tiny_ratio/
 // mmg_hausd_factor/resolution/mmg_verbose/mmg_debug; hmax = largest_size^(1/NDIMS) * resolution,
-// hmin = (smallest_size * ratio)^(1/NDIMS) * resolution): the single owner of the MMG lifecycle,
-// shared by mesh init and remeshing. Dies with EXIT_MESH_MMG on any MMG failure, except
-// MMG5_LOWFAILURE when in.tolerate_low_failure (init).
+// hmin = (smallest_size * ratio)^(1/NDIMS) * resolution); ref=0 facets are dropped, so out.seg
+// holds boundary facets only. The single owner of the MMG lifecycle, shared by mesh init and
+// remeshing. Dies with EXIT_MESH_MMG on any MMG failure, except MMG5_LOWFAILURE when
+// in.tolerate_low_failure (init).
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out);
 
 #endif // USEMMG
