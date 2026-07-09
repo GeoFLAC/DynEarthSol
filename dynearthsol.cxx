@@ -39,6 +39,7 @@ void init_var(const Param& param, Variables& var)
     var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
+    var.nremesh_prior = 0;
     var.noutput = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
@@ -363,6 +364,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        bin_chkpt.read_scalar(var.nremesh_prior, "nremesh");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&

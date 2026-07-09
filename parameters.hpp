@@ -694,7 +694,9 @@ struct Variables {
     double l2_residual;
     double reference_frame_time;
     int steps;
-    int nremesh;
+    int nremesh;        // this run's remeshes, which the time summary and the manifest count
+    int nremesh_prior;  // remeshes before this run (the checkpoint's "nremesh"), so the log's
+                        // remesh #N continues across a restart
     int noutput;
     int info_display_next_step;
     Time func_time;

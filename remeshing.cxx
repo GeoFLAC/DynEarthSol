@@ -3227,7 +3227,20 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     for (int e=0; e<var.nelem; e++) {
         if ((*var.volume)[e] < smallest_vol) {
             index = e;
-            std::cout << "    The size of element #" << index << " is too small.\n";
+            // report location + the nodes' boundary flags, so a chronic re-trigger spot
+            // is identifiable (interior vs which boundary it is pinned to)
+            double cent[NDIMS] = {0.};
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int d = 0; d < NDIMS; ++d)
+                    cent[d] += (*var.coord)[conn[k]][d] / NODES_PER_ELEM;
+            std::cout << "    The size of element #" << index << " is too small at (";
+            for (int d = 0; d < NDIMS; ++d)
+                std::cout << (d ? ", " : "") << cent[d];
+            std::cout << "), node bcflags:";
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                std::cout << ' ' << (*var.bcflag)[conn[k]];
+            std::cout << ".\n";
 #ifdef NPROF
             nvtxRangePop();
 #endif
@@ -3247,7 +3260,8 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
                 double z = (*var.coord)[i][NDIMS-1];
                 if (std::fabs(z - bottom) > dist) {
                     index = i;
-                    std::cout << "    Node #" << i << " is too far from the bottm: z = " << z << "\n";
+                    std::cout << "    Node #" << i << " is too far from the bottom: z = " << z
+                              << " (plane z = " << bottom << ", limit +-" << dist << ")\n";
 #ifdef NPROF
                     nvtxRangePop();
 #endif
@@ -3265,26 +3279,30 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
                 double x = (*var.coord)[i][0];
                 if (std::fabs(x) > dist) {
                     index = i;
-                    std::cout << "    Node #" << i << " is too far from the x0 side: x = " << x << "\n";
+                    std::cout << "    Node #" << i << " is too far from the x0 side: x = " << x
+                              << " (plane x = 0, limit +-" << dist << ")\n";
                 }
             } else if (is_x1((*var.bcflag)[i])) {
                 double x = (*var.coord)[i][0];
                 if (std::fabs(x - param.mesh.xlength) > dist) {
                     index = i;
-                    std::cout << "    Node #" << i << " is too far from the x1 side: x = " << x << "\n";
+                    std::cout << "    Node #" << i << " is too far from the x1 side: x = " << x
+                              << " (plane x = " << param.mesh.xlength << ", limit +-" << dist << ")\n";
                 }
 #ifdef THREED
             } else if (is_y0((*var.bcflag)[i])) {
                 double y = (*var.coord)[i][1];
                 if (std::fabs(y) > dist) {
                     index = i;
-                    std::cout << "    Node #" << i << " is too far from the y0 side: y = " << y << "\n";
+                    std::cout << "    Node #" << i << " is too far from the y0 side: y = " << y
+                              << " (plane y = 0, limit +-" << dist << ")\n";
                 }
             } else if (is_y1((*var.bcflag)[i])) {
                 double y = (*var.coord)[i][1];
                 if (std::fabs(y - param.mesh.ylength) > dist) {
                     index = i;
-                    std::cout << "    Node #" << i << " is too far from the y1 side: y = " << y << "\n";
+                    std::cout << "    Node #" << i << " is too far from the y1 side: y = " << y
+                              << " (plane y = " << param.mesh.ylength << ", limit +-" << dist << ")\n";
                 }
 #endif
             }
@@ -3309,11 +3327,20 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     min_quality = q;
     if (q < param.mesh.min_quality) {
         index = worst_elem;
-        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << " (bcflag: ";
-        for (int i = 0; i < NODES_PER_ELEM; i++) {
-            std::cout << (*var.bcflag)[(*var.connectivity)[worst_elem][i]];
-            std::cout << (i < NODES_PER_ELEM - 1 ? ", " : ").\n");
-        }
+        // same format as the too-small trigger above: centroid + the nodes' boundary flags
+        double cent[NDIMS] = {0.};
+        ConstConnAccessor conn = (*var.connectivity)[worst_elem];
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            for (int d = 0; d < NDIMS; ++d)
+                cent[d] += (*var.coord)[conn[k]][d] / NODES_PER_ELEM;
+        std::cout << "    The quality of element #" << worst_elem << " is too low (" << q
+                  << ") at (";
+        for (int d = 0; d < NDIMS; ++d)
+            std::cout << (d ? ", " : "") << cent[d];
+        std::cout << "), node bcflags:";
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            std::cout << ' ' << (*var.bcflag)[conn[k]];
+        std::cout << ".\n";
 #ifdef NPROF
         nvtxRangePop();
 #endif
@@ -3333,12 +3360,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     int64_t time_tmp = get_nanoseconds();
 
-    std::cout << "  Remeshing starts...\n";
+    std::cout << "  Remeshing starts (#" << var.nremesh_prior + var.nremesh + 1
+              << ", step " << var.steps << ", t = " << var.time / YEAR2SEC << " yr)...\n";
 #ifdef ACC
     {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
-        std::cout << "  [GPU mem] remesh start: free="
+        std::cout << "      [GPU mem] remesh start: free="
                   << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
     }
 #endif
@@ -3414,20 +3442,28 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segment.steal_ref(*var.segment);
         old_segflag.steal_ref(*var.segflag);
 
+        const int old_nnode = old_coord.size();
+        const int old_nelem = old_connectivity.size();
+        const int old_nseg  = old_segment.size();
+        const char *remesh_engine = "?";
+
         // Reset the per-remesh record of old nodes the remesh moved or deleted; new_mesh
         // (Triangle/TetGen) fills it for barycentric_node_interpolation.
-        var.remesh_affected_old_node.assign(old_coord.size(), 0);
+        var.remesh_affected_old_node.assign(old_nnode, 0);
 
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
+            remesh_engine = "MMG";
             optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
 #else
+            remesh_engine = "TetGen";
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
+            remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                     old_segment, old_segflag);
         } else {
@@ -3437,16 +3473,20 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #else  // if 2d
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
+            remesh_engine = "MMG";
             optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
                 old_segment, old_segflag);
 #else
+            remesh_engine = "Triangle";
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                 old_segment, old_segflag);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
+            remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                 old_segment, old_segflag);
         } else if (param.mesh.meshing_elem_shape == 2) {
+            remesh_engine = "uniform equilateral";
             new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
                 old_segment, old_segflag);
         } else {
@@ -3454,6 +3494,17 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             die(EXIT_CONFIG_VALUE);
         }        
 #endif
+
+        // Per-engine remesh report, with the free-surface (BOUNDZ1) facet count.
+        int old_ntop_facets = 0;
+        for (int i=0; i<old_nseg; ++i)
+            if (static_cast<uint>(old_segflag[i][0]) & BOUNDZ1) ++old_ntop_facets;
+        int new_ntop_facets = 0;
+        for (int i=0; i<var.nseg; ++i)
+            if (static_cast<uint>((*var.segflag)[i][0]) & BOUNDZ1) ++new_ntop_facets;
+        std::cout << "    New mesh (" << remesh_engine << "): nodes " << old_nnode << " -> " << var.nnode
+                  << ", elements " << old_nelem << " -> " << var.nelem
+                  << ", top surface facets " << old_ntop_facets << " -> " << new_ntop_facets << "\n";
         // Drain all async GPU work before freeing/reallocating temporary arrays.
         // This gives CUDA a sync point to reclaim migrated managed-memory pages.
         #pragma acc wait
@@ -3461,7 +3512,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         {
             size_t free_bytes, total_bytes;
             knn_bvh_mem_info(&free_bytes, &total_bytes);
-            std::cout << "  [GPU mem] before reallocate_tmp: free="
+            std::cout << "      [GPU mem] before reallocate_tmp: free="
                       << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
         }
 #endif
@@ -3521,7 +3572,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
-        std::cout << "  [GPU mem] before reallocate_variables: free="
+        std::cout << "      [GPU mem] before reallocate_variables: free="
                   << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
     }
 #endif
@@ -3640,7 +3691,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
-        std::cout << "  [GPU mem] remesh end:   free="
+        std::cout << "      [GPU mem] remesh end:   free="
                   << free_bytes/(1<<20) << " MB / total=" << total_bytes/(1<<20) << " MB\n";
     }
 #endif
