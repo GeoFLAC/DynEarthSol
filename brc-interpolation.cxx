@@ -201,8 +201,9 @@ void prepare_interpolation(const Param& param, const Variables &var,
             double r[NDIMS];
             int e;
 
-            // shortcut: q is exactly the same as nn
-            if (dd == 0) {
+            // shortcut: q coincides with nn (within round-off; dd is squared
+            // distance, same tolerance as the element path in nn-interpolation)
+            if (dd < 1e-15) {
                 e = nn_elem[0];
                 bary.transform(q, e, r);
                 // r should be a permutation of [1, 0, 0]
