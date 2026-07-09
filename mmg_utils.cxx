@@ -1,6 +1,9 @@
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <vector>
 
 #include "constants.hpp"
@@ -23,6 +26,60 @@
         die(EXIT_MESH_MMG); \
     } } while (0)
 
+namespace {
+
+// Merge duplicate boundary facets (same node set) into one entry, OR-ing their refs. MMG emits
+// the facets of REQUIRED elements as extra ref=0 copies of the input segments; fed back, MMG's
+// facet hash keeps one copy at random, and when the ref=0 copy wins the boundary ref is lost:
+// nodes inserted on that facet get bcflag=0 and flatten_* never restores them (sagging bottom).
+// Refs are BOUND* bitmasks and distinct facets never share a node set, so OR-merging preserves
+// the exact constraint set with a deterministic ref.
+void dedup_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
+{
+    std::map<std::array<int, NODES_PER_FACET>, int> first_at;   // facet key -> surviving index
+    int ns = 0;
+    for (int s = 0; s < nseg; ++s) {
+        std::array<int, NODES_PER_FACET> key;
+        for (int k = 0; k < NODES_PER_FACET; ++k) key[k] = seg[(std::size_t)s*NODES_PER_FACET + k];
+        std::sort(key.begin(), key.end());
+        auto it = first_at.find(key);
+        if (it != first_at.end()) {
+            segflag[it->second] |= segflag[s];   // duplicate: merge ref into the first copy
+            continue;
+        }
+        first_at[key] = ns;
+        for (int k = 0; k < NODES_PER_FACET; ++k)
+            seg[(std::size_t)ns*NODES_PER_FACET + k] = seg[(std::size_t)s*NODES_PER_FACET + k];
+        segflag[ns] = segflag[s];
+        ++ns;
+    }
+    nseg = ns;
+    seg.resize((std::size_t)ns * NODES_PER_FACET);
+    segflag.resize(ns);
+}
+
+// Drop ref=0 facets. With mesh.is_discarding_internal_segments every REAL boundary facet carries
+// a BOUND* ref (the OR-merge above guarantees it), so a remaining ref=0 facet is an interior ECHO
+// of a required element's edges. Echoes add no protection within an adapt (requiredness does
+// that) but constrain the NEXT remeshes' interior and ratchet remesh over remesh (nseg grew ~35x
+// over a long run, output quality degraded, then two echoes crossed: tangled mesh). Applied to
+// MMG's output, so var.segment is the real boundary only.
+void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
+{
+    int ns = 0;
+    for (int s = 0; s < nseg; ++s) {
+        if (segflag[s] == 0) continue;
+        for (int k = 0; k < NODES_PER_FACET; ++k)
+            seg[(std::size_t)ns*NODES_PER_FACET + k] = seg[(std::size_t)s*NODES_PER_FACET + k];
+        segflag[ns] = segflag[s];
+        ++ns;
+    }
+    nseg = ns;
+    seg.resize((std::size_t)ns * NODES_PER_FACET);
+    segflag.resize(ns);
+}
+
+} // anonymous namespace
 
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 {
@@ -38,8 +95,14 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     std::vector<int> conn1(in.conn, in.conn + (std::size_t)in.nelem * NODES_PER_ELEM);
     for (int &v : conn1) ++v;
     std::vector<int> seg1(in.seg, in.seg + (std::size_t)in.nseg * NODES_PER_FACET);
-    for (int &v : seg1) ++v;
     std::vector<int> segref(in.segflag, in.segflag + in.nseg);
+    // Defensive input dedup: a checkpoint or an output written before the readback dedup below
+    // may still carry duplicate facets with conflicting refs; never hand those to MMG.
+    int nseg_in = in.nseg;
+    dedup_facets(nseg_in, seg1, segref);
+    if (mesh.is_discarding_internal_segments)
+        drop_unflagged_facets(nseg_in, seg1, segref);   // stale interior echoes (see above)
+    for (int &v : seg1) ++v;
 
     MMG5_pMesh mmgMesh = NULL;
     MMG5_pSol  mmgSol  = NULL;
@@ -48,7 +111,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG3D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    MMG_OK(MMG3D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, in.nseg, 0, 0));
+    MMG_OK(MMG3D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_in, 0, 0));
     MMG_OK(MMG3D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
     MMG_OK(MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG3D_Set_triangles(mmgMesh, seg1.data(), segref.data()));
@@ -102,6 +165,13 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         MMG_OK(MMG3D_Get_triangle(mmgMesh, &s[0], &s[1], &s[2], &out.segflag[i], NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
     }
+    // MMG returns each required-element facet as an extra ref=0 copy of the same node set;
+    // merge duplicates so var.segment stays duplicate-free (see dedup_facets), then drop the
+    // surviving ref=0 interior echoes so they cannot ratchet across remeshes (see
+    // drop_unflagged_facets).
+    dedup_facets(out.nseg, out.seg, out.segflag);
+    if (mesh.is_discarding_internal_segments)
+        drop_unflagged_facets(out.nseg, out.seg, out.segflag);
 
     MMG3D_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                    MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
@@ -111,7 +181,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG2D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, in.nseg));
+    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_in));
     MMG_OK(MMG2D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
     MMG_OK(MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG2D_Set_edges(mmgMesh, seg1.data(), segref.data()));
@@ -164,6 +234,13 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         MMG_OK(MMG2D_Get_edge(mmgMesh, &s[0], &s[1], &out.segflag[i], NULL, NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
     }
+    // MMG returns each required-element facet as an extra ref=0 copy of the same node set;
+    // merge duplicates so var.segment stays duplicate-free (see dedup_facets), then drop the
+    // surviving ref=0 interior echoes so they cannot ratchet across remeshes (see
+    // drop_unflagged_facets).
+    dedup_facets(out.nseg, out.seg, out.segflag);
+    if (mesh.is_discarding_internal_segments)
+        drop_unflagged_facets(out.nseg, out.seg, out.segflag);
 
     MMG2D_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                    MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
