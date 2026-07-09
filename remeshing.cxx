@@ -4,6 +4,7 @@
 #include <iostream>
 #include <numeric>
 #include <limits>
+#include <map>
 #include <unordered_map>
 
 #include "constants.hpp"
@@ -136,6 +137,15 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
         if (is_bottom(flag)) {
             // restore edge nodes to initial depth
             qcoord[i*NDIMS + NDIMS-1] = bottom;
+        }
+        else if (flag & BOUNDZ1 && qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
+            // A TOP node at/below the restored bottom: the domain has necked through. Collapsing it
+            // would weld the free surface onto the floor (garbage mesh, NaN); stop instead.
+            std::cerr << "Error: top-surface node " << i << " (z = "
+                      << qcoord[i*NDIMS + NDIMS-1] << ") has reached the bottom boundary (z = "
+                      << bottom << ").\n       The model domain has necked through -- "
+                      "this is a terminal model state, not a remeshing problem. Stopping.\n";
+            die(EXIT_MESH_QUALITY);   // terminal physical state reached in the mesh-repair path
         }
         else if (qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
             // Mark every NON-bottom node at/below the flattened bottom plane for deletion: interior
@@ -1358,6 +1368,20 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         points_to_delete.resize(last - points_to_delete.begin());
     }
 
+    // Record the ORIGINAL nodes boundary remeshing reshaped (deleted here + moved by flatten_*):
+    // barycentric_node_interpolation silences its "interior node not found" warning where a new
+    // node legitimately maps outside the old outline. Before delete_points() renumbers qcoord.
+    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
+        for (int n : points_to_delete)
+            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
+        for (int n = 0; n < old_nnode; ++n)
+            for (int d = 0; d < NDIMS; ++d)
+                if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
+                    var.remesh_affected_old_node[n] = 1;
+                    break;
+                }
+    }
+
     // delete points
     switch (param.mesh.remeshing_option) {
     case 0:
@@ -2357,6 +2381,22 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
         metric[n] = (*var.init_elem_size_n)[n] * std::sqrt(vol_ratio);
 #endif
     }
+    // FLOOR the metric one hysteresis step ABOVE MMG's hmin. A plastic-strain-refined
+    // target at or below hmin makes the shear band live exactly at the size floor, where
+    // MMG's output scatter (hmin is best-effort, not a hard guarantee) lands inside the
+    // tiny-element re-trigger buffer (smallest_vol / remesh_tiny_margin) -- the chronic
+    // "The size of element # is too small" remesh storm at the trench / slab shear zones:
+    // every remesh re-emitted ~1.2 km elements against a 1.34 km hmin and a 1.1 km trigger,
+    // so the intended hysteresis gap was never restored. Requesting at least
+    // hmin * margin^(1/NDIMS) keeps the low tail of the output scatter at ~hmin, a full
+    // margin factor (in volume) above the trigger.
+    {
+        double metric_floor = refine_floors(param.mesh).hmin
+                              * std::pow(param.mesh.remesh_tiny_margin, 1.0 / NDIMS);
+        #pragma omp parallel for default(none) shared(var, metric, metric_floor)
+        for (int n = 0; n < var.nnode; n++)
+            metric[n] = std::max(metric[n], metric_floor);
+    }
 }
 
 
@@ -2374,6 +2414,210 @@ double signed_elem_measure(const double *coord, const int *elem)
     const double *a = coord + elem[0]*2, *b = coord + elem[1]*2, *c = coord + elem[2]*2;
     return (b[0]-a[0])*(c[1]-a[1]) - (c[0]-a[0])*(b[1]-a[1]);
 #endif
+}
+// elem_quality on packed coords (0..1, equilateral = 1), measured from THESE coords instead of
+// var.volume so it can judge an element after flatten_* moved its nodes; <= 0 = degenerate/inverted.
+double packed_elem_quality(const double *coord, const int *elem)
+{
+    double m = signed_elem_measure(coord, elem);
+#ifdef THREED
+    if (m <= 0.0) return m;
+    const double vol = m / 6.0;
+    double area_sum = 0.0;
+    static const int faces[4][3] = {{0,1,2},{0,1,3},{2,3,0},{2,3,1}};
+    for (int f = 0; f < 4; ++f) {
+        const double *a = coord + elem[faces[f][0]]*3;
+        const double *b = coord + elem[faces[f][1]]*3;
+        const double *c = coord + elem[faces[f][2]]*3;
+        double ux=b[0]-a[0], uy=b[1]-a[1], uz=b[2]-a[2];
+        double vx=c[0]-a[0], vy=c[1]-a[1], vz=c[2]-a[2];
+        double nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+        area_sum += 0.5 * std::sqrt(nx*nx + ny*ny + nz*nz);
+    }
+    return 216.0 * std::sqrt(3.0) * vol * vol / (area_sum * area_sum * area_sum);
+#else
+    if (m <= 0.0) return m;
+    const double area = 0.5 * m;
+    double d2_sum = 0.0;
+    for (int k = 0; k < 3; ++k) {
+        const double *a = coord + elem[k]*2, *b = coord + elem[(k+1)%3]*2;
+        double dx=b[0]-a[0], dy=b[1]-a[1];
+        d2_sum += dx*dx + dy*dy;
+    }
+    return 4.0 * std::sqrt(3.0) * area / d2_sum;
+#endif
+}
+
+// Centroid + longest-edge length of a packed-coords element (locality scale for the
+// post-remesh unfreeze below).
+void elem_centroid_scale(const double *coord, const int *elem, double *centroid, double &scale)
+{
+    for (int d = 0; d < NDIMS; ++d) centroid[d] = 0.0;
+    scale = 0.0;
+    for (int k = 0; k < NODES_PER_ELEM; ++k) {
+        const double *a = coord + (std::size_t)elem[k]*NDIMS;
+        for (int d = 0; d < NDIMS; ++d) centroid[d] += a[d];
+        for (int j = 0; j < k; ++j) {
+            const double *b = coord + (std::size_t)elem[j]*NDIMS;
+            double d2 = 0.0;
+            for (int d = 0; d < NDIMS; ++d) { double dd = a[d]-b[d]; d2 += dd*dd; }
+            if (d2 > scale) scale = d2;
+        }
+    }
+    for (int d = 0; d < NDIMS; ++d) centroid[d] /= NODES_PER_ELEM;
+    scale = std::sqrt(scale);
+}
+
+// Collect the below-min_quality / tiny elements of an MMG output (the same criteria as
+// bad_mesh_quality's element checks -- an output that would immediately re-trigger remeshing).
+// Returns the count; when bad_c/bad_r are non-null the bad elements' centroids and locality
+// radii (longest edge) are appended for the unfreeze region seeding below.
+int collect_bad_output(const Param &param, const MMGOutput &out,
+                       std::vector<double> *bad_c, std::vector<double> *bad_r)
+{
+    const double q_thr = param.mesh.min_quality;
+    // A fresh output element must clear the tiny-element trigger by HALF the hysteresis gap
+    // (> smallest_vol / sqrt(margin)): at the trigger itself a constrained spot re-crosses within
+    // a few thousand steps; at the full floor MMG's output scatter routinely fails.
+    const double tiny_vol = refine_floors(param.mesh).smallest_vol
+                            / std::sqrt(param.mesh.remesh_tiny_margin);
+    int nbad = 0;
+    for (int e = 0; e < out.nelem; ++e) {
+        const int *el = &out.conn[(std::size_t)e*NODES_PER_ELEM];
+        const double m = signed_elem_measure(out.coord.data(), el);
+#ifdef THREED
+        const double vol = m / 6.0;
+#else
+        const double vol = m / 2.0;
+#endif
+        double q = packed_elem_quality(out.coord.data(), el);
+#ifdef THREED
+        if (q > 0.0) q = std::cbrt(q);   // bad_mesh_quality's normalization
+#endif
+        if (q >= q_thr && vol >= tiny_vol) continue;
+        ++nbad;
+        if (!bad_c || !bad_r) continue;
+        double c[NDIMS], r;
+        elem_centroid_scale(out.coord.data(), el, c, r);
+        for (int d = 0; d < NDIMS; ++d) bad_c->push_back(c[d]);
+        bad_r->push_back(r);
+    }
+    return nbad;
+}
+
+// Post-remesh quality gate: bad_mesh_quality's element checks applied to the MMG OUTPUT, so a
+// remesh cannot emit an element that immediately re-triggers remeshing (MMG repairs the trigger
+// element, frozen neighbours block the fix, the badness moves next door). On failure, unfreeze
+// the still-required input entities around each bad output element with GRADED freedom:
+//   * CORE  -- the bad element's input pre-image grown to frozen contact (capped) + `attempt`
+//     extra rings, so a persistent failure gets more room instead of being chased one element
+//     per retry: free req_elem AND req_node.
+//   * HINGE -- one more ring: free req_elem only, keep req_node (split/swap allowed, nodal fields
+//     still carried verbatim).
+// Returns the number unfreed; 0 = clean output, or nothing frozen in reach.
+int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
+                             int mnode, int melem, const double *mcoord, const int *mconn,
+                             int attempt,
+                             std::vector<char> &req_node, std::vector<char> &req_elem)
+{
+    std::vector<double> bad_c;    // bad output element centroids (NDIMS each)
+    std::vector<double> bad_r;    // matching locality radii (longest edge)
+    const int nbad = collect_bad_output(param, out, &bad_c, &bad_r);
+    if (nbad == 0) return 0;
+
+    // Node -> element support of the MMG INPUT mesh, built locally: on the collapse path the mesh
+    // is renumbered and var.support does not match mconn. Centroids/radii are cached alongside.
+    std::vector<std::vector<int>> node_elems(mnode);
+    std::vector<double> ic((std::size_t)melem * NDIMS);   // input-element centroids
+    std::vector<double> ir(melem);                        // input-element radii (longest edge)
+    for (int e = 0; e < melem; ++e) {
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        elem_centroid_scale(mcoord, el, &ic[(std::size_t)e*NDIMS], ir[e]);
+        for (int k = 0; k < NODES_PER_ELEM; ++k) node_elems[el[k]].push_back(e);
+    }
+
+    // Seed: input elements overlapping a bad output element (centroids within the summed radii),
+    // plus each bad element's single nearest input element so the seed is never empty.
+    std::vector<char> region(melem, 0);
+    std::vector<int> frontier;
+    std::vector<int> nearest(nbad, -1);
+    std::vector<double> nearest_d2(nbad, 1e300);
+    for (int e = 0; e < melem; ++e) {
+        const double *c = &ic[(std::size_t)e*NDIMS];
+        for (int j = 0; j < nbad; ++j) {
+            double d2 = 0.0;
+            for (int d = 0; d < NDIMS; ++d) { double dd = c[d] - bad_c[(std::size_t)j*NDIMS + d]; d2 += dd*dd; }
+            if (d2 < (bad_r[j] + ir[e]) * (bad_r[j] + ir[e]) && !region[e]) { region[e] = 1; frontier.push_back(e); }
+            if (d2 < nearest_d2[j]) { nearest_d2[j] = d2; nearest[j] = e; }
+        }
+    }
+    for (int j = 0; j < nbad; ++j)
+        if (nearest[j] >= 0 && !region[nearest[j]]) { region[nearest[j]] = 1; frontier.push_back(nearest[j]); }
+
+    // Does the current region touch any frozen (still-required) entity?
+    auto region_has_frozen = [&]() {
+        for (int e = 0; e < melem; ++e) {
+            if (!region[e]) continue;
+            if (req_elem[e]) return true;
+            const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+            for (int k = 0; k < NODES_PER_ELEM; ++k) if (req_node[el[k]]) return true;
+        }
+        return false;
+    };
+
+    // Grow one node-support ring: every element sharing a node with the current frontier.
+    auto grow_ring = [&](std::vector<int> &fr) {
+        std::vector<int> next;
+        for (int e : fr) {
+            const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int nb : node_elems[el[k]])
+                    if (!region[nb]) { region[nb] = 1; next.push_back(nb); }
+        }
+        fr.swap(next);
+    };
+
+    // CORE growth. Phase A: grow to the first frozen entity (capped), so a blocking frozen band a
+    // few elements away is reached. Phase B: `attempt` extra rings per retry.
+    const int max_contact_rings = 3;   // matches brc-interpolation's BFS layer cap
+    int rings = 0;
+    while (!frontier.empty() && rings < max_contact_rings && !region_has_frozen()) {
+        grow_ring(frontier);
+        ++rings;
+    }
+    for (int r = 0; r < attempt && !frontier.empty(); ++r) {
+        grow_ring(frontier);
+        ++rings;
+    }
+
+    // Free the CORE: both entity kinds -- full repair freedom.
+    int nfreed_core = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (!region[e]) continue;
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        if (req_elem[e]) { req_elem[e] = 0; ++nfreed_core; }
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (req_node[el[k]]) { req_node[el[k]] = 0; ++nfreed_core; }
+    }
+
+    // Required-element invariant: an element with any movable node cannot be required. This IS
+    // the hinge ring: required elements touching the core lose element status, nodes stay pinned.
+    // (An extra explicitly-freed ring beyond it measured as an exact no-op.)
+    int nfreed_hinge = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (!req_elem[e]) continue;
+        const int *el = mconn + (std::size_t)e*NODES_PER_ELEM;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (!req_node[el[k]]) { req_elem[e] = 0; ++nfreed_hinge; break; }
+    }
+    const int nfreed = nfreed_core + nfreed_hinge;
+    std::cout << "    Post-remesh quality check: " << nbad
+              << " output element(s) below min_quality/tiny; unfroze " << nfreed_core
+              << " core entities within " << rings << " connectivity ring(s) (+"
+              << nfreed_hinge << " hinge element(s), nodes kept)"
+              << (nfreed ? "." : " -- nothing frozen in reach, keeping this mesh.")
+              << "\n";
+    return nfreed;
 }
 
 // MMG-native handling of material that moved OUTSIDE a restored boundary. flatten_* snapped the
@@ -2631,6 +2875,164 @@ bool has_outside_material(const Param &param, const array_t &coord, const uint_v
     return false;
 }
 
+// Under strong convergence the free surface piles boundary nodes into a short near-vertical
+// "cliff" (a boundary segment far below hmin). MMG will not collapse a boundary edge (its corner
+// detection pins the ends; turning it off wrecks the box corners), so the sliver re-fires the
+// tiny-element trigger forever. Collapse such segments BEFORE MMG by merging the removable
+// endpoint onto its segment PARTNER (deterministic), like the Triangle path's boundary decimation.
+// Rules: never remove a domain corner; each node joins at most one collapse per pass (depth-1);
+// the connectivity rebuild drops degenerate AND near-null/inverted elements.
+// AREA CONSERVATION: a plain snap sweeps the triangle (p, rem, keep) out of / into the domain.
+// For pure TOP collapses the target is repositioned along n = rot90(q - p):
+//     keep' = keep + (2 * signed_area(p, rem, keep) / |q - p|^2) * n
+// so the shoelace contribution of p->keep'->q equals that of p->rem->keep->q. Falls back to the
+// plain snap at corners / non-top segments / degenerate chords. 2D only. Returns the number of
+// nodes collapsed (0 => outputs untouched). new_to_old_{node,elem}[new] = old id.
+#ifndef THREED
+int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
+        const double *coord, const uint_vec &bcflag,
+        const int *conn, const int *segment, const int *segflag, const double_vec &metric,
+        double min_len,
+        double_vec &ncoord, int_vec &nconn, int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
+        int_vec &new_to_old_node, int_vec &new_to_old_elem, int_vec &removed_old_nodes,
+        int &nn, int &ne, int &ns)
+{
+    // node -> boundary-segment adjacency (a simple boundary chain has exactly 2 per node),
+    // for locating the collapse neighbours p and q of the area-preserving reposition.
+    int_vec nadj_of(nnode, 0), adj(2*nnode, -1);
+    for (int s = 0; s < nseg; ++s)
+        for (int k = 0; k < NODES_PER_FACET; ++k) {
+            const int n = segment[s*NODES_PER_FACET + k];
+            if (nadj_of[n] < 2) adj[2*n + nadj_of[n]] = s;
+            ++nadj_of[n];
+        }
+    // other endpoint of boundary node n's OTHER segment (not segment s); -1 if not a chain
+    auto chain_nbr = [&](int n, int s) {
+        if (nadj_of[n] != 2) return -1;
+        const int o = (adj[2*n] == s) ? adj[2*n + 1] : adj[2*n];
+        const int e0 = segment[o*NODES_PER_FACET], e1 = segment[o*NODES_PER_FACET + 1];
+        return e0 == n ? e1 : e0;
+    };
+
+    int_vec merged_to(nnode, -1);
+    std::vector<char> touched(nnode, 0), moved(nnode, 0);
+    double_vec moved_pos(2*nnode, 0.0);
+    const double thr2 = min_len * min_len;
+    int ncoll = 0, nadjusted = 0;
+    double a_conserved = 0.0;
+    for (int s = 0; s < nseg; ++s) {
+        const int a = segment[s*NODES_PER_FACET], b = segment[s*NODES_PER_FACET + 1];
+        if (touched[a] || touched[b]) continue;                 // keep every collapse independent
+        double d2 = 0.0;
+        for (int d = 0; d < NDIMS; ++d) { double dd = coord[a*NDIMS+d] - coord[b*NDIMS+d]; d2 += dd*dd; }
+        if (d2 >= thr2) continue;
+        const bool ca = is_corner(bcflag[a]), cb = is_corner(bcflag[b]);
+        if (ca && cb) continue;                                 // never collapse between two corners
+        const int rem = ca ? b : a, keep = ca ? a : b;          // keep the corner if there is one
+
+        // area-preserving reposition of the merge target (pure top-surface chains only)
+        const bool keep_pure_top =
+            (bcflag[keep] & BOUNDZ1) && !(bcflag[keep] & (BOUND_ANY & ~BOUNDZ1));
+        const uint sflag = static_cast<uint>(segflag[s]);
+        if (keep_pure_top && (sflag & BOUNDZ1) && !(sflag & (BOUND_ANY & ~BOUNDZ1))) {
+            const int p = chain_nbr(rem, s), q = chain_nbr(keep, s);
+            if (p >= 0 && q >= 0 && p != q && p != keep && q != rem &&
+                !touched[p] && !touched[q]) {
+                const double *P = coord + p*NDIMS,   *R = coord + rem*NDIMS;
+                const double *K = coord + keep*NDIMS, *Q = coord + q*NDIMS;
+                // 2 * signed area of the triangle a plain snap would sweep
+                const double A2 = (P[0]*R[1] - P[1]*R[0])
+                                + (R[0]*K[1] - R[1]*K[0])
+                                + (K[0]*P[1] - K[1]*P[0]);
+                const double nx = Q[1] - P[1], ny = P[0] - Q[0];   // rot90(q - p)
+                const double L2 = nx*nx + ny*ny;
+                if (L2 > 1e-6 * thr2) {
+                    const double t = A2 / L2;
+                    moved[keep] = 1;
+                    moved_pos[2*keep]     = K[0] + t*nx;
+                    moved_pos[2*keep + 1] = K[1] + t*ny;
+                    touched[p] = touched[q] = 1;   // a chained collapse would shift the chord
+                    a_conserved += std::fabs(0.5 * A2);
+                    ++nadjusted;
+                }
+            }
+        }
+
+        merged_to[rem] = keep;
+        touched[a] = touched[b] = 1;
+        removed_old_nodes.push_back(rem);
+        ++ncoll;
+    }
+    if (ncoll == 0) { nn = ne = ns = 0; return 0; }
+    if (nadjusted)
+        std::cout << "    Area-preserving collapse: repositioned " << nadjusted
+                  << " merge target(s), conserving " << a_conserved << " m^2.\n";
+    auto resolve = [&](int n) { return merged_to[n] >= 0 ? merged_to[n] : n; };
+
+    // renumber survivors, rebuild coord + metric (repositioned merge targets get their
+    // area-conserving coordinates)
+    int_vec node_map(nnode, -1);
+    ncoord.clear(); nmetric.clear(); new_to_old_node.clear(); nn = 0;
+    for (int n = 0; n < nnode; ++n) {
+        if (merged_to[n] >= 0) continue;                        // removed -> merged onto its partner
+        node_map[n] = nn++;
+        new_to_old_node.push_back(n);
+        for (int d = 0; d < NDIMS; ++d)
+            ncoord.push_back(moved[n] ? moved_pos[n*NDIMS + d] : coord[n*NDIMS + d]);
+        nmetric.push_back(metric[n]);
+    }
+    auto remap = [&](int n) { return node_map[resolve(n)]; };
+
+    // reference orientation/scale from a pristine element (no merged or repositioned node)
+    // to detect flips.
+    double ref = 0.0;
+    for (int e = 0; e < nelem && ref == 0.0; ++e) {
+        const int *el = conn + e*NODES_PER_ELEM;
+        bool pristine = true;
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            if (merged_to[el[k]] >= 0 || moved[el[k]]) { pristine = false; break; }
+        if (!pristine) continue;
+        int v[NODES_PER_ELEM];
+        for (int k = 0; k < NODES_PER_ELEM; ++k) v[k] = node_map[el[k]];
+        ref = signed_elem_measure(ncoord.data(), v);
+    }
+
+    // rebuild connectivity, dropping repeated-node and near-null/inverted elements.
+    nconn.clear(); new_to_old_elem.clear(); ne = 0;
+    for (int e = 0; e < nelem; ++e) {
+        const int *el = conn + e*NODES_PER_ELEM;
+        int v[NODES_PER_ELEM];
+        bool degenerate = false;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            v[k] = remap(el[k]);
+            for (int j = 0; j < k; ++j) if (v[j] == v[k]) degenerate = true;
+        }
+        if (degenerate) continue;
+        double m = signed_elem_measure(ncoord.data(), v);
+        if (ref != 0.0 && m * ref <= 1e-6 * ref * ref) continue;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) nconn.push_back(v[k]);
+        new_to_old_elem.push_back(e);
+        ++ne;
+    }
+
+    // rebuild boundary segments, dropping any that collapsed to a point.
+    nsegment.clear(); nsegflag.clear(); ns = 0;
+    for (int s = 0; s < nseg; ++s) {
+        int v[NODES_PER_FACET];
+        bool degenerate = false;
+        for (int k = 0; k < NODES_PER_FACET; ++k) {
+            v[k] = remap(segment[s*NODES_PER_FACET + k]);
+            for (int j = 0; j < k; ++j) if (v[j] == v[k]) degenerate = true;
+        }
+        if (degenerate) continue;
+        for (int k = 0; k < NODES_PER_FACET; ++k) nsegment.push_back(v[k]);
+        nsegflag.push_back(segflag[s]);
+        ++ns;
+    }
+    return ncoll;
+}
+#endif
+
 
 // Conservative remeshing: mark the "quiet" part of the mesh as MMG-required so MMG leaves it
 // untouched and only remeshes the active region. This mirrors the triangle path, which
@@ -2655,9 +3057,16 @@ bool has_outside_material(const Param &param, const array_t &coord, const uint_v
 // match the old-mesh node/element order 1:1 (vertices = packed old_coord, triangles/tets built
 // from old connectivity in order). Only call when !outside_material (the collapse path renumbers).
 // Fills required_node[mnode] / required_elem[melem] (1 = frozen); mmg_adapt applies them to MMG.
+// NOTE (2026-07-10): dissolving small REQUIRED-element islands (components < 6 elements
+// losing required-element status, nodes kept) was tried here as a preventive against the
+// post-remesh quality retries and REVERTED after an A/B/C/D comparison on the
+// subd-serp-remesh frame-30 restart window: with dissolution 14 remeshes / 17 MMG re-runs,
+// without it 10 / 8 -- re-tessellating the dissolved islands at every remesh CREATED more
+// bad output elements (and mesh churn) than the pinned islands ever did. Do not re-add.
+
 void mark_quiet_required(const Param &param, const Variables &var,
                          const array_t &old_coord, const conn_t &old_connectivity,
-                         int mnode, int melem,
+                         int mnode, int melem, const std::vector<char> &flatten_broken,
                          std::vector<char> &required_node, std::vector<char> &required_elem)
 {
     // compute_active_mask returns node_movable (MMG may move) + elem_modifiable (MMG may split/remesh).
@@ -2669,6 +3078,22 @@ void mark_quiet_required(const Param &param, const Variables &var,
     // non-required (one-element transition layer) so MMG can adjust it when the neighbour moves.
     std::vector<char> node_movable, elem_modifiable;
     compute_active_mask(param, var, old_coord, old_connectivity, mnode, melem, node_movable, elem_modifiable);
+
+    // FREE what flatten broke. compute_active_mask judged REPAIR on the PRE-flatten coords, but
+    // flatten_* may have snapped boundary nodes onto their restored plane (up to
+    // max_boundary_distortion), squashing or inverting elements AFTER the mask was computed;
+    // their interior nodes would stay pinned as required vertices and MMG could never repair the
+    // flat band it would otherwise emit along the restored boundary (cmp_bottom remesh 176/177).
+    // flatten_broken[e] applies the same REPAIR rule on the post-flatten geometry; free those
+    // elements exactly like compute_active_mask frees a repair element. Deliberately NO wider
+    // freeing: every extra freed element enlarges the re-interpolated region and its post-remesh
+    // disequilibrium shock (freeing the whole flatten band NaN'd cmp_bottom at step 118600).
+    for (int e = 0; e < melem; ++e) {
+        if (!flatten_broken[e]) continue;
+        elem_modifiable[e] = 1;
+        ConstConnAccessor conn = old_connectivity[e];
+        for (int i = 0; i < NODES_PER_ELEM; ++i) node_movable[conn[i]] = 1;
+    }
 
     required_node.assign(mnode, 0);
     required_elem.assign(melem, 0);
@@ -2705,6 +3130,7 @@ void mark_quiet_required_collapse(const Param &param, const Variables &var,
                                   int old_nnode, int old_nelem, const int_vec &pts,
                                   const int *c_conn, int mnode, int melem,
                                   const int_vec &new_to_old_node, const int_vec &new_to_old_elem,
+                                  const std::vector<char> &flatten_broken,
                                   std::vector<char> &required_node, std::vector<char> &required_elem)
 {
     // (1) far-field freeze policy on the OLD mesh
@@ -2719,13 +3145,22 @@ void mark_quiet_required_collapse(const Param &param, const Variables &var,
 
     // (3) free the collapse region. A new element whose source old element touched a collapsed
     //     (pts) node was reshaped -> free it + its nodes; then one ring of connected elements.
+    //     ALSO free elements flatten BROKE (post-flatten quality below min_quality or inverted,
+    //     judged by the caller on the flattened coords): on the sag flanks a boundary node was
+    //     snapped km-scale without any pts node nearby, and the old-mesh mask -- judged on
+    //     pre-flatten coords -- would keep the squashed element's interior nodes pinned as
+    //     required vertices, leaving MMG unable to repair the flat band it emits along the
+    //     restored boundary (cmp_bottom remesh 176/177). Only the broken elements are freed;
+    //     freeing the whole flatten band NaN'd cmp_bottom at step 118600.
     std::vector<char> is_pts(old_nnode, 0);
     for (std::size_t i = 0; i < pts.size(); ++i) is_pts[pts[i]] = 1;
     std::vector<char> collapse_node(mnode, 0);
     for (int e = 0; e < melem; ++e) {
-        ConstConnAccessor oc = old_connectivity[new_to_old_elem[e]];
-        bool touched = false;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) if (is_pts[oc[i]]) { touched = true; break; }
+        const int old_e = new_to_old_elem[e];
+        ConstConnAccessor oc = old_connectivity[old_e];
+        bool touched = flatten_broken[old_e] != 0;
+        for (int i = 0; i < NODES_PER_ELEM && !touched; ++i)
+            if (is_pts[oc[i]]) touched = true;
         if (!touched) continue;
         modifiable[e] = 1;
         for (int i = 0; i < NODES_PER_ELEM; ++i) { int nn = c_conn[e*NODES_PER_ELEM + i]; movable[nn] = 1; collapse_node[nn] = 1; }
@@ -2866,6 +3301,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
     bool outside_material = has_outside_material(param, original_coord, old_bcflag,
                                                  old_nnode, min_dist);
+    bool collapse_needed = outside_material;
     if (outside_material) {
         std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
                      "the boundary before MMG.\n";
@@ -2882,31 +3318,106 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         msegflag = c_segflag.data();
         mmetric = c_metric.data();
     }
+#ifndef THREED
+    // Otherwise collapse crowded free-surface cliffs MMG cannot fix (short near-vertical boundary
+    // segments that persist as tiny slivers), via the same renumber-aware collapse path.
+    else {
+        int cn = 0, ce = 0, cs = 0;
+        int_vec removed;
+        int n_surf = collapse_short_boundary_segments_2d(old_nnode, old_nelem, old_nseg,
+                         qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
+                         refine_floors(param.mesh).hmin,
+                         c_coord, c_conn, c_seg, c_segflag, c_metric,
+                         c_new_to_old_node, c_new_to_old_elem, removed, cn, ce, cs);
+        if (n_surf > 0) {
+            std::cout << "    Collapsing " << n_surf
+                      << " crowded free-surface node(s) below hmin before MMG.\n";
+            mnode = cn; melem = ce; mseg = cs;
+            mcoord = c_coord.data();
+            mconn1 = c_conn.data();
+            mseg1 = c_seg.data();
+            msegflag = c_segflag.data();
+            mmetric = c_metric.data();
+            for (int n : removed) points_to_delete.push_back(n);   // record for remesh_affected + freeze region
+            collapse_needed = true;
+        }
+    }
+#endif
 
     // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
     // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
     // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
     // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
+    // flatten_broken[e] = flatten_* snapped one of e's boundary nodes onto its restored plane
+    // AND that broke the element (post-flatten quality below min_quality, or inverted). Both
+    // marker variants free exactly these elements: the freeze mask was judged on PRE-flatten
+    // coords, so without this the broken elements' interior nodes stay pinned as required
+    // vertices and MMG cannot repair them. Deliberately KEPT to the REPAIR criterion --
+    // empirically, every wider freeing shortens cmp_bottom's life by enlarging the
+    // re-interpolated region and its post-remesh disequilibrium shock (dies at: whole
+    // displaced band 118600 / quality-halved band 99200 / REPAIR-only 180200 = the model's
+    // physical neck-through end).
+    std::vector<char> displaced(old_nnode, 0);
+    for (int n = 0; n < old_nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
+    // Boundary-reshaped original nodes: moved by flatten_* plus deleted/collapsed
+    // (points_to_delete); barycentric_node_interpolation silences its warning there.
+    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
+        for (int n = 0; n < old_nnode; ++n)
+            if (displaced[n]) var.remesh_affected_old_node[n] = 1;
+        for (int n : points_to_delete)
+            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
+    }
+    std::vector<char> flatten_broken(old_nelem, 0);
+    for (int e = 0; e < old_nelem; ++e) {
+        const int *el = qconn + e*NODES_PER_ELEM;
+        bool touched = false;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) if (displaced[el[i]]) { touched = true; break; }
+        if (!touched) continue;
+        double q = packed_elem_quality(qcoord, el);
+#ifdef THREED
+        if (q > 0.0) q = std::cbrt(q);   // match compute_active_mask's normalization
+#endif
+        if (q < param.mesh.min_quality) flatten_broken[e] = 1;
+    }
     std::vector<char> req_node, req_elem;
-    if (!outside_material)   // 1:1 old<->MMG id map: mark directly on the original mesh
+    if (!collapse_needed)    // 1:1 old<->MMG id map: mark directly on the original mesh
         mark_quiet_required(param, var, original_coord, original_connectivity,
-                            mnode, melem, req_node, req_elem);
+                            mnode, melem, flatten_broken, req_node, req_elem);
     else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
         mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
                                      old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
-                                     c_new_to_old_node, c_new_to_old_elem, req_node, req_elem);
+                                     c_new_to_old_node, c_new_to_old_elem, flatten_broken, req_node, req_elem);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    mmg_adapt(param.mesh, mmg_in, mmg_out);
+    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
+    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
+    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
+    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
+    for (int attempt = 0; ; ++attempt) {
+        mmg_adapt(param.mesh, mmg_in, mmg_out);
+        if (attempt >= 3) {
+            // Retries exhausted: keep the last mesh, but say so when it is still bad --
+            // a silent bad element re-triggers remeshing a few steps later.
+            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
+            if (nbad)
+                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
+                             "with " << nbad << " below-min_quality/tiny element(s).\n";
+            break;
+        }
+        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
+                                     req_node, req_elem) == 0) break;
+        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << ").\n";
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
     var.nseg  = mmg_out.nseg;
-    std::cerr << "New number of vertices:" << var.nnode
-              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
     array_t   new_coord(var.nnode);
     conn_t    new_connectivity(var.nelem);
@@ -2920,8 +3431,6 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-
-    std::cerr << "\nMesh optimization done" <<std::endl;
 }
 
 #else
@@ -3036,6 +3545,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
     bool outside_material = has_outside_material(param, original_coord, old_bcflag,
                                                  old_nnode, min_dist);
+    bool collapse_needed = outside_material;
     if (outside_material) {
         std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
                      "the boundary before MMG.\n";
@@ -3052,31 +3562,180 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         msegflag = c_segflag.data();
         mmetric = c_metric.data();
     }
+#ifndef THREED
+    // Otherwise collapse crowded free-surface cliffs MMG cannot fix (short near-vertical boundary
+    // segments that persist as tiny slivers), via the same renumber-aware collapse path.
+    else {
+        int cn = 0, ce = 0, cs = 0;
+        int_vec removed;
+        int n_surf = collapse_short_boundary_segments_2d(old_nnode, old_nelem, old_nseg,
+                         qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
+                         refine_floors(param.mesh).hmin,
+                         c_coord, c_conn, c_seg, c_segflag, c_metric,
+                         c_new_to_old_node, c_new_to_old_elem, removed, cn, ce, cs);
+        if (n_surf > 0) {
+            std::cout << "    Collapsing " << n_surf
+                      << " crowded free-surface node(s) below hmin before MMG.\n";
+            mnode = cn; melem = ce; mseg = cs;
+            mcoord = c_coord.data();
+            mconn1 = c_conn.data();
+            mseg1 = c_seg.data();
+            msegflag = c_segflag.data();
+            mmetric = c_metric.data();
+            for (int n : removed) points_to_delete.push_back(n);   // record for remesh_affected + freeze region
+            collapse_needed = true;
+        }
+    }
+#endif
 
     // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
     // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
     // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
     // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
+    // flatten_broken[e] = flatten_* snapped one of e's boundary nodes onto its restored plane
+    // AND that broke the element (post-flatten quality below min_quality, or inverted). Both
+    // marker variants free exactly these elements: the freeze mask was judged on PRE-flatten
+    // coords, so without this the broken elements' interior nodes stay pinned as required
+    // vertices and MMG cannot repair them. Deliberately KEPT to the REPAIR criterion --
+    // empirically, every wider freeing shortens cmp_bottom's life by enlarging the
+    // re-interpolated region and its post-remesh disequilibrium shock (dies at: whole
+    // displaced band 118600 / quality-halved band 99200 / REPAIR-only 180200 = the model's
+    // physical neck-through end).
+    std::vector<char> displaced(old_nnode, 0);
+    for (int n = 0; n < old_nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
+    // Record boundary-reshaped original nodes -- moved by flatten_* (displaced) plus
+    // deleted/collapsed (points_to_delete, the same list collapse_outside_nodes consumed) --
+    // so barycentric_node_interpolation can skip the interior-node "not found" warning where a
+    // new node legitimately maps outside the pre-remesh outline.
+    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
+        for (int n = 0; n < old_nnode; ++n)
+            if (displaced[n]) var.remesh_affected_old_node[n] = 1;
+        for (int n : points_to_delete)
+            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
+    }
+    std::vector<char> flatten_broken(old_nelem, 0);
+    for (int e = 0; e < old_nelem; ++e) {
+        const int *el = qconn + e*NODES_PER_ELEM;
+        bool touched = false;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) if (displaced[el[i]]) { touched = true; break; }
+        if (!touched) continue;
+        double q = packed_elem_quality(qcoord, el);
+#ifdef THREED
+        if (q > 0.0) q = std::cbrt(q);   // match compute_active_mask's normalization
+#endif
+        if (q < param.mesh.min_quality) flatten_broken[e] = 1;
+    }
     std::vector<char> req_node, req_elem;
-    if (!outside_material)   // 1:1 old<->MMG id map: mark directly on the original mesh
+    if (!collapse_needed)    // 1:1 old<->MMG id map: mark directly on the original mesh
         mark_quiet_required(param, var, original_coord, original_connectivity,
-                            mnode, melem, req_node, req_elem);
+                            mnode, melem, flatten_broken, req_node, req_elem);
     else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
         mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
                                      old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
-                                     c_new_to_old_node, c_new_to_old_elem, req_node, req_elem);
+                                     c_new_to_old_node, c_new_to_old_elem, flatten_broken, req_node, req_elem);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
+    // DES_DEBUG_BSEG: diagnose bottom-BOUNDZ0 loss across MMG (env-gated, off by default).
+    const bool dbg_bseg = std::getenv("DES_DEBUG_BSEG") != NULL;
+    if (dbg_bseg) {
+        const double zb = -param.mesh.zlength;
+        std::map<std::pair<int,int>, std::vector<int>> edges;
+        int nflag0 = 0;
+        for (int s = 0; s < mseg; ++s) {
+            int a = mseg1[s*NODES_PER_FACET], b = mseg1[s*NODES_PER_FACET+1];
+            if (a > b) std::swap(a, b);
+            edges[{a,b}].push_back(msegflag[s]);
+            if (msegflag[s] == 0) ++nflag0;
+        }
+        int ndup = 0, ndup_mixed = 0;
+        for (auto &kv : edges) {
+            if (kv.second.size() < 2) continue;
+            ++ndup;
+            bool mixed = false;
+            for (std::size_t i = 1; i < kv.second.size(); ++i)
+                if (kv.second[i] != kv.second[0]) mixed = true;
+            if (mixed) {
+                ++ndup_mixed;
+                int a = kv.first.first, b = kv.first.second;
+                std::fprintf(stderr, "[bseg-in] DUP-MIXED edge %d-%d (%.0f,%.0f)-(%.0f,%.0f) flags:",
+                             a, b, mcoord[a*NDIMS], mcoord[a*NDIMS+1], mcoord[b*NDIMS], mcoord[b*NDIMS+1]);
+                for (int fl : kv.second) std::fprintf(stderr, " %d", fl);
+                std::fprintf(stderr, "\n");
+            }
+        }
+        std::fprintf(stderr, "[bseg-in] outside=%d nseg=%d flag0=%d dup_pairs=%d dup_mixed=%d\n",
+                     (int)outside_material, mseg, nflag0, ndup, ndup_mixed);
+        // bottom-line nodes of the MMG INPUT without a BOUNDZ0 segment endpoint
+        std::vector<uint> nodeflag(mnode, 0);
+        for (int s = 0; s < mseg; ++s) {
+            nodeflag[mseg1[s*NODES_PER_FACET]]   |= (uint)msegflag[s];
+            nodeflag[mseg1[s*NODES_PER_FACET+1]] |= (uint)msegflag[s];
+        }
+        for (int n = 0; n < mnode; ++n)
+            if (std::fabs(mcoord[n*NDIMS+NDIMS-1] - zb) < 1.0 && !(nodeflag[n] & BOUNDZ0))
+                std::fprintf(stderr, "[bseg-in] node %d ON LINE no-BOUNDZ0 x=%.0f segsum=%u req=%d\n",
+                             n, mcoord[n*NDIMS], nodeflag[n], (int)rn[n]);
+    }
+
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    mmg_adapt(param.mesh, mmg_in, mmg_out);
+    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
+    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
+    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
+    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
+    for (int attempt = 0; ; ++attempt) {
+        mmg_adapt(param.mesh, mmg_in, mmg_out);
+        if (attempt >= 3) {
+            // Retries exhausted: keep the last mesh, but say so when it is still bad --
+            // a silent bad element re-triggers remeshing a few steps later.
+            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
+            if (nbad)
+                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
+                             "with " << nbad << " below-min_quality/tiny element(s).\n";
+            break;
+        }
+        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
+                                     req_node, req_elem) == 0) break;
+        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << ").\n";
+    }
+
+    if (dbg_bseg) {
+        const double zb = -param.mesh.zlength;
+        int nflag0 = 0;
+        for (int s = 0; s < mmg_out.nseg; ++s) if (mmg_out.segflag[s] == 0) ++nflag0;
+        std::vector<uint> nodeflag(mmg_out.nnode, 0);
+        std::vector<std::vector<int>> nodesegs(mmg_out.nnode);
+        for (int s = 0; s < mmg_out.nseg; ++s) {
+            for (int k = 0; k < NODES_PER_FACET; ++k) {
+                int n = mmg_out.seg[s*NODES_PER_FACET+k];
+                nodeflag[n] |= (uint)mmg_out.segflag[s];
+                nodesegs[n].push_back(s);
+            }
+        }
+        std::fprintf(stderr, "[bseg-out] nseg=%d flag0=%d\n", mmg_out.nseg, nflag0);
+        for (int n = 0; n < mmg_out.nnode; ++n) {
+            if (std::fabs(mmg_out.coord[n*NDIMS+NDIMS-1] - zb) < 1.0 && !(nodeflag[n] & BOUNDZ0)) {
+                std::fprintf(stderr, "[bseg-out] node %d ON LINE no-BOUNDZ0 x=%.0f nsegs=%zu:",
+                             n, mmg_out.coord[n*NDIMS], nodesegs[n].size());
+                for (int s : nodesegs[n]) {
+                    int a = mmg_out.seg[s*NODES_PER_FACET], b = mmg_out.seg[s*NODES_PER_FACET+1];
+                    std::fprintf(stderr, " [s%d %d-%d f%d (%.0f,%.0f)-(%.0f,%.0f)]",
+                                 s, a, b, mmg_out.segflag[s],
+                                 mmg_out.coord[a*NDIMS], mmg_out.coord[a*NDIMS+1],
+                                 mmg_out.coord[b*NDIMS], mmg_out.coord[b*NDIMS+1]);
+                }
+                std::fprintf(stderr, "\n");
+            }
+        }
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
     var.nseg  = mmg_out.nseg;
-    std::cerr << "New number of vertices:" << var.nnode
-              << ", elements:" << var.nelem << ", segments:" << var.nseg << std::endl;
 
     array_t   new_coord(var.nnode);
     conn_t    new_connectivity(var.nelem);
@@ -3090,8 +3749,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
     var.segflag->steal_ref( new_segflag );
-
-    std::cerr << "\nMesh optimization done" <<std::endl;
 }
 #endif  // end of if THREED
 #endif // end of if USEMMG
@@ -3178,7 +3835,18 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     for (int e=0; e<var.nelem; e++) {
         if ((*var.volume)[e] < smallest_vol) {
             index = e;
-            std::cout << "    The size of element #" << index << " is too small.\n";
+            // report location + the nodes' boundary flags, so a chronic re-trigger spot
+            // is identifiable (interior vs which boundary it is pinned to)
+            double cent[NDIMS] = {0.};
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int d = 0; d < NDIMS; ++d)
+                    cent[d] += (*var.coord)[conn[k]][d] / NODES_PER_ELEM;
+            std::cout << "    The size of element #" << index << " is too small at ("
+                      << cent[0] << ", " << cent[NDIMS-1] << "), node bcflags:";
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                std::cout << ' ' << (*var.bcflag)[conn[k]];
+            std::cout << ".\n";
 #ifdef NPROF
             nvtxRangePop();
 #endif
@@ -3260,11 +3928,17 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     min_quality = q;
     if (q < param.mesh.min_quality) {
         index = worst_elem;
-        std::cout << "    Element #" << worst_elem << " has mesh quality = " << q << " (bcflag: ";
-        for (int i = 0; i < NODES_PER_ELEM; i++) {
-            std::cout << (*var.bcflag)[(*var.connectivity)[worst_elem][i]];
-            std::cout << (i < NODES_PER_ELEM - 1 ? ", " : ").\n");
-        }
+        // same format as the too-small trigger above: centroid + the nodes' boundary flags
+        double cent[NDIMS] = {0.};
+        ConstConnAccessor conn = (*var.connectivity)[worst_elem];
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            for (int d = 0; d < NDIMS; ++d)
+                cent[d] += (*var.coord)[conn[k]][d] / NODES_PER_ELEM;
+        std::cout << "    The quality of element #" << worst_elem << " is too low (" << q
+                  << ") at (" << cent[0] << ", " << cent[NDIMS-1] << "), node bcflags:";
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            std::cout << ' ' << (*var.bcflag)[conn[k]];
+        std::cout << ".\n";
 #ifdef NPROF
         nvtxRangePop();
 #endif
@@ -3274,6 +3948,111 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     nvtxRangePop();
 #endif
     return 0;
+}
+
+// Fail-fast guard against a TANGLED mesh (a self-collapsed free surface that no remesh can repair):
+//   (1) FOLDED element: signed measure of the opposite sign to the mesh's dominant sign (not
+//       hard-coded CCW; the 2D solver is orientation-agnostic). A size-relative tolerance ignores
+//       near-degenerate tiny elements (the tiny-element trigger's job).
+//   (2) SELF-INTERSECTING boundary (2D): two boundary segments sharing no node cross. Not tested
+//       in 3D.
+// Prints the offending geometry and dies with the mesh error code. `when` labels the call site.
+static double tangle_orient2d(const double *a, const double *b, const double *c)
+{
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+}
+void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
+                       int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
+{
+    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and a size-relative
+    // tolerance = REL * (characteristic element measure), so a genuine flip is caught but
+    // floating-point noise on a near-degenerate element is not mistaken for one.
+    const double REL = 1e-9;
+    auto elem_measure = [&](int e, double &m, double &tol) {
+        const auto &cn = connectivity[e];
+        double maxedge2 = 0.0;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int j = 0; j < i; ++j) {
+                double d2 = 0.0;
+                for (int k = 0; k < NDIMS; ++k) { double dd = coord[cn[i]][k] - coord[cn[j]][k]; d2 += dd*dd; }
+                if (d2 > maxedge2) maxedge2 = d2;
+            }
+#ifdef THREED
+        double bx=coord[cn[1]][0]-coord[cn[0]][0], by=coord[cn[1]][1]-coord[cn[0]][1], bz=coord[cn[1]][2]-coord[cn[0]][2];
+        double cx=coord[cn[2]][0]-coord[cn[0]][0], cy=coord[cn[2]][1]-coord[cn[0]][1], cz=coord[cn[2]][2]-coord[cn[0]][2];
+        double dx=coord[cn[3]][0]-coord[cn[0]][0], dy=coord[cn[3]][1]-coord[cn[0]][1], dz=coord[cn[3]][2]-coord[cn[0]][2];
+        m = bx*(cy*dz-cz*dy) - by*(cx*dz-cz*dx) + bz*(cx*dy-cy*dx);
+        tol = REL * maxedge2 * std::sqrt(maxedge2);   // measure ~ length^3
+#else
+        double ax=coord[cn[0]][0], ay=coord[cn[0]][1];
+        m = (coord[cn[1]][0]-ax)*(coord[cn[2]][1]-ay) - (coord[cn[2]][0]-ax)*(coord[cn[1]][1]-ay);
+        tol = REL * maxedge2;                          // measure ~ length^2
+#endif
+    };
+
+    // (1) folded element -- opposite orientation to the mesh's dominant sign.
+    // Pass 1: dominant orientation sign (ignoring near-degenerate elements).
+    int npos = 0, nneg = 0;
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; elem_measure(e, m, tol);
+        if (m >  tol) ++npos;
+        else if (m < -tol) ++nneg;
+    }
+    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
+    // Pass 2: flag the first element wound against the majority.
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; elem_measure(e, m, tol);
+        if (std::fabs(m) > tol && m * ref < 0.0) {
+            const auto &cn = connectivity[e];
+            std::cerr << "Error: tangled mesh (" << when << "): element #" << e
+                      << " is folded (signed measure = " << m << ", opposite the mesh's orientation). ";
+            std::cerr << "nodes";
+            for (int k=0;k<NODES_PER_ELEM;++k) {
+                std::cerr << " (";
+                for (int dd=0; dd<NDIMS; ++dd) std::cerr << coord[cn[k]][dd] << (dd<NDIMS-1?",":"");
+                std::cerr << ")";
+            }
+            std::cerr << "\n       The mesh has folded over itself (typically a self-collapsed free "
+                         "surface) and can no longer be repaired by remeshing. Stopping.\n";
+            die(EXIT_MESH_QUALITY);
+        }
+    }
+
+#ifndef THREED
+    // (2) self-intersecting boundary (2D), O(nseg^2), remesh time only. Read coords through the
+    // Array2D accessor (SoA: components are not adjacent). A per-segment tolerance requires each
+    // endpoint clearly on one side, so exact collinearity is never a crossing.
+    auto pt = [&](int n, double p[2]) { p[0] = coord[n][0]; p[1] = coord[n][1]; };
+    auto seg_len2 = [&](const double p[2], const double q[2]) {
+        double dx=q[0]-p[0], dy=q[1]-p[1]; return dx*dx+dy*dy;
+    };
+    for (int s = 0; s < nseg; ++s) {
+        const int a0 = segment[s][0], a1 = segment[s][1];
+        double p1[2], p2[2]; pt(a0, p1); pt(a1, p2);
+        const double tolA = REL * seg_len2(p1, p2);   // scale of orient() about segment A
+        for (int t = s + 1; t < nseg; ++t) {
+            const int b0 = segment[t][0], b1 = segment[t][1];
+            if (a0==b0 || a0==b1 || a1==b0 || a1==b1) continue;   // share a node -> not a crossing
+            double p3[2], p4[2]; pt(b0, p3); pt(b1, p4);
+            const double tolB = REL * seg_len2(p3, p4);
+            double d1 = tangle_orient2d(p3, p4, p1);   // p1,p2 sides of segment B
+            double d2 = tangle_orient2d(p3, p4, p2);
+            double d3 = tangle_orient2d(p1, p2, p3);   // p3,p4 sides of segment A
+            double d4 = tangle_orient2d(p1, p2, p4);
+            bool oppB = (d1 >  tolB && d2 < -tolB) || (d1 < -tolB && d2 >  tolB);
+            bool oppA = (d3 >  tolA && d4 < -tolA) || (d3 < -tolA && d4 >  tolA);
+            if (oppA && oppB) {
+                std::cerr << "Error: tangled mesh (" << when << "): boundary segments #" << s
+                          << " [flag " << segflag[s][0] << "] (" << p1[0] << "," << p1[1] << ")-("
+                          << p2[0] << "," << p2[1] << ") and #" << t << " [flag " << segflag[t][0]
+                          << "] (" << p3[0] << "," << p3[1] << ")-(" << p4[0] << "," << p4[1]
+                          << ") cross.\n       The free surface has self-collapsed (self-intersecting "
+                             "boundary); the mesh can no longer be repaired by remeshing. Stopping.\n";
+                die(EXIT_MESH_QUALITY);
+            }
+        }
+    }
+#endif
 }
 
 
@@ -3365,16 +4144,29 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         old_segment.steal_ref(*var.segment);
         old_segflag.steal_ref(*var.segflag);
 
+        const int old_nnode = old_coord.size();
+        const int old_nelem = old_connectivity.size();
+        const int old_nseg  = old_segment.size();
+        const char *remesh_engine = "?";
+
+        // Reset the per-remesh record of boundary-reshaped old nodes; the meshing routine
+        // below fills it (moved/deleted/collapsed original nodes) so barycentric_node_interpolation
+        // can distinguish a legitimately reshaped boundary from broken connectivity.
+        var.remesh_affected_old_node.assign(old_nnode, 0);
+
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
+            remesh_engine = "MMG";
             optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
 #else
+            remesh_engine = "Tetgen";
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
+            remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                     old_segment, old_segflag);
         } else {
@@ -3384,16 +4176,20 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #else  // if 2d
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
+            remesh_engine = "MMG";
             optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
                 old_segment, old_segflag);
 #else
+            remesh_engine = "Triangle";
             new_mesh(param, var, bad_quality, old_coord, old_connectivity,
                 old_segment, old_segflag);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
+            remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
                 old_segment, old_segflag);
         } else if (param.mesh.meshing_elem_shape == 2) {
+            remesh_engine = "uniform equilateral";
             new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
                 old_segment, old_segflag);
         } else {
@@ -3401,6 +4197,21 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             die(EXIT_CONFIG_VALUE);
         }        
 #endif
+
+        // Per-engine remesh report. Reports the free-surface (BOUNDZ1) facet count rather than raw
+        // nseg: the initial mesh holds only input segments while remeshers emit the full edge set.
+        int old_ntop_facets = 0;
+        for (int i=0; i<old_nseg; ++i)
+            if (static_cast<uint>(old_segflag[i][0]) & BOUNDZ1) ++old_ntop_facets;
+        int new_ntop_facets = 0;
+        for (int i=0; i<var.nseg; ++i)
+            if (static_cast<uint>((*var.segflag)[i][0]) & BOUNDZ1) ++new_ntop_facets;
+        std::cout << "    New mesh (" << remesh_engine << "): nodes " << old_nnode << " -> " << var.nnode
+                  << ", elements " << old_nelem << " -> " << var.nelem
+                  << ", top surface facets " << old_ntop_facets << " -> " << new_ntop_facets << "\n";
+        // Fail fast on a tangled mesh before interpolating onto it.
+        check_mesh_tangle("post-remesh", *var.coord, *var.connectivity, var.nelem,
+                          *var.segment, *var.segflag, var.nseg);
         // Drain all async GPU work before freeing/reallocating temporary arrays.
         // This gives CUDA a sync point to reclaim migrated managed-memory pages.
         #pragma acc wait
@@ -3445,6 +4256,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
+        // done with the old mesh; drop the boundary-reshaped-node record so it is never
+        // consulted against a mismatched mesh later (e.g. temperature-file interpolation).
+        var.remesh_affected_old_node.clear();
         create_support(var);
         // delete var.neighbor;
         // delete var.contact;

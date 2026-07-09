@@ -807,6 +807,13 @@ struct Variables {
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
 
+    // Per-remesh scratch: 1 for each ORIGINAL-mesh node that boundary remeshing MOVED
+    // (flatten_*), DELETED, or COLLAPSED. Sized to the old node count in remesh() and
+    // filled by the Triangle/MMG remesh paths; barycentric_node_interpolation consults it
+    // to skip the "interior node not found" warning near a legitimately reshaped boundary.
+    // Empty outside remeshing.
+    std::vector<char> remesh_affected_old_node;
+
     // tensor_t *stress_old;
 
     MatProps *mat;
