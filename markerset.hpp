@@ -144,7 +144,7 @@ private:
 
 };
 
-void remap_markers(const Param&, Variables &, 
+void remap_markers(const Param&, Variables &,
                    const array_t &, const conn_t &);
 void advect_hydrous_markers(const Param &, const Variables &, double,
                             MarkerSet &, Array2D<int,1> &);

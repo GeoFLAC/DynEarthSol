@@ -238,25 +238,31 @@ static void declare_parameters(po::options_description &cfg,
          "13: move all bottom, left, and right nodes to initial dimensions. A side wall that receives "
          "material (inflow vbc) keeps its run-start column: the incoming material gets the wall's "
          "temperature, layering, coord0 reference and pristine strain (side profile), and with MMG the "
-         "material interfaces in the inflow band are required edges.\n")
+         "material interfaces in the inflow band are required edges. REQUIRES MMG when "
+         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
+         "collapse.\n")
 
-        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.0),
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
          "Plastic-strain-INCREMENT threshold for the (always-on) conservative-freeze REFINE condition: "
          "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
          "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
          "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
          "since the last remesh. Distorted (quality < mesh.min_quality) or tiny (< smallest_vol) elements "
          "are always remeshed with node motion; boundary nodes are always movable (flattening). "
-         "Default 0 (any further yielding refines).")
-        ("mesh.remesh_tiny_margin", po::value<double>(&p.mesh.remesh_tiny_margin)->default_value(1.0),
-         "Hysteresis for the tiny-element remesh trigger. A remesh fires when an element measure drops "
-         "below smallest_vol / remesh_tiny_margin, where smallest_vol = smallest_size*sizefactor*"
-         "resolution^NDIMS is also the size the remesher floors elements at. margin=1 (default): trigger "
-         "sits exactly on the floor, so a just-remeshed element re-triggers under any compression (high "
-         "remesh frequency). margin>1: the element must shrink to 1/margin of the floor measure (=1/margin"
+         "Must be > 0 in practice: at 0, every element that yielded incidentally since the last "
+         "remesh (milli-strain numerical noise: measured, half of all SPLIT elements sat at a median "
+         "plastic strain of 0.003) is handed to MMG as splittable/"
+         "swappable, letting it re-tessellate quiet far-field and corner elements for no reason. "
+         "Default 0.01: two orders below a real shear band (~1), three above the noise floor.")
+        ("mesh.remesh_tiny_margin", po::value<double>(&p.mesh.remesh_tiny_margin)->default_value(1.5),
+         "Hysteresis for the tiny-element remesh trigger (both remeshers). A remesh fires when an element "
+         "measure drops below smallest_vol / remesh_tiny_margin, where smallest_vol = smallest_size*"
+         "sizefactor*resolution^NDIMS is also the size the remesher floors elements at. margin=1: the "
+         "trigger sits exactly on the floor, so a just-remeshed element re-triggers under any compression "
+         "(remesh thrash). margin>1: the element must shrink to 1/margin of the floor measure (=1/margin"
          "^(1/NDIMS) in edge length) before triggering -- fewer remeshes, but smaller min elements (hence "
-         "smaller dt) between remeshes. Must be >= 1.")
-        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.0),
+         "smaller dt) between remeshes. Default 1.5: a 2/3 measure gap, heuristic. Must be >= 1.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
          "Defensive band for the conservative-freeze REPAIR criterion (USEMMG). During remeshing, "
          "elements with quality below mesh.min_quality * this ratio are unfrozen (nodes movable) so MMG "
          "repairs marginal elements BEFORE they drift across the min_quality remesh trigger, instead of "
@@ -331,7 +337,10 @@ static void declare_parameters(po::options_description &cfg,
          "How to determine the mattype of replenished markers?\n"
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
-         "2: same as the mattype of the nearest marker (slowest option).")
+         "2: same as the mattype of the nearest marker (slowest option).\n"
+         "(Independently of this option, when a remeshing_option restores the side walls (e.g. 13) "
+         "material returning at a restored side always keeps the layering auto-detected at run start "
+         "for that side, pinned to the side's top mesh point.)")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;
@@ -1338,6 +1347,28 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // The remaining mesh.mmg_* knobs are consumed only inside remeshing.cxx's USEMMG block or in
+    // mmg_utils.cxx, which is not linked here, so setting one is a silent no-op. Name the ones the
+    // cfg actually set; a defaulted value is not the user's doing and stays quiet.
+    {
+        const char *mmg_only[] = {
+            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
+            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
+            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_aniso_wall_ratio",
+        };
+        for (const char *name : mmg_only)
+            if (vm.count(name) && ! vm[name].defaulted())
+                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
+                          << " has no effect.\n";
+    }
+    // Option 13 re-flattens the side walls every remesh, which breeds sub-hmin elements pinned to
+    // the wall. Only MMG collapses those: decimate_below_hmin never thins a boundary node and the
+    // tiny-element repair excludes corners, so the Triangle/TetGen path remesh-storms instead.
+    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
+            "Without it the restored side wall accumulates sub-hmin elements that the "
+            "Triangle/TetGen path cannot collapse. mesh.meshing_elem_shape = 1 is unaffected.");
 #endif
 
     //

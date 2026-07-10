@@ -53,6 +53,10 @@ public:
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
 
+    template <typename T>
+    void write_aux_array(const std::vector<T>& A, const char *name, std::size_t size)
+    { write_array(A, name, size); }
+
     void write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
                               const DeviceInfo& dev, const std::string& restart_from,
                               double rss_gib, double peak_rss_gib);
@@ -113,6 +117,9 @@ public:
 
     template <typename T>
     void write_array(const std::vector<T>& A, const char *name, hsize_t len);
+
+    template <typename T>
+    void write_aux_array(const std::vector<T>& A, const char *name, hsize_t len);
 
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len, int dest_N = -1);

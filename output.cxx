@@ -414,6 +414,51 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
 #endif
+
+    // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
+    // run-start structure. side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
+    // support x1}; per-side arrays follow (see SideProfile).
+    {
+        const int side_idx[2] = { iboundx0, iboundx1 };
+        const char *sfx[2] = { "x0", "x1" };
+        char aname[64];
+        int_vec psz(6, 0);
+        for (int t = 0; t < 2; ++t) {
+            const SideProfile &prof = var.side_profile[side_idx[t]];
+            psz[t]     = prof.nnode();
+            psz[2 + t] = prof.nelem();
+            psz[4 + t] = (int)prof.node_support_arr.size();
+        }
+        if (psz[0] + psz[1] > 0) {
+            bin.write_aux_array(psz, "side_prof_sizes", psz.size());
+            // cumulative wall-restore shifts (the profile's only evolving state)
+            double_vec shifts(2);
+            shifts[0] = var.side_profile[iboundx0].wall_shift;
+            shifts[1] = var.side_profile[iboundx1].wall_shift;
+            bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
+            for (int t = 0; t < 2; ++t) {
+                const SideProfile &prof = var.side_profile[side_idx[t]];
+                if (prof.empty()) continue;
+                auto wrd = [&](const double_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                auto wri = [&](const int_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                wrd(prof.node_reldepth, "node_reldepth");
+                wrd(prof.node_coord, "node_coord");
+                wrd(prof.node_coord0, "node_coord0");
+                wrd(prof.node_temperature, "node_temperature");
+                wri(prof.node_support_idx, "node_support_idx");
+                wri(prof.node_support_arr, "node_support_arr");
+                wrd(prof.elem_reldepth, "elem_reldepth");
+                wri(prof.elem_mattype, "elem_mattype");
+                wrd(prof.elem_radiogenic_source, "elem_radiogenic_source");
+            }
+        }
+    }
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
