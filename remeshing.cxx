@@ -1007,7 +1007,7 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
 // boundary stays closed; in 2D a boundary point whose two segments are both longer
 // than min_size is kept, in 3D the facet flips move the surface by at most min_size in all.
 // Non-boundary points are simply removed. This is the
-// deletion path for remeshing_option 1 and >= 10 (boundaries may be modified); it
+// deletion path for remeshing_option 1 and 10-12 (boundaries may be modified); it
 // fully handles the removal, so the caller must NOT also call delete_points().
 void delete_points_and_merge_boundary(int_vec &points_to_delete,
                                const array_t &bnormals,
@@ -1235,10 +1235,12 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 10:
     case 11:
     case 12:
-    case 13:
         // DO NOT change the corners
         excl_func = &is_corner;
         break;
+    case 13:
+        // new_mesh is the non-MMG remesher, and validate_parameters rejects option 13 without MMG.
+        die(EXIT_INTERNAL_UNREACHABLE, "new_mesh: remeshing_option 13 requires MMG remeshing");
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
         die(EXIT_CONFIG_VALUE);
@@ -1263,16 +1265,6 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         break;
     case 12:
         flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
-        break;
-    case 13:
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
-        flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
-        flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
-#ifdef THREED
-        flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
-        flatten_y1(old_bcflag, qcoord, param.mesh.ylength, points_to_delete, min_dist);
-#endif
         break;
     }
 
@@ -1327,7 +1319,6 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 10:
     case 11:
     case 12:
-    case 13:
         // deleting points, some of them might be on the boundary (option 1: the side-wall nodes
         // flatten_bottom marks).
         // delete_points_and_merge_boundary() already removes the points in

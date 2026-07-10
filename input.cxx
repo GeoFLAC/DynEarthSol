@@ -242,7 +242,9 @@ static void declare_parameters(po::options_description &cfg,
          "above or below it; other boundaries are intact, except small boundary segments might "
          "get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions.\n")
+         "13: move all bottom, left, and right nodes to initial dimensions. REQUIRES MMG when "
+         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
+         "collapse.\n")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -1301,6 +1303,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // Option 13 re-flattens the side walls at every remesh, which breeds sub-hmin wall elements. Only
+    // MMG collapses them: decimate_below_hmin keeps boundary nodes, and the tiny-element repair
+    // skips corners.
+    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_UNSUPPORTED_LIB, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
+            "Without it the restored side wall accumulates sub-hmin elements that the "
+            "Triangle/TetGen path cannot collapse. Uniform meshes (mesh.meshing_elem_shape > 0) "
+            "are unaffected.");
 #endif
 
     //
