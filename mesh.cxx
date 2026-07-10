@@ -1096,6 +1096,133 @@ static void mmg_refine_init_mesh_2d(
     std::cerr << "MMG2D init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
+
+// Refine the RESTORED side walls of the INITIAL mesh to ~mesh.resolution (remeshing_option 13):
+// the incoming-material profile is sampled at wall-node spacing, so a coarse initial wall would
+// freeze a kinked profile for the whole run. One MMG pass with the per-node size CLAMPED at the
+// wall nodes refines only the wall band. var.init_elem_size_n is filled from the UNCLAMPED sizes,
+// so the frozen metric base keeps the cfg-intended size and off-wall elements coarsen back at the
+// next remesh. 2D only (3D walls are refined progressively by the remesh-time clamp).
+static void refine_initial_side_walls_2d(const Param &param, Variables &var,
+        int &nnode, int &nelem, int &nseg,
+        double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
+{
+    const double res = param.mesh.resolution;
+
+    // Per-node actual element size (edge length of the equilateral element of the same area,
+    // area-weighted nodal average -- the same convention as initialize_elem_size_n).
+    std::vector<double> size_n(nnode, 0.0), wsum(nnode, 0.0), esize(nelem, 0.0);
+    for (int e = 0; e < nelem; ++e) {
+        const int *c = pconn + e*NODES_PER_ELEM;
+        const double *a = pcoord + c[0]*NDIMS, *b = pcoord + c[1]*NDIMS, *d = pcoord + c[2]*NDIMS;
+        double area = 0.5 * std::abs((b[0]-a[0])*(d[1]-a[1]) - (d[0]-a[0])*(b[1]-a[1]));
+        esize[e] = std::sqrt(area / sizefactor);
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            size_n[c[k]] += esize[e] * area;
+            wsum [c[k]] += area;
+        }
+    }
+    for (int n = 0; n < nnode; ++n)
+        if (wsum[n] > 0) size_n[n] /= wsum[n];
+
+    // Clamp the metric at the side-wall nodes of BOTH walls regardless of the BC: a static wall
+    // keeps a thin ~resolution column and a full-resolution profile should the flow turn inward;
+    // only the unfreeze and the field restore are inflow-gated at remesh time.
+    const double xtol = 1e-9 * param.mesh.xlength;
+    std::vector<double> metric(size_n);
+    bool needs_refining = false;
+    for (int n = 0; n < nnode; ++n) {
+        double x = pcoord[n*NDIMS];
+        if ((x < xtol || x > param.mesh.xlength - xtol) && metric[n] > res) {
+            metric[n] = res;
+            needs_refining = true;
+        }
+    }
+    if (!needs_refining) return;
+
+    // The cfg-intended size hint that must survive the refinement: the zone-aware hint the
+    // use_mmg_init path already computed, or the actual (pre-refinement) sizes otherwise.
+    // Copied, not referenced: init_elem_size_n itself is reassigned below.
+    const double_vec hint = ((int)var.init_elem_size_n->size() == nnode)
+                            ? *var.init_elem_size_n : size_n;
+
+    // Freeze everything except the wall bands: wall-faceted elements + TWO connectivity rings are
+    // modifiable (one ring wider than the remesh-time R4 strip), and only where the element is
+    // COARSER than the target; the rest of the initial mesh is carried verbatim.
+    std::vector<char> free_elem(nelem, 0), free_node(nnode, 0);
+    for (int n = 0; n < nnode; ++n) {
+        double x = pcoord[n*NDIMS];
+        if (x < xtol || x > param.mesh.xlength - xtol)
+            free_node[n] = 1;                        // ring 0 grows from the wall nodes
+    }
+    for (int r = 0; r <= 2; ++r) {
+        std::vector<char> next(nnode, 0);
+        for (int e = 0; e < nelem; ++e) {
+            if (free_elem[e]) continue;
+            if (esize[e] <= res) continue;           // already at/below resolution
+            const int *c = pconn + e*NODES_PER_ELEM;
+            bool touch = false;
+            for (int k = 0; k < NODES_PER_ELEM && !touch; ++k) touch = free_node[c[k]];
+            if (!touch) continue;
+            free_elem[e] = 1;
+            for (int k = 0; k < NODES_PER_ELEM; ++k) next[c[k]] = 1;
+        }
+        for (int n = 0; n < nnode; ++n)
+            if (next[n]) free_node[n] = 1;
+    }
+    std::vector<char> req_elem(nelem), req_node(nnode);
+    for (int e = 0; e < nelem; ++e) req_elem[e] = !free_elem[e];
+    for (int n = 0; n < nnode; ++n) req_node[n] = !free_node[n];
+
+    MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
+                         metric.data(), req_node.data(), req_elem.data(), true };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
+
+    // init_elem_size_n on the refined mesh = nearest-old-node transfer of the UNCLAMPED hint.
+    {
+        CentroidCloud cloud(pcoord, nnode);   // plain AoS point cloud; works for nodes too
+        CentroidKDTree kdtree(NDIMS, cloud,
+            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+        kdtree.buildIndex();
+        var.init_elem_size_n->assign(mmg_out.nnode, 0.0);
+        for (int n = 0; n < mmg_out.nnode; ++n) {
+            std::size_t nearest_idx;
+            double dist_sq;
+            nanoflann::KNNResultSet<double> result(1);
+            result.init(&nearest_idx, &dist_sq);
+            kdtree.findNeighbors(result, &mmg_out.coord[(std::size_t)n*NDIMS],
+                                 nanoflann::SearchParameters());
+            (*var.init_elem_size_n)[n] = hint[nearest_idx];
+        }
+    }
+
+    // Material regions follow via nearest old element centroid.
+    double *fine_regattr = new double[mmg_out.nelem];
+    if (pregattr)
+        propagate_regattr_nearest(nelem, pcoord, pconn, pregattr,
+                                  mmg_out.nelem, mmg_out.coord.data(), mmg_out.conn.data(),
+                                  fine_regattr);
+    else
+        std::fill(fine_regattr, fine_regattr + mmg_out.nelem, 0.0);
+
+    // Replace the mesh buffers with the refined mesh.
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
+    pcoord   = new double[(std::size_t)nnode * NDIMS];
+    pconn    = new int   [(std::size_t)nelem * NODES_PER_ELEM];
+    pseg     = new int   [(std::size_t)nseg  * NODES_PER_FACET];
+    psegflag = new int   [nseg];
+    pregattr = fine_regattr;
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
+
+    std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
+              << nnode << " nodes, " << nelem << " elements\n";
+}
 #endif // !THREED
 #endif // USEMMG
 
@@ -1295,6 +1422,15 @@ void points_to_mesh(const Param &param, Variables &var,
                        max_elem_size, vertex_per_polygon,
                        var.nnode, var.nelem, var.nseg,
                        pcoord, pconnectivity, psegment, psegflag, pregattr);
+#endif
+
+#if defined(USEMMG) && !defined(THREED)
+    // Restored side walls (remeshing_option 13) must start at ~mesh.resolution so the recorded
+    // incoming-material profiles (temperature, layering) resolve the initial structure. The
+    // cfg-intended sizes are preserved in init_elem_size_n (see refine_initial_side_walls_2d).
+    if (param.mesh.remeshing_option == 13)
+        refine_initial_side_walls_2d(param, var, var.nnode, var.nelem, var.nseg,
+                                     pcoord, pconnectivity, psegment, psegflag, pregattr);
 #endif
 
     var.coord = new array_t(pcoord, var.nnode);

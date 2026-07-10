@@ -384,6 +384,54 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
+    // Incoming side-material profiles (remeshing_option 13): restore the RUN-START profile of every
+    // side that has one stored. The incoming side may change at a restart (a new vbc sign), so the
+    // per-side existence check is required: a side without stored data is detected by main() from
+    // its current column, and a stored profile whose wall no longer receives material is erased at
+    // the first remesh (side-profile lifecycle). No profiles at all = the checkpointed run had none.
+    if (bin_chkpt.has_array("side_prof_sizes")) {
+        // side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
+        // support x1}; per-side arrays follow (see SideProfile).
+        int_vec psz(6);
+        bin_chkpt.read_array(psz, "side_prof_sizes");
+        const int side_idx[2] = { iboundx0, iboundx1 };
+        const char *sfx[2] = { "x0", "x1" };
+        char aname[64];
+        double_vec shifts(2, 0.);   // cumulative wall-restore shifts
+        bin_chkpt.read_array(shifts, "side_prof_wall_shift");
+        for (int t = 0; t < 2; ++t) {
+            SideProfile &prof = var.side_profile[side_idx[t]];
+            prof.clear();
+            prof.wall_shift = shifts[t];
+            const int nn = psz[t], ne = psz[2 + t], ns = psz[4 + t];
+            if (nn <= 0) continue;
+            auto rd = [&](double_vec &a, const char *name, int size) {
+                a.resize(size);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                bin_chkpt.read_array(a, aname);
+            };
+            rd(prof.node_reldepth, "node_reldepth", nn);
+            rd(prof.node_coord, "node_coord", nn * NDIMS);
+            rd(prof.node_coord0, "node_coord0", nn * NDIMS);
+            rd(prof.node_temperature, "node_temperature", nn);
+            prof.node_support_idx.resize(nn + 1);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx[t]);
+            bin_chkpt.read_array(prof.node_support_idx, aname);
+            prof.node_support_arr.resize(ns);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx[t]);
+            bin_chkpt.read_array(prof.node_support_arr, aname);
+            rd(prof.elem_reldepth, "elem_reldepth", ne);
+            prof.elem_mattype.resize(ne);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx[t]);
+            bin_chkpt.read_array(prof.elem_mattype, aname);
+            rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+        }
+        std::cout << "  Restored incoming side profiles from checkpoint (x0/x1: "
+                  << psz[0] << "/" << psz[1] << " nodes, "
+                  << psz[2] << "/" << psz[3] << " elements, wall shift "
+                  << shifts[0] << "/" << shifts[1] << " m).\n";
+    }
+
     // the following fields are not required for restarting, yet
     {
         // for shear heating
@@ -650,6 +698,24 @@ int main(int argc, const char* argv[])
     }
     else {
         restart(param, var);
+    }
+
+    // When the remeshing option restores the side walls (e.g. 13), material returning at a
+    // restored side should keep its original structure rather than copy wrong-layer nearest
+    // markers / NN-smeared fields. Snapshot each side's initial wall column here (node
+    // locations, node->element support, nodal temperature, element field values and dominant
+    // materials), after the mesh + markers exist (fresh or restart), pinned to each side's top
+    // mesh point (no manual cfg input). Re-imposed on incoming material by restore_side_fields
+    // (remeshing.cxx) and the side-wall marker replenishment (markerset.cxx).
+    if (param.mesh.remeshing_option == 13) {
+        // Fresh runs detect the incoming side profiles from the initial side columns; a
+        // restart restores the RUN-START profiles from the checkpoint instead (restart()
+        // above), so only detect what the checkpoint did not provide (fresh start, or a
+        // restart from an old checkpoint written before the profiles were stored).
+        const bool have_prof = !var.side_profile[iboundx0].empty() ||
+                               !var.side_profile[iboundx1].empty();
+        if (!have_prof)
+            detect_side_profile(param, var);
     }
 
     // var.dt_PT = var.dt;

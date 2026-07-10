@@ -584,6 +584,46 @@ struct Param {
 };
 
 //
+// Snapshot of the initial wall column at a restored side (mesh.remeshing_option 13), recorded at
+// run start by detect_side_profile() and re-imposed after every remesh on the material that
+// entered through the wall: restore_side_fields() restores nodal temperature and coord0, zeroes
+// the incoming elements' strain and restores their radiogenic source; the marker replenishment
+// assigns new side-wall markers the elem_mattype of their depth. Depths are RELATIVE to the side's
+// top point; node_coord keeps the absolute run-start locations. Node -> element connectivity is
+// CSR (node i: node_support_arr[node_support_idx[i] .. node_support_idx[i+1])). Tensor fields
+// are flattened NSTR per element. Lookups: side_profile_node_value / side_profile_elems_at.
+// Checkpointed, so a restart keeps the RUN-START profile.
+//
+struct SideProfile {
+    // wall nodes, sorted top -> bottom
+    double_vec node_reldepth;      // depth below the side's top point (ascending)
+    double_vec node_coord;         // run-start coordinates, NDIMS per node
+    double_vec node_coord0;        // run-start REFERENCE coordinates (var.coord0), NDIMS per node
+    double_vec node_temperature;   // nodal temperature at run start
+    int_vec    node_support_idx;   // CSR row pointer, size nnode()+1
+    int_vec    node_support_arr;   // CSR column data: local element indices
+    // elements with at least one node on the wall. Only the material and the radiogenic
+    // source are recorded: incoming elements get plstrain/delta_plstrain/strain reset to
+    // ZERO (pristine material), and stress/stressyy/RSF fields are left to the regular
+    // NN/SPR remap (restore_side_fields).
+    double_vec elem_reldepth;      // centroid depth below the side's top point
+    int_vec    elem_mattype;       // dominant marker material (replenishment lookup)
+    double_vec elem_radiogenic_source;
+
+    // Cumulative signed shift of the restored wall (the only EVOLVING member): every remesh
+    // displaces the drifted wall back to its initial plane, and those displacements sum here
+    // (x0 inflow: negative; x1 inflow: positive). Incoming nodes get the reference coordinate
+    // coord0[x] = plane + wall_shift -- a material (Lagrangian) entry coordinate outside the
+    // domain, so coord - coord0 stays a consistent displacement across inflow generations.
+    double wall_shift = 0.;
+
+    int nnode() const { return static_cast<int>(node_reldepth.size()); }
+    int nelem() const { return static_cast<int>(elem_reldepth.size()); }
+    bool empty() const { return node_reldepth.empty(); }
+    void clear() { *this = SideProfile(); }
+};
+
+//
 // Structures for surface processes
 //
 // Node-support graph in CSR: node n owns [idx[n], idx[n+1]) of arr and lidx.
@@ -723,6 +763,11 @@ struct Variables {
     int_vec *bnodes[nbdrytypes];
     std::vector< std::pair<int,int> > *bfacets[nbdrytypes];
     array_t *bnormals;
+
+    // Incoming-material profile per side wall (SideProfile), detected once at run start and
+    // re-applied after every remesh to the material that entered through a restored side wall
+    // (restore_side_fields; side-wall marker replenishment).
+    SideProfile side_profile[nbdrytypes];
     int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
     int stress_bc_types[nbdrytypes_hydro];
@@ -815,6 +860,13 @@ struct Variables {
     // to skip the "interior node not found" warning near a legitimately reshaped boundary.
     // Empty outside remeshing.
     std::vector<char> remesh_affected_old_node;
+
+    // Per-remesh scratch: 1 for each NEW-mesh node whose position fell OUTSIDE the old mesh
+    // during barycentric_node_interpolation (nearest-node fallback used). At a restored side
+    // wall these are exactly the nodes of the material that entered since the last remesh;
+    // remesh() consults it to re-impose the recorded side profile (var.side_profile) on the
+    // incoming band, nodes and elements (restore_side_fields). Empty outside remeshing.
+    std::vector<char> remesh_node_outside;
 
     // tensor_t *stress_old;
 

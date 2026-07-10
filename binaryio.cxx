@@ -730,6 +730,41 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
     H5Sclose(space_id);
 }
 
+// Auxiliary (non-mesh-sized) checkpoint array: write_array above classifies by length
+// (PointData/CellData) and exits on anything that is not nnode/nelem/nseg/etop, which a
+// small state array (e.g. the incoming side profiles) legitimately is not. Store it under
+// the block base without visualization metadata, plus the root-level alias that
+// HDF5Input::read_array / has_array resolve.
+template<typename T>
+void HDF5Output::write_aux_array(const std::vector<T> &A, const char *name, hsize_t len)
+{
+    std::string full_name = "/VTKHDF/" + block_base + "/" + name;
+
+    hid_t space_id = H5Screate_simple(1, &len, nullptr);
+    hid_t dtype_id = H5Native<T>::id();
+
+    hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
+    hsize_t chunk_dim = (len < 1024 ? len : 1024);
+    H5Pset_chunk(dcpl_id, 1, &chunk_dim);
+    H5Pset_shuffle(dcpl_id);
+    H5Pset_deflate(dcpl_id, compression_level);
+
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
+                        H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
+
+    create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+
+    H5Dclose(dset_id);
+    H5Pclose(dcpl_id);
+    H5Sclose(space_id);
+}
+
+template
+void HDF5Output::write_aux_array<int>(const int_vec& A, const char *name, hsize_t);
+template
+void HDF5Output::write_aux_array<double>(const double_vec& A, const char *name, hsize_t);
+
 // 2D array
 template<typename T, int N>
 void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len, int dest_N)
