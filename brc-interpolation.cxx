@@ -104,7 +104,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
                            const array_t &old_coord,
                            const conn_t &old_connectivity,
                            const Support &old_support,
-                           brc_t &brc, int_vec &el)
+                           brc_t &brc, int_vec &el,
+                           std::vector<char> *outside_nodes)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -180,7 +181,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
         neighbor* neighbors = kdtree.search(block_queries, (end - start), max_el);
 
         #pragma omp parallel for default(none) schedule(guided) \
-            shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors, start, end)
+            shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors, start, end, outside_nodes)
         for (int i = start; i < end; i++) {
             
             int local_i = i - start;
@@ -298,14 +299,10 @@ void prepare_interpolation(const Param& param, const Variables &var,
                     bary.transform(q, e, r);
                     goto found;
                 }
-                // For all other cases the nearest-node fallback below is used; warn only for an
-                // interior node this remesh's own node moves/deletions do not explain.
-                //   bcflag != 0: boundary node — may sit just outside the old mesh after
-                //                remeshing; nearest-node fallback is correct, never warn.
-                //   bcflag == 0: interior node -- silent if its nearest old node is flagged in
-                //                var.remesh_affected_old_node (moved or deleted before meshing;
-                //                Triangle/TetGen also flags its interior deletions), else
-                //                possibly broken connectivity.
+                // Otherwise the nearest-node fallback below is used. Warn only for an interior
+                // node whose nearest old node is not flagged in var.remesh_affected_old_node: a
+                // boundary node may sit just outside the old mesh after remeshing (a restored wall,
+                // a regenerated top or bottom).
                 const bool near_affected_old_node =
                     nn >= 0 && nn < (int)var.remesh_affected_old_node.size()
                     && var.remesh_affected_old_node[nn];
@@ -323,6 +320,11 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 // using nearest old_coord instead
                 e = nn_elem[0];
                 bary.transform(old_coord[nn], e, r);
+                // record the miss: at a restored boundary these are the nodes of material
+                // that entered since the last remesh (consumed by remesh()'s
+                // restore_side_fields). Per-i write, thread-safe.
+                if (outside_nodes)
+                    (*outside_nodes)[i] = 1;
             }
         found:
             el[i] = e;
@@ -362,7 +364,11 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     int_vec el(n);
     brc_t brc(n);
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el);
+    // Track which new nodes fell outside the old mesh (nearest-node fallback): remesh()
+    // uses this for restore_side_fields on incoming material.
+    var.remesh_node_outside.assign(n, 0);
+    prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el,
+                          &var.remesh_node_outside);
 
     double_vec *new_temperature = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
@@ -443,7 +449,8 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
 {
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
-    prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
+    prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el,
+                          nullptr);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
 

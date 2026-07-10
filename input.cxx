@@ -256,7 +256,9 @@ static void declare_parameters(po::options_description &cfg,
          "above or below it; other boundaries are intact, except small boundary segments might "
          "get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions. REQUIRES MMG when "
+         "13: move all bottom, left, and right nodes to initial dimensions. A side wall that receives "
+         "material (inflow vbc) keeps its run-start column: the incoming material gets the wall's "
+         "temperature, layering, coord0 reference and pristine strain (side profile). REQUIRES MMG when "
          "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
          "collapse.\n")
 
@@ -265,12 +267,14 @@ static void declare_parameters(po::options_description &cfg,
          "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
          "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
          "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
-         "since the last remesh. Distorted (quality < min_quality * "
+         "since the last remesh. Distorted (quality < mesh.min_quality * "
          "mmg_remesh_defensive_quality_ratio) or tiny (< smallest_vol * "
-         "mmg_remesh_defensive_tiny_ratio) elements "
-         "are always remeshed with node motion. Boundary nodes stay pinned except free-surface nodes "
-         "the surface process moves by more than 1% of resolution per remesh interval (2D only), "
-         "the off-bottom nodes of side walls and slant boundaries, and nodes of repaired elements. "
+         "mmg_remesh_defensive_tiny_ratio) elements are always remeshed "
+         "with node motion (a distorted, not tiny, element keeps a node where disjoint material "
+         "bodies meet pinned). Boundary nodes stay pinned except free-surface nodes the surface "
+         "process moves by more than 1% of resolution per remesh interval (2D only, "
+         "surface_process_option 1 or 102; in 3D they stay pinned too), the off-bottom nodes of "
+         "unrestored side walls and of slant boundaries, and nodes of repaired elements. "
          "Must be > 0 in practice: at 0, every element that yielded at all since the last remesh, "
          "incidental yielding included, is handed to MMG as splittable/"
          "swappable, letting it re-tessellate quiet far-field and corner elements for no reason. "
@@ -357,8 +361,9 @@ static void declare_parameters(po::options_description &cfg,
          "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
          "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
          "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
-         "(the target is then the initial size except for the metric floor and the "
-         "surface-motion inflation of shrinking top elements). Default: 5.")
+         "(the target is then the initial size except for the metric floor, the surface-motion "
+         "inflation of shrinking top elements and the option-13 restored-wall sizing). "
+         "Default: 5.")
         ;
 
     cfg.add_options()
@@ -379,7 +384,10 @@ static void declare_parameters(po::options_description &cfg,
          "2: same as the mattype of the nearest marker (slowest option).\n"
          "12: if the element's surviving markers are all one mattype, use that mattype directly "
          "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
-         "to option 2 (nearest marker). Exact in single-material elements.")
+         "to option 2 (nearest marker). Exact in single-material elements.\n"
+         "(Independently of this option, when a remeshing_option restores the side walls (e.g. 13) "
+         "material returning at a restored side always keeps the layering auto-detected at run start "
+         "for that side, pinned to the side's top mesh point.)")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;

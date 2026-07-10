@@ -73,6 +73,9 @@ def read_data(des, frame):
     coordinate = des.read_field(frame, 'coordinate')
     stuff.x = np.array(coordinate[:,0])
     stuff.z = np.array(coordinate[:,-1])
+    coord0 = des.read_field(frame, 'coord0')
+    stuff.c0x = np.array(coord0[:,0])
+    stuff.c0z = np.array(coord0[:,-1])
     velocity = des.read_field(frame, 'velocity')
     stuff.vx = np.array(velocity[:,0])
     stuff.vz = np.array(velocity[:,-1])
@@ -151,6 +154,8 @@ def compare(old, new):
             (old.T,      new.T,      'Temperature'),
             (old.x,      new.x,      'X coordinate'),
             (old.z,      new.z,      'Z coordinate'),
+            (old.c0x,    new.c0x,    'X coord0'),
+            (old.c0z,    new.c0z,    'Z coord0'),
             (old.vx,     new.vx,     'X velocity'),
             (old.vz,     new.vz,     'Z velocity'),
             (old.pls,    new.pls,    'Pl. strain'),
