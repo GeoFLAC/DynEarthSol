@@ -17,6 +17,7 @@
 #include "utils.hpp"
 #include "knn.hpp"
 #include "matprops.hpp"
+#include "remeshing.hpp"
 
 
 namespace {
@@ -1491,6 +1492,65 @@ namespace {
 #endif
     }
 
+    // Replenish markers at RESTORED side-wall elements from the AUTO-DETECTED side profile
+    // (remeshing_option 13): each new marker gets the recorded material of the profile wall element
+    // its depth falls into (SideProfile::elem_mattype, nearest centroid among the spanning
+    // elements), so incoming material keeps the side's layering. Depths are relative to the side's
+    // CURRENT top point. Serial; side_elems must all touch a side with a profile.
+    void replenish_markers_by_side_profile(const Param& param, const Variables &var,
+                                           int_pair_vec &side_elems, int genesis)
+    {
+        if (side_elems.empty()) return;
+        MarkerSet &ms = *var.markersets[0];
+
+        // Current top mesh point of each x-side; the profile depths are pinned to it.
+        const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
+        const int  side_idx [2] = { iboundx0, iboundx1 };
+        double top_z[2] = { -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max() };
+        for (int n = 0; n < var.nnode; ++n)
+            for (int t = 0; t < 2; ++t)
+                if ((*var.bcflag)[n] & side_flag[t]) {
+                    double z = (*var.coord)[n][NDIMS-1];
+                    if (z > top_z[t]) top_z[t] = z;
+                }
+
+        const double depth_tol = 1e-6 * param.mesh.resolution;  // same-depth node merge tolerance
+        int_vec cand;
+        for (const auto& pair : side_elems) {
+            int e = pair.first;
+            int num_marker_in_elem = pair.second;
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            // which side does this element touch (and does that side have a detected profile)?
+            int t = -1;
+            for (int k = 0; k < NODES_PER_ELEM && t < 0; ++k)
+                for (int tt = 0; tt < 2; ++tt)
+                    if (((*var.bcflag)[conn[k]] & side_flag[tt]) &&
+                        var.side_profile[side_idx[tt]].nelem() > 0) { t = tt; break; }
+            if (t < 0) continue;   // no detected profile for this element's side (caller sent it to nn)
+            const SideProfile &prof = var.side_profile[side_idx[t]];
+            while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+                double eta[NODES_PER_ELEM];
+                MarkerSet::random_eta_seed(eta, e + num_marker_in_elem + var.steps);
+                double z = 0.0;
+                for (int k = 0; k < NODES_PER_ELEM; ++k)
+                    z += eta[k] * (*var.coord)[conn[k]][NDIMS-1];
+                double rel = top_z[t] - z;                 // depth below this side's top point
+                side_profile_elems_at(prof, rel, depth_tol, cand);
+                // nearest centroid among the elements spanning this depth: the material
+                // switches at the centroid midpoint, i.e. the old detected layer interface
+                int le = cand.front();
+                for (int c : cand)
+                    if (std::fabs(prof.elem_reldepth[c] - rel) <
+                        std::fabs(prof.elem_reldepth[le] - rel)) le = c;
+                int mt = prof.elem_mattype[le];
+                ms.append_marker(eta, e, mt, var.time / YEAR2SEC, 0., 0., 0., genesis);
+                ++(*var.elemmarkers)[e][mt];
+                (*var.markers_in_elem)[e].push_back(ms.get_nmarkers()-1);
+                ++num_marker_in_elem;
+            }
+        }
+    }
+
 } // anonymous namespace
 
 
@@ -1862,15 +1922,38 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     nvtxRangePop();
 #endif
 
+    // Material returning at a RESTORED side wall keeps its original layering independent of
+    // replenishment_option: side-wall elements whose side has a profile are replenished from it,
+    // the rest go through the chosen option. `rest` aliases unplenished_elems without a profile.
+    int_pair_vec side_elems, filtered;
+    int_pair_vec *rest = &unplenished_elems;
+    bool have_side_profile = false;
+    for (int b = 0; b < nbdrytypes && !have_side_profile; ++b)
+        if (var.side_profile[b].nelem() > 0) have_side_profile = true;
+    if (have_side_profile) {
+        for (const auto& pr : unplenished_elems) {
+            ConstConnAccessor conn = (*var.connectivity)[pr.first];
+            int b = -1;
+            for (int k = 0; k < NODES_PER_ELEM && b < 0; ++k) {
+                if      ((*var.bcflag)[conn[k]] & BOUNDX0) b = iboundx0;
+                else if ((*var.bcflag)[conn[k]] & BOUNDX1) b = iboundx1;
+            }
+            if (b >= 0 && var.side_profile[b].nelem() > 0) side_elems.push_back(pr);
+            else filtered.push_back(pr);
+        }
+        replenish_markers_by_side_profile(param, var, side_elems, 1);
+        rest = &filtered;
+    }
+
     switch (param.markers.replenishment_option) {
     case 0:
-        replenish_markers_with_mattype_0(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_0(param, var, *rest, 1);
         break;
     case 1:
-        replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_from_cpdf(param, var, *rest, 1);
         break;
     case 2:
-        replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_from_nn(param, var, *rest, 1);
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
