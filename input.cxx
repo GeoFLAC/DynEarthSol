@@ -1514,6 +1514,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // Without USEMMG nothing reads the mmg_* keys: name the ones the cfg set, not the defaulted ones.
+    {
+        const char *mmg_only[] = {
+            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
+            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
+            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_aniso_wall_ratio",
+            "mesh.mmg_remesh_defensive_tiny_ratio",
+        };
+        for (const char *name : mmg_only)
+            if (vm.count(name) && ! vm[name].defaulted())
+                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
+                          << " has no effect.\n";
+    }
     // Option 13 re-flattens the side walls at every remesh, which breeds sub-hmin wall elements. Only
     // MMG collapses them: decimate_below_hmin keeps boundary nodes, and the tiny-element repair
     // skips corners.
