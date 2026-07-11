@@ -2319,41 +2319,76 @@ static double mmg_metric_floor(const Mesh &m)
                     std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
 }
 
-void compute_metric_field(const Param &param, const Variables &var, double_vec &metric, double_vec &etmp)
+void compute_metric_field(const Param &param, const Variables &var, double_vec &metric, double_vec &etmp,
+                          const array_t &old_coord, const conn_t &old_connectivity)
 {
-    /* Compute the desired element size (nodal metric = edge length) for MMG remeshing.
+    /* Desired element size (nodal metric = edge length) for MMG remeshing.
      *
-     * The base size is init_elem_size_n (the frozen initial nodal element size), so away
-     * from plastic strain element sizes are MAINTAINED across remeshing (metric == base).
+     * Base = init_elem_size_n (initial nodal size, fixed at t = 0), so sizes are MAINTAINED away from
+     * any trigger. The target VOLUME is scaled by 1/(1 + coeff*plstrain) and the edge length
+     * MMG consumes is that ratio^(1/NDIMS) (aggregation at the end); scaling the edge by the
+     * volume ratio is ~NDIMS times too aggressive. Do not re-anchor the base to the CURRENT
+     * size: at coeff=0 it leaves the band coarse, at coeff>0 the element count ratchets.
      *
-     * NOTE (2026-07-08): a "maintain CURRENT size" base (Design A of the refine-unification
-     * experiment) was tried and REVERTED. Empirically it either left the shear band coarse
-     * (coeff=0: MMG regenerates a uniform mesh, it does not preserve Triangle's Lagrangian node
-     * crowding) or ran away (coeff>0: re-anchoring to the just-refined size makes the count ratchet
-     * unboundedly -- the same over-refinement runaway the frozen init anchor exists to prevent).
-     * The frozen init base is the bounding anchor; keep it. To sharpen MMG's band, raise
-     * mmg_metric_refine_coeff (bounded, reaches peak plstrain ~3.8 at coeff~50).
-     *
-     * Where plastic strain has accumulated, the target is reduced to refine the mesh,
-     * following Triangle's area/volume-constraint convention: the target element VOLUME is
-     * scaled by 1/(1 + coeff*plstrain), so the target EDGE LENGTH that MMG consumes is that
-     * volume ratio raised to 1/NDIMS. (The earlier form scaled the edge length by the
-     * volume ratio directly -- i.e. treated a volume ratio as a length ratio -- which was
-     * ~NDIMS times too aggressive and refined the whole domain to the floor whenever
-     * yielding was broad, ratcheting the element count up at every remesh.)
-     *
-     * coeff = mmg_metric_refine_coeff makes the refinement sensitivity easy to manage.
+     * old_connectivity must be the PRE-remesh one: var.connectivity is empty (steal_ref'd) here.
      */
     // Not const-qualified on purpose: a const scalar is predetermined-shared in OpenMP and
-    // may not appear in a shared() clause on some toolchains (gcc<=10, icpc) -- see the
-    // #ifdef GPP1X dance used for sizefactor elsewhere. A plain local sidesteps that.
+    // may not appear in a shared() clause on some toolchains -- a plain local sidesteps that.
     double coeff = param.mesh.mmg_metric_refine_coeff;
-    std::fill_n(metric.begin(), var.nnode, 0);
 
-    // volume-based refinement target where plastic strain is present (Triangle max_area style)
+    // Do not inflate interior targets by exp(-div u * tau): no measurable effect (the 2D top
+    // elements keep it, below).
+
+    // plastic-strain-reduced element volumes, aggregated to nodes below
     #pragma omp parallel for default(none) shared(var, etmp, coeff)
     for (int e = 0; e < var.nelem; e++)
         etmp[e] = (*var.volume)[e] / (1.0 + coeff * (*var.plstrain)[e]);
+
+#ifndef THREED
+    // SURFACE-MOTION ANTICIPATION for the top elements: inflate a top element's target volume by
+    // the deformation expected over one remesh interval, so it is rebuilt with room to be crushed.
+    // Movers: the surface-process dh (bc.cxx) and the advective nodal velocity (a fast slide
+    // moves the surface by km per interval; dh alone is blind to it).
+    //   dA2/dt  = shoelace area rate from (vx, vz + dh/dt), exact for the linear triangle;
+    //             uniform advection cancels, only DEFORMING motion inflates.
+    //   inflate = exp(-rate * tau), tau = time since the last remesh, capped at 8x volume.
+    // 2D only (dh is the 2D top-chain bookkeeping). *var.coord / *var.connectivity are EMPTY here.
+    const double tau = var.time - var.last_remesh_time;
+    if (var.top_elems && var.surfinfo.dh && var.dt > 0.0 && tau > 0.0) {
+        // global node id -> last step's surface-process rate dh/dt (m/s)
+        std::vector<double> dhdt(var.nnode, 0.0);
+        for (int i = 0; i < var.surfinfo.ntop; ++i)
+            dhdt[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i] / var.dt;
+        int n_inflated = 0;
+        for (int k = 0; k < var.ntop_elems; ++k) {
+            const int e = (*var.top_elems)[k];
+            ConstConnAccessor conn = old_connectivity[e];
+            const double xa = old_coord[conn[0]][0], za = old_coord[conn[0]][1];
+            const double xb = old_coord[conn[1]][0], zb = old_coord[conn[1]][1];
+            const double xc = old_coord[conn[2]][0], zc = old_coord[conn[2]][1];
+            const double area2 = (xb - xa) * (zc - za) - (xc - xa) * (zb - za);
+            // nodal motion rates: velocity + surface process (vertical)
+            double ux[3], uz[3];
+            for (int i = 0; i < 3; ++i) {
+                const int n = conn[i];
+                ux[i] = (*var.vel)[n][0];
+                uz[i] = (*var.vel)[n][NDIMS-1] + dhdt[n];
+            }
+            // d(2A)/dt of the shoelace with moving vertices (exact for linear motion)
+            const double dA2dt = ux[0]*(zb - zc) + ux[1]*(zc - za) + ux[2]*(za - zb)
+                               + uz[0]*(xc - xb) + uz[1]*(xa - xc) + uz[2]*(xb - xa);
+            const double rate = dA2dt / area2;          // signed d(lnV)/dt
+            if (rate < 0.0) {
+                // cap 8x volume (~2.8x edge in 2D): heuristic headroom for a fast slide, untuned
+                etmp[e] *= std::min(8.0, std::exp(-rate * tau));
+                ++n_inflated;
+            }
+        }
+        if (n_inflated)
+            std::cout << "    Surface-motion anticipation: inflated the metric of "
+                      << n_inflated << " top element(s).\n";
+    }
+#endif
 
     #pragma omp parallel for default(none) shared(var, metric, etmp)
     for (int n = 0; n < var.nnode; n++) {
@@ -3384,7 +3419,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(param, var, *var.ntmp, *var.etmp);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp, original_coord, original_connectivity);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -3596,7 +3631,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(param, var, *var.ntmp, *var.etmp);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp, original_coord, original_connectivity);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -3638,6 +3673,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     else {
         int cn = 0, ce = 0, cs = 0;
         int_vec removed;
+        // Collapse at hmin, not at the metric floor: the more aggressive collapse perturbed the
+        // hausd-constrained surface and produced more bad outputs.
         int n_surf = collapse_short_boundary_segments_2d(old_nnode, old_nelem, old_nseg,
                          qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
                          refine_floors(param.mesh).hmin,

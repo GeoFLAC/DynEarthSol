@@ -336,7 +336,8 @@ static void declare_parameters(po::options_description &cfg,
          "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
          "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
          "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
-         "(the target is then the initial size, floored at the metric floor). Default: 5.")
+         "(the target is then the initial size except for the metric floor and the "
+         "surface-motion inflation of shrinking top elements). Default: 5.")
         ;
 
     cfg.add_options()
