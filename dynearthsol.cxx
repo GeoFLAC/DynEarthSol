@@ -947,7 +947,10 @@ int main(int argc, const char* argv[])
         nvtxRangePop();
 #endif
 
-    } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+    } while (var.steps < param.sim.max_steps &&
+             (var.time <= param.sim.max_time_in_yr * YEAR2SEC ||
+              (param.sim.is_outputting_averaged_fields &&
+               var.steps % param.mesh.quality_check_step_interval != 0)));
 
     monitor_finalize(var);
 
