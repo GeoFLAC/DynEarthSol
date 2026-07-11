@@ -256,6 +256,23 @@ static void declare_parameters(po::options_description &cfg,
          "remesh frequency). margin>1: the element must shrink to 1/margin of the floor measure (=1/margin"
          "^(1/NDIMS) in edge length) before triggering -- fewer remeshes, but smaller min elements (hence "
          "smaller dt) between remeshes. Must be >= 1.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.0),
+         "Defensive band for the conservative-freeze REPAIR criterion (USEMMG). During remeshing, "
+         "elements with quality below mesh.min_quality * this ratio are unfrozen (nodes movable) so MMG "
+         "repairs marginal elements BEFORE they drift across the min_quality remesh trigger, instead of "
+         "freezing them at e.g. quality 0.21 and remeshing again a few steps later. ratio=1: only "
+         "below-trigger elements are repaired. Default 1.5: repair with headroom up to 1.5x min_quality, "
+         "heuristic. The remesh trigger itself always fires at min_quality. Must be >= 1.")
+        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+         "Fossil-fine mesh recovery (USEMMG). During remeshing, a quiet element is unfrozen when its "
+         "size times this ratio is below the GRADATION ENVELOPE -- the smallest size MMG's gradation "
+         "(hgrad) could legally assign there given every intentionally-fine metric target (side-wall "
+         "clamp, plastic-strain refinement, size floors). Recovers e.g. the ~resolution elements that "
+         "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
+         "wall size forever as they advect inland. Elements within the envelope (the legal size "
+         "transition around fine regions, the refined shear band) are never touched. "
+         "0 disables; otherwise must be > 1 (hysteresis against re-freeing the legal transition). "
+         "Default 1.4 ~ sqrt(2): one edge-halving level in 2D measure, heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -1201,6 +1218,20 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         // margin<1 would RAISE the trigger above the remesher's floor -> a just-remeshed element is
         // already tiny -> immediate re-trigger / possible non-termination. margin>=1 lowers the trigger.
         std::cerr << "Error: mesh.remesh_tiny_margin must be >= 1 (1 = trigger at the floor; larger = more hysteresis).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.mmg_remesh_defensive_quality_ratio < 1.0) {
+        // ratio<1 would repair FEWER elements than the remesh trigger flags -- a below-trigger
+        // element could stay frozen and re-trigger forever.
+        std::cerr << "Error: mesh.mmg_remesh_defensive_quality_ratio must be >= 1 (1 = repair only below the trigger).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
+        // ratio <= 1 would free elements sitting ON the gradation envelope -- the legal size
+        // transition around every fine region -- and re-adapt it at every remesh forever.
+        std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
         die(EXIT_CONFIG_VALUE);
     }
 
