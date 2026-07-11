@@ -201,6 +201,8 @@ struct Mesh {
     // which leaves quiet elements undisturbed). mmg_remesh_active_plstrain is the refine threshold.
     double mmg_remesh_active_plstrain;
     double remesh_tiny_margin;   // tiny-element remesh trigger fires at smallest_vol/margin (>=1); hysteresis vs the floor
+    double mmg_remesh_defensive_quality_ratio;   // unfreeze (REPAIR) elements below min_quality*ratio (>=1); 1 = only below the trigger
+    double mmg_remesh_size_recovery_ratio;   // free fossil-fine elements finer than the gradation envelope by this factor (>1); 0 = off
 
     // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
     double remesh_deborah_min;
