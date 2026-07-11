@@ -12,7 +12,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, 
     elem_cache& tmp_result);
 double calculate_residual_force(const Variables& var, array_t& vel);
-double calculate_characteristic_force(const Variables& var, elem_cache& tmp_result);
+double calculate_characteristic_force(const Param& param, Variables& var, elem_cache& tmp_result);
 void update_velocity(const Variables& var, array_t& vel);
 void copy_stress_PT(const tensor_t& src, tensor_t& dst);
 void update_velocity_PT(const Param& param, const Variables& var, array_t& vel);

@@ -562,7 +562,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
     {
         const double residual_initial_init = var.l2_residual;
         // FLAC-style unbalanced-force normalization (see main loop).
-        const double force_scale = calculate_characteristic_force(var, *var.tmp_result);
+        const double force_scale = calculate_characteristic_force(param, var, *var.tmp_result);
         const double residual_scale = (force_scale > 0) ? force_scale
                                                         : residual_initial_init;
         if (param.control.PT_info_interval > 0)
@@ -855,7 +855,7 @@ int main(int argc, const char* argv[])
             // gravity), not the initial imbalance — residual_0 is round-off
             // noise whenever a step starts at equilibrium (e.g. boundary-
             // driven problems) and can never shrink by the tolerance factor.
-            const double force_scale = calculate_characteristic_force(var, *var.tmp_result);
+            const double force_scale = calculate_characteristic_force(param, var, *var.tmp_result);
             const double residual_scale = (force_scale > 0) ? force_scale
                                                             : residual_initial_step;
             if (param.control.PT_info_interval > 0)
@@ -877,88 +877,98 @@ int main(int argc, const char* argv[])
             // of burning the rest of PT_max_iter.  Two consecutive stagnant
             // windows are required (hysteresis against ringing).
             const int stag_window = pt_stagnation_window(param, var);
-            double best_residual = std::numeric_limits<double>::max();
-            double best_at_last_check = std::numeric_limits<double>::max();
-            int stag_strikes = 0;
             param.control.PT_jump = true;
-            for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
             {
-                apply_vbcs(param, var, *var.vel);
-                // NOTE: the mesh is intentionally NOT moved during PT
-                // iterations (see initial_body_force_adjustment).  The
-                // outer loop advects the mesh once with the converged
-                // velocity right after this PT block.
-                update_strain_rate(var, *var.strain_rate);
-                update_stress_PT(param, var, *var.stress);
-                update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-                update_velocity_PT(param, var, *var.vel);
-                var.l2_residual = calculate_residual_force(var, *var.force_residual);
-                double rel_residual = var.l2_residual / residual_scale;
-                if (param.control.PT_info_interval > 0 &&
-                    pt_step % param.control.PT_info_interval == 0)
-                    std::cout << "  PT iter " << pt_step
-                              << ": residual = " << var.l2_residual
-                              << ", residual/residual_0 = " << rel_residual << "\n";
-                if (rel_residual < param.control.PT_relative_tolerance) {
-                    if (param.control.PT_info_interval > 0)
-                        std::cout << "  PT converged at iter " << pt_step
+                double best_residual = std::numeric_limits<double>::max();
+                double best_at_last_check = std::numeric_limits<double>::max();
+                int stag_strikes = 0;
+                for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step)
+                {
+                    apply_vbcs(param, var, *var.vel);
+                    // NOTE: the mesh is intentionally NOT moved during PT
+                    // iterations (see initial_body_force_adjustment).  The
+                    // outer loop advects the mesh once with the converged
+                    // velocity right after this PT block.
+                    update_strain_rate(var, *var.strain_rate);
+                    // Visco-elastic PT relaxation with the plastic return map
+                    // applied -- damped by the same w0/w1 blend as the elastic
+                    // update -- every iteration.  (A removed experimental
+                    // "staggered" variant instead applied one full undamped
+                    // projection per outer round; it broke the discretized
+                    // force balance and caused the boundary-pluck.  See
+                    // doc/pt-boundary-pluck.md.)
+                    update_stress_PT(param, var, *var.stress);
+                    update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+                    update_velocity_PT(param, var, *var.vel);
+                    var.l2_residual = calculate_residual_force(var, *var.force_residual);
+                    double rel_residual = var.l2_residual / residual_scale;
+                    if (param.control.PT_info_interval > 0 &&
+                        pt_step % param.control.PT_info_interval == 0)
+                        std::cout << "  PT iter " << pt_step
                                   << ": residual = " << var.l2_residual
-                                  << " (residual/residual_0 = " << rel_residual << ")\n";
-                    break;
-                }
-                best_residual = std::min(best_residual, var.l2_residual);
-                if (stag_window > 0 && pt_step > 0 && pt_step % stag_window == 0) {
-                    if (best_residual > 0.999 * best_at_last_check) {
-                        if (++stag_strikes >= 2) {
-                            std::cout << "  PT stagnated at iter " << pt_step
+                                  << ", residual/residual_0 = " << rel_residual << "\n";
+                    if (rel_residual < param.control.PT_relative_tolerance) {
+                        if (param.control.PT_info_interval > 0)
+                            std::cout << "  PT converged at iter " << pt_step
                                       << ": residual = " << var.l2_residual
-                                      << " (residual/residual_0 = " << rel_residual
-                                      << " > tolerance " << param.control.PT_relative_tolerance
-                                      << "); accepting current state.\n";
-                            break;
-                        }
+                                      << " (residual/residual_0 = " << rel_residual << ")\n";
+                        break;
                     }
-                    else
-                        stag_strikes = 0;
-                    best_at_last_check = best_residual;
-                }
-                // var.dt = std::min({var.dt*1.01, dt_copy});
-
-                if (param.mesh.quality_check_step_interval > 0 &&
-                    pt_step % param.mesh.quality_check_step_interval == 0) {
-                    if (param.control.has_moving_mesh)
-                    {
-                        int quality_is_bad, bad_quality_index;
-                        double min_quality;
-                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
-                        if (quality_is_bad) {
-
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
+                    best_residual = std::min(best_residual, var.l2_residual);
+                    if (stag_window > 0 && pt_step > 0 && pt_step % stag_window == 0) {
+                        if (best_residual > 0.999 * best_at_last_check) {
+                            if (++stag_strikes >= 2) {
+                                std::cout << "  PT stagnated at iter " << pt_step
+                                          << ": residual = " << var.l2_residual
+                                          << " (residual/residual_0 = " << rel_residual
+                                          << " > tolerance " << param.control.PT_relative_tolerance
+                                          << "); accepting current state.\n";
+                                break;
                             }
-
-                            monitor_before_remesh(param, var);
-                            remesh(param, var, quality_is_bad);
-                            monitor_remesh_update(param, var);
-
-                            // Mesh (and element count) changed: refresh the
-                            // PT constants and re-anchor τ_old to the
-                            // interpolated stress.
-                            update_pt_params(param, var);
-                            copy_stress_PT(*var.stress, *var.stress_old);
-
-                            // The residual legitimately jumps after remesh;
-                            // restart the stagnation trackers.
-                            best_residual = std::numeric_limits<double>::max();
-                            best_at_last_check = std::numeric_limits<double>::max();
+                        }
+                        else
                             stag_strikes = 0;
+                        best_at_last_check = best_residual;
+                    }
+                    // var.dt = std::min({var.dt*1.01, dt_copy});
 
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
+                    if (param.mesh.quality_check_step_interval > 0 &&
+                        pt_step % param.mesh.quality_check_step_interval == 0) {
+                        if (param.control.has_moving_mesh)
+                        {
+                            int quality_is_bad, bad_quality_index;
+                            double min_quality;
+                            quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
+                            if (quality_is_bad) {
+
+                                if (param.sim.has_output_during_remeshing) {
+                                    var.output->write_exact(var);
+                                }
+
+                                monitor_before_remesh(param, var);
+                                remesh(param, var, quality_is_bad);
+                                monitor_remesh_update(param, var);
+
+                                // Mesh (and element count) changed: refresh the
+                                // PT constants and re-anchor τ_old to the
+                                // interpolated stress.
+                                update_pt_params(param, var);
+                                copy_stress_PT(*var.stress, *var.stress_old);
+
+                                // The residual legitimately jumps after remesh;
+                                // restart the stagnation trackers.
+                                best_residual = std::numeric_limits<double>::max();
+                                best_at_last_check = std::numeric_limits<double>::max();
+                                stag_strikes = 0;
+
+                                if (param.sim.has_output_during_remeshing) {
+                                    var.output->write_exact(var);
+                                }
                             }
                         }
                     }
                 }
+
             }
             if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
             // var.dt = dt_copy;
@@ -1014,9 +1024,15 @@ int main(int argc, const char* argv[])
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
-            var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
-                                            : compute_dt(param, var);
         }
+        // dt must react every step, not just every slow_updates_interval steps --
+        // otherwise the per-step dt limiters (dt_weakening, dt_yield, ...) only
+        // ever see the pre-deformation state for the first
+        // slow_updates_interval-1 steps of a run, and never get a chance to
+        // react to a newly-activating plastic zone within that window (see
+        // doc/pt-boundary-pluck.md).
+        var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
+                                        : compute_dt(param, var);
 
         #pragma acc wait
 

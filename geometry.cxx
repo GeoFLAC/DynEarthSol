@@ -1055,19 +1055,166 @@ double compute_dt_PT(const Param& param, Variables& var)
     double dt_advection = (v_adv > 0) ?
         0.5 * minl / v_adv : std::numeric_limits<double>::max();
 
+    // compute_dt() (DR mode) records this; compute_dt_PT() didn't, leaving
+    // var.max_global_vel_mag stuck at its initial value forever in PT mode
+    // -- visible as the always-0.00000e+00 "vmax" in the Step/Output lines,
+    // and (if control.use_global_velocity_scaling were ever enabled) a
+    // silent apprent_speed=0 -> rho=inf in compute_mass()'s pseudo_speed_ATP
+    // branch.
+    var.max_global_vel_mag = global_max_vem;
+
     // adaptive fixed point: delta_plstrain ~ rate*dt, so dt settles at
     // allowance/rate for the tightest element; shrinks while a band
     // actively weakens, relaxes after it saturates
     double dt_weakening = (check_weakening && steps_min < 1e300) ?
         steps_min * var.dt : std::numeric_limits<double>::max();
 
+    // Boundary-yield dt limiter (experimental; see doc/pt-boundary-pluck.md,
+    // "dt-based fix for boundary-first yielding"). Distinct from the
+    // previously-reverted dt_yield: that read back the PT loop's own
+    // in-progress, not-yet-converged stress/strain-rate, creating a
+    // feedback loop (shrinking dt grew PT_dtau_rho, which amplified the
+    // same non-convergence gap into a larger absolute error, shrinking dt
+    // further). This limiter instead uses only a-priori known quantities
+    // -- the imposed vbc velocity magnitude, the mesh size at the
+    // velocity-Dirichlet boundaries, and the current (start-of-step, hence
+    // trustworthy) yield headroom -- to bound dt so that even the worst
+    // case (this step's entire prescribed boundary velocity absorbed by
+    // just the boundary-adjacent element, zero propagation into the
+    // interior) would not drive that element's elastic stress past yield.
+    //
+    // Per-face, not global: different faces can have wildly different
+    // resolution for reasons unrelated to their own imposed velocity (e.g.
+    // a y-face refined throughout while the x-face carrying the actual
+    // Dirichlet velocity is coarse). Mixing a global min-h with a global
+    // max-|vbc| pairs the finest element on ANY face with the largest
+    // velocity on ANY OTHER face -- a scenario that doesn't physically
+    // occur and can over-throttle dt by an order of magnitude or more.
+    // Each face's own h_min is paired only with that same face's own
+    // |vbc_val|; an element touching multiple active faces (e.g. a corner)
+    // uses the worst (largest) eps_worst among the faces it touches.
+    double dt_bc_yield = std::numeric_limits<double>::max();
+    if (param.mat.rheol_type & MatProps::rh_plastic) {
+        struct FaceSpec { uint flag; double vbc; };
+        FaceSpec faces[6] = {
+            { param.bc.vbc_x0 ? BOUNDX0 : 0u, std::fabs(param.bc.vbc_val_x0) },
+            { param.bc.vbc_x1 ? BOUNDX1 : 0u, std::fabs(param.bc.vbc_val_x1) },
+            { param.bc.vbc_y0 ? BOUNDY0 : 0u, std::fabs(param.bc.vbc_val_y0) },
+            { param.bc.vbc_y1 ? BOUNDY1 : 0u, std::fabs(param.bc.vbc_val_y1) },
+#ifdef THREED
+            { param.bc.vbc_z0 ? BOUNDZ0 : 0u, std::fabs(param.bc.vbc_val_z0) },
+            { param.bc.vbc_z1 ? BOUNDZ1 : 0u, std::fabs(param.bc.vbc_val_z1) },
+#else
+            { 0u, 0.0 }, { 0u, 0.0 },
+#endif
+        };
+
+        double eps_worst_face[6] = {0, 0, 0, 0, 0, 0};
+        uint active_bc_mask = 0;
+        for (int fidx = 0; fidx < 6; ++fidx) {
+            if (faces[fidx].flag == 0 || faces[fidx].vbc <= 0) continue;
+            const uint flag = faces[fidx].flag;
+            double h_min_face = std::numeric_limits<double>::max();
+            #pragma omp parallel for reduction(min:h_min_face) \
+                default(none) shared(var, flag)
+            for (int e = 0; e < var.nelem; ++e) {
+                int n0 = (*var.connectivity)[e][0];
+                int n1 = (*var.connectivity)[e][1];
+                int n2 = (*var.connectivity)[e][2];
+                bool touches = ((*var.bcflag)[n0] & flag) ||
+                               ((*var.bcflag)[n1] & flag) ||
+                               ((*var.bcflag)[n2] & flag);
+#ifdef THREED
+                int n3 = (*var.connectivity)[e][3];
+                touches = touches || ((*var.bcflag)[n3] & flag);
+#endif
+                if (!touches) continue;
+
+                ConstArrayAccessor a = (*var.coord)[n0];
+                ConstArrayAccessor b = (*var.coord)[n1];
+                ConstArrayAccessor c = (*var.coord)[n2];
+                double minh;
+#ifdef THREED
+                ConstArrayAccessor d = (*var.coord)[n3];
+                double maxa = std::max(std::max(triangle_area(a, b, c),
+                                                triangle_area(a, b, d)),
+                                       std::max(triangle_area(c, d, a),
+                                                triangle_area(c, d, b)));
+                minh = 3.0 * (*var.volume)[e] / maxa;
+#else
+                double maxl = std::sqrt(std::max(std::max(dist2(a, b),
+                                                          dist2(b, c)),
+                                                 dist2(a, c)));
+                minh = 2.0 * (*var.volume)[e] / maxl;
+#endif
+                h_min_face = std::min(h_min_face, minh);
+            }
+            if (h_min_face < std::numeric_limits<double>::max()) {
+                eps_worst_face[fidx] = faces[fidx].vbc / h_min_face;
+                active_bc_mask |= flag;
+            }
+        }
+
+        if (active_bc_mask != 0) {
+            double dt_bc_min = std::numeric_limits<double>::max();
+            #pragma omp parallel for reduction(min:dt_bc_min) \
+                default(none) shared(var, active_bc_mask, faces, eps_worst_face)
+            for (int e = 0; e < var.nelem; ++e) {
+                int n0 = (*var.connectivity)[e][0];
+                int n1 = (*var.connectivity)[e][1];
+                int n2 = (*var.connectivity)[e][2];
+                uint elem_flags = (*var.bcflag)[n0] | (*var.bcflag)[n1] | (*var.bcflag)[n2];
+#ifdef THREED
+                int n3 = (*var.connectivity)[e][3];
+                elem_flags |= (*var.bcflag)[n3];
+#endif
+                elem_flags &= active_bc_mask;
+                if (!elem_flags) continue;
+
+                double eps_worst = 0.0;
+                for (int fidx = 0; fidx < 6; ++fidx)
+                    if (elem_flags & faces[fidx].flag)
+                        eps_worst = std::max(eps_worst, eps_worst_face[fidx]);
+                if (eps_worst <= 0) continue;
+
+                double G_e = var.mat->shearm(e);
+                if (G_e <= 0) continue;
+
+                ConstTensorAccessor s = (*var.stress)[e];
+                double mean = 0;
+                for (int d = 0; d < NDIMS; ++d) mean += s[d];
+                mean /= NDIMS;
+                double J2 = 0;
+                for (int d = 0; d < NDIMS; ++d) {
+                    double dev = s[d] - mean;
+                    J2 += 0.5 * dev * dev;
+                }
+                for (int d = NDIMS; d < NSTR; ++d)
+                    J2 += s[d] * s[d];
+                double tau_eq = std::sqrt(J2);
+
+                double amc, anphi, anpsi, hardn, ten_max;
+                var.mat->plastic_props(e, (*var.plstrain)[e], amc, anphi, anpsi, hardn, ten_max);
+
+                double headroom = amc - tau_eq;
+                if (headroom <= 0) continue;  // already at/past yield; can't help here
+
+                double dt_e = headroom / (2.0 * G_e * eps_worst);
+                dt_bc_min = std::min(dt_bc_min, dt_e);
+            }
+            if (dt_bc_min < std::numeric_limits<double>::max())
+                dt_bc_yield = dt_bc_min;
+        }
+    }
+
     double dt = std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion,
-                          dt_weakening})
+                          dt_weakening, dt_bc_yield})
                 * param.control.dt_fraction;
     if (param.debug.dt) {
         std::cout << "step #" << var.steps << "  dt(PT): " << dt_maxwell << " "
                   << dt_advection << " " << dt_diffusion << " "
-                  << dt_hydro_diffusion << " " << dt_weakening << " sec\n";
+                  << dt_hydro_diffusion << " " << dt_weakening << " "
+                  << dt_bc_yield << " sec\n";
     }
     if (dt <= 0 || dt > 1e300) {
         // no finite physical limit (e.g. zero boundary velocity and no
@@ -1130,8 +1277,28 @@ void update_pt_params(const Param& param, Variables& var)
     double h_sum     = 0.0;
     double mu_ve_max = 0.0;
 
+    // Yield-aware modulus softening (experimental). update_stress_PT()
+    // relaxes stress toward the elastic target with a damped rate theta
+    // built from mu_ve_e, then -- every single iteration, regardless of
+    // theta -- projects any yield violation straight back onto the yield
+    // surface via a full, undamped return map (elasto_plastic()). Feeding
+    // the pure elastic G_e into mu_ve_e when an element is at/near yield
+    // ignores that mismatch: the elastic part creeps slowly, but the
+    // plastic part snaps back instantly every time it's crossed, which is
+    // a plausible driver of the observed residual limit cycle (confirmed
+    // independent of any softening curve -- see doc/pt-boundary-pluck.md).
+    // Approximate "how close to yield" with a deviatoric-stress-only
+    // (friction/pressure term ignored) proxy, since exposing the exact
+    // principal-stress-based Mohr-Coulomb check from rheology.cxx was out
+    // of scope for this experiment.  This softening keeps the local damping
+    // consistent with the material's post-yield stiffness when the plastic
+    // return map is applied (damped) every PT iteration.
+    const bool has_plastic = (param.mat.rheol_type & MatProps::rh_plastic) != 0;
+    const double yield_onset = 0.7, yield_floor = 0.05;
+
     #pragma omp parallel for reduction(min:h_min) reduction(+:h_sum) reduction(max:mu_ve_max) \
-        default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L)
+        default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L) \
+        firstprivate(has_plastic, yield_onset, yield_floor)
     for (int e = 0; e < var.nelem; ++e) {
         // --- minimum element height ---
         int n0 = (*var.connectivity)[e][0];
@@ -1164,6 +1331,29 @@ void update_pt_params(const Param& param, Variables& var)
 
         // --- effective visco-elastic viscosity (Räss et al. 2022, Eq. 35) ---
         double G_e  = var.mat->shearm(e);
+        if (has_plastic) {
+            ConstTensorAccessor s = (*var.stress)[e];
+            double mean = 0;
+            for (int d = 0; d < NDIMS; ++d) mean += s[d];
+            mean /= NDIMS;
+            double J2 = 0;
+            for (int d = 0; d < NDIMS; ++d) {
+                double dev = s[d] - mean;
+                J2 += 0.5 * dev * dev;
+            }
+            for (int d = NDIMS; d < NSTR; ++d)
+                J2 += s[d] * s[d];
+            double tau_eq = std::sqrt(J2);
+
+            double amc, anphi, anpsi, hardn, ten_max;
+            var.mat->plastic_props(e, (*var.plstrain)[e], amc, anphi, anpsi, hardn, ten_max);
+            double yield_ratio = (amc > 0) ? tau_eq / amc : 0.0;
+
+            if (yield_ratio > yield_onset) {
+                double t = std::min((yield_ratio - yield_onset) / (1.0 - yield_onset), 1.0);
+                G_e *= 1.0 - t * (1.0 - yield_floor);
+            }
+        }
         double mu_e = (*var.viscosity)[e];
         // Guard against G=0 (purely viscous material) or dt=0
         double mu_ve_e = (G_e > 0.0 && var.dt > 0.0)

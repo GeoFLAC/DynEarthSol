@@ -1023,6 +1023,8 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
     // applied during the PT iterations.
 
     const double dt = var.dt;
+    // The plastic return map (damped by the w0/w1 blend below) is applied on
+    // every PT iteration for plastic, non-RSF rheologies.
     const bool apply_plastic = (param.mat.rheol_type & MatProps::rh_plastic)
                             && !(param.mat.rheol_type & MatProps::rh_rsf);
 
@@ -1067,17 +1069,37 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
             const double de0[NSTR] = {0};
             double depls = 0, dpp = 0;
             int failure_mode;
+
+            // Damp the return-map correction itself with the same theta
+            // used for the elastic relaxation above (experimental; see
+            // doc/pt-boundary-pluck.md). Left undamped, elasto_plastic()
+            // snaps any yield violation back to the yield surface in
+            // full, every single iteration, regardless of theta -- an
+            // instantaneous correction riding on top of an intentionally
+            // damped elastic build-up. Treating the fully-projected
+            // stress as another "target" approached at the same rate
+            // keeps the plastic correction consistent with the rest of
+            // the PT scheme's pseudo-inertia.
+            double s_pre[NSTR];
+            #pragma acc loop seq
+            for (int i = 0; i < NSTR; ++i) s_pre[i] = s[i];
+
             if (var.mat->is_plane_strain) {
                 double& syy = (*var.stressyy)[e];
+                double syy_pre = syy;
                 elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
                                  de0, depls, s, syy, failure_mode,
                                  false, dpp);
+                syy = w0 * syy_pre + w1 * syy;
             }
             else {
                 elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
                                de0, depls, s, failure_mode,
                                false, dpp);
             }
+            #pragma acc loop seq
+            for (int i = 0; i < NSTR; ++i)
+                s[i] = w0 * s_pre[i] + w1 * s[i];
         }
     }
 

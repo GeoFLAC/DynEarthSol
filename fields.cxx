@@ -764,21 +764,34 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
 }
 
-double calculate_characteristic_force(const Variables& var, elem_cache& tmp_result)
+double calculate_characteristic_force(const Param& param, Variables& var, elem_cache& tmp_result)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
-    // Characteristic (gross) force scale for the PT convergence test:
-    // RMS over DOFs of Σ_e |element nodal contribution| (internal tractions
-    // + gravity), read from the tmp_result cache filled by the immediately
-    // preceding update_force() call.  The out-of-balance residual is judged
-    // relative to this scale (FLAC-style unbalanced force ratio).
-    // Normalizing by the initial residual instead fails whenever a step
-    // starts at (or near) equilibrium — e.g. boundary-driven problems —
-    // where residual_0 is round-off noise and residual/residual_0 can never
-    // reach the tolerance.
-
+    // Characteristic force scale for the PT convergence test: RMS over DOFs
+    // of Σ_e |element nodal contribution| (internal tractions + gravity),
+    // read from the tmp_result cache filled by the immediately preceding
+    // update_force() call.  The out-of-balance residual is judged relative
+    // to this scale (FLAC-style unbalanced-force ratio).  Normalizing by the
+    // initial residual instead fails whenever a step starts at (or near)
+    // equilibrium -- e.g. boundary-driven problems -- where residual_0 is
+    // round-off noise and residual/residual_0 can never reach the tolerance.
+    //
+    // A delta-from-reference variant (normalizing by |tr - tr_ref| against a
+    // one-time snapshot, to strip the locally-balancing lithostatic/gravity
+    // background from the scale) was tried and rejected -- see
+    // doc/pt-boundary-pluck.md, "Residual metric A/B".  It was not the cause
+    // of the per-step convergence degradation (that was the Winkler vertical
+    // instability, fixed elsewhere), and it carried two hazards this raw sum
+    // avoids: the reference snapshot is not reallocated/interpolated across
+    // remeshing (broken for the remeshing_option=11 production config), and
+    // its denominator collapses toward zero near the reference state, making
+    // the relative residual blow up spuriously.  The background inflates this
+    // scale (so the effective tolerance on the driving problem is looser than
+    // the nominal value), but that is tunable via PT_relative_tolerance; if a
+    // truly background-free scale is ever needed, build it from the boundary/
+    // imposed-BC tractions (remesh-invariant and stateless), not a snapshot.
     double l2 = 0.0;
     double num = var.nnode * NDIMS;
 
@@ -792,6 +805,7 @@ double calculate_characteristic_force(const Variables& var, elem_cache& tmp_resu
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
             ConstConnAccessor conn = (*var.connectivity)[*e];
             ConstElemCacheAccessor tr = tmp_result[*e];
+
             for (int i = 0; i < NODES_PER_ELEM; i++) {
                 if (n == conn[i]) {
                     for (int j = 0; j < NDIMS; j++)

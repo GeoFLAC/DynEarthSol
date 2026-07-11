@@ -703,18 +703,32 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                     if (param.control.has_hydraulic_diffusion) {
                         rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
                         // 1000.0 is the fluid density (e.g., water, in kg/m³)
-                        // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
                     }
-                    else
-                    {
-                        // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+
+                    // Predicted end-of-step vertical position of the facet center.
+                    // During PT the mesh is frozen (see the PT loop in dynearthsol.cxx),
+                    // so evaluating the Winkler pressure at the *current* zcenter makes
+                    // the foundation a constant load with NO stiffness -- leaving the
+                    // vertical rigid-body translation unconstrained and PT divergent
+                    // (see doc/pt-boundary-pluck.md, "Winkler-driven vertical
+                    // instability"). Evaluating at the predicted end-of-step position
+                    // z + vz*dt -- exactly where update_coordinate will move the
+                    // boundary -- restores the physical spring stiffness implicitly
+                    // (backward-Euler in the vertical) within the pseudo-time iteration.
+                    // In the DR path the mesh moves every step, so keep the original
+                    // explicit position there.
+                    double zc = zcenter;
+                    if (param.control.has_PT) {
+                        double vz = 0;
+                        for (int j=0; j<NODES_PER_FACET; ++j)
+                            vz += (*var.vel)[idx[j]][NDIMS-1];
+                        zc += (vz / NODES_PER_FACET) * var.dt;
                     }
+
+                    // Winkler foundation for the bottom boundary with adjusted effective density
+                    p = var.compensation_pressure -
+                        (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
+                        param.control.gravity * (zc + param.mesh.zlength);  // Adjust for predicted depth from base
                 }
                 else if (i==iboundz1 && param.bc.has_water_loading) {
                     // hydrostatic water loading for the surface boundary
