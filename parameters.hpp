@@ -196,11 +196,11 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
-    // Conservative MMG remeshing (always on): freeze (mark "required") elements that have neither
-    // plastic strain nor distortion, so MMG only remeshes the active region (like the triangle path,
-    // which leaves quiet elements undisturbed). mmg_remesh_active_plstrain is the refine threshold.
+    // MMG freeze rules (FREEZE / REQUIRED POLICY, remeshing.cxx)
     double mmg_remesh_active_plstrain;
     double mmg_remesh_defensive_tiny_ratio;
+    double mmg_remesh_defensive_quality_ratio;
+    double mmg_remesh_size_recovery_ratio;
 
     // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
     double remesh_deborah_min;
@@ -778,8 +778,8 @@ struct Variables {
     double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
     double_vec *temperature, *plstrain, *delta_plstrain;
-    // REFINE baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so
-    // a fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
+    // R2 baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so a
+    // fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
     double_vec *plstrain_remesh;
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
@@ -829,11 +829,9 @@ struct Variables {
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
 
-    // Per-remesh scratch: 1 for each ORIGINAL-mesh node the remesh MOVED (flatten_*), DELETED
-    // or COLLAPSED (new_mesh's interior deletions included). Sized to the old node count in
-    // remesh() and filled by new_mesh (Triangle/TetGen) and the MMG paths;
-    // barycentric_node_interpolation skips its "interior node not found" warning for a new node
-    // whose nearest old node is flagged. Empty outside remeshing.
+    // Per-remesh scratch, per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
+    // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
+    // found" warning. Empty outside remeshing.
     std::vector<char> remesh_affected_old_node;
 
     // tensor_t *stress_old;

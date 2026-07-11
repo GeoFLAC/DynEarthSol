@@ -439,6 +439,15 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
+    // The last surface-process dh: a PT-loop remesh in the first step after a restart reads it (R3,
+    // compute_metric_field) before surface_processes refreshes it. Per node: a restart re-sorts
+    // surfinfo.top_nodes by x.
+    {
+        double_vec dh_n(var.nnode, 0.0);
+        for (int i = 0; i < var.surfinfo.ntop; ++i)
+            dh_n[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i];
+        bin.write_array(dh_n, "surface dh", dh_n.size());
+    }
 #endif
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());

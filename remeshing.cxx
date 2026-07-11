@@ -46,10 +46,10 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
-// Shared refine-policy size floors, derived in ONE place so the triangle decimation, the MMG
-// size band, the tiny-element remesh trigger, and the boundary-merge distance cannot drift apart.
-// (These were previously spelled out at six sites with subtly different sizefactor placement -- the
-// exact class of bug that caused earlier over/under-refinement.) All are in the mesh's own units.
+// Size floors derived from mesh.smallest_size, shared by the Triangle/TetGen decimation, the
+// tiny-element trigger, the MMG metric floor and the boundary-merge distance (mesh units).
+// mmg_adapt (mmg_utils.cxx) derives MMG's hmin/hmax on its own (hmin raised by
+// mmg_remesh_defensive_tiny_ratio): keep the two in step.
 struct RefineFloors {
     double hmin;          // trigger edge length  = smallest_size^(1/NDIMS) * resolution
     double smallest_vol;  // min element measure  = smallest_size * sizefactor * resolution^NDIMS
@@ -1197,53 +1197,25 @@ void decimate_below_hmin(const Param &param, const array_t &coord, int nnode,
 }
 
 
-#ifdef USEMMG
-// Refine-policy CRITERION for MMG. Two per-element conditions, treated DIFFERENTLY:
-//   REPAIR = distorted (elem_quality < min_quality) OR tiny (below MMG's floor). MMG must be free
-//            to MOVE the nodes and split/collapse/swap these (repairing them needs node motion). The
-//            tiny term is MANDATORY -- the return-3 trigger is an MMG hard-failure independent of quality.
-//   REFINE = yielded further since the last remesh (plstrain - plstrain_remesh > mmg_remesh_active_plstrain).
-//            MMG ADDS resolution here (splits the element) but WITHOUT moving the existing nodes, so their
-//            plastic-strain values are carried verbatim (not re-interpolated/diffused) and only
-//            newly-inserted nodes get interpolated.
-// Two output masks, consumed by mark_quiet_required:
-//   node_movable[n]   = MMG may move node n : set by REPAIR elements (repair needs node motion) and by
-//                       boundary nodes (boundary flattening moves them). REFINE does NOT move nodes.
-//   elem_modifiable[e]= MMG may split/remesh element e : set by REPAIR or REFINE.
-// Quiet elements (neither) with no movable node are fully frozen and carried across the remesh verbatim.
-void compute_active_mask(const Param &param, const Variables &var,
-                         const array_t &coord, const conn_t &connectivity,
-                         int nnode, int nelem,
-                         std::vector<char> &node_movable, std::vector<char> &elem_modifiable)
+// Flag in var.remesh_affected_old_node every original node in points_to_delete or moved before
+// meshing (qcoord != original_coord). Call before qcoord is renumbered.
+void record_affected_old_nodes(Variables &var, const array_t &original_coord, const double *qcoord,
+                               int old_nnode, const int_vec &points_to_delete)
 {
-    const double q_thr = param.mesh.min_quality;
-    // Tiny = below MMG's floor, one mmg_remesh_defensive_tiny_ratio step above the trigger.
-    const double repair_vol = refine_floors(param.mesh).smallest_vol
-                              * param.mesh.mmg_remesh_defensive_tiny_ratio;
-    const double pls_thr = param.mesh.mmg_remesh_active_plstrain;
-
-    node_movable.assign(nnode, 0);
-    elem_modifiable.assign(nelem, 0);
-    for (int e = 0; e < nelem; ++e) {
-        // q^(1/3) in 3D, as bad_mesh_quality: the freeze test and the trigger use one scale
-        double q = elem_quality(coord, connectivity, *var.volume, e);
-#ifdef THREED
-        q = std::pow(q, 1.0 / 3);
-#endif
-        const bool repair = q < q_thr || (*var.volume)[e] < repair_vol;
-        const bool refine = ((*var.plstrain)[e] - (*var.plstrain_remesh)[e]) > pls_thr;
-        elem_modifiable[e] = repair || refine;   // MMG may split/remesh either
-        if (repair) {                             // only REPAIR frees the nodes to move
-            ConstConnAccessor conn = connectivity[e];
-            for (int i = 0; i < NODES_PER_ELEM; ++i)
-                node_movable[conn[i]] = 1;
-        }
+    if ((int)var.remesh_affected_old_node.size() != old_nnode)
+        die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: record not sized to the old mesh");
+    for (int n : points_to_delete) {
+        if (n < 0 || n >= old_nnode)
+            die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: deleted node is not an old node");
+        var.remesh_affected_old_node[n] = 1;
     }
-    for (int n = 0; n < nnode; ++n)
-        if ((*var.bcflag)[n] != 0)
-            node_movable[n] = 1;              // boundary nodes always movable (flattening)
+    for (int n = 0; n < old_nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
+                var.remesh_affected_old_node[n] = 1;
+                break;
+            }
 }
-#endif // USEMMG (compute_active_mask)
 
 
 void new_mesh(const Param &param, Variables &var, int bad_quality,
@@ -1349,19 +1321,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         points_to_delete.resize(last - points_to_delete.begin());
     }
 
-    // Record every ORIGINAL node deleted here (interior ones included) or moved by flatten_*:
-    // barycentric_node_interpolation silences its "interior node not found" warning for a new
-    // node whose nearest old node is one of them. Before delete_points() renumbers qcoord.
-    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
-        for (int n : points_to_delete)
-            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
-        for (int n = 0; n < old_nnode; ++n)
-            for (int d = 0; d < NDIMS; ++d)
-                if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
-                    var.remesh_affected_old_node[n] = 1;
-                    break;
-                }
-    }
+    record_affected_old_nodes(var, original_coord, qcoord, old_nnode, points_to_delete);
 
     // delete points
     switch (param.mesh.remeshing_option) {
@@ -2352,6 +2312,9 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
     //   dA2/dt  = shoelace area rate from (vx, vz + dh/dt), exact for the linear triangle;
     //             uniform advection cancels, only DEFORMING motion inflates.
     //   inflate = exp(-rate * tau), tau = time since the last remesh, capped at 8x volume.
+    // dh is the last surface-process step's (zero right after a remesh, restored on a restart). A
+    // repeat remesh within one step (tau = 0) skips this: no time has passed to extrapolate over,
+    // so the elements it rebuilds get no inflation.
     // 2D only (dh is the 2D top-chain bookkeeping). *var.coord / *var.connectivity are EMPTY here.
     const double tau = var.time - var.last_remesh_time;
     if (var.top_elems && var.surfinfo.dh && var.dt > 0.0 && tau > 0.0) {
@@ -2415,6 +2378,135 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 }
 
 
+// ============================================================================
+//  FREEZE / REQUIRED POLICY -- single source of truth
+// ============================================================================
+// Remeshing must repair bad elements while PRESERVING the fields, above all the localized
+// plastic strain: every rebuilt entity is re-interpolated, which diffuses it. Triangle
+// re-triangulates the existing points, so preservation is implicit (its only policy is the
+// shared size floors, RefineFloors). MMG rebuilds everything not forbidden, so preservation is
+// explicit through MMG's required VERTEX (never moved/deleted) and required ELEMENT (untouched).
+//
+// Remeshing must repair bad elements while PRESERVING the computed fields --
+// above all the localized plastic strain: every entity the mesher rebuilds is
+// re-interpolated afterwards, and re-interpolation numerically diffuses the
+// fields it touches. The freeze policy decides, entity by entity, how much
+// freedom the mesher gets. Both engines implement the same intent with
+// different mechanisms:
+//
+//  * Triangle/Tetgen re-triangulates the EXISTING point cloud: untouched
+//    points keep their fields verbatim, so preservation is implicit. The only
+//    explicit policy is the shared size floors (RefineFloors, top of file) --
+//    decimate_below_hmin drops interior nodes closer than hmin so
+//    re-triangulation cannot emit an element under the tiny-element trigger.
+//
+//  * MMG rebuilds everything it is not explicitly forbidden to touch.
+//    Preservation is explicit, through MMG's two "required" constraints:
+//      required VERTEX       -- MMG may not move or delete the node,
+//      required TRIANGLE/TET -- MMG may not touch the element at all.
+//
+// VOCABULARY -- per-entity freedom levels. The policy computes FREEDOM; the
+// complement is what is handed to MMG as constraints:
+//
+//   node : MOVABLE -> free.
+//          PINNED  -> MMG required vertex; its nodal fields are carried
+//                     verbatim across the remesh.
+//   elem : FREE    -> may be split/collapsed/swapped AND its nodes are made
+//                     MOVABLE: full repair freedom.
+//          SPLIT   -> may be split/swapped, but this rule does NOT free its
+//                     nodes: refinement inserts new nodes without moving the
+//                     old ones, so e.g. the shear band's plastic strain is
+//                     carried verbatim and only new nodes are interpolated.
+//          FROZEN  -> becomes an MMG required element IF additionally all of
+//                     its nodes ended up PINNED (see DERIVED REQUIRED below).
+//
+// RULES -- applied in order by mark_quiet_required below; each rule may only
+// RAISE freedom, never lower it:
+//
+//   R1 REPAIR    elem_quality < min_quality * mmg_remesh_defensive_quality_ratio
+//                OR volume < smallest_vol * mmg_remesh_defensive_tiny_ratio -> FREE
+//   R2 REFINE    plstrain - plstrain_remesh > mmg_remesh_active_plstrain -> SPLIT
+//   R3 BOUNDARY  every boundary node -> MOVABLE (flatten_* moves them);
+//                EXCEPT QUIET pure TOP nodes (no flatten_top exists; freeing
+//                them re-tessellated the whole top row every remesh -- but the
+//                exemption is gated on surface-process ACTIVITY: nodes the
+//                surface process is displacing by > 1% of resolution per remesh
+//                interval stay movable, else the pinned top lid starves MMG of
+//                slack and remeshing death-spirals) and EXCEPT pure wall nodes
+//                of a fixed (non-inflow) restored side (remeshing_option 13):
+//                the wall column is carried verbatim. Every BOTTOM node (BOUNDZ0)
+//                stays required too: the boundary outline already places the row
+//                (1, 11 and 13 snap it to -zlength, 12 slides its x0 end).
+//   R4 SIDE STRIP (option 13, inflow sides only) wall-faceted elements plus
+//                2 connectivity rings -> FREE, so the ~resolution wall band
+//                can coarsen back to its intended size once off the wall.
+//   R5 SIZE RECOVERY quiet element finer than the GRADATION ENVELOPE by more
+//                than mmg_remesh_size_recovery_ratio -> FREE. The envelope is the
+//                smallest size MMG's gradation could legally assign, grown by
+//                hgrad from every intentionally-fine metric target (wall
+//                clamp, plstrain refinement, floors) -- so the legal size
+//                transition and the refined band are never touched, only
+//                fossil-fine mesh with no justification (e.g. wall-band
+//                elements that advected inland and froze at wall size).
+//   R6 FLATTEN-BROKEN elements that flatten_* broke (post-flatten quality
+//                below min_quality, judged AFTER the R1-R5 masks) -> FREE. On
+//                the collapse path they also get R7's ring.
+//   R7 COLLAPSE-REGION (collapse path only) elements reshaped by
+//                collapse_outside_nodes or the 2D short-boundary-segment
+//                collapse, plus 1 connectivity ring -> FREE.
+//
+//   DERIVED REQUIRED -- the only place freedom becomes MMG constraints:
+//     required_node[n] = NOT movable
+//     required_elem[e] = FROZEN grade AND all of its nodes pinned
+//   An element with any movable node is therefore never required: that is the
+//   built-in one-element hinge/transition layer around every freed region.
+//
+// POST-OUTPUT QUALITY GATE (mmg_adapt_quality_gated): if MMG's output contains
+// an element that would immediately re-trigger remeshing (below min_quality,
+// or under the tiny-element trigger + half the hysteresis gap), unfreeze a
+// graded region around each bad output element and re-run MMG:
+//   CORE  (grown to frozen contact + `attempt` extra rings): full freedom;
+//   HINGE (the derived-required invariant): elements bordering the core lose
+//         required-ELEMENT status while their nodes stay pinned.
+// Bounded attempts; a still-bad final mesh is kept with a warning.
+//
+// INIT-TIME (mesh.cxx refine_initial_side_walls_2d, option 13): the same
+// freeze idea at t=0 -- everything required except the wall band + 2 rings of
+// coarser-than-resolution elements (R4's reach), so one MMG pass refines only
+// the walls to ~resolution.
+//
+// KNOBS (all under the [mesh] cfg section):
+//   min_quality                     R1 + remesh trigger + retry gate
+//   mmg_remesh_defensive_quality_ratio  R1 headroom band (1 = plain trigger)
+//   mmg_remesh_active_plstrain          R2 growing-band threshold
+//   smallest_size / resolution      size floors (RefineFloors, top of file)
+//   mmg_remesh_defensive_tiny_ratio     MMG floor, metric floor, gate, R1 tiny
+//   mmg_remesh_size_recovery_ratio      R5 envelope hysteresis (0 = off)
+//
+// MEASURED DEAD ENDS -- do not re-try without new evidence (details live as
+// NOTEs at the code they annotate):
+//   * unbounded undersized flood-fill unfreeze (re-frees the hgrad transition
+//     zone forever)                                     [R4 note]
+//   * freeing wider than REPAIR around flatten damage on the direct
+//     path (NaN'd cmp_bottom)
+//                                                       [mark_quiet_required note]
+//   * dissolving small required-element islands (more retries, not fewer)
+//                                                       [mark_quiet_required note]
+//   * raising R1's tiny floor to the metric floor (diffuses the shear band)
+//                                                       [R1 note]
+//   * explicit extra hinge ring in the retry unfreeze (exact no-op)
+//                                                       [unfreeze note]
+//   * SPLIT (nodes pinned) for R1's quality term -- both variants: ALL
+//     distorted elements, and defensive-band-only at any ratio 1.25-3.0
+//     (more remeshes/retries, quality floor erodes, NO preservation gain)
+//                                                       [R1 note]
+// ============================================================================
+
+
+// ----------------------------------------------------------------------------
+//  Packed-coords element measure / quality (policy tests + collapse machinery)
+// ----------------------------------------------------------------------------
+
 // Signed measure of an element (2x area in 2D, 6x volume in 3D) from packed node coords.
 double signed_elem_measure(const double *coord, const int *elem)
 {
@@ -2462,6 +2554,494 @@ double packed_elem_quality(const double *coord, const int *elem)
     return 4.0 * std::sqrt(3.0) * area / d2_sum;
 #endif
 }
+
+
+// ----------------------------------------------------------------------------
+//  Freedom masks + rules R1-R5 (the OLD-mesh part of the policy)
+// ----------------------------------------------------------------------------
+
+// Element freedom grades (section VOCABULARY). Only the FROZEN/not-FROZEN distinction
+// reaches MMG directly; FREE vs SPLIT differ through the nodes each rule frees.
+enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
+
+struct FreezeMask {
+    std::vector<char> node_movable;   // 1 = MOVABLE, 0 = PINNED
+    std::vector<char> elem_grade;     // ElemGrade
+};
+
+// R1 REPAIR + R2 REFINE (one pass):
+//   REPAIR = distorted (quality < min_quality * defensive ratio) or tiny (below MMG's floor)
+//            -> FREE. The tiny term is mandatory (the return-3 trigger is a hard failure). The
+//            quality term keeps a node pinned where disjoint material bodies meet (moving it drags
+//            the boundary).
+//   REFINE = yielded since the last remesh -> SPLIT: MMG adds resolution without moving the
+//            existing nodes, so their plastic strain is carried verbatim.
+// Do not give the quality term SPLIT instead of FREE: MMG cannot fix distortion without node
+// motion, the badness survives to the gate's blunter unfreeze, and preservation does not improve.
+void rule_repair_and_refine(const Param &param, const Variables &var,
+                            const array_t &coord, const conn_t &connectivity,
+                            int nelem, FreezeMask &m)
+{
+    const double q_thr = param.mesh.min_quality * param.mesh.mmg_remesh_defensive_quality_ratio;
+    // At MMG's floor, not the metric floor: raising it to the metric floor frees REFINE-pinned
+    // band nodes.
+    const double repair_vol = refine_floors(param.mesh).smallest_vol
+                              * param.mesh.mmg_remesh_defensive_tiny_ratio;
+    const double pls_thr = param.mesh.mmg_remesh_active_plstrain;
+
+    // Marker-material bitmask per element (mattypes >= 63 share the top bit): two elements
+    // are disjoint bodies iff the masks do not intersect; a markerless element counts as disjoint.
+    std::vector<uint64_t> mat_mask(nelem, 0);
+    for (int e = 0; e < nelem; ++e) {
+        const int_vec &em = (*var.elemmarkers)[e];
+        for (int t = 0; t < (int)em.size(); ++t)
+            if (em[t] > 0) mat_mask[e] |= 1ULL << std::min(t, 63);
+    }
+
+    int n_iface_pinned = 0;
+    for (int e = 0; e < nelem; ++e) {
+        // q^(1/3) in 3D, as bad_mesh_quality: the freeze test and the trigger use one scale
+        double q = elem_quality(coord, connectivity, *var.volume, e);
+#ifdef THREED
+        q = std::pow(q, 1.0 / 3);
+#endif
+        const bool low_q = q < q_thr;
+        const bool tiny  = (*var.volume)[e] < repair_vol;
+        const bool refine = ((*var.plstrain)[e] - (*var.plstrain_remesh)[e]) > pls_thr;
+        m.elem_grade[e] = (low_q || tiny) ? ELEM_FREE
+                                          : (refine ? ELEM_SPLIT : ELEM_FROZEN);
+        if (tiny) {                        // every node
+            ConstConnAccessor conn = connectivity[e];
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                m.node_movable[conn[i]] = 1;
+        } else if (low_q) {
+            // every node except one shared with an element of no common mattype
+            ConstConnAccessor conn = connectivity[e];
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                const int n = conn[i];
+                bool disjoint_nbr = false;
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                for (int k = 0; k < npatch; ++k) {
+                    const int ne = patch[k];
+                    if (ne != e && (mat_mask[ne] & mat_mask[e]) == 0) {
+                        disjoint_nbr = true;
+                        break;
+                    }
+                }
+                if (disjoint_nbr) { ++n_iface_pinned; continue; }
+                m.node_movable[n] = 1;
+            }
+        }
+    }
+    if (n_iface_pinned)
+        std::cout << "    Repair: " << n_iface_pinned
+                  << " material-interface node ref(s) of low-quality elements not freed by the "
+                     "quality term.\n";
+}
+
+// R3 BOUNDARY: boundary nodes movable (flattening moves them) -- except pure TOP
+// (free-surface) nodes where the surface process is not actively reshaping the surface,
+// pure wall nodes of a FIXED (non-inflow) restored side (option 13), and bottom nodes.
+void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
+                         FreezeMask &m)
+{
+    // activity = |dh|/dt * tau (dh: see SURFACE-MOTION ANTICIPATION)
+    std::vector<char> top_active(nnode, 0);
+#ifndef THREED
+    const double tau = var.time - var.last_remesh_time;
+    if (var.surfinfo.dh && var.dt > 0.0 && tau > 0.0) {
+        // 1% of resolution per remesh interval: heuristic static/active split, untuned
+        const double tol = 0.01 * param.mesh.resolution;
+        for (int i = 0; i < var.surfinfo.ntop; ++i) {
+            const int n = (*var.surfinfo.top_nodes)[i];
+            if (std::abs((*var.surfinfo.dh)[i]) / var.dt * tau > tol)
+                top_active[n] = 1;
+        }
+    }
+#endif
+
+    for (int n = 0; n < nnode; ++n) {
+        const uint f = (*var.bcflag)[n];
+        if (!f) continue;
+        // QUIET pure TOP nodes stay required: no flatten_* restores the free surface, a collapse
+        // removes top nodes only inside R7's freed region, and R1 has already freed the nodes of
+        // any broken/tiny surface element (bar a low-quality one's material-interface nodes).
+        // Freeing them wholesale re-tessellated the ENTIRE top row at every remesh (measured: 100%
+        // top-row rebuild), diffusing the surface fields and
+        // perturbing topography within hausd. Surface-process-ACTIVE top nodes (see
+        // above) and corner nodes (also on a side) stay movable.
+        if ((f & BOUNDZ1) && !(f & (BOUND_ANY & ~BOUNDZ1)) && !top_active[n]) continue;
+        // BOTTOM nodes (incl. bottom corners) stay required: the boundary outline already places
+        // the row (1, 11 and 13 snap it, 12 slides its x0 end), so nothing needs them movable.
+        if (f & BOUNDZ0) continue;
+        m.node_movable[n] = 1;              // boundary nodes movable (flattening)
+    }
+}
+
+
+// R5 SIZE RECOVERY -- free fossil-fine quiet elements so MMG can coarsen them back to the
+// intended size. The wall metric clamp (option 13) and the plstrain refinement keep creating
+// elements finer than the init_elem_size_n hint; once such an element advects out of the R4
+// strip it is quiet, the freeze has no size term, and it is carried verbatim FOREVER -- on
+// the subduction production run this grew the element count by +106% over 7 Myr.
+// The naive fix -- free everything undersized vs the
+// hint -- was tried and REVERTED long ago: it kept re-freeing the hgrad-limited size
+// TRANSITION around the wall band (~400 elements re-adapted at every remesh without ever
+// reaching their target, see the R4 note). The transition is exactly the mesh MMG's
+// gradation FORCES to be finer than the hint, so the recovery criterion must be the
+// GRADATION ENVELOPE, not the hint:
+//   1. per-node fine TARGET t(n), mirroring compute_metric_field: the init hint reduced by
+//      the accumulated-plstrain refinement, floored at the metric floor, clamped to
+//      ~resolution on the restored side walls (option 13);
+//   2. achievable(n) = min over all nodes s of t(s) * hgrad^rings(n,s) -- the smallest size
+//      MMG could legally assign at n (fixpoint relaxation over element edges);
+//   3. an element is FOSSIL EXCESS iff esize * ratio < achievable at all its nodes: finer
+//      than anything the metric system could have asked for there -> FREE (its nodes must be
+//      deletable for MMG to merge it away). ratio (mmg_remesh_size_recovery_ratio, > 1) is the
+//      hysteresis that keeps borderline transition elements frozen; 0 disables the rule.
+// Self-limiting: band elements have fine targets (achievable ~ their size), transition
+// elements sit ON the envelope, so neither is ever freed; R2 (growing band) elements are
+// explicitly skipped, and so are every element connected to a top-surface node
+// (var.top_elems -- surface guard below, keeps the free surface verbatim) and every
+// element on a MATERIAL INTERFACE (mixed markers, or sharing a node with an element of a
+// different mattype -- interface guard below, keeps layer boundaries verbatim).
+// Deformation history is additionally protected the way the metric protects it: through
+// the plstrain-refined targets.
+void rule_size_recovery(const Param &param, const Variables &var,
+                        const conn_t &connectivity,
+                        int nnode, int nelem, uint clamp_side_bits, FreezeMask &m)
+{
+    const double ratio = param.mesh.mmg_remesh_size_recovery_ratio;
+    if (ratio <= 0.0) return;                                    // disabled
+    if ((int)var.init_elem_size_n->size() != nnode) return;      // defensive: init() always fills it
+
+    const double hgrad = 1.3;   // MMG's default gradation; mmg_adapt does not override it
+    const double coeff = param.mesh.mmg_metric_refine_coeff;
+    const double metric_floor = mmg_metric_floor(param.mesh);
+
+    // (1) per-node fine target
+    std::vector<double> achievable(nnode, std::numeric_limits<double>::max());
+    std::vector<double> esize(nelem);
+    for (int e = 0; e < nelem; ++e) {
+        ConstConnAccessor conn = connectivity[e];
+#ifdef THREED
+        esize[e] = std::cbrt((*var.volume)[e] / sizefactor);
+        const double red = std::cbrt(1.0 / (1.0 + coeff * (*var.plstrain)[e]));
+#else
+        esize[e] = std::sqrt((*var.volume)[e] / sizefactor);
+        const double red = std::sqrt(1.0 / (1.0 + coeff * (*var.plstrain)[e]));
+#endif
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            const int n = conn[i];
+            const double t = (*var.init_elem_size_n)[n] * red;
+            if (t < achievable[n]) achievable[n] = t;
+        }
+    }
+    for (int n = 0; n < nnode; ++n) {
+        if ((*var.bcflag)[n] & clamp_side_bits)
+            achievable[n] = std::min(achievable[n], param.mesh.resolution);  // wall clamp
+        achievable[n] = std::max(achievable[n], metric_floor);
+    }
+
+    // (2) gradation envelope: fixpoint of achievable(n) <= min(elem neighbours) * hgrad.
+    //     Sweeps needed = mesh diameter in rings; 512 is a heuristic cap on that diameter.
+    bool converged = false;
+    for (int sweep = 0; sweep < 512 && !converged; ++sweep) {
+        bool changed = false;
+        for (int e = 0; e < nelem; ++e) {
+            ConstConnAccessor conn = connectivity[e];
+            double amin = achievable[conn[0]];
+            for (int i = 1; i < NODES_PER_ELEM; ++i)
+                amin = std::min(amin, achievable[conn[i]]);
+            const double lim = amin * hgrad;
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (achievable[conn[i]] > lim) { achievable[conn[i]] = lim; changed = true; }
+        }
+        converged = !changed;
+    }
+    if (!converged)
+        std::cout << "      [freeze] WARNING: R5 gradation envelope not converged in 512 sweeps; "
+                     "size recovery may free transition elements.\n";
+
+    // Surface guard: skip an element on a top-surface node (var.top_elems), whose freeing would
+    // unpin quiet lid nodes R3 pinned. R3's activity gate (2D only) still frees active surface
+    // spots.
+    std::vector<char> is_top_elem(nelem, 0);
+    for (int i = 0; i < var.ntop_elems; ++i)
+        is_top_elem[(*var.top_elems)[i]] = 1;
+
+    // Material-interface guard: never free an element with mixed markers, or sharing a node with
+    // an element of a different mattype: coarsening remaps the patch's markers and diffuses the
+    // boundary. elem_mat[e] = the sole mattype, or -1 if mixed/markerless.
+    std::vector<int> elem_mat(nelem, -1);
+    for (int e = 0; e < nelem; ++e) {
+        const int_vec &em = (*var.elemmarkers)[e];
+        int mt = -1;
+        for (int t = 0; t < (int)em.size(); ++t) {
+            if (em[t] <= 0) continue;
+            if (mt >= 0) { mt = -1; break; }   // second mattype -> mixed
+            mt = t;
+        }
+        elem_mat[e] = mt;
+    }
+
+    // (3) free the fossil excess
+    int n_freed = 0, n_top_skipped = 0, n_mat_skipped = 0;
+    for (int e = 0; e < nelem; ++e) {
+        if (m.elem_grade[e] == ELEM_SPLIT) continue;   // R2 growing band: nodes stay pinned
+        ConstConnAccessor conn = connectivity[e];
+        double ach = achievable[conn[0]];
+        for (int i = 1; i < NODES_PER_ELEM; ++i)
+            ach = std::min(ach, achievable[conn[i]]);
+        if (esize[e] * ratio >= ach) continue;         // within the legal envelope
+        if (is_top_elem[e]) { ++n_top_skipped; continue; }
+        // loop every support element of every node: freeable only if this element and
+        // ALL elements sharing any of its nodes carry the same single mattype
+        bool on_interface = (elem_mat[e] < 0);
+        for (int i = 0; i < NODES_PER_ELEM && !on_interface; ++i) {
+            const int npatch = var.support.size(conn[i]);
+            const int* patch = var.support.patch(conn[i]);
+            for (int k = 0; k < npatch; ++k)
+                if (elem_mat[patch[k]] != elem_mat[e]) { on_interface = true; break; }
+        }
+        if (on_interface) { ++n_mat_skipped; continue; }
+        if (m.elem_grade[e] != ELEM_FREE) ++n_freed;
+        m.elem_grade[e] = ELEM_FREE;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            if (!((*var.bcflag)[conn[i]] & BOUNDZ0))   // the bottom row stays required (R3)
+                m.node_movable[conn[i]] = 1;
+    }
+    if (n_freed || n_top_skipped || n_mat_skipped)
+        std::cout << "    Size recovery: freed " << n_freed
+                  << " fossil-fine element(s) below the gradation envelope (skipped "
+                  << n_top_skipped << " top-surface-connected, "
+                  << n_mat_skipped << " on a material interface).\n";
+}
+
+
+// R1-R5 on the OLD mesh; mark_quiet_required adds R6/R7 and derives MMG's required arrays.
+FreezeMask compute_active_mask(const Param &param, const Variables &var,
+                               const array_t &coord, const conn_t &connectivity,
+                               int nnode, int nelem)
+{
+    FreezeMask m;
+    m.node_movable.assign(nnode, 0);
+    m.elem_grade.assign(nelem, ELEM_FROZEN);
+
+    rule_repair_and_refine(param, var, coord, connectivity, nelem, m);   // R1 + R2
+
+    rule_boundary_nodes(param, var, nnode, m);                           // R3
+
+    // R5 wall-clamp targets: ALL restored sides (the compute_metric_field clamp is not
+    // inflow-gated), so a static wall's fine column counts as intentional there too.
+    uint clamp_side_bits = 0;
+    if (param.mesh.remeshing_option == 13) {
+        clamp_side_bits = BOUNDX0 | BOUNDX1;
+#ifdef THREED
+        clamp_side_bits |= BOUNDY0 | BOUNDY1;
+#endif
+    }
+    rule_size_recovery(param, var, connectivity, nnode, nelem, clamp_side_bits, m);  // R5
+
+    return m;
+}
+
+// DERIVED REQUIRED: required_node = pinned; required_elem = FROZEN grade with all nodes
+// pinned. An element with any movable node is left non-required (the one-element hinge/
+// transition layer), so MMG can adjust it when the neighbour moves.
+void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
+                     std::vector<char> &required_node, std::vector<char> &required_elem,
+                     int &n_req_node, int &n_req_elem)
+{
+    required_node.assign(mnode, 0);
+    required_elem.assign(melem, 0);
+    n_req_node = n_req_elem = 0;
+    for (int n = 0; n < mnode; ++n)
+        if (!m.node_movable[n]) { required_node[n] = 1; ++n_req_node; }
+    for (int e = 0; e < melem; ++e) {
+        if (m.elem_grade[e] != ELEM_FROZEN) continue;   // repair/refine element: MMG may split/remesh it
+        const int *el = conn + (std::size_t)e*NODES_PER_ELEM;
+        bool all_fixed = true;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            if (m.node_movable[el[i]]) { all_fixed = false; break; }
+        if (all_fixed) { required_elem[e] = 1; ++n_req_elem; }
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+//  R6 input: what did flatten_* break?
+// ----------------------------------------------------------------------------
+// Elements flatten_* broke: a boundary node was snapped onto its restored plane (qcoord !=
+// original_coord) and the post-flatten quality fell below min_quality. Also records the moved
+// and deleted old nodes (record_affected_old_nodes). OLD element ids.
+std::vector<char> detect_flatten_broken(const Param &param, Variables &var,
+                                        const array_t &original_coord,
+                                        const double *qcoord, const int *qconn,
+                                        int old_nnode, int old_nelem,
+                                        const int_vec &points_to_delete)
+{
+    std::vector<char> displaced(old_nnode, 0);
+    for (int n = 0; n < old_nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
+    record_affected_old_nodes(var, original_coord, qcoord, old_nnode, points_to_delete);
+    std::vector<char> flatten_broken(old_nelem, 0);
+    for (int e = 0; e < old_nelem; ++e) {
+        const int *el = qconn + e*NODES_PER_ELEM;
+        bool touched = false;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) if (displaced[el[i]]) { touched = true; break; }
+        if (!touched) continue;
+        double q = packed_elem_quality(qcoord, el);
+#ifdef THREED
+        if (q > 0.0) q = std::cbrt(q);   // match rule_repair_and_refine's normalization
+#endif
+        if (q < param.mesh.min_quality) flatten_broken[e] = 1;
+    }
+    return flatten_broken;
+}
+
+
+// ----------------------------------------------------------------------------
+//  R6/R7 + derived required: the required arrays handed to MMG
+// ----------------------------------------------------------------------------
+
+// Renumbering info for the collapse path (collapse_outside_nodes /
+// collapse_short_boundary_segments_2d rebuilt the mesh handed to MMG, so old and MMG entity
+// ids no longer match 1:1). All arrays describe the NEW (collapsed) mesh except
+// collapsed_pts, which lists the OLD node ids marked for the collapse (merged away unless no target
+// keeps their elements oriented).
+struct CollapseRemap {
+    const int_vec *new_to_old_node;   // [mnode] -> old node id
+    const int_vec *new_to_old_elem;   // [melem] -> old elem id
+    const int_vec *collapsed_pts;     // old node ids marked for the collapse
+};
+
+// Conservative remeshing: mark the "quiet" part of the mesh as MMG-required so MMG leaves it
+// untouched and mostly remeshes the active region (FREEZE / REQUIRED POLICY lists the quiet
+// elements it also frees). This mirrors the triangle path, which
+// re-triangulates existing points and does not disturb elements without plastic strain or
+// deformation -- avoiding needless node motion and field interpolation in quiet regions.
+//
+// The criterion is plastic strain that is still INCREASING, not accumulated plastic strain.
+// Every MMG remesh re-interpolates the elements it re-adapts (inject_field's weighted average),
+// which numerically diffuses their fields; keying on accumulated strain would re-adapt the whole
+// shear band every remesh and smear the localization (peak plstrain decays vs the triangle path).
+// Instead we compare against plstrain_remesh (the snapshot taken at the previous remesh): an
+// element is ACTIVE only if it yielded MORE since then (R2). A fossil band that has stopped
+// growing is therefore frozen and its sharp plstrain is carried across the remesh verbatim
+// (is_changed==0 -> direct copy), exactly like the triangle path preserves untouched points.
+//
+// MMG entity ids are 1-based and, on the direct path (remap == NULL), match the old-mesh
+// node/element order 1:1 (vertices = packed old_coord, triangles/tets built from old
+// connectivity in order). On the collapse path the mesh handed to MMG has been RENUMBERED
+// (sunk material merged out, elements dropped), so the old<->MMG id map is no longer 1:1:
+//   (1) compute the freeze policy on the OLD mesh (its var fields match old ids exactly),
+//   (2) TRANSLATE the masks through the collapse renumbering (remap->new_to_old_*),
+//   (3) additionally FREE the collapse region (R7): any new element whose source old element
+//       referenced a collapsed (pts) node was reshaped by the collapse; mark it and its nodes
+//       movable, plus one ring of connected elements. Those freed nodes carry the
+//       init_elem_size_n-based metric (compute_metric_field's base), so MMG re-refines the
+//       collapsed region back to the initial element size instead of leaving it coarse,
+//   (4) derive required on the NEW connectivity.
+//
+// R6 on both paths: flatten_* may have snapped boundary nodes onto their restored plane
+// (up to max_boundary_distortion), squashing or inverting elements AFTER the R1-R5 masks were
+// computed on the PRE-flatten coords; their interior nodes would stay pinned as required
+// vertices and MMG could never repair the flat band it would otherwise emit along the restored
+// boundary (cmp_bottom remesh 176/177). flatten_broken[e] applies the same REPAIR rule on the
+// post-flatten geometry; free those elements exactly like R1 frees a repair element (the
+// collapse path also gives them the collapse region's one ring, see (3) above). Deliberately
+// NO wider freeing on the direct path: every extra freed element enlarges the re-interpolated
+// region and its post-remesh disequilibrium shock (freeing the whole flatten band NaN'd
+// cmp_bottom at step 118600; dies at: whole displaced band 118600 / quality-halved band 99200 /
+// REPAIR-only 177400 = the model's physical neck-through end).
+//
+// NOTE (2026-07-10): dissolving small REQUIRED-element islands (components < 6 elements
+// losing required-element status, nodes kept) was tried here as a preventive against the
+// post-remesh quality retries and REVERTED after an A/B/C/D comparison on the
+// subd-serp-remesh frame-30 restart window: with dissolution 14 remeshes / 17 MMG re-runs,
+// without it 10 / 8 -- re-tessellating the dissolved islands at every remesh CREATED more
+// bad output elements (and mesh churn) than the pinned islands ever did. Do not re-add.
+void mark_quiet_required(const Param &param, const Variables &var,
+                         const array_t &old_coord, const conn_t &old_connectivity,
+                         int mnode, int melem,
+                         const int *mconn,   // mnode/melem mesh, 0-based row-major (conn_t is SoA)
+                         const std::vector<char> &flatten_broken,
+                         const CollapseRemap *remap,
+                         std::vector<char> &required_node, std::vector<char> &required_elem)
+{
+    const int old_nnode = old_coord.size();
+    const int old_nelem = old_connectivity.size();
+
+    // (1) R1-R5 on the OLD mesh (var's fields match old ids exactly).
+    FreezeMask m = compute_active_mask(param, var, old_coord, old_connectivity,
+                                       old_nnode, old_nelem);
+
+    int n_req_node = 0, n_req_elem = 0;
+    if (!remap) {
+        // Direct path: old and MMG ids match 1:1 (mnode == old_nnode, melem == old_nelem).
+        if (mnode != old_nnode || melem != old_nelem)
+            die(EXIT_INTERNAL_ASSERT, "mark_quiet_required: direct-path mesh is not the old mesh");
+        // R6: free what flatten broke.
+        for (int e = 0; e < melem; ++e) {
+            if (!flatten_broken[e]) continue;
+            m.elem_grade[e] = ELEM_FREE;
+            ConstConnAccessor conn = old_connectivity[e];
+            for (int i = 0; i < NODES_PER_ELEM; ++i) m.node_movable[conn[i]] = 1;
+        }
+        derive_required(m, mnode, melem, mconn,
+                        required_node, required_elem, n_req_node, n_req_elem);
+        std::cout << "    Conservative remesh: froze " << n_req_elem << "/" << melem
+                  << " elements (" << (melem - n_req_elem) << " modifiable), "
+                  << n_req_node << "/" << mnode << " nodes required.\n";
+    }
+    else {
+        // (2) translate OLD masks -> NEW (collapsed) masks
+        FreezeMask t;
+        t.node_movable.assign(mnode, 0);
+        t.elem_grade.assign(melem, ELEM_FROZEN);
+        for (int n = 0; n < mnode; ++n) t.node_movable[n] = m.node_movable[(*remap->new_to_old_node)[n]];
+        for (int e = 0; e < melem; ++e) t.elem_grade[e]   = m.elem_grade[(*remap->new_to_old_elem)[e]];
+
+        // (3) R7 + R6: free the elements whose old element touched a collapsed node or was
+        //     flatten-broken, their nodes and one ring: with those interior nodes pinned MMG
+        //     cannot repair the flat band along the restored boundary.
+        std::vector<char> is_pts(old_nnode, 0);
+        for (std::size_t i = 0; i < remap->collapsed_pts->size(); ++i)
+            is_pts[(*remap->collapsed_pts)[i]] = 1;
+        std::vector<char> collapse_node(mnode, 0);
+        for (int e = 0; e < melem; ++e) {
+            const int old_e = (*remap->new_to_old_elem)[e];
+            ConstConnAccessor oc = old_connectivity[old_e];
+            bool touched = flatten_broken[old_e] != 0;
+            for (int i = 0; i < NODES_PER_ELEM && !touched; ++i)
+                if (is_pts[oc[i]]) touched = true;
+            if (!touched) continue;
+            t.elem_grade[e] = ELEM_FREE;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) { int nn = mconn[e*NODES_PER_ELEM + i]; t.node_movable[nn] = 1; collapse_node[nn] = 1; }
+        }
+        for (int e = 0; e < melem; ++e) {
+            bool touch = false;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) if (collapse_node[mconn[e*NODES_PER_ELEM + i]]) { touch = true; break; }
+            if (!touch) continue;
+            t.elem_grade[e] = ELEM_FREE;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) t.node_movable[mconn[e*NODES_PER_ELEM + i]] = 1;
+        }
+        // (4) derive required on the NEW connectivity
+        derive_required(t, mnode, melem, mconn,
+                        required_node, required_elem, n_req_node, n_req_elem);
+        std::cout << "    Conservative remesh (collapse path): froze " << n_req_elem << "/" << melem
+                  << " elements (" << (melem - n_req_elem) << " modifiable), "
+                  << n_req_node << "/" << mnode << " nodes required.\n";
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+//  Post-output quality gate (retry with graded unfreeze)
+// ----------------------------------------------------------------------------
 
 // Centroid + longest-edge length of a packed-coords element (locality scale for the
 // post-remesh unfreeze below).
@@ -2611,8 +3191,9 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
             if (req_node[el[k]]) { req_node[el[k]] = 0; ++nfreed_core; }
     }
 
-    // The hinge ring: a required element that touches the core loses its required status
-    // (mmg_adapt's contract); req_node stays.
+    // Required-element invariant: an element with any movable node cannot be required. This IS
+    // the hinge ring: required elements touching the core lose element status, nodes stay pinned.
+    // (An extra explicitly-freed ring beyond it measured as an exact no-op.)
     int nfreed_hinge = 0;
     for (int e = 0; e < melem; ++e) {
         if (!req_elem[e]) continue;
@@ -2631,6 +3212,38 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
               << "\n";
     return nfreed;
 }
+
+// Quality-gated adaptation: if the output would immediately re-trigger remeshing
+// (below-min_quality or tiny element), unfreeze the frozen entities around the bad
+// spots and re-run MMG. req_node/req_elem MUST be the vectors mmg_in.required_node/
+// required_elem point into: the retry unfreeze mutates them in place and re-runs MMG
+// on the same input. Bounded retries; a failed final attempt keeps the last mesh.
+void mmg_adapt_quality_gated(const Param &param, const MMGInput &in, MMGOutput &out,
+                             std::vector<char> &req_node, std::vector<char> &req_elem)
+{
+    if (in.required_node != req_node.data() || in.required_elem != req_elem.data())
+        die(EXIT_INTERNAL_ASSERT, "mmg_adapt_quality_gated: in must point into req_*");
+    for (int attempt = 0; ; ++attempt) {
+        mmg_adapt(param.mesh, in, out);
+        if (attempt >= 3) {   // 4 MMG passes: heuristic cap, untuned
+            // Retries exhausted: keep the last mesh, but say so when it is still bad --
+            // a silent bad element re-triggers remeshing a few steps later.
+            const int nbad = collect_bad_output(param, out, NULL, NULL);
+            if (nbad)
+                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
+                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
+                             "where the free surface meets a wall can need a larger "
+                             "mmg_hausd_factor.\n";
+            break;
+        }
+        if (unfreeze_near_bad_output(param, out, in.nnode, in.nelem, in.coord, in.conn,
+                                     attempt, req_node, req_elem) == 0) break;
+        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << ").\n";
+    }
+}
+
+// ======================= end FREEZE / REQUIRED POLICY =======================
 
 // Orientation + scale reference for a flat/inverted-element test: the measure of the first element
 // `pristine` accepts that is wound like the majority. Not simply the first: flatten_* can turn an
@@ -3179,165 +3792,6 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
 #endif
 
 
-// Conservative remeshing: mark the "quiet" part of the mesh as MMG-required so MMG leaves it
-// untouched and only remeshes the active region. This mirrors the triangle path, which
-// re-triangulates existing points and does not disturb elements without plastic strain or
-// deformation -- avoiding needless node motion and field interpolation in quiet regions.
-//
-// The criterion is plastic strain that is still INCREASING, not accumulated plastic strain.
-// Every MMG remesh re-interpolates the elements it re-adapts (inject_field's weighted average),
-// which numerically diffuses their fields; keying on accumulated strain would re-adapt the whole
-// shear band every remesh and smear the localization (peak plstrain decays vs the triangle path).
-// Instead we compare against plstrain_remesh (the snapshot taken at the previous remesh): an
-// element is ACTIVE only if it yielded MORE since then (plstrain - plstrain_remesh >
-// mmg_remesh_active_plstrain). A fossil band that has stopped growing is therefore frozen and its
-// sharp plstrain is carried across the remesh verbatim (is_changed==0 -> direct copy), exactly
-// like the triangle path preserves untouched points.
-//
-// An element is also ACTIVE if it is distorted (elem_quality < min_quality) or tiny. A node is
-// movable if it is a boundary node or an incident element is distorted or tiny (a yielding
-// element keeps its nodes pinned); an element with a movable node is never required, which
-// leaves a one-element-thick free transition layer around repaired zones so MMG has room to
-// repair them. Quiet nodes are marked required (not moved) and all-quiet elements are marked
-// required (not split/collapsed). MMG entity ids are 1-based and, on the non-collapse path,
-// match the old-mesh node/element order 1:1 (vertices = packed old_coord, triangles/tets built
-// from old connectivity in order). Only call when !outside_material (the collapse path renumbers).
-// Fills required_node[mnode] / required_elem[melem] (1 = frozen); mmg_adapt applies them to MMG.
-// NOTE (2026-07-10): dissolving small REQUIRED-element islands (components < 6 elements
-// losing required-element status, nodes kept) was tried here as a preventive against the
-// post-remesh quality retries and REVERTED after an A/B/C/D comparison on the
-// subd-serp-remesh frame-30 restart window: with dissolution 14 remeshes / 17 MMG re-runs,
-// without it 10 / 8 -- re-tessellating the dissolved islands at every remesh CREATED more
-// bad output elements (and mesh churn) than the pinned islands ever did. Do not re-add.
-
-void mark_quiet_required(const Param &param, const Variables &var,
-                         const array_t &old_coord, const conn_t &old_connectivity,
-                         int mnode, int melem, const std::vector<char> &flatten_broken,
-                         std::vector<char> &required_node, std::vector<char> &required_elem)
-{
-    // compute_active_mask returns node_movable (MMG may move) + elem_modifiable (MMG may split/remesh).
-    // MMG freezes the complement:
-    //   required_node[n]  = node NOT movable  -> MMG holds it fixed.
-    //   required_elem[e]  = element NOT modifiable AND all its nodes fixed -> MMG leaves it untouched.
-    // A mode-2 REFINE element is modifiable (splittable) yet has fixed nodes: MMG adds new nodes to
-    // refine it without moving the existing ones. A quiet element next to a movable node is left
-    // non-required (one-element transition layer) so MMG can adjust it when the neighbour moves.
-    std::vector<char> node_movable, elem_modifiable;
-    compute_active_mask(param, var, old_coord, old_connectivity, mnode, melem, node_movable, elem_modifiable);
-
-    // FREE what flatten broke. compute_active_mask judged REPAIR on the PRE-flatten coords, but
-    // flatten_* may have snapped boundary nodes onto their restored plane (up to
-    // max_boundary_distortion), squashing or inverting elements AFTER the mask was computed;
-    // their interior nodes would stay pinned as required vertices and MMG could never repair the
-    // flat band it would otherwise emit along the restored boundary (cmp_bottom remesh 176/177).
-    // flatten_broken[e] applies the same REPAIR rule on the post-flatten geometry; free those
-    // elements exactly like compute_active_mask frees a repair element. Deliberately NO wider
-    // freeing: every extra freed element enlarges the re-interpolated region and its post-remesh
-    // disequilibrium shock (freeing the whole flatten band NaN'd cmp_bottom at step 118600).
-    for (int e = 0; e < melem; ++e) {
-        if (!flatten_broken[e]) continue;
-        elem_modifiable[e] = 1;
-        ConstConnAccessor conn = old_connectivity[e];
-        for (int i = 0; i < NODES_PER_ELEM; ++i) node_movable[conn[i]] = 1;
-    }
-
-    required_node.assign(mnode, 0);
-    required_elem.assign(melem, 0);
-    int n_req_node = 0, n_req_elem = 0;
-    for (int n = 0; n < mnode; ++n)
-        if (!node_movable[n]) { required_node[n] = 1; ++n_req_node; }
-    for (int e = 0; e < melem; ++e) {
-        if (elem_modifiable[e]) continue;   // repair/refine element: MMG may split/remesh it
-        ConstConnAccessor conn = old_connectivity[e];
-        bool all_fixed = true;
-        for (int i = 0; i < NODES_PER_ELEM; ++i)
-            if (node_movable[conn[i]]) { all_fixed = false; break; }
-        if (all_fixed) { required_elem[e] = 1; ++n_req_elem; }
-    }
-    std::cout << "    Conservative remesh: froze " << n_req_elem << "/" << melem
-              << " elements (" << (melem - n_req_elem) << " modifiable), "
-              << n_req_node << "/" << mnode << " nodes required.\n";
-}
-
-// Collapse-path variant of mark_quiet_required. On the collapse path the mesh handed to MMG has
-// been RENUMBERED by collapse_outside_nodes (sunk material merged out, elements dropped), so the
-// old<->MMG id map is no longer 1:1 and mark_quiet_required's direct indexing is invalid. Here we
-//   (1) compute the freeze policy on the OLD mesh (compute_active_mask -- its var fields match old
-//       ids exactly), then
-//   (2) TRANSLATE the movable/modifiable masks through the collapse renumbering (new_to_old_*), then
-//   (3) additionally FREE the collapse region: any new element whose source old element referenced a
-//       collapsed (pts) node was reshaped by the collapse; mark it and its nodes movable, plus one
-//       ring of connected elements. Those freed nodes carry the init_elem_size_n-based metric
-//       (compute_metric_field's base), so MMG re-refines the collapsed region back to the initial
-//       element size instead of leaving it coarse. Finally
-//   (4) required = complement (same rule as mark_quiet_required), evaluated on the NEW connectivity.
-void mark_quiet_required_collapse(const Param &param, const Variables &var,
-                                  const array_t &old_coord, const conn_t &old_connectivity,
-                                  int old_nnode, int old_nelem, const int_vec &pts,
-                                  const int *c_conn, int mnode, int melem,
-                                  const int_vec &new_to_old_node, const int_vec &new_to_old_elem,
-                                  const std::vector<char> &flatten_broken,
-                                  std::vector<char> &required_node, std::vector<char> &required_elem)
-{
-    // (1) far-field freeze policy on the OLD mesh
-    std::vector<char> old_movable, old_modifiable;
-    compute_active_mask(param, var, old_coord, old_connectivity, old_nnode, old_nelem,
-                        old_movable, old_modifiable);
-
-    // (2) translate OLD masks -> NEW (collapsed) masks
-    std::vector<char> movable(mnode, 0), modifiable(melem, 0);
-    for (int n = 0; n < mnode; ++n) movable[n]    = old_movable[new_to_old_node[n]];
-    for (int e = 0; e < melem; ++e) modifiable[e] = old_modifiable[new_to_old_elem[e]];
-
-    // (3) free the collapse region. A new element whose source old element touched a collapsed
-    //     (pts) node was reshaped -> free it + its nodes; then one ring of connected elements.
-    //     ALSO free elements flatten BROKE (post-flatten quality below min_quality or inverted,
-    //     judged by the caller on the flattened coords): on the sag flanks a boundary node was
-    //     snapped km-scale without any pts node nearby, and the old-mesh mask -- judged on
-    //     pre-flatten coords -- would keep the squashed element's interior nodes pinned as
-    //     required vertices, leaving MMG unable to repair the flat band it emits along the
-    //     restored boundary (cmp_bottom remesh 176/177). Only the broken elements are freed;
-    //     freeing the whole flatten band NaN'd cmp_bottom at step 118600.
-    std::vector<char> is_pts(old_nnode, 0);
-    for (std::size_t i = 0; i < pts.size(); ++i) is_pts[pts[i]] = 1;
-    std::vector<char> collapse_node(mnode, 0);
-    for (int e = 0; e < melem; ++e) {
-        const int old_e = new_to_old_elem[e];
-        ConstConnAccessor oc = old_connectivity[old_e];
-        bool touched = flatten_broken[old_e] != 0;
-        for (int i = 0; i < NODES_PER_ELEM && !touched; ++i)
-            if (is_pts[oc[i]]) touched = true;
-        if (!touched) continue;
-        modifiable[e] = 1;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) { int nn = c_conn[e*NODES_PER_ELEM + i]; movable[nn] = 1; collapse_node[nn] = 1; }
-    }
-    for (int e = 0; e < melem; ++e) {
-        bool touch = false;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) if (collapse_node[c_conn[e*NODES_PER_ELEM + i]]) { touch = true; break; }
-        if (!touch) continue;
-        modifiable[e] = 1;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) movable[c_conn[e*NODES_PER_ELEM + i]] = 1;
-    }
-
-    // (4) required = complement, on the NEW connectivity
-    required_node.assign(mnode, 0);
-    required_elem.assign(melem, 0);
-    int n_req_node = 0, n_req_elem = 0;
-    for (int n = 0; n < mnode; ++n)
-        if (!movable[n]) { required_node[n] = 1; ++n_req_node; }
-    for (int e = 0; e < melem; ++e) {
-        if (modifiable[e]) continue;
-        bool all_fixed = true;
-        for (int i = 0; i < NODES_PER_ELEM; ++i)
-            if (movable[c_conn[e*NODES_PER_ELEM + i]]) { all_fixed = false; break; }
-        if (all_fixed) { required_elem[e] = 1; ++n_req_elem; }
-    }
-    std::cout << "    Conservative remesh (collapse path): froze " << n_req_elem << "/" << melem
-              << " elements (" << (melem - n_req_elem) << " modifiable), "
-              << n_req_node << "/" << mnode << " nodes required.\n";
-}
-
-
 #ifdef THREED
 void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
@@ -3456,78 +3910,23 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
-    // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
-    // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
-    // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
-    // flatten_broken[e] = flatten_* snapped one of e's boundary nodes onto its restored plane
-    // AND that broke the element (post-flatten quality below min_quality, or inverted). Both
-    // marker variants free exactly these elements: the freeze mask was judged on PRE-flatten
-    // coords, so without this the broken elements' interior nodes stay pinned as required
-    // vertices and MMG cannot repair them. Deliberately KEPT to the REPAIR criterion --
-    // empirically, every wider freeing shortens cmp_bottom's life by enlarging the
-    // re-interpolated region and its post-remesh disequilibrium shock (dies at: whole
-    // displaced band 118600 / quality-halved band 99200 / REPAIR-only 180200 = the model's
-    // physical neck-through end).
-    std::vector<char> displaced(old_nnode, 0);
-    for (int n = 0; n < old_nnode; ++n)
-        for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
-    // Boundary-reshaped original nodes: moved by flatten_* plus deleted/collapsed
-    // (points_to_delete); barycentric_node_interpolation silences its warning there.
-    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
-        for (int n = 0; n < old_nnode; ++n)
-            if (displaced[n]) var.remesh_affected_old_node[n] = 1;
-        for (int n : points_to_delete)
-            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
-    }
-    std::vector<char> flatten_broken(old_nelem, 0);
-    for (int e = 0; e < old_nelem; ++e) {
-        const int *el = qconn + e*NODES_PER_ELEM;
-        bool touched = false;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) if (displaced[el[i]]) { touched = true; break; }
-        if (!touched) continue;
-        double q = packed_elem_quality(qcoord, el);
-#ifdef THREED
-        if (q > 0.0) q = std::cbrt(q);   // match compute_active_mask's normalization
-#endif
-        if (q < param.mesh.min_quality) flatten_broken[e] = 1;
-    }
+    // Adapt with the shared MMG driver: detect_flatten_broken supplies R6, mark_quiet_required
+    // applies R1-R7 and derives the required arrays, mmg_adapt_quality_gated runs MMG under the
+    // post-output gate. See the FREEZE / REQUIRED POLICY section.
+    std::vector<char> flatten_broken =
+        detect_flatten_broken(param, var, original_coord, qcoord, qconn,
+                              old_nnode, old_nelem, points_to_delete);
     std::vector<char> req_node, req_elem;
-    if (!collapse_needed)    // 1:1 old<->MMG id map: mark directly on the original mesh
-        mark_quiet_required(param, var, original_coord, original_connectivity,
-                            mnode, melem, flatten_broken, req_node, req_elem);
-    else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
-        mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
-                                     old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
-                                     c_new_to_old_node, c_new_to_old_elem, flatten_broken, req_node, req_elem);
+    CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
+    mark_quiet_required(param, var, original_coord, original_connectivity, mnode, melem, mconn1,
+                        flatten_broken, collapse_needed ? &remap : nullptr,
+                        req_node, req_elem);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
-    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
-    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
-    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
-    for (int attempt = 0; ; ++attempt) {
-        mmg_adapt(param.mesh, mmg_in, mmg_out);
-        if (attempt >= 3) {
-            // Retries exhausted: keep the last mesh, but say so when it is still bad --
-            // a silent bad element re-triggers remeshing a few steps later.
-            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
-            if (nbad)
-                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
-                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
-                             "where the free surface meets a wall can need a larger "
-                             "mmg_hausd_factor.\n";
-            break;
-        }
-        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
-                                     req_node, req_elem) == 0) break;
-        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
-                  << attempt + 2 << ").\n";
-    }
+    mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
@@ -3689,86 +4088,29 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             mseg1 = c_seg.data();
             msegflag = c_segflag.data();
             mmetric = c_metric.data();
-            for (int n : removed) points_to_delete.push_back(n);   // record for remesh_affected + freeze region
+            for (int n : removed) points_to_delete.push_back(n);   // for remesh_affected_old_node and R7
             collapse_needed = true;
         }
     }
 #endif
 
-    // --- Adapt the mesh with the shared MMG driver (mmg_utils.cxx) ----------------
-    // Conservative freeze: quiet (no plastic strain, undistorted, non-boundary) elements are
-    // marked required so MMG only remeshes the active region. Always on -- the collapse path uses
-    // a renumber-aware variant (masks computed on the old mesh, translated + collapse region freed).
-    // flatten_broken[e] = flatten_* snapped one of e's boundary nodes onto its restored plane
-    // AND that broke the element (post-flatten quality below min_quality, or inverted). Both
-    // marker variants free exactly these elements: the freeze mask was judged on PRE-flatten
-    // coords, so without this the broken elements' interior nodes stay pinned as required
-    // vertices and MMG cannot repair them. Deliberately KEPT to the REPAIR criterion --
-    // empirically, every wider freeing shortens cmp_bottom's life by enlarging the
-    // re-interpolated region and its post-remesh disequilibrium shock (dies at: whole
-    // displaced band 118600 / quality-halved band 99200 / REPAIR-only 180200 = the model's
-    // physical neck-through end).
-    std::vector<char> displaced(old_nnode, 0);
-    for (int n = 0; n < old_nnode; ++n)
-        for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
-    // Record boundary-reshaped original nodes -- moved by flatten_* (displaced) plus
-    // deleted/collapsed (points_to_delete, the same list collapse_outside_nodes consumed) --
-    // so barycentric_node_interpolation can skip the interior-node "not found" warning where a
-    // new node legitimately maps outside the pre-remesh outline.
-    if ((int)var.remesh_affected_old_node.size() == old_nnode) {
-        for (int n = 0; n < old_nnode; ++n)
-            if (displaced[n]) var.remesh_affected_old_node[n] = 1;
-        for (int n : points_to_delete)
-            if (n >= 0 && n < old_nnode) var.remesh_affected_old_node[n] = 1;
-    }
-    std::vector<char> flatten_broken(old_nelem, 0);
-    for (int e = 0; e < old_nelem; ++e) {
-        const int *el = qconn + e*NODES_PER_ELEM;
-        bool touched = false;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) if (displaced[el[i]]) { touched = true; break; }
-        if (!touched) continue;
-        double q = packed_elem_quality(qcoord, el);
-#ifdef THREED
-        if (q > 0.0) q = std::cbrt(q);   // match compute_active_mask's normalization
-#endif
-        if (q < param.mesh.min_quality) flatten_broken[e] = 1;
-    }
+    // Adapt with the shared MMG driver: detect_flatten_broken supplies R6, mark_quiet_required
+    // applies R1-R7 and derives the required arrays, mmg_adapt_quality_gated runs MMG under the
+    // post-output gate. See the FREEZE / REQUIRED POLICY section.
+    std::vector<char> flatten_broken =
+        detect_flatten_broken(param, var, original_coord, qcoord, qconn,
+                              old_nnode, old_nelem, points_to_delete);
     std::vector<char> req_node, req_elem;
-    if (!collapse_needed)    // 1:1 old<->MMG id map: mark directly on the original mesh
-        mark_quiet_required(param, var, original_coord, original_connectivity,
-                            mnode, melem, flatten_broken, req_node, req_elem);
-    else                     // collapse renumbered the mesh: mark on the old mesh, translate, free the collapse region
-        mark_quiet_required_collapse(param, var, original_coord, original_connectivity,
-                                     old_nnode, old_nelem, points_to_delete, mconn1, mnode, melem,
-                                     c_new_to_old_node, c_new_to_old_elem, flatten_broken, req_node, req_elem);
+    CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
+    mark_quiet_required(param, var, original_coord, original_connectivity, mnode, melem, mconn1,
+                        flatten_broken, collapse_needed ? &remap : nullptr,
+                        req_node, req_elem);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
     MMGOutput mmg_out;
-    // Quality-gated adaptation: if the output would immediately re-trigger remeshing
-    // (below-min_quality or tiny element), unfreeze the frozen entities around the bad
-    // spots and re-run MMG. req_node/req_elem are mutated in place (mmg_in keeps pointers
-    // into them). Bounded retries; a failed final attempt keeps the last mesh (old behavior).
-    for (int attempt = 0; ; ++attempt) {
-        mmg_adapt(param.mesh, mmg_in, mmg_out);
-        if (attempt >= 3) {
-            // Retries exhausted: keep the last mesh, but say so when it is still bad --
-            // a silent bad element re-triggers remeshing a few steps later.
-            const int nbad = collect_bad_output(param, mmg_out, nullptr, nullptr);
-            if (nbad)
-                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
-                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
-                             "where the free surface meets a wall can need a larger "
-                             "mmg_hausd_factor.\n";
-            break;
-        }
-        if (unfreeze_near_bad_output(param, mmg_out, mnode, melem, mcoord, mconn1, attempt,
-                                     req_node, req_elem) == 0) break;
-        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
-                  << attempt + 2 << ").\n";
-    }
+    mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
@@ -4245,6 +4587,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         // filled by the meshing routine (Variables::remesh_affected_old_node)
         var.remesh_affected_old_node.assign(old_nnode, 0);
 
+
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
@@ -4346,6 +4689,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
+
         // done with the old mesh; drop the affected-old-node record so it is never
         // consulted against a mismatched mesh later (e.g. temperature-file interpolation).
         var.remesh_affected_old_node.clear();
@@ -4409,7 +4753,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // Timescale reference for the next remesh's Deborah-number stress blend.
     var.last_remesh_time = var.time;
 
-    // the next remesh's REFINE baseline (Variables::plstrain_remesh), on the new mesh
+    // the next remesh's R2 baseline (Variables::plstrain_remesh), on the new mesh
     delete var.plstrain_remesh;
     var.plstrain_remesh = new double_vec(*var.plstrain);
 
@@ -4498,6 +4842,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
 
     std::cout << "  Remeshing finished.\n";
+
 
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;

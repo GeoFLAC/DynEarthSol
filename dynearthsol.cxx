@@ -210,7 +210,7 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
-    *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not REFINE growth
+    *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not R2 growth
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
@@ -379,7 +379,7 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
-        // the REFINE baseline, so the first remesh after a restart refines as in a continuous run
+        // the R2 baseline, so the first remesh after a restart refines as in a continuous run
         bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
@@ -391,6 +391,12 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
+        {   // the last surface-process dh, stored per node (Output::write_checkpoint)
+            double_vec dh_n(var.nnode);
+            bin_chkpt.read_array(dh_n, "surface dh");
+            for (int i = 0; i < var.surfinfo.ntop; ++i)
+                (*var.surfinfo.dh)[i] = dh_n[(*var.surfinfo.top_nodes)[i]];
+        }
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
@@ -419,7 +425,7 @@ void restart(const Param& param, Variables& var)
         std::cout << "  Creating new weakzone...\n";
         const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
-        // Shift the REFINE baseline by the re-seed only; growth since the last remesh still counts.
+        // Shift the R2 baseline by the re-seed only; growth since the last remesh still counts.
         for (int e = 0; e < var.nelem; ++e)
             (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];
     }

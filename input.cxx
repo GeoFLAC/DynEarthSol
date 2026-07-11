@@ -265,9 +265,12 @@ static void declare_parameters(po::options_description &cfg,
          "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
          "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
          "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
-         "since the last remesh. Distorted (quality < mesh.min_quality) or tiny (< smallest_vol * "
+         "since the last remesh. Distorted (quality < min_quality * "
+         "mmg_remesh_defensive_quality_ratio) or tiny (< smallest_vol * "
          "mmg_remesh_defensive_tiny_ratio) elements "
-         "are always remeshed with node motion; boundary nodes are always movable (flattening). "
+         "are always remeshed with node motion. Boundary nodes stay pinned except free-surface nodes "
+         "the surface process moves by more than 1% of resolution per remesh interval (2D only), "
+         "the off-bottom nodes of side walls and slant boundaries, and nodes of repaired elements. "
          "Must be > 0 in practice: at 0, every element that yielded at all since the last remesh, "
          "incidental yielding included, is handed to MMG as splittable/"
          "swappable, letting it re-tessellate quiet far-field and corner elements for no reason. "
@@ -288,6 +291,23 @@ static void declare_parameters(po::options_description &cfg,
          "ceiling) is capped just below it, with a warning; when largest_size equals "
          "smallest_size the cap is 1 - 1e-9 (round-off, in effect 1). Default 1.5: a 2/3 "
          "measure gap, heuristic. Must be >= 1 as set.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
+         "MMG remeshing repairs (unfreezes, with its nodes movable except where disjoint material "
+         "bodies meet) every element of quality below "
+         "min_quality * this ratio, so a marginal element is rebuilt before it crosses the "
+         "min_quality remesh trigger instead of triggering another remesh a few steps later. The "
+         "trigger itself stays at min_quality. Must be >= 1 (1: repair only below the trigger). "
+         "Default 1.5, heuristic.")
+        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+         "Fossil-fine mesh recovery (USEMMG). During remeshing, a quiet element is unfrozen when its "
+         "size times this ratio is below the GRADATION ENVELOPE -- the smallest size MMG's gradation "
+         "(hgrad) could legally assign there given every intentionally-fine metric target (side-wall "
+         "clamp, plastic-strain refinement, size floors). Recovers e.g. the ~resolution elements that "
+         "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
+         "wall size forever as they advect inland. Elements within the envelope (the legal size "
+         "transition around fine regions, the refined shear band) are never touched. "
+         "0 disables; otherwise must be > 1 (hysteresis against re-freeing the legal transition). "
+         "Default 1.4 ~ sqrt(2): one edge-halving level in 2D measure, heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -324,7 +344,8 @@ static void declare_parameters(po::options_description &cfg,
          "At 0.01 MMG refines a sharply bent free surface down to its size floor and builds elements "
          "below the tiny-element trigger there, so the trigger fires at nearly every quality check: "
          "use 0.02-0.05 along a 3D fault scarp and 0.1 on the top/wall ridges next to restored side "
-         "walls.\n")
+         "walls. MMG3D does not bound its top-surface edge swaps between pinned nodes by this "
+         "distance.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
@@ -1280,6 +1301,28 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << ". MMG builds closer to the tiny-element trigger: expect frequent "
                   << "tiny-element remeshes unless smallest_size < largest_size / ratio.\n";
         p.mesh.mmg_remesh_defensive_tiny_ratio = cap;
+    }
+
+    if (p.mesh.mmg_remesh_defensive_quality_ratio < 1.0) {
+        // ratio < 1 can leave a below-trigger element frozen, re-triggering at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_defensive_quality_ratio must be >= 1 (1 = repair only below the trigger).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // Quality <= 1 (1 = equilateral). About a quarter of a remeshed MMG mesh lies below 0.875
+    // (measured in 2D and 3D; 0.875, not 0.9, as 0.6 * 1.5 rounds below 0.9) and all of it below
+    // 1, so R1 would repair that much at every remesh.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.min_quality * p.mesh.mmg_remesh_defensive_quality_ratio >= 0.875) {
+        std::cerr << "Warning: mesh.min_quality * mesh.mmg_remesh_defensive_quality_ratio "
+                     ">= 0.875: the MMG freeze repairs a quarter of the mesh or more at every "
+                     "remesh (all of it at >= 1).\n";
+    }
+
+    if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
+        // ratio <= 1 frees elements on the gradation envelope itself, at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
+        die(EXIT_CONFIG_VALUE);
     }
 #endif
 
