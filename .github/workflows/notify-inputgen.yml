@@ -1,0 +1,27 @@
+name: Notify des-inputgen when input.cxx changes
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'input.cxx'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch event to des-inputgen
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.INPUTGEN_REPO_TOKEN }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: 'GeoFLAC',
+              repo: 'des-inputgen',
+              event_type: 'input-cxx-changed',
+              client_payload: {
+                sha: context.sha,
+                ref: context.ref,
+                commit_url: `https://github.com/GeoFLAC/DynEarthSol/commit/${context.sha}`,
+              },
+            });

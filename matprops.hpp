@@ -79,7 +79,6 @@ public:
     const bool is_plane_strain;
     const double visc_min;
     const double visc_max;
-    const double tension_max;
     const double therm_diff_max;
     double hydro_diff_max;
 
@@ -114,6 +113,7 @@ private:
     double_vec cohesion0, cohesion1;
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
+    double_vec tension_max;
 
     // hydraulic process
     const double_vec &ppressure;
