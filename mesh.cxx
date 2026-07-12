@@ -2268,10 +2268,16 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     std::cerr <<" Number of element blocks is " << num_elem_blk <<"."<<std::endl;
     std::cerr <<" Number of node sets is " << num_node_sets <<"."<<std::endl;
     std::cerr <<" Number of side sets is " << num_side_sets <<"."<<std::endl;
-    if( param.mat.nmat != num_elem_blk) {
-        std::cerr <<"param.mat.nmat is not equal to # of element blocks in this exo file!"<<std::endl;
+    if( param.mat.nmat < num_elem_blk) {
+        std::cerr <<"param.mat.nmat (" << param.mat.nmat << ") is less than # of element blocks ("
+                  << num_elem_blk << ") in this exo file!"<<std::endl;
         std::cerr <<"Check if your material parameters are properly set!!"<<std::endl;
         std::exit(2);
+    }
+    else if( param.mat.nmat > num_elem_blk) {
+        std::cerr <<" Note: nmat (" << param.mat.nmat << ") > # element blocks ("
+                  << num_elem_blk << "); the extra materials start with no elements "
+                     "(e.g. backfill introduced later via mat.reassign_markers_file)."<<std::endl;
     }
 
     // Assign node coordinates.

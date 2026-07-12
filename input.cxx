@@ -810,6 +810,10 @@ static void declare_parameters(po::options_description &cfg,
          "Min. value of viscosity (in Pa.s)")
         ("mat.max_tension", po::value<std::string>()->default_value("[1e9]"),
          "Max. value of tensile stress (in Pa), per material (single value broadcasts to all)")
+        ("mat.reassign_markers_file", po::value<std::string>(&p.mat.reassign_markers_file)->default_value(""),
+         "Path to a file of 'elem_id new_mattype' pairs. At start/restart, markers in "
+         "those elements are retagged to the given material and their stress/plastic strain "
+         "zeroed (excavation/backfill). Requires remeshing_option=0. Empty = disabled.")
         ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
