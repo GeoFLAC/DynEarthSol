@@ -570,6 +570,76 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 #endif
 }
 
+
+void apply_marker_reassignment(const Param& param, Variables& var)
+{
+    // Retag markers to a new material and reset stress in listed elements, to
+    // model excavation / backfilling (e.g. rock -> cemented paste backfill).
+    // The file lists one "elem_id new_mattype" pair per line; a driver
+    // regenerates it per mining step and DynEarthSol applies it at start/restart.
+    // Requires stable element indexing between runs, i.e. remeshing_option = 0.
+    const std::string& fname = param.mat.reassign_markers_file;
+    std::ifstream f(fname);
+    if (!f) {
+        std::cerr << "Error: cannot open mat.reassign_markers_file '" << fname << "'\n";
+        std::exit(1);
+    }
+
+    std::unordered_map<int,int> target; // element id -> new mattype
+    int e, mt;
+    while (f >> e >> mt) {
+        if (e < 0 || e >= var.nelem) {
+            std::cerr << "Error: reassign element id " << e
+                      << " out of range [0," << var.nelem << ")\n";
+            std::exit(1);
+        }
+        if (mt < 0 || mt >= param.mat.nmat) {
+            std::cerr << "Error: reassign mattype " << mt
+                      << " out of range [0," << param.mat.nmat << ")\n";
+            std::exit(1);
+        }
+        target[e] = mt;
+    }
+
+    if (target.empty()) {
+        std::cout << "  Marker reassignment: '" << fname << "' has no entries; skipping.\n";
+        return;
+    }
+
+    // Retag every marker whose home element is in the target set, and keep the
+    // per-element material counts (elemmarkers) consistent. Retagging does not
+    // move markers between elements, so markers_in_elem is unchanged. Only the
+    // material markerset (index 0) carries mattype; skip any hydrous markerset.
+    int nretag = 0;
+    MarkerSet* ms = var.markersets[0];
+    for (int m = 0; m < ms->get_nmarkers(); ++m) {
+        int e = ms->get_elem(m);
+        auto it = target.find(e);
+        if (it == target.end()) continue;
+        int old_mt = ms->get_mattype(m);
+        int new_mt = it->second;
+        if (old_mt == new_mt) continue;
+        ms->set_mattype(m, new_mt);
+        --(*var.elemmarkers)[e][old_mt];
+        ++(*var.elemmarkers)[e][new_mt];
+        ++nretag;
+    }
+
+    // Zero stress and plastic-strain history in the reassigned (fresh-fill) elements.
+    for (const auto& kv : target) {
+        int el = kv.first;
+        TensorAccessor s = (*var.stress)[el];
+        for (int i = 0; i < NSTR; ++i) s[i] = 0.0;
+        if (param.mat.is_plane_strain) (*var.stressyy)[el] = 0.0;
+        (*var.plstrain)[el] = 0.0;
+        (*var.delta_plstrain)[el] = 0.0;
+    }
+
+    std::cout << "  Marker reassignment: retagged " << nretag << " markers in "
+              << target.size() << " elements (stress/plstrain zeroed there).\n";
+}
+
+
 int main(int argc, const char* argv[])
 {
 #if defined(__APPLE__) && defined(_OPENMP)
@@ -628,6 +698,10 @@ int main(int argc, const char* argv[])
     }
 
     var.dt_PT = var.dt;
+
+    // Excavation/backfill: retag markers and reset stress in listed elements.
+    if (! param.mat.reassign_markers_file.empty())
+        apply_marker_reassignment(param, var);
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11

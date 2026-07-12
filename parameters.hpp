@@ -456,6 +456,10 @@ struct Mat {
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
 
+    // Excavation/backfill: file of "elem_id new_mattype" pairs applied at
+    // start/restart (marker retag + stress reset). Empty = disabled.
+    std::string reassign_markers_file;
+
     // hydraulic parameters
     double_vec porosity;
     double_vec hydraulic_perm;
