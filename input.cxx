@@ -772,8 +772,8 @@ static void declare_parameters(po::options_description &cfg,
          "Max. value of viscosity (in Pa.s)")
         ("mat.min_viscosity", po::value<double>(&p.mat.visc_min)->default_value(1e18),
          "Min. value of viscosity (in Pa.s)")
-        ("mat.max_tension", po::value<double>(&p.mat.tension_max)->default_value(1e9),
-         "Max. value of tensile stress (in Pa)")
+        ("mat.max_tension", po::value<std::string>()->default_value("[1e9]"),
+         "Max. value of tensile stress (in Pa), per material (single value broadcasts to all)")
         ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
@@ -1433,6 +1433,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
         get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
         get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.max_tension", p.mat.tension_max, p.mat.nmat, -1);
 
         // Hydraulic parameters
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);

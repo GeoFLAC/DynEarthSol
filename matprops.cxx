@@ -175,7 +175,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   is_plane_strain(p.mat.is_plane_strain),
   visc_min(p.mat.visc_min),
   visc_max(p.mat.visc_max),
-  tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
   hydro_diff_max(1e-1),
   coord(*var.coord),
@@ -209,6 +208,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     friction_angle1 = p.mat.friction_angle1;
     dilation_angle0 = p.mat.dilation_angle0;
     dilation_angle1 = p.mat.dilation_angle1;
+    tension_max = p.mat.tension_max;
 
     // Hydraulic parameters
     porosity = p.mat.porosity;
@@ -233,7 +233,7 @@ MatProps::~MatProps()
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume)
     #pragma acc exit data delete(heat_capacity,therm_cond,pls0,pls1,cohesion0)
-    #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
+    #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1,tension_max)
 
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
@@ -517,6 +517,17 @@ void MatProps::plastic_props(int e, double pls,
 
     plastic_weakening(e, pls, cohesion, phi, psi, hardn);
 
+    // element-averaged tensile cutoff (marker-weighted, matching cohesion)
+    double tmax = 0;
+    int nt = 0;
+    for (int m=0; m<nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        nt += k;
+        tmax += tension_max[m] * k;
+    }
+    tmax /= nt;
+
     // derived variables
     double sphi = sin_safe(sin_table,phi * DEG2RAD);
     double spsi = sin_safe(sin_table,psi * DEG2RAD);
@@ -525,7 +536,7 @@ void MatProps::plastic_props(int e, double pls,
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/tan_safe(tan_table,phi*DEG2RAD));
+    ten_max = (phi == 0)? tmax : std::min(tmax, cohesion/tan_safe(tan_table,phi*DEG2RAD));
 }
 
 void MatProps::plastic_props_rsf(int e, double pls,
@@ -540,6 +551,17 @@ void MatProps::plastic_props_rsf(int e, double pls,
     plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
                           dyn_fric_coeff, state_variable, state_model, dt);
 
+    // element-averaged tensile cutoff (marker-weighted, matching cohesion)
+    double tmax = 0;
+    int nt = 0;
+    for (int m=0; m<nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        nt += k;
+        tmax += tension_max[m] * k;
+    }
+    tmax /= nt;
+
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);
     double spsi = std::sin(psi * DEG2RAD);
@@ -548,7 +570,7 @@ void MatProps::plastic_props_rsf(int e, double pls,
     anpsi = (1 + spsi) / (1 - spsi);
     amc = 2 * cohesion * std::sqrt(anphi);
 
-    ten_max = (phi == 0)? tension_max : std::min(tension_max, cohesion/std::tan(phi*DEG2RAD));
+    ten_max = (phi == 0)? tmax : std::min(tmax, cohesion/std::tan(phi*DEG2RAD));
 }
 
 void MatProps::rsf_friction_from_state(int e, double pls, double slip_rate,

@@ -432,7 +432,6 @@ struct Mat {
     bool is_plane_strain;
     double visc_min;
     double visc_max;
-    double tension_max;
     double therm_diff_max;
 
     double_vec rho0;
@@ -455,6 +454,7 @@ struct Mat {
     double_vec cohesion0, cohesion1;
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
+    double_vec tension_max;
 
     // hydraulic parameters
     double_vec porosity;
