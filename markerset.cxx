@@ -1491,6 +1491,90 @@ namespace {
 #endif
     }
 
+    // An element whose surviving markers are ALL one mattype is filled with that mattype directly
+    // (exact, no nearest-neighbour guess). A sediment marker also gets a deposition time: surface
+    // path as in the nn replenisher (compute_sed_marker_time_genesis), else copied from a surviving
+    // sediment marker. Caller guarantees exactly one nonzero mattype count per element. Serial.
+    void replenish_markers_homogeneous(const Param& param, const Variables &var,
+            int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi)
+    {
+        if (homo_elems.empty()) return;
+        MarkerSet &ms = *var.markersets[0];
+        const ElemMarkerInfo* emi_ptr = emi.data();
+        const int* top_elems_ptr = var.top_elems->data();
+        const int ntop_elems = var.ntop_elems;
+
+        for (const auto& pr : homo_elems) {
+            int e = pr.first;
+            int num_marker_in_elem = pr.second;
+
+            // the single mattype present (exactly one nonzero count, per the caller's split)
+            int mt = 0;
+            for (int t = 0; t < param.mat.nmat; ++t)
+                if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
+
+            // Baseline deposition time for a sediment marker: copy a surviving sediment
+            // marker of this element (all markers here share mt, so any is sediment). A
+            // non-sediment marker carries 0, as in replenish_markers_with_mattype_0/cpdf.
+            double ti_base = 0.;
+            if (mt == param.mat.mattype_sed && !(*var.markers_in_elem)[e].empty())
+                ti_base = ms.get_time((*var.markers_in_elem)[e].front());
+
+            const int first_new = ms.get_nmarkers();
+            while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+                double eta[NODES_PER_ELEM];
+                ms.random_eta_seed(eta, e + num_marker_in_elem + var.steps);
+
+                double ti = ti_base;
+                int ge = genesis;
+                // a new surface sediment marker: the deposit time of
+                // replenish_markers_with_mattype_from_nn (same positions; the new markers join
+                // markers_in_elem after this loop, so the same reference markers)
+                if (is_surface && mt == param.mat.mattype_sed) {
+                    double xq[NDIMS];
+                    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+                    for (int d = 0; d < NDIMS; ++d) {
+                        xq[d] = 0.;
+                        for (int k = 0; k < NODES_PER_ELEM; ++k) xq[d] += coord[k][d] * eta[k];
+                    }
+                    int e_local = binary_search_index(top_elems_ptr, ntop_elems, e);
+                    compute_sed_marker_time_genesis(param, var, ms, e, e_local, emi_ptr,
+                                                    ConstArrayAccessor(xq, 1), ti, ge);
+                }
+
+                ms.append_marker(eta, e, mt, ti, 0., 0., 0., ge);
+                ++(*var.elemmarkers)[e][mt];
+                ++num_marker_in_elem;
+            }
+            for (int m = first_new; m < ms.get_nmarkers(); ++m)
+                (*var.markers_in_elem)[e].push_back(m);
+        }
+    }
+
+
+    // replenishment_option 12: an element whose surviving markers are all one mattype is filled
+    // by replenish_markers_homogeneous, the rest (mixed or empty) by the nearest-neighbor one.
+    void replenish_markers_homogeneous_or_nn(const Param& param, const Variables &var,
+            int_pair_vec &unplenished_elems, int genesis, bool is_surface = false,
+            const EMI_vec& emi = EMI_vec())
+    {
+        if (unplenished_elems.empty()) return;
+        int_pair_vec homo, mixed;
+        homo.reserve(unplenished_elems.size());
+        for (const auto& pr : unplenished_elems) {
+            int e = pr.first;
+            int nnz = 0;
+            if (pr.second > 0)
+                for (int mt = 0; mt < param.mat.nmat; ++mt)
+                    if ((*var.elemmarkers)[e][mt] > 0) ++nnz;
+            if (nnz == 1) homo.push_back(pr);
+            else          mixed.push_back(pr);
+        }
+
+        replenish_markers_homogeneous(param, var, homo, genesis, is_surface, emi);
+        replenish_markers_with_mattype_from_nn(param, var, mixed, genesis, is_surface, emi);
+    }
+
 } // anonymous namespace
 
 
@@ -1731,6 +1815,9 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         case 2:
             replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 3, true, markers_in_elem_info);
             break;
+        case 12:
+            replenish_markers_homogeneous_or_nn(param, var, unplenished_elems, 3, true, markers_in_elem_info);
+            break;
         default:
             std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
             die(EXIT_CONFIG_VALUE);
@@ -1871,6 +1958,9 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         break;
     case 2:
         replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 1);
+        break;
+    case 12:
+        replenish_markers_homogeneous_or_nn(param, var, unplenished_elems, 1);
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
