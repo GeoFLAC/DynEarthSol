@@ -116,8 +116,15 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG_OK(MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG3D_Set_triangles(mmgMesh, seg1.data(), segref.data()));
 
-    MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-    MMG_OK(MMG3D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    if (in.metric_aniso) {
+        // metric_aniso is nnode*6 row-major (m11,m12,m13,m22,m23,m33) -- exactly the layout
+        // MMG3D_Set_tensorSols expects, so set it in one call (mirrors the scalar branch).
+        MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
+        MMG_OK(MMG3D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+    } else {
+        MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
+        MMG_OK(MMG3D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    }
 
     MMG_OK(MMG3D_Chk_meshData(mmgMesh, mmgSol));
 
@@ -181,13 +188,35 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG2D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_in));
+    // Material-interface front-tracking (option 13): append the interface edges after the
+    // boundary segments with a sentinel ref, so they can be marked MMG-required below (kept as a
+    // conforming edge) and then dropped from the returned segments (they are internal, not a
+    // boundary). seg1/segref hold nseg_in 1-indexed boundary edges; append the interface edges.
+    const int IFACE_EDGE_REF = 1 << 24;   // distinct from every BOUND* flag combination
+    const int n_iface = (in.req_edges && in.n_req_edges > 0) ? in.n_req_edges : 0;
+    for (int k = 0; k < n_iface; ++k) {
+        seg1.push_back(in.req_edges[2*k]     + 1);
+        seg1.push_back(in.req_edges[2*k + 1] + 1);
+        segref.push_back(IFACE_EDGE_REF);
+    }
+    const int nseg_all = nseg_in + n_iface;
+
+    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_all));
     MMG_OK(MMG2D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
     MMG_OK(MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG2D_Set_edges(mmgMesh, seg1.data(), segref.data()));
+    for (int k = 0; k < n_iface; ++k)   // 1-based; interface edges are the last n_iface entries
+        MMG_OK(MMG2D_Set_requiredEdge(mmgMesh, nseg_in + k + 1));
 
-    MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-    MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    if (in.metric_aniso) {
+        // metric_aniso is nnode*3 row-major (m11,m12,m22) -- exactly the layout
+        // MMG2D_Set_tensorSols expects, so set it in one call (mirrors the scalar branch).
+        MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
+        MMG_OK(MMG2D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+    } else {
+        MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
+        MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    }
 
     MMG_OK(MMG2D_Chk_meshData(mmgMesh, mmgSol));
 
@@ -233,6 +262,21 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         int *s = &out.seg[(std::size_t)i*NODES_PER_FACET];
         MMG_OK(MMG2D_Get_edge(mmgMesh, &s[0], &s[1], &out.segflag[i], NULL, NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
+    }
+    if (n_iface) {   // drop the interface edges (internal constraints) from the boundary segments
+        int w = 0;
+        for (int i = 0; i < out.nseg; ++i) {
+            if (out.segflag[i] == IFACE_EDGE_REF) continue;
+            if (w != i) {
+                for (int j = 0; j < NODES_PER_FACET; ++j)
+                    out.seg[(std::size_t)w*NODES_PER_FACET + j] = out.seg[(std::size_t)i*NODES_PER_FACET + j];
+                out.segflag[w] = out.segflag[i];
+            }
+            ++w;
+        }
+        out.nseg = w;
+        out.seg.resize((std::size_t)out.nseg * NODES_PER_FACET);
+        out.segflag.resize(out.nseg);
     }
     // MMG returns each required-element facet as an extra ref=0 copy of the same node set;
     // merge duplicates so var.segment stays duplicate-free (see dedup_facets), then drop the

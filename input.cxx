@@ -319,7 +319,16 @@ static void declare_parameters(po::options_description &cfg,
          "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
          "is scaled by 1/(1 + coeff*plastic_strain) (Triangle max_area convention), so the "
          "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
-         "(elements keep their frozen initial size everywhere). Default: 5.")
+         "(elements keep their frozen initial size everywhere). Default 5: the sweet spot of the "
+         "Triangle-vs-MMG core-complex comparison (band sharpness without element-count growth).")
+        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+         "Anisotropic MMG metric at INFLOW restored side walls (remeshing_option 13). 0 (default) "
+         "= off: isotropic scalar metric, unchanged. >= 1 = aspect ratio; the inflow-wall elements "
+         "are coarsened by this factor in the inflow-perpendicular direction (kept fine tangentially) "
+         "so the incoming thermal/compositional column is carried by thin, wide elements. The "
+         "achievable aspect is capped by MMG's hmax truncation at largest_size^(1/NDIMS) (~5.5 in 2D "
+         "/ ~3.1 in 3D with the default largest_size), so ratios beyond that are clamped. "
+         "A value in (0,1) is rejected (it would refine, not coarsen). Requires USEMMG. Default: 0.")
         ;
 
     cfg.add_options()
@@ -338,6 +347,9 @@ static void declare_parameters(po::options_description &cfg,
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
          "2: same as the mattype of the nearest marker (slowest option).\n"
+         "12: if the element's surviving markers are all one mattype, use that mattype directly "
+         "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
+         "to option 2 (nearest marker). Faster than 2 in single-material elements, exact there.\n"
          "(Independently of this option, when a remeshing_option restores the side walls (e.g. 13) "
          "material returning at a restored side always keeps the layering auto-detected at run start "
          "for that side, pinned to the side's top mesh point.)")
@@ -1089,6 +1101,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_steps = std::numeric_limits<int>::max();
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
+
+    // mmg_aniso_wall_ratio is an aspect ratio: 0 = off, >= 1 = coarsen the inflow-wall-perpendicular
+    // axis by this factor. A value in (0,1) would REFINE that axis (hx = h*ratio < h), the opposite
+    // of the intent -- reject it rather than silently invert the anisotropy.
+    if ( p.mesh.mmg_aniso_wall_ratio > 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
+        std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
+                     "a value in (0,1) would refine the wall instead of coarsening it.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
