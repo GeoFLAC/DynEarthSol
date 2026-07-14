@@ -951,8 +951,8 @@ static void mmg_refine_init_mesh_3d(
     compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
-    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true };
+    // --- Adapt the coarse mesh (mmg_adapt) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true, nullptr };
     MMGOutput mmg_out;
     mmg_adapt(mesh, mmg_in, mmg_out);
 
@@ -1040,8 +1040,8 @@ static void mmg_refine_init_mesh_2d(
     compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
-    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true };
+    // --- Adapt the coarse mesh (mmg_adapt) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true, nullptr };
     MMGOutput mmg_out;
     mmg_adapt(mesh, mmg_in, mmg_out);
 
@@ -1177,7 +1177,7 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
             for (int k = 0; k < NODES_PER_ELEM; ++k) req_node[pconn[e*NODES_PER_ELEM + k]] = 1;
 
     MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
-                         metric.data(), req_node.data(), req_elem.data(), true };
+                         metric.data(), req_node.data(), req_elem.data(), true, nullptr };
     MMGOutput mmg_out;
     mmg_adapt(param.mesh, mmg_in, mmg_out);
 

@@ -17,6 +17,9 @@ struct MMGInput {
     const char   *required_node;  // nnode; 1 = pinned (MMG-required vertex). nullptr => none
     const char   *required_elem;  // nelem; 1 = frozen (MMG-required). nullptr => none
     bool tolerate_low_failure;    // true: keep the saved mesh on MMG5_LOWFAILURE (init); false: abort (remesh)
+    // Optional (nullptr => scalar `metric`): nnode symmetric tensors, row-major per node (2D:
+    // m11,m12,m22; 3D: m11,m12,m13,m22,m23,m33), used INSTEAD of `metric`.
+    const double *metric_aniso;
     // Optional, 2D only: n_req_edges node pairs kept as required interface edges (passed with a
     // sentinel ref, dropped from out.seg). nullptr/0 => none.
     const int *req_edges;

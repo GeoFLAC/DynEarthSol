@@ -2854,7 +2854,8 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         // Size the divided line to the SMALLEST target of its surrounding nodes (endpoints + the
         // two apexes) and pull those nodes down to it: the fine wall size then propagates along
         // the in-band interface as it advects inland instead of creeping upward. Monotone (min
-        // only, floored where compute_metric_field floored it).
+        // only, floored where compute_metric_field floored it). Scalar metric only: with
+        // mmg_aniso_wall_ratio > 0 only the new midpoints get the reduced (isotropic) size.
         const int c0 = tris[0].second, c1 = tris[1].second;
         const double h = std::min({metric[a], metric[b], metric[c0], metric[c1]});
         if (!(h > 0.0))   // compute_metric_field's output is positive
@@ -4055,6 +4056,53 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
     return ncoll;
 }
 #endif
+// Per-node ANISOTROPIC (tensor) metric for MMG from the scalar target: isotropic diag(1/h^2)
+// everywhere except nodes on an INFLOW restored wall (option 13, sides in `sis`): fine (h)
+// tangentially, coarse (h*ratio) wall-perpendicular, so the incoming column is carried by thin
+// wide elements. Wall membership is by COORDINATE (collapse-safe). `aniso` is nnode*NT
+// (2D: m11,m12,m22; 3D: m11,m12,m13,m22,m23,m33).
+static void build_wall_anisotropic_metric(const Param &param, const SideInflowState &sis,
+                                          int nnode, const double *coord, const double *scalar,
+                                          double tol, double_vec &aniso)
+{
+    const int NT = (NDIMS == 2) ? 3 : 6;
+    const double ratio = param.mesh.mmg_aniso_wall_ratio;    // >= 1; coarsening normal to the wall
+    const double xlen = param.mesh.xlength;
+#ifdef THREED
+    const double ylen = param.mesh.ylength;
+#endif
+    // Coarsen the wall-PERPENDICULAR axis only: R3 pins the wall nodes and R4 frees the interior
+    // band, so inland is the only direction with movable nodes; wide wall elements also absorb the
+    // incoming advection slowly. Coarsening ALONG the wall instead lengthens the transition and
+    // degrades the profile's depth sampling. Limitation: a wide wall element's centroid sits
+    // inland of the band, so restore_side_fields does not re-impose its ELEMENT fields (nodal
+    // temperature still is; deep-wall element fields are ~0). 3D also coarsens the y walls.
+    aniso.assign((std::size_t)nnode * NT, 0.0);
+    for (int n = 0; n < nnode; ++n) {
+        const double *p = coord + (std::size_t)n * NDIMS;
+        const double h = scalar[n];
+        double hx = h, hz = h;             // per-axis target; default isotropic (non-wall nodes)
+#ifdef THREED
+        double hy = h;
+#endif
+        if (sis.in_x0 && p[0] < tol)          hx = h * ratio;
+        if (sis.in_x1 && p[0] > xlen - tol)   hx = h * ratio;
+#ifdef THREED
+        if (sis.in_y0 && p[1] < tol)          hy = h * ratio;
+        if (sis.in_y1 && p[1] > ylen - tol)   hy = h * ratio;
+#endif
+        double *m = &aniso[(std::size_t)n * NT];
+#ifdef THREED
+        // (m11,m12,m13,m22,m23,m33) = diag(1/hx^2, 1/hy^2, 1/hz^2)
+        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 0.0;
+        m[3] = 1.0/(hy*hy); m[4] = 0.0;
+        m[5] = 1.0/(hz*hz);
+#else
+        // (m11,m12,m22) = diag(1/hx^2, 1/hz^2)  (2D coords are (x, z))
+        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 1.0/(hz*hz);
+#endif
+    }
+}
 
 
 #ifdef THREED
@@ -4189,7 +4237,17 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, nullptr, 0 };
+    // Optional anisotropic wall metric (nullptr => scalar path). Built from the post-collapse
+    // metric/coords handed to MMG; the gate never rescales the metric, so once is valid for all retries.
+    double_vec wall_aniso;
+    const double *mmetric_aniso = nullptr;
+    if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
+        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
+        mmetric_aniso = wall_aniso.data();
+    }
+
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, nullptr, 0 };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
@@ -4371,6 +4429,16 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
+    // Optional anisotropic wall metric (nullptr => scalar path). Built from the post-collapse
+    // metric/coords handed to MMG; the gate never rescales the metric, so once is valid for all retries.
+    double_vec wall_aniso;
+    const double *mmetric_aniso = nullptr;
+    if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
+        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
+        mmetric_aniso = wall_aniso.data();
+    }
+
     // Front-tracking (option 13): keep the incoming material boundary an MMG-required edge. On the
     // collapse path translate the old-mesh node ids through the remap (dropping edges whose
     // endpoint was collapsed away); on the direct path old ids == MMG ids.
@@ -4395,7 +4463,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             iface_edges.swap(tr);
         }
         // BOTH paths: pre-subdivide over-long interface edges (MMG cannot split a required edge).
-        // Grows the local mesh buffers and the required masks, and repoints the
+        // Grows the local mesh buffers, the required masks and the aniso tensor, and repoints the
         // mesh handed to MMG. Either path may run at any remesh, and at each one flatten_x0/x1
         // snap the wall end of a wall-attached edge back out to the receiving wall's plane, so the
         // edge grows with the wall's inward motion until it is split here.
@@ -4408,6 +4476,14 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             presubdivide_interface_edges(aug_coord, aug_conn, aug_metric, req_node, req_elem,
                                          iface_edges, nn, ne);
             if (nn != mnode0) {
+                if (mmetric_aniso) {   // extend the aniso tensor for the new interior nodes (isotropic)
+                    for (int i = mnode0; i < nn; ++i) {
+                        // h > 0: presubdivide_interface_edges asserts it for every new midpoint
+                        const double h = aug_metric[i]; const double inv = 1.0/(h*h);
+                        wall_aniso.push_back(inv); wall_aniso.push_back(0.0); wall_aniso.push_back(inv);
+                    }
+                    mmetric_aniso = wall_aniso.data();
+                }
                 mnode = nn; melem = ne;
                 mcoord = aug_coord.data(); mconn1 = aug_conn.data(); mmetric = aug_metric.data();
                 rn = req_node.data(); re = req_elem.data();
@@ -4416,7 +4492,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         if (!iface_edges.empty()) { ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2; }
     }
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, ie_ptr, n_ie };
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 

@@ -371,6 +371,13 @@ static void declare_parameters(po::options_description &cfg,
          "the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
          "narrower, at more elements and, where an elastic, advection or diffusion limit sets "
          "dt, a shorter time step. Smaller values refine less.")
+        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+         "Anisotropic MMG metric at inflow restored side walls (remeshing_option 13). 0 (default): "
+         "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
+         "normal to the wall and kept fine along it, so the incoming column is carried by thin, wide "
+         "elements. MMG's hmax (see largest_size) caps the aspect (~5.5 in 2D, "
+         "~3.1 in 3D at the default largest_size). Other values below 1 are rejected. Requires "
+         "USEMMG.")
         ;
 
     cfg.add_options()
@@ -1176,6 +1183,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_steps = std::numeric_limits<int>::max();
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
+
+#ifdef USEMMG
+    // An aspect ratio: in (0,1) it would refine the wall-normal axis; a negative one means nothing.
+    if ( p.mesh.mmg_aniso_wall_ratio != 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
+        std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
+                     "a smaller ratio would refine the wall or mean nothing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");

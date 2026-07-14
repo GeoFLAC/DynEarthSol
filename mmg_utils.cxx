@@ -131,8 +131,14 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG_OK(MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG3D_Set_triangles(mmgMesh, seg1.data(), segref.data()));
 
-    MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-    MMG_OK(MMG3D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    if (in.metric_aniso) {
+        // metric_aniso's layout is MMG3D_Set_tensorSols' own: one call
+        MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
+        MMG_OK(MMG3D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+    } else {
+        MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
+        MMG_OK(MMG3D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    }
 
     MMG_OK(MMG3D_Chk_meshData(mmgMesh, mmgSol));
 
@@ -209,8 +215,14 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     for (int k = 0; k < n_iface; ++k)   // 1-based; interface edges are the last n_iface entries
         MMG_OK(MMG2D_Set_requiredEdge(mmgMesh, nseg_in + k + 1));
 
-    MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-    MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    if (in.metric_aniso) {
+        // metric_aniso's layout is MMG2D_Set_tensorSols' own: one call
+        MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
+        MMG_OK(MMG2D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+    } else {
+        MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
+        MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+    }
 
     MMG_OK(MMG2D_Chk_meshData(mmgMesh, mmgSol));
 

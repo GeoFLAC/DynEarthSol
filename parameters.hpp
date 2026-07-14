@@ -213,6 +213,7 @@ struct Mesh {
     double mmg_init_coarsening_factor;
     double mmg_metric_refine_coeff;
     bool use_mmg_init;
+    double mmg_aniso_wall_ratio;
 };
 
 struct Control {
