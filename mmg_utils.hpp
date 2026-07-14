@@ -18,6 +18,16 @@ struct MMGInput {
     const char   *required_node;  // nnode; 1 = frozen (MMG-required). nullptr => none
     const char   *required_elem;  // nelem; 1 = frozen (MMG-required). nullptr => none
     bool tolerate_low_failure;    // true: keep the saved mesh on MMG5_LOWFAILURE (init); false: abort (remesh)
+    // Optional ANISOTROPIC metric: nnode * NTENSOR symmetric tensors, row-major per node
+    // (2D: m11,m12,m22 ; 3D: m11,m12,m13,m22,m23,m33). When non-null it REPLACES `metric`
+    // (MMG uses a tensor solution instead of the scalar edge-length one). nullptr => scalar.
+    const double *metric_aniso;
+    // Optional MATERIAL-INTERFACE edges to keep as conforming, MMG-required edges (2D only):
+    // 2*n_req_edges node ids (0-based, pairs). Appended to the edge list with a sentinel ref and
+    // marked required so the remesh cannot coarsen an element across the material boundary; the
+    // sentinel edges are filtered out of the returned segments. nullptr/0 => none.
+    const int *req_edges;
+    int n_req_edges;
 };
 
 // Adapted mesh returned by mmg_adapt (0-indexed, flat buffers ready for load_from_buffer).
