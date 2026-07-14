@@ -17,6 +17,10 @@ struct MMGInput {
     const char   *required_node;  // nnode; 1 = pinned (MMG-required vertex). nullptr => none
     const char   *required_elem;  // nelem; 1 = frozen (MMG-required). nullptr => none
     bool tolerate_low_failure;    // true: keep the saved mesh on MMG5_LOWFAILURE (init); false: abort (remesh)
+    // Optional, 2D only: n_req_edges node pairs kept as required interface edges (passed with a
+    // sentinel ref, dropped from out.seg). nullptr/0 => none.
+    const int *req_edges;
+    int n_req_edges;
 };
 
 // Adapted mesh returned by mmg_adapt (0-indexed, flat buffers ready for load_from_buffer).

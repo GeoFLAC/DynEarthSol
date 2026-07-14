@@ -258,7 +258,8 @@ static void declare_parameters(po::options_description &cfg,
          "12: flatten x0 when using fixed bottom boundary.\n"
          "13: move all bottom, left, and right nodes to initial dimensions. A side wall that receives "
          "material (inflow vbc) keeps its run-start column: the incoming material gets the wall's "
-         "temperature, layering, coord0 reference and pristine strain (side profile). REQUIRES MMG when "
+         "temperature, layering, coord0 reference and pristine strain (side profile), and with MMG "
+         "in 2D the material interfaces in the inflow band are required edges. REQUIRES MMG when "
          "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
          "collapse.\n")
 
@@ -310,8 +311,9 @@ static void declare_parameters(po::options_description &cfg,
          "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
          "wall size forever as they advect inland. Elements within the envelope (the legal size "
          "transition around fine regions, the refined shear band) are never touched. "
-         "0 disables; otherwise must be > 1 (hysteresis against re-freeing the legal transition). "
-         "Default 1.4 ~ sqrt(2): one edge-halving level in 2D measure, heuristic.")
+         "0 disables (also the split of elements >= 2x their target); otherwise must be > 1 (hysteresis "
+         "against re-freeing the legal transition). Default 1.4 ~ sqrt(2) in edge length: one "
+         "bisection (area-halving) level in 2D, heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -363,7 +365,12 @@ static void declare_parameters(po::options_description &cfg,
          "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
          "(the target is then the initial size except for the metric floor, the surface-motion "
          "inflation of shrinking top elements and the option-13 restored-wall sizing). "
-         "Default: 5.")
+         "Default 5, kept from the formerly hard-coded factor 1 + 5*plastic_strain, which scaled "
+         "the edge length rather than the volume: at a given plastic strain the same 5 now "
+         "targets larger elements. Larger values mesh a plastically strained zone finer, down to "
+         "the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
+         "narrower, at more elements and, where an elastic, advection or diffusion limit sets "
+         "dt, a shorter time step. Smaller values refine less.")
         ;
 
     cfg.add_options()

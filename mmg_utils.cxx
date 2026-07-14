@@ -57,15 +57,15 @@ void dedup_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
     segflag.resize(ns);
 }
 
-// Drop ref=0 facets. With mesh.is_discarding_internal_segments every REAL boundary facet carries
-// a BOUND* ref (the OR-merge above guarantees it), so on the remesh path a remaining ref=0 facet is
-// an interior ECHO of a required element's edges. (At mesh init it can be a real internal boundary,
-// a refined-zone box or a .poly facet, which MMG drops itself: the initial mesh is the same with or
-// without this filter.) Echoes add no protection within an adapt (requiredness does
-// that) but constrain the NEXT remeshes' interior and ratchet remesh over remesh (nseg grew ~35x
-// over a long run until two echoes crossed and tangled the mesh). Applied on
-// BOTH sides of the adapt: on input, which kills the bloat a checkpoint or an output written
-// before this filter existed carries in, and on output, so var.segment is the real boundary only.
+// Drop ref=0 facets. Every boundary facet carries a BOUND* ref (the OR-merge above guarantees it),
+// so a ref=0 facet is interior: on output, an ECHO (MMG re-emits each facet of a required element
+// with ref 0); on input at mesh init, an internal segment of the initial mesh (refined-zone box,
+// .poly facet). MMG ignores both as constraints (it drops a ref=0 facet between elements of equal
+// ref), so the filter never changes what MMG builds. It keeps the INVARIANT that var.segment holds
+// boundary facets only, which collapse_short_boundary_segments_2d, check_mesh_tangle and the 2D
+// interface-edge append below rely on: they treat every entry as boundary. A Triangle/TetGen-built
+// initial mesh gets the same from discard_internal_segments, so validate_parameters rejects
+// mesh.is_discarding_internal_segments = no under MMG.
 void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
 {
     int ns = 0;
@@ -120,6 +120,9 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG5_pSol  mmgSol  = NULL;
 
 #ifdef THREED
+    // MMG3D drops an interior triangle between tetrahedra of equal reference (none carry a ref
+    // here), so a required interface triangle would be discarded: front tracking is 2D only.
+    if (in.req_edges) die(EXIT_INTERNAL_ASSERT, "mmg_adapt: interface edges are 2D only");
     MMG3D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
@@ -189,10 +192,22 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG2D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_in));
+    // req_edges go after the nseg_in boundary edges with a sentinel ref (see MMGInput).
+    const int IFACE_EDGE_REF = 1 << 24;   // distinct from every BOUND* flag combination
+    const int n_iface = (in.req_edges && in.n_req_edges > 0) ? in.n_req_edges : 0;
+    for (int k = 0; k < n_iface; ++k) {
+        seg1.push_back(in.req_edges[2*k]     + 1);
+        seg1.push_back(in.req_edges[2*k + 1] + 1);
+        segref.push_back(IFACE_EDGE_REF);
+    }
+    const int nseg_all = nseg_in + n_iface;
+
+    MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_all));
     MMG_OK(MMG2D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
     MMG_OK(MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG2D_Set_edges(mmgMesh, seg1.data(), segref.data()));
+    for (int k = 0; k < n_iface; ++k)   // 1-based; interface edges are the last n_iface entries
+        MMG_OK(MMG2D_Set_requiredEdge(mmgMesh, nseg_in + k + 1));
 
     MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
     MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
@@ -241,6 +256,21 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         int *s = &out.seg[(std::size_t)i*NODES_PER_FACET];
         MMG_OK(MMG2D_Get_edge(mmgMesh, &s[0], &s[1], &out.segflag[i], NULL, NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
+    }
+    if (n_iface) {   // drop the interface edges (internal constraints) from the boundary segments
+        int w = 0;
+        for (int i = 0; i < out.nseg; ++i) {
+            if (out.segflag[i] == IFACE_EDGE_REF) continue;
+            if (w != i) {
+                for (int j = 0; j < NODES_PER_FACET; ++j)
+                    out.seg[(std::size_t)w*NODES_PER_FACET + j] = out.seg[(std::size_t)i*NODES_PER_FACET + j];
+                out.segflag[w] = out.segflag[i];
+            }
+            ++w;
+        }
+        out.nseg = w;
+        out.seg.resize((std::size_t)out.nseg * NODES_PER_FACET);
+        out.segflag.resize(out.nseg);
     }
     // MMG's ref=0 echoes of required-element facets (dedup_facets, drop_unflagged_facets)
     dedup_facets(out.nseg, out.seg, out.segflag);
