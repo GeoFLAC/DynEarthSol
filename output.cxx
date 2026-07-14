@@ -122,7 +122,19 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     bin.write_array(*var.coord, "coordinate", var.coord->size());
     bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
+
+    // Scalars completing the .info row (frame, steps, time, dt, walltime,
+    // nnode, nelem, nseg) so utils/recreate_info.py can rebuild a lost
+    // .info from the frame files alone.
+    bin.write_scalar(var.steps, "steps");
+    bin.write_scalar(double(run_time_ns) * 1e-9, "walltime_sec");
+    bin.write_scalar(var.nnode, "nnode");
+    bin.write_scalar(var.nelem, "nelem");
 #endif
+
+    bin.write_scalar(var.time, "time_sec");
+    bin.write_scalar(dt, "dt_sec");
+    bin.write_scalar(var.nseg, "nseg");
 
     bin.write_nodal_vec_array(*var.vel, "velocity", var.vel->size());
     if (!disable_averaging && is_averaged) {

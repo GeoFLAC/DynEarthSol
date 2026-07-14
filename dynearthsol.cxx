@@ -228,31 +228,6 @@ void restart(const Param& param, Variables& var)
 {
     std::cout << "Initializing mesh and field data from checkpoints...\n";
 
-    /* Reading info file */
-    {
-        char filename[256];
-        std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
-        std::FILE *f = std::fopen(filename, "r");
-        int frame, steps, nnode, nelem, nseg;
-        while (1) {
-            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
-                                &frame, &steps, &nnode, &nelem, &nseg);
-            if (n != 5) {
-                std::cerr << "Error: reading info file: " << filename << '\n';
-                std::exit(2);
-            }
-            if (frame == param.sim.restarting_from_frame)
-                break;
-        }
-
-        var.steps = steps;
-        var.nnode = nnode;
-        var.nelem = nelem;
-        var.nseg = nseg;
-
-        std::fclose(f);
-    }
-
     char filename_save[256];
 #ifdef HDF5
     std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
@@ -264,6 +239,49 @@ void restart(const Param& param, Variables& var)
     BinaryInput bin_save(filename_save);
 #endif
     std::cout << "  Reading " << filename_save << "...\n";
+
+    char filename[256];
+    std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
+    bool got_meta = false;
+    std::FILE *f = std::fopen(filename, "r");
+    if (f != NULL) {
+        int frame, steps, nnode, nelem, nseg;
+        while (1) {
+            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
+                                &frame, &steps, &nnode, &nelem, &nseg);
+            if (n != 5) break;   // EOF or malformed line: stop scanning, fall back
+            if (frame == param.sim.restarting_from_frame) {
+                var.steps = steps;
+                var.nnode = nnode;
+                var.nelem = nelem;
+                var.nseg = nseg;
+                got_meta = true;
+                break;
+            }
+        }
+        std::fclose(f);
+        if (!got_meta) {
+            std::cerr << "Error: frame " << param.sim.restarting_from_frame
+                    << " not found in " << filename << ".\n";
+            exit(2);
+        }
+    } else {
+        std::cerr << "Warning: cannot open info file " << filename
+                << "; using metadata embedded in " << filename_save << ".\n";
+    }
+
+    if (!got_meta) {
+        if (bin_save.has_array("steps") && bin_save.has_array("nseg")) {
+            bin_save.read_scaler(var.steps, "steps");
+            bin_save.read_scaler(var.nnode, "nnode");
+            bin_save.read_scaler(var.nelem, "nelem");
+            bin_save.read_scaler(var.nseg, "nseg");
+        } else {
+            std::cerr << "Error: cannot read frame metadata from " << filename
+                      << " and " << filename_save << " has none embedded.\n";
+            std::exit(2);
+        }
+    }
 
     char filename_chkpt[256];
 #ifdef HDF5
