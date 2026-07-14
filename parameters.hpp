@@ -215,6 +215,11 @@ struct Mesh {
     double mmg_init_coarsening_factor;
     double mmg_metric_refine_coeff;
     bool use_mmg_init;
+    // Anisotropic metric at INFLOW restored side walls (remeshing_option 13). 0 = off (isotropic
+    // scalar metric, unchanged). > 0 = aspect ratio: wall elements are coarsened by this factor in
+    // the inflow-perpendicular direction (fine tangentially, so the incoming column is carried by
+    // thin wide elements). Enables a tensor MMG metric.
+    double mmg_aniso_wall_ratio;
 };
 
 struct Control {

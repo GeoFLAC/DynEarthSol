@@ -2445,9 +2445,8 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
     }
 }
 
-
 // ============================================================================
-//  FREEZE / REQUIRED POLICY -- single source of truth
+//  FREEZE / REQUIRED POLICY
 // ============================================================================
 // Remeshing must repair bad elements while PRESERVING the fields, above all the localized
 // plastic strain: every rebuilt entity is re-interpolated, which diffuses it. Triangle
@@ -2455,126 +2454,51 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 // shared size floors, RefineFloors). MMG rebuilds everything not forbidden, so preservation is
 // explicit through MMG's required VERTEX (never moved/deleted) and required ELEMENT (untouched).
 //
-// Remeshing must repair bad elements while PRESERVING the computed fields --
-// above all the localized plastic strain: every entity the mesher rebuilds is
-// re-interpolated afterwards, and re-interpolation numerically diffuses the
-// fields it touches. The freeze policy decides, entity by entity, how much
-// freedom the mesher gets. Both engines implement the same intent with
-// different mechanisms:
+// Per-entity freedom; the complement is handed to MMG as constraints:
+//   node : MOVABLE, or PINNED (required vertex, nodal fields carried verbatim).
+//   elem : FREE   -- split/collapse/swap AND its nodes MOVABLE (full repair);
+//          SPLIT  -- split/swap only, nodes NOT freed (refinement inserts nodes without moving
+//                    the old ones, so the band's plastic strain is carried verbatim);
+//          FROZEN -- MMG-required IF all its nodes ended up PINNED (DERIVED REQUIRED).
 //
-//  * Triangle/Tetgen re-triangulates the EXISTING point cloud: untouched
-//    points keep their fields verbatim, so preservation is implicit. The only
-//    explicit policy is the shared size floors (RefineFloors, top of file) --
-//    decimate_below_hmin drops interior nodes closer than hmin so
-//    re-triangulation cannot emit an element under the tiny-element trigger.
+// Rules, applied in order by mark_quiet_required; each may only RAISE freedom:
+//   R1 REPAIR    quality < min_quality * mmg_remesh_defensive_quality_ratio, or volume <
+//                smallest_vol -> FREE (a node where disjoint material bodies meet stays pinned).
+//   R2 REFINE    plstrain - plstrain_remesh > mmg_remesh_active_plstrain -> SPLIT.
+//   R3 BOUNDARY  only an ACTIVE free-surface (TOP) node is MOVABLE (surface-process displacement
+//                > 1% of resolution per interval). Quiet top nodes, every pure wall node of a
+//                restored side (option 13) and every BOTTOM node stay pinned, carried verbatim.
+//                A fully pinned top lid starves MMG of slack and death-spirals.
+//   R4 SIDE STRIP (option 13, INFLOW sides) wall-faceted elements + 1 ring -> FREE with movable
+//                interior nodes, so the ~resolution wall band coarsens back once off the wall.
+//   R5 SIZE RECOVERY a quiet element FINER than the gradation envelope (the smallest size MMG's
+//                hgrad could legally assign, grown from every intentionally-fine target) by more
+//                than mmg_remesh_size_recovery_ratio -> FREE to coarsen; >= 2x its own target -> FREE
+//                to split. Skips top-connected elements, material-interface elements (for
+//                coarsening) and the wall band + 4 rings of a FIXED side; never unpins a wall or
+//                bottom node.
+//   R6 FLATTEN-BROKEN elements flatten_* broke (post-flatten quality < min_quality) -> FREE.
+//   R7 COLLAPSE-REGION (collapse path) elements reshaped by collapse_outside_nodes + 1 ring -> FREE.
+//   DERIVED REQUIRED: required_node = NOT movable; required_elem = FROZEN with all nodes pinned.
+//   An element with any movable node is never required: the built-in one-element hinge layer.
 //
-//  * MMG rebuilds everything it is not explicitly forbidden to touch.
-//    Preservation is explicit, through MMG's two "required" constraints:
-//      required VERTEX       -- MMG may not move or delete the node,
-//      required TRIANGLE/TET -- MMG may not touch the element at all.
+// POST-OUTPUT QUALITY GATE (mmg_adapt_quality_gated): if MMG's output contains an element that
+// would re-trigger remeshing, unfreeze a graded region around it (CORE: full freedom, grown to
+// frozen contact + `attempt` rings; HINGE: bordering elements lose required-element status but
+// keep pinned nodes) and re-run MMG. Bounded attempts.
 //
-// VOCABULARY -- per-entity freedom levels. The policy computes FREEDOM; the
-// complement is what is handed to MMG as constraints:
+// INIT-TIME (mesh.cxx refine_initial_side_walls_2d, option 13): the same idea at t=0 --
+// everything required except the wall band + 2 rings.
 //
-//   node : MOVABLE -> free.
-//          PINNED  -> MMG required vertex; its nodal fields are carried
-//                     verbatim across the remesh.
-//   elem : FREE    -> may be split/collapsed/swapped AND its nodes are made
-//                     MOVABLE: full repair freedom.
-//          SPLIT   -> may be split/swapped, but this rule does NOT free its
-//                     nodes: refinement inserts new nodes without moving the
-//                     old ones, so e.g. the shear band's plastic strain is
-//                     carried verbatim and only new nodes are interpolated.
-//          FROZEN  -> becomes an MMG required element IF additionally all of
-//                     its nodes ended up PINNED (see DERIVED REQUIRED below).
+// KNOBS ([mesh]): min_quality, mmg_remesh_defensive_quality_ratio (R1), mmg_remesh_active_plstrain (R2),
+// smallest_size/resolution (floors), remesh_tiny_margin (trigger buffer, metric floor, gate),
+// mmg_remesh_size_recovery_ratio (R5, 0 = off).
 //
-// RULES -- applied in order by mark_quiet_required below; each rule may only
-// RAISE freedom, never lower it:
-//
-//   R1 REPAIR    elem_quality < min_quality * mmg_remesh_defensive_quality_ratio
-//                OR volume < smallest_vol                          -> FREE
-//   R2 REFINE    plstrain - plstrain_remesh > mmg_remesh_active_plstrain -> SPLIT
-//   R3 BOUNDARY  a boundary node -> MOVABLE (flatten_* moves it) ONLY where the
-//                surface is being reshaped -- i.e. an ACTIVE free-surface (TOP)
-//                node. Everything else on the boundary stays required:
-//                  * QUIET pure TOP nodes (no flatten_top exists; freeing them
-//                    re-tessellated the whole top row every remesh). The gate is
-//                    surface-process ACTIVITY: a node the surface process displaces
-//                    by > 1% of resolution per remesh interval stays movable, else
-//                    a pinned top lid starves MMG of slack and death-spirals.
-//                  * every pure SIDE-WALL node of a restored side (clamp_side_bits,
-//                    remeshing_option 13) -- the wall column is carried verbatim,
-//                    including its quiet TOP corner (nothing flattens a wall corner;
-//                    leaving it movable diagonal-flipped the corner elements).
-//                  * every BOTTOM node (BOUNDZ0) -- the bottom row is carried
-//                    verbatim; flatten_bottom still snaps it to -zlength in the
-//                    boundary outline and remesh() resets its coord0.
-//   R4 SIDE STRIP (option 13, INFLOW sides only) wall-faceted elements plus
-//                2 connectivity rings -> FREE, so the ~resolution inflow wall band
-//                can coarsen back to its intended size once off the wall. (R3 pins
-//                all restored side walls; R4 then re-frees the INFLOW band on top,
-//                while R5's fixed-side band guard keeps the FIXED sides verbatim.)
-//   R5 SIZE RECOVERY quiet element finer than the GRADATION ENVELOPE by more
-//                than mmg_remesh_size_recovery_ratio -> FREE. The envelope is the
-//                smallest size MMG's gradation could legally assign, grown by
-//                hgrad from every intentionally-fine metric target (wall
-//                clamp, plstrain refinement, floors) -- so the legal size
-//                transition and the refined band are never touched, only
-//                fossil-fine mesh with no justification (e.g. wall-band
-//                elements that advected inland and froze at wall size). Also
-//                SKIPPED: top-surface-connected and material-interface elements,
-//                and elements within the wall-faceted layer + 4 rings of a FIXED
-//                side (fixed_side_bits); and a freed element never unpins a
-//                SIDE-WALL (clamp_side_bits) or BOTTOM node.
-//   R6 FLATTEN-BROKEN elements that flatten_* broke (post-flatten quality
-//                below min_quality, judged AFTER the R1-R5 masks) -> FREE.
-//   R7 COLLAPSE-REGION (collapse path only) elements reshaped by
-//                collapse_outside_nodes, plus 1 connectivity ring -> FREE.
-//
-//   DERIVED REQUIRED -- the only place freedom becomes MMG constraints:
-//     required_node[n] = NOT movable
-//     required_elem[e] = FROZEN grade AND all of its nodes pinned
-//   An element with any movable node is therefore never required: that is the
-//   built-in one-element hinge/transition layer around every freed region.
-//
-// POST-OUTPUT QUALITY GATE (mmg_adapt_quality_gated): if MMG's output contains
-// an element that would immediately re-trigger remeshing (below min_quality,
-// or under the tiny-element trigger + half the hysteresis gap), unfreeze a
-// graded region around each bad output element and re-run MMG:
-//   CORE  (grown to frozen contact + `attempt` extra rings): full freedom;
-//   HINGE (the derived-required invariant): elements bordering the core lose
-//         required-ELEMENT status while their nodes stay pinned.
-// Bounded attempts; a still-bad final mesh is kept with a warning.
-//
-// INIT-TIME (mesh.cxx refine_initial_side_walls_2d, option 13): independent of the
-// runtime rules above -- the same freeze idea at t=0, everything required except the
-// wall band + 2 rings of coarser-than-resolution elements (free_wall_band's ring growth),
-// so one MMG pass refines only the walls to ~resolution.
-//
-// KNOBS (all under the [mesh] cfg section):
-//   min_quality                     R1 + remesh trigger + retry gate
-//   mmg_remesh_defensive_quality_ratio  R1 headroom band (1 = plain trigger)
-//   mmg_remesh_active_plstrain          R2 growing-band threshold
-//   smallest_size / resolution      size floors (RefineFloors, top of file)
-//   remesh_tiny_margin              tiny trigger buffer + metric floor + gate
-//   mmg_remesh_size_recovery_ratio      R5 envelope hysteresis (0 = off)
-//
-// MEASURED DEAD ENDS -- do not re-try without new evidence (details live as
-// NOTEs at the code they annotate):
-//   * unbounded undersized flood-fill unfreeze (re-frees the hgrad transition
-//     zone forever)                                     [R4 note]
-//   * freeing wider than REPAIR around flatten damage (NaN'd cmp_bottom)
-//                                                       [mark_quiet_required note]
-//   * dissolving small required-element islands (more retries, not fewer)
-//                                                       [mark_quiet_required note]
-//   * raising R1's tiny floor to the metric floor (diffuses the shear band)
-//                                                       [R1 note]
-//   * explicit extra hinge ring in the retry unfreeze (exact no-op)
-//                                                       [unfreeze note]
-//   * SPLIT (nodes pinned) for R1's quality term -- both variants: ALL
-//     distorted elements, and defensive-band-only at any ratio 1.25-3.0
-//     (more remeshes/retries, quality floor erodes, NO preservation gain)
-//                                                       [R1 note]
+// Measured dead ends, do not retry: an unbounded undersized flood-fill unfreeze (re-frees the
+// hgrad transition forever); freeing wider than REPAIR around flatten damage (NaN); dissolving
+// small required islands (more retries); raising R1's tiny floor to the metric floor (diffuses
+// the band); an explicit extra hinge ring (no-op); SPLIT instead of FREE for R1's quality term
+// (more remeshes, no preservation gain).
 // ============================================================================
 
 
@@ -2711,14 +2635,16 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
 #endif
         const bool low_q = q < q_thr;
         const bool tiny  = (*var.volume)[e] < repair_vol;
-        const bool refine = ((*var.plstrain)[e] - (*var.plstrain_remesh)[e]) > pls_thr;
+        const bool refine = ((*var.plstrain)[e] - (*var.plstrain_remesh)[e]) > pls_thr; // TODO: change to pls rate
         m.elem_grade[e] = (low_q || tiny) ? ELEM_FREE
                                           : (refine ? ELEM_SPLIT : ELEM_FROZEN);
-        if (low_q) {
-            // LOW QUALITY (checked before tiny): free the nodes to move -- except a node
-            // that also touches an element sharing NO marker mattype with this one; that
-            // node sits where disjoint material bodies meet, and moving it would drag the
-            // material boundary along with the repair. It stays required.
+        if (tiny) {                        // tiny-only: unguarded (hard failure)
+            ConstConnAccessor conn = connectivity[e];
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                m.node_movable[conn[i]] = 1;
+        } else if (low_q) {
+            // LOW QUALITY: free the nodes, except one that also touches an element sharing NO
+            // mattype with this one (disjoint bodies meet there; moving it drags the boundary).
             ConstConnAccessor conn = connectivity[e];
             for (int i = 0; i < NODES_PER_ELEM; ++i) {
                 const int n = conn[i];
@@ -2735,10 +2661,6 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
                 if (disjoint_nbr) { ++n_iface_pinned; continue; }
                 m.node_movable[n] = 1;
             }
-        } else if (tiny) {                        // tiny-only: unguarded (hard failure)
-            ConstConnAccessor conn = connectivity[e];
-            for (int i = 0; i < NODES_PER_ELEM; ++i)
-                m.node_movable[conn[i]] = 1;
         }
     }
     if (n_iface_pinned)
@@ -2844,6 +2766,116 @@ void rule_inflow_side_strip(const Variables &var, const conn_t &connectivity,
                   << " connectivity rings to resize back.\n";
 }
 
+// Required MATERIAL-INTERFACE edges of the inflow band (option 13, 2D): an edge shared by two
+// band elements of different dominant mattype lies on the interface. Marked MMG-required, the
+// remesh keeps the boundary conforming and cannot coarsen a straddling element across a thin
+// layer. Re-derived every remesh from the markers. Returns 0-based OLD-mesh node pairs; the
+// collapse path translates them through its remap. 3D returns empty (an interface there is a
+// face -> required triangles, not edges).
+std::vector<int> build_interface_req_edges(const Variables &var, const conn_t &connectivity,
+                                           int nnode, int nelem, uint inflow_side_bits)
+{
+#ifdef THREED
+    (void)var; (void)connectivity; (void)nnode; (void)nelem; (void)inflow_side_bits;
+    return {};
+#else
+    if (inflow_side_bits == 0) return {};
+    std::vector<char> band_node(nnode, 0), band_elem(nelem, 0);
+    for (int n = 0; n < nnode; ++n)
+        if ((*var.bcflag)[n] & inflow_side_bits) band_node[n] = 1;
+    free_wall_band(nnode, nelem, connectivity, 1, NULL, band_node, band_elem);
+
+    auto dominant = [&](int e) -> int {
+        const int_vec &a = (*var.elemmarkers)[e];
+        return (int)std::distance(a.begin(), std::max_element(a.begin(), a.end()));
+    };
+    // An interior edge is shared by exactly two triangles; emit it once, on the second share,
+    // when the two dominant mattypes differ.
+    std::map<std::pair<int,int>, int> first_mat;      // edge -> dominant mattype of its first elem
+    std::vector<int> out;
+    for (int e = 0; e < nelem; ++e) {
+        if (!band_elem[e]) continue;
+        const int mt = dominant(e);
+        ConstConnAccessor el = connectivity[e];
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int j = i + 1; j < NODES_PER_ELEM; ++j) {
+                std::pair<int,int> key(std::min(el[i], el[j]), std::max(el[i], el[j]));
+                auto res = first_mat.emplace(key, mt);
+                if (!res.second && res.first->second != mt) {
+                    out.push_back(key.first);
+                    out.push_back(key.second);
+                    res.first->second = mt;           // guard against a 3rd share re-emitting
+                }
+            }
+    }
+    return out;
+#endif
+}
+
+// Pre-subdivide the required interface edges to ~metric BEFORE MMG: required edges (the only tag
+// that reliably KEEPS an internal line; opnbdy/ref edges let MMG curve or cross it) cannot be
+// split by MMG, so an over-long edge is bisected here at its midpoint (collinear -> exact line),
+// the two adjacent triangles split, and the midpoint + half-edges marked required. Converges
+// over remeshes (each pass halves an over-long edge). 2D only. Grows coord/conn/metric/reqn/reqe
+// in place and rewrites `iface`; a triangle is split at most once per pass (tri_consumed).
+void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &conn,
+                                  std::vector<double> &metric, std::vector<char> &reqn,
+                                  std::vector<char> &reqe, std::vector<int> &iface,
+                                  int &nn, int &ne, double resolution)
+{
+#ifndef THREED
+    if (iface.empty()) return;
+    const double FACTOR = 1.41;   // MMG splits an edge longer than ~sqrt(2)*target; pre-do it here
+    auto keyof = [](int a, int b){ return std::make_pair(std::min(a,b), std::max(a,b)); };
+    std::map<std::pair<int,int>, int> ifmap;                             // iface-edge membership
+    for (std::size_t k = 0; k + 1 < iface.size(); k += 2) ifmap[keyof(iface[k], iface[k+1])] = 1;
+    std::map<std::pair<int,int>, std::vector<std::pair<int,int>>> adj;   // iface edge -> [(tri, opp node)]
+    for (int e = 0; e < ne; ++e) {
+        const int n0 = conn[e*3], n1 = conn[e*3+1], n2 = conn[e*3+2];
+        const int ed[3][2] = {{n0,n1},{n1,n2},{n2,n0}}; const int opp[3] = {n2,n0,n1};
+        for (int s = 0; s < 3; ++s) {
+            auto k = keyof(ed[s][0], ed[s][1]);
+            if (ifmap.count(k)) adj[k].push_back({e, opp[s]});
+        }
+    }
+    std::vector<char> tri_consumed(ne, 0);
+    std::vector<int> out; out.reserve(iface.size() * 2);
+    for (std::size_t k = 0; k + 1 < iface.size(); k += 2) {
+        const int a = iface[k], b = iface[k+1];
+        const double dx = coord[a*2] - coord[b*2], dz = coord[a*2+1] - coord[b*2+1];
+        const double L = std::sqrt(dx*dx + dz*dz);
+        double tgt = std::min(metric[a], metric[b]); if (tgt <= 0.0) tgt = resolution;
+        auto &tris = adj[keyof(a,b)];
+        const bool ok = (L > FACTOR * tgt) && tris.size() == 2
+                        && !tri_consumed[tris[0].first] && !tri_consumed[tris[1].first];
+        if (!ok) { out.push_back(a); out.push_back(b); continue; }
+        const int m = nn++;
+        coord.push_back(0.5*(coord[a*2]   + coord[b*2]));
+        coord.push_back(0.5*(coord[a*2+1] + coord[b*2+1]));
+        // Size the divided line to the SMALLEST target of its surrounding nodes (endpoints + the
+        // two apexes) and pull those nodes down to it: the fine wall size then propagates along
+        // the in-band interface as it advects inland instead of creeping upward. Monotone (min
+        // only, floored where compute_metric_field floored it).
+        const int c0 = tris[0].second, c1 = tris[1].second;
+        const double h = std::min({metric[a], metric[b], metric[c0], metric[c1]});
+        metric.push_back(h);
+        metric[a] = h; metric[b] = h; metric[c0] = h; metric[c1] = h;
+        reqn.push_back(1);
+        for (auto &tc : tris) {
+            const int e = tc.first, c = tc.second;
+            tri_consumed[e] = 1;
+            conn[e*3] = a; conn[e*3+1] = m; conn[e*3+2] = c;              // reuse slot e -> (a,m,c)
+            conn.push_back(m); conn.push_back(b); conn.push_back(c);      // append (m,b,c)
+            reqe.push_back(reqe[e]); ++ne;                               // child inherits requiredness
+        }
+        out.push_back(a); out.push_back(m); out.push_back(m); out.push_back(b);
+    }
+    iface.swap(out);
+#else
+    (void)coord;(void)conn;(void)metric;(void)reqn;(void)reqe;(void)iface;(void)nn;(void)ne;(void)resolution;
+#endif
+}
+
 // R5 SIZE RECOVERY: free fossil-fine quiet elements so MMG can coarsen them back. The wall clamp
 // (option 13) and the plstrain refinement create elements finer than init_elem_size_n; once quiet
 // and inland they would be carried verbatim forever (the element count roughly doubled over a
@@ -2907,6 +2939,10 @@ void rule_size_recovery(const Param &param, const Variables &var,
         achievable[n] = std::max(achievable[n], metric_floor);
     }
 
+    // Per-node target BEFORE the gradation sweep: the oversized rule compares an element against
+    // its OWN target, never against an envelope a fine neighbour graded down.
+    std::vector<double> target_raw = achievable;
+
     // (2) gradation envelope: fixpoint of achievable(n) <= min(elem neighbours) * hgrad.
     //     Sweeps needed = mesh diameter in rings; 512 is a heuristic cap on that diameter.
     bool converged = false;
@@ -2948,41 +2984,47 @@ void rule_size_recovery(const Param &param, const Variables &var,
         }
         elem_mat[e] = mt;
     }
-
-    // (3) free the fossil excess
-    int n_freed = 0, n_top_skipped = 0, n_mat_skipped = 0, n_fixed_skipped = 0;
+    // (3) free the size excess in BOTH directions: fossil-fine (finer than the envelope by more
+    //     than `ratio`) -> free to COARSEN; oversized (>= 2x its own target, e.g. frozen coarse
+    //     while the metric refined under it) -> free to SPLIT (MMG cannot split a required element).
+    int n_freed = 0, n_oversized = 0, n_top_skipped = 0, n_mat_skipped = 0, n_fixed_skipped = 0;
     for (int e = 0; e < nelem; ++e) {
         if (m.elem_grade[e] == ELEM_SPLIT) continue;   // R2 growing band: nodes stay pinned
         ConstConnAccessor conn = connectivity[e];
-        double ach = achievable[conn[0]];
-        for (int i = 1; i < NODES_PER_ELEM; ++i)
+        double ach = achievable[conn[0]], tgt = target_raw[conn[0]];
+        for (int i = 1; i < NODES_PER_ELEM; ++i) {
             ach = std::min(ach, achievable[conn[i]]);
-        if (esize[e] * ratio >= ach) continue;         // within the legal envelope
+            tgt = std::max(tgt, target_raw[conn[i]]);
+        }
+        const bool fossil_fine = (esize[e] * ratio < ach);   // finer than envelope -> coarsen
+        const bool oversized   = (esize[e] >= 2.0 * tgt);     // >= 2x its target -> split
+        if (!fossil_fine && !oversized) continue;             // within the legal size band
         if (is_top_elem[e]) { ++n_top_skipped; continue; }
         if (fixed_band_elem[e]) { ++n_fixed_skipped; continue; }  // wall + 4 rings of a fixed side
-        // loop every support element of every node: freeable only if this element and
-        // ALL elements sharing any of its nodes carry the same single mattype
-        bool on_interface = (elem_mat[e] < 0);
-        for (int i = 0; i < NODES_PER_ELEM && !on_interface; ++i) {
-            const int npatch = var.support.size(conn[i]);
-            const int* patch = var.support.patch(conn[i]);
-            for (int k = 0; k < npatch; ++k)
-                if (elem_mat[patch[k]] != elem_mat[e]) { on_interface = true; break; }
+        // The interface guard applies to COARSENING only: splitting keeps the (required) interface
+        // edge and only adds resolution. Freeable to coarsen only if this element and all its node
+        // neighbours carry the same single mattype.
+        if (fossil_fine) {
+            bool on_interface = (elem_mat[e] < 0);
+            for (int i = 0; i < NODES_PER_ELEM && !on_interface; ++i) {
+                const int npatch = var.support.size(conn[i]);
+                const int* patch = var.support.patch(conn[i]);
+                for (int k = 0; k < npatch; ++k)
+                    if (elem_mat[patch[k]] != elem_mat[e]) { on_interface = true; break; }
+            }
+            if (on_interface) { ++n_mat_skipped; continue; }
         }
-        if (on_interface) { ++n_mat_skipped; continue; }
-        if (m.elem_grade[e] != ELEM_FREE) ++n_freed;
+        if (m.elem_grade[e] != ELEM_FREE) { if (fossil_fine) ++n_freed; else ++n_oversized; }
         m.elem_grade[e] = ELEM_FREE;
         for (int i = 0; i < NODES_PER_ELEM; ++i)
-            // Never unpin a SIDE-WALL node (clamp_side_bits) or a BOTTOM node (BOUNDZ0):
-            // those wall columns / bottom row are carried verbatim, so R5 may free this
-            // fossil element for coarsening but must leave those nodes required -- only its
-            // off-wall, off-bottom nodes become movable.
+            // Never unpin a wall (clamp_side_bits) or bottom node: only the element's off-wall,
+            // off-bottom nodes become movable.
             if (!((*var.bcflag)[conn[i]] & clamp_side_bits) && !((*var.bcflag)[conn[i]] & BOUNDZ0))
                 m.node_movable[conn[i]] = 1;
     }
-    if (n_freed || n_top_skipped || n_mat_skipped || n_fixed_skipped)
+    if (n_freed || n_oversized || n_top_skipped || n_mat_skipped || n_fixed_skipped)
         std::cout << "    Size recovery: freed " << n_freed
-                  << " fossil-fine element(s) below the gradation envelope (skipped "
+                  << " fossil-fine + " << n_oversized << " oversized(>=2x) element(s) (skipped "
                   << n_top_skipped << " top-surface-connected, "
                   << n_mat_skipped << " on a material interface, "
                   << n_fixed_skipped << " in a fixed-side band).\n";
@@ -3944,6 +3986,54 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
     return ncoll;
 }
 #endif
+// Per-node ANISOTROPIC (tensor) metric for MMG from the scalar target: isotropic diag(1/h^2)
+// everywhere except nodes on an INFLOW restored wall (option 13, sides in `sis`): fine (h)
+// tangentially, coarse (h*ratio) wall-perpendicular, so the incoming column is carried by thin
+// wide elements. Wall membership is by COORDINATE (collapse-safe). `aniso` is nnode*NTENSOR
+// (2D: m11,m12,m22; 3D: m11,m12,m13,m22,m23,m33).
+static void build_wall_anisotropic_metric(const Param &param, const SideInflowState &sis,
+                                          int nnode, const double *coord, const double *scalar,
+                                          double tol, double_vec &aniso)
+{
+    const int NT = (NDIMS == 2) ? 3 : 6;
+    const double ratio = param.mesh.mmg_aniso_wall_ratio;    // > 1; coarsening factor ⟂ the wall
+    const double xlen = param.mesh.xlength;
+#ifdef THREED
+    const double ylen = param.mesh.ylength;
+#endif
+    // Coarsen the wall-PERPENDICULAR axis only: R3 pins the wall nodes and R4 frees the interior
+    // band, so inland is the only direction with movable nodes; wide wall elements also absorb the
+    // incoming advection slowly. Coarsening ALONG the wall instead lengthens the transition and
+    // degrades the profile's depth sampling. Limitation: a wide wall element's centroid sits
+    // inland of the band, so restore_side_fields does not re-impose its ELEMENT fields (nodal
+    // temperature still is; deep-wall element fields are ~0). 3D also coarsens the y walls.
+    aniso.assign((std::size_t)nnode * NT, 0.0);
+    for (int n = 0; n < nnode; ++n) {
+        const double *p = coord + (std::size_t)n * NDIMS;
+        const double h = scalar[n];
+        double hx = h, hz = h;             // per-axis target; default isotropic (non-wall nodes)
+#ifdef THREED
+        double hy = h;
+#endif
+        // Coarsen the inflow-PERPENDICULAR axis at an inflow wall; tangential axes stay = h.
+        if (sis.in_x0 && p[0] < tol)          hx = h * ratio;
+        if (sis.in_x1 && p[0] > xlen - tol)   hx = h * ratio;
+#ifdef THREED
+        if (sis.in_y0 && p[1] < tol)          hy = h * ratio;
+        if (sis.in_y1 && p[1] > ylen - tol)   hy = h * ratio;
+#endif
+        double *m = &aniso[(std::size_t)n * NT];
+#ifdef THREED
+        // (m11,m12,m13,m22,m23,m33) = diag(1/hx^2, 1/hy^2, 1/hz^2)
+        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 0.0;
+        m[3] = 1.0/(hy*hy); m[4] = 0.0;
+        m[5] = 1.0/(hz*hz);
+#else
+        // (m11,m12,m22) = diag(1/hx^2, 1/hz^2)  (2D coords are (x, z))
+        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 1.0/(hz*hz);
+#endif
+    }
+}
 
 
 #ifdef THREED
@@ -4114,7 +4204,68 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
+    // Optional anisotropic wall metric (nullptr => scalar path). Built from the post-collapse
+    // metric/coords handed to MMG; the gate never rescales the metric, so once is valid for all retries.
+    double_vec wall_aniso;
+    const double *mmetric_aniso = nullptr;
+    if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
+        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
+        mmetric_aniso = wall_aniso.data();
+    }
+
+    // Front-tracking (option 13): keep the incoming material boundary an MMG-required edge. On the
+    // collapse path translate the old-mesh node ids through the remap (dropping edges whose
+    // endpoint was collapsed away); on the direct path old ids == MMG ids.
+    std::vector<int> iface_edges;
+    const int *ie_ptr = nullptr; int n_ie = 0;
+    std::vector<double> aug_coord, aug_metric;   // augmented mmg-input mesh (interface pre-subdivision)
+    std::vector<int>    aug_conn;                // kept alive through the quality-gate retries below
+    if (param.mesh.remeshing_option == 13) {
+        SideInflowState sis_ie = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        uint inflow_bits = 0;
+        if (sis_ie.in_x0) inflow_bits |= BOUNDX0;
+        if (sis_ie.in_x1) inflow_bits |= BOUNDX1;
+        iface_edges = build_interface_req_edges(var, original_connectivity, old_nnode, old_nelem, inflow_bits);
+        if (collapse_needed && !iface_edges.empty()) {
+            std::vector<int> old_to_new(old_nnode, -1);
+            for (int n = 0; n < mnode; ++n) old_to_new[(*remap.new_to_old_node)[n]] = n;
+            std::vector<int> tr; tr.reserve(iface_edges.size());
+            for (std::size_t k = 0; k + 1 < iface_edges.size(); k += 2) {
+                const int a = old_to_new[iface_edges[k]], b = old_to_new[iface_edges[k+1]];
+                if (a >= 0 && b >= 0) { tr.push_back(a); tr.push_back(b); }
+            }
+            iface_edges.swap(tr);
+        }
+        // BOTH paths: pre-subdivide over-long interface edges (MMG cannot split a required edge).
+        // Grows the local mesh buffers, the required masks and the aniso tensor, and repoints the
+        // mesh handed to MMG. Gating this to the direct path let a wall-attached edge ratchet
+        // longer for hundreds of kyr while every remesh took the collapse path.
+        if (!iface_edges.empty()) {
+            const int mnode0 = mnode;
+            aug_coord.assign(mcoord, mcoord + (std::size_t)mnode*NDIMS);
+            aug_conn.assign(mconn1, mconn1 + (std::size_t)melem*NODES_PER_ELEM);
+            aug_metric.assign(mmetric, mmetric + mnode);
+            int nn = mnode, ne = melem;
+            presubdivide_interface_edges(aug_coord, aug_conn, aug_metric, req_node, req_elem,
+                                         iface_edges, nn, ne, param.mesh.resolution);
+            if (nn != mnode0) {
+                if (mmetric_aniso) {   // extend the aniso tensor for the new interior nodes (isotropic)
+                    for (int i = mnode0; i < nn; ++i) {
+                        const double h = aug_metric[i]; const double inv = (h > 0.0) ? 1.0/(h*h) : 0.0;
+                        wall_aniso.push_back(inv); wall_aniso.push_back(0.0); wall_aniso.push_back(inv);
+                    }
+                    mmetric_aniso = wall_aniso.data();
+                }
+                mnode = nn; melem = ne;
+                mcoord = aug_coord.data(); mconn1 = aug_conn.data(); mmetric = aug_metric.data();
+                rn = req_node.data(); re = req_elem.data();
+            }
+        }
+        if (!iface_edges.empty()) { ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2; }
+    }
+
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
@@ -4349,7 +4500,68 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                              n, mcoord[n*NDIMS], nodeflag[n], (int)rn[n]);
     }
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false };
+    // Optional anisotropic wall metric (nullptr => scalar path). Built from the post-collapse
+    // metric/coords handed to MMG; the gate never rescales the metric, so once is valid for all retries.
+    double_vec wall_aniso;
+    const double *mmetric_aniso = nullptr;
+    if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
+        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
+        mmetric_aniso = wall_aniso.data();
+    }
+
+    // Front-tracking (option 13): keep the incoming material boundary an MMG-required edge. On the
+    // collapse path translate the old-mesh node ids through the remap (dropping edges whose
+    // endpoint was collapsed away); on the direct path old ids == MMG ids.
+    std::vector<int> iface_edges;
+    const int *ie_ptr = nullptr; int n_ie = 0;
+    std::vector<double> aug_coord, aug_metric;   // augmented mmg-input mesh (interface pre-subdivision)
+    std::vector<int>    aug_conn;                // kept alive through the quality-gate retries below
+    if (param.mesh.remeshing_option == 13) {
+        SideInflowState sis_ie = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        uint inflow_bits = 0;
+        if (sis_ie.in_x0) inflow_bits |= BOUNDX0;
+        if (sis_ie.in_x1) inflow_bits |= BOUNDX1;
+        iface_edges = build_interface_req_edges(var, original_connectivity, old_nnode, old_nelem, inflow_bits);
+        if (collapse_needed && !iface_edges.empty()) {
+            std::vector<int> old_to_new(old_nnode, -1);
+            for (int n = 0; n < mnode; ++n) old_to_new[(*remap.new_to_old_node)[n]] = n;
+            std::vector<int> tr; tr.reserve(iface_edges.size());
+            for (std::size_t k = 0; k + 1 < iface_edges.size(); k += 2) {
+                const int a = old_to_new[iface_edges[k]], b = old_to_new[iface_edges[k+1]];
+                if (a >= 0 && b >= 0) { tr.push_back(a); tr.push_back(b); }
+            }
+            iface_edges.swap(tr);
+        }
+        // BOTH paths: pre-subdivide over-long interface edges (MMG cannot split a required edge).
+        // Grows the local mesh buffers, the required masks and the aniso tensor, and repoints the
+        // mesh handed to MMG. Gating this to the direct path let a wall-attached edge ratchet
+        // longer for hundreds of kyr while every remesh took the collapse path.
+        if (!iface_edges.empty()) {
+            const int mnode0 = mnode;
+            aug_coord.assign(mcoord, mcoord + (std::size_t)mnode*NDIMS);
+            aug_conn.assign(mconn1, mconn1 + (std::size_t)melem*NODES_PER_ELEM);
+            aug_metric.assign(mmetric, mmetric + mnode);
+            int nn = mnode, ne = melem;
+            presubdivide_interface_edges(aug_coord, aug_conn, aug_metric, req_node, req_elem,
+                                         iface_edges, nn, ne, param.mesh.resolution);
+            if (nn != mnode0) {
+                if (mmetric_aniso) {   // extend the aniso tensor for the new interior nodes (isotropic)
+                    for (int i = mnode0; i < nn; ++i) {
+                        const double h = aug_metric[i]; const double inv = (h > 0.0) ? 1.0/(h*h) : 0.0;
+                        wall_aniso.push_back(inv); wall_aniso.push_back(0.0); wall_aniso.push_back(inv);
+                    }
+                    mmetric_aniso = wall_aniso.data();
+                }
+                mnode = nn; melem = ne;
+                mcoord = aug_coord.data(); mconn1 = aug_conn.data(); mmetric = aug_metric.data();
+                rn = req_node.data(); re = req_elem.data();
+            }
+        }
+        if (!iface_edges.empty()) { ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2; }
+    }
+
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
