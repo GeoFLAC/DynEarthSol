@@ -2394,8 +2394,8 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
             }
         }
         if (n_inflated)
-            std::cout << "    Surface-motion anticipation: inflated the metric of "
-                      << n_inflated << " top element(s).\n";
+            std::cout << "      [metric] surface-motion anticipation: inflated the target of "
+                      << n_inflated << " shrinking top element(s).\n";
     }
 #endif
 
@@ -2575,10 +2575,35 @@ double packed_elem_quality(const double *coord, const int *elem)
 // Element grades (FREEZE / REQUIRED POLICY); derive_required maps them to MMG's inputs.
 enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
+// node_rule codes are the rule numbers: 0 = not freed by R1-R5, else 1, 3, 4 or 5 (R2 frees no
+// node). An array indexed by node_rule has NODE_RULE_CODES entries.
+enum { NODE_RULE_CODES = 6 };
+
+// Per-rule attribution, filled by compute_active_mask as the rules run, reported by
+// report_freeze_summary.
+struct FreezeCounts {
+    int n_r1_free  = 0;               // R1 repair: low-quality / tiny
+    int n_r4_free  = 0;               // R4 inflow side strip
+    int n_r5_free  = 0;               // R5 size recovery (fossil-fine / oversized)
+    // Movable-NODE attribution by node_rule (R3 grades nodes, not elements, so it only shows here).
+    int n_mv[NODE_RULE_CODES] = {};
+};
+
 struct FreezeMask {
     std::vector<char> node_movable;   // 1 = MOVABLE, 0 = PINNED
+    std::vector<char> node_rule;      // first rule that made the node movable (compute_active_mask)
     std::vector<char> elem_grade;     // ElemGrade
+    FreezeCounts counts;
 };
+
+// R1-R5 make a node movable only through this. The mask only goes 0 -> 1, so node_rule records the
+// first rule that freed the node: the one source of every movable-node attribution.
+void free_node(FreezeMask &m, int n, char rule)
+{
+    if (m.node_movable[n]) return;
+    m.node_movable[n] = 1;
+    m.node_rule[n] = rule;
+}
 
 // Wall-band ring growth shared by R4, R5's fixed-side band and build_interface_req_edges:
 // pass 0 marks the elements faceting a seed node, passes 1..nrings free one connectivity ring
@@ -2650,7 +2675,7 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
         if (tiny) {                        // every node
             ConstConnAccessor conn = connectivity[e];
             for (int i = 0; i < NODES_PER_ELEM; ++i)
-                m.node_movable[conn[i]] = 1;
+                free_node(m, conn[i], 1);
         } else if (low_q) {
             // every node except one shared with an element of no common mattype
             ConstConnAccessor conn = connectivity[e];
@@ -2667,14 +2692,14 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
                     }
                 }
                 if (disjoint_nbr) { ++n_iface_pinned; continue; }
-                m.node_movable[n] = 1;
+                free_node(m, n, 1);
             }
         }
     }
     if (n_iface_pinned)
-        std::cout << "    Repair: " << n_iface_pinned
+        std::cout << "      [freeze] repair: " << n_iface_pinned
                   << " material-interface node ref(s) of low-quality elements not freed by the "
-                     "quality term.\n";
+                     "quality term (the interface must not move during the repair).\n";
 }
 
 // R3 BOUNDARY: quiet lid nodes (top nodes on no other boundary than a restored wall), pure wall
@@ -2718,7 +2743,7 @@ void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
         // BOTTOM nodes (incl. bottom corners) stay required: the boundary outline already places
         // the row (1, 11 and 13 snap it, 12 slides its x0 end), so nothing needs them movable.
         if (f & BOUNDZ0) continue;
-        m.node_movable[n] = 1;              // active top and unrestored-wall nodes: movable
+        free_node(m, n, 3);                 // active lid, unrestored-wall and slant nodes: movable
     }
 }
 
@@ -2764,13 +2789,14 @@ void rule_inflow_side_strip(const Variables &var, const conn_t &connectivity,
             if (is_iface) continue;
 
             if (!is_boundary((*var.bcflag)[conn[i]]))
-                m.node_movable[conn[i]] = 1;
+                free_node(m, conn[i], 4);
         }
     }
     if (n_freed)
-        std::cout << "    Side strip: " << n_freed
-                  << " band element(s) free (wall-node elements + " << nrings
-                  << " connectivity ring(s), R1 repairs included) to resize back.\n";
+        std::cout << "      [unfreeze] inflow side strip: " << n_freed
+                  << " band element(s) free (wall band + " << nrings
+                  << " connectivity ring(s), R1 repairs included) so the incoming band"
+                     " resizes back.\n";
 }
 
 #ifndef THREED
@@ -2839,6 +2865,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
     }
     std::vector<char> tri_consumed(ne, 0);
     std::vector<int> out; out.reserve(iface.size() * 2);
+    int nsplit = 0;
     for (std::size_t k = 0; k + 1 < iface.size(); k += 2) {
         const int a = iface[k], b = iface[k+1];
         const double dx = coord[a*2] - coord[b*2], dz = coord[a*2+1] - coord[b*2+1];
@@ -2848,6 +2875,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         const bool ok = (L > FACTOR * tgt) && tris.size() == 2
                         && !tri_consumed[tris[0].first] && !tri_consumed[tris[1].first];
         if (!ok) { out.push_back(a); out.push_back(b); continue; }
+        ++nsplit;
         const int m = nn++;
         coord.push_back(0.5*(coord[a*2]   + coord[b*2]));
         coord.push_back(0.5*(coord[a*2+1] + coord[b*2+1]));
@@ -2877,6 +2905,10 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         out.push_back(a); out.push_back(m); out.push_back(m); out.push_back(b);
     }
     iface.swap(out);
+    if (nsplit)
+        std::cout << "      [require] pre-subdivided " << nsplit
+                  << " over-long interface edge(s) at their midpoints "
+                     "(MMG cannot split a required edge itself).\n";
 }
 #endif  // !THREED
 
@@ -3017,14 +3049,14 @@ void rule_size_recovery(const Param &param, const Variables &var,
         m.elem_grade[e] = ELEM_FREE;
         for (int i = 0; i < NODES_PER_ELEM; ++i)
             if (!((*var.bcflag)[conn[i]] & clamp_side_bits) && !((*var.bcflag)[conn[i]] & BOUNDZ0))
-                m.node_movable[conn[i]] = 1;
+                free_node(m, conn[i], 5);
     }
     if (n_freed || n_oversized || n_top_skipped || n_mat_skipped || n_fixed_skipped)
-        std::cout << "    Size recovery: freed " << n_freed
-                  << " fossil-fine + " << n_oversized << " oversized(>=2x) element(s) (skipped "
-                  << n_top_skipped << " top-surface-connected, "
-                  << n_mat_skipped << " on a material interface, "
-                  << n_fixed_skipped << " in a fixed-side band).\n";
+        std::cout << "      [unfreeze] size recovery: freed " << n_freed
+                  << " fossil-fine + " << n_oversized << " oversized(>=2x) elem(s) (skipped "
+                  << n_top_skipped << " top-surface, "
+                  << n_mat_skipped << " iface, "
+                  << n_fixed_skipped << " fixed-side band).\n";
 }
 
 
@@ -3035,9 +3067,18 @@ FreezeMask compute_active_mask(const Param &param, const Variables &var,
 {
     FreezeMask m;
     m.node_movable.assign(nnode, 0);
+    m.node_rule.assign(nnode, 0);
     m.elem_grade.assign(nelem, ELEM_FROZEN);
 
     rule_repair_and_refine(param, var, coord, connectivity, nelem, m);   // R1 + R2
+
+    // per-rule element attribution: count each rule's newly freed elements as it runs
+    auto count_grade = [&m, nelem](char g) {
+        int c = 0;
+        for (int e = 0; e < nelem; ++e) if (m.elem_grade[e] == g) ++c;
+        return c;
+    };
+    m.counts.n_r1_free = count_grade(ELEM_FREE);
 
     // Side-wall masks of the restored walls (option 13):
     //   clamp_side_bits  = ALL restored sides (R3 pins; R5 clamps their target and never unpins
@@ -3062,11 +3103,59 @@ FreezeMask compute_active_mask(const Param &param, const Variables &var,
 
     if (param.mesh.remeshing_option == 13 && inflow_side_bits)
         rule_inflow_side_strip(var, connectivity, nnode, nelem, inflow_side_bits, m);  // R4
+    m.counts.n_r4_free = count_grade(ELEM_FREE) - m.counts.n_r1_free;
 
-    // R5 wall-clamp targets: ALL restored sides (the metric clamp is not inflow-gated).
+    // Surface-churn alarm, before R5 so it reports R1-R4: when more than CHURN_ALARM_FRAC of the
+    // top nodes are movable, say which rule freed them (node_rule) and which top elements stay
+    // required (as derive_required decides).
+    {
+        int tn = 0, tmv = 0;
+        int t_mv[NODE_RULE_CODES] = {}, blk[NODE_RULE_CODES] = {};   // per node_rule
+        for (int n = 0; n < nnode; ++n) {
+            if (!((*var.bcflag)[n] & BOUNDZ1)) continue;
+            ++tn;
+            if (!m.node_movable[n]) continue;
+            ++tmv;
+            ++t_mv[(int)m.node_rule[n]];
+        }
+        int te = 0, n_free = 0, n_split = 0, n_frozen = 0, n_req = 0;
+        for (int e = 0; e < nelem; ++e) {
+            ConstConnAccessor conn = connectivity[e];
+            bool top = false;
+            for (int i = 0; i < NODES_PER_ELEM && !top; ++i)
+                top = ((*var.bcflag)[conn[i]] & BOUNDZ1) != 0;
+            if (!top) continue;
+            ++te;
+            if (m.elem_grade[e] == ELEM_FREE) { ++n_free; continue; }
+            if (m.elem_grade[e] == ELEM_SPLIT) { ++n_split; continue; }
+            ++n_frozen;
+            bool all_fixed = true;
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (m.node_movable[conn[i]]) all_fixed = false;
+            if (all_fixed) { ++n_req; continue; }
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (m.node_movable[conn[i]]) ++blk[(int)m.node_rule[conn[i]]];
+        }
+        const double CHURN_ALARM_FRAC = 0.3;   // heuristic
+        if (tmv > CHURN_ALARM_FRAC * tn)
+            std::cout << "      [freeze] WARNING: surface churn -- " << tmv << "/" << tn
+                      << " top-bdry nodes movable (R1=" << t_mv[1] << " R3=" << t_mv[3]
+                      << " R4=" << t_mv[4] << "), MMG may re-tessellate the free surface"
+                      << " and diffuse the topography.\n"
+                      << "      [freeze] top-row elems: total=" << te
+                      << " free(R1/R4)=" << n_free << " split(R2)=" << n_split
+                      << " frozen=" << n_frozen << " -> required=" << n_req
+                      << "; blocking movable-node refs: R1=" << blk[1]
+                      << " R3=" << blk[3] << " R4=" << blk[4] << "\n";
+    }
+
     rule_size_recovery(param, var, connectivity, nnode, nelem, clamp_side_bits,
                        fixed_side_bits, m);  // R5
+    m.counts.n_r5_free = count_grade(ELEM_FREE) - m.counts.n_r1_free - m.counts.n_r4_free;
 
+    // movable-node attribution for the [freeze] summary
+    for (int n = 0; n < nnode; ++n)
+        if (m.node_movable[n]) ++m.counts.n_mv[(int)m.node_rule[n]];
     return m;
 }
 
@@ -3141,52 +3230,58 @@ struct CollapseRemap {
     const int_vec *collapsed_pts;     // old node ids marked for the collapse
 };
 
-// Conservative remeshing: mark the "quiet" part of the mesh as MMG-required so MMG leaves it
-// untouched and mostly remeshes the active region (FREEZE / REQUIRED POLICY lists the quiet
-// elements it also frees). This mirrors the triangle path, which
-// re-triangulates existing points and does not disturb elements without plastic strain or
-// deformation -- avoiding needless node motion and field interpolation in quiet regions.
-//
-// The criterion is plastic strain that is still INCREASING, not accumulated plastic strain.
-// Every MMG remesh re-interpolates the elements it re-adapts (inject_field's weighted average),
-// which numerically diffuses their fields; keying on accumulated strain would re-adapt the whole
-// shear band every remesh and smear the localization (peak plstrain decays vs the triangle path).
-// Instead we compare against plstrain_remesh (the snapshot taken at the previous remesh): an
-// element is ACTIVE only if it yielded MORE since then (R2). A fossil band that has stopped
-// growing is therefore frozen and its sharp plstrain is carried across the remesh verbatim
-// (is_changed==0 -> direct copy), exactly like the triangle path preserves untouched points.
-//
-// MMG entity ids are 1-based and, on the direct path (remap == NULL), match the old-mesh
-// node/element order 1:1 (vertices = packed old_coord, triangles/tets built from old
-// connectivity in order). On the collapse path the mesh handed to MMG has been RENUMBERED
-// (sunk material merged out, elements dropped), so the old<->MMG id map is no longer 1:1:
-//   (1) compute the freeze policy on the OLD mesh (its var fields match old ids exactly),
-//   (2) TRANSLATE the masks through the collapse renumbering (remap->new_to_old_*),
-//   (3) additionally FREE the collapse region (R7): any new element whose source old element
-//       referenced a collapsed (pts) node was reshaped by the collapse; mark it and its nodes
-//       movable, plus one ring of connected elements. Those freed nodes carry the
-//       init_elem_size_n-based metric (compute_metric_field's base), so MMG re-refines the
-//       collapsed region back to the initial element size instead of leaving it coarse,
-//   (4) derive required on the NEW connectivity.
-//
-// R6 on both paths: flatten_* may have snapped boundary nodes onto their restored plane
-// (up to max_boundary_distortion), squashing or inverting elements AFTER the R1-R5 masks were
-// computed on the PRE-flatten coords; their interior nodes would stay pinned as required
-// vertices and MMG could never repair the flat band it would otherwise emit along the restored
-// boundary (cmp_bottom remesh 176/177). flatten_broken[e] applies the same REPAIR rule on the
-// post-flatten geometry; free those elements exactly like R1 frees a repair element (the
-// collapse path also gives them the collapse region's one ring, see (3) above). Deliberately
-// NO wider freeing on the direct path: every extra freed element enlarges the re-interpolated
-// region and its post-remesh disequilibrium shock (freeing the whole flatten band NaN'd
-// cmp_bottom at step 118600; dies at: whole displaced band 118600 / quality-halved band 99200 /
-// REPAIR-only 177400 = the model's physical neck-through end).
-//
-// NOTE (2026-07-10): dissolving small REQUIRED-element islands (components < 6 elements
-// losing required-element status, nodes kept) was tried here as a preventive against the
-// post-remesh quality retries and REVERTED after an A/B/C/D comparison on the
-// subd-serp-remesh frame-30 restart window: with dissolution 14 remeshes / 17 MMG re-runs,
-// without it 10 / 8 -- re-tessellating the dissolved islands at every remesh CREATED more
-// bad output elements (and mesh churn) than the pinned islands ever did. Do not re-add.
+// One [freeze] report per remesh: grade totals and, per grade, which rule acted and why.
+static void report_freeze_summary(const char *path, const FreezeCounts &c,
+                                  const std::vector<char> &elem_grade, int extra_free,
+                                  const char *extra_label, const char *note,
+                                  int mnode, int n_req_node, int n_req_elem)
+{
+    const int melem = (int)elem_grade.size();
+    int n_free = 0, n_split = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (elem_grade[e] == ELEM_FREE) ++n_free;
+        else if (elem_grade[e] == ELEM_SPLIT) ++n_split;
+    }
+    const int n_frozen = melem - n_free - n_split;
+    // frozen = required (carried verbatim) + hinge (a movable node, so MMG may reshape it)
+    std::cout << "      [freeze] conservative remesh (" << path << "): " << melem
+              << " elements -> " << n_free << " free + " << n_split << " split + "
+              << n_frozen << " frozen (" << n_req_elem << " required verbatim + "
+              << n_frozen - n_req_elem << " hinge with movable nodes); "
+              << n_req_node << "/" << mnode << " nodes pinned.\n";
+    if (n_free) {
+        std::cout << "      [freeze]   free :";
+        const char *sep = " ";
+        if (c.n_r1_free) { std::cout << sep << c.n_r1_free << " R1 repair (low-quality/tiny)"; sep = ", "; }
+        if (c.n_r4_free) { std::cout << sep << c.n_r4_free << " R4 inflow side strip"; sep = ", "; }
+        if (c.n_r5_free) { std::cout << sep << c.n_r5_free << " R5 size recovery"; sep = ", "; }
+        if (extra_free)  { std::cout << sep << extra_free << " " << extra_label; }
+        std::cout << note << ".\n";
+    }
+    if (n_split)
+        std::cout << "      [freeze]   split: " << n_split
+                  << " R2 plastic-strain growth (refined in place, nodes pinned).\n";
+    const int n_movable = mnode - n_req_node;
+    if (n_movable) {
+        std::cout << "      [freeze]   nodes: " << n_movable << "/" << mnode << " movable --";
+        const char *sep = " ";
+        if (c.n_mv[1]) { std::cout << sep << c.n_mv[1] << " R1 repair"; sep = ", "; }
+        if (c.n_mv[3]) { std::cout << sep << c.n_mv[3] << " R3 boundary"; sep = ", "; }
+        if (c.n_mv[4]) { std::cout << sep << c.n_mv[4] << " R4 inflow band interior"; sep = ", "; }
+        if (c.n_mv[5]) { std::cout << sep << c.n_mv[5] << " R5 size recovery"; sep = ", "; }
+        const int rest = n_movable - c.n_mv[1] - c.n_mv[3] - c.n_mv[4] - c.n_mv[5];
+        if (rest != 0) std::cout << sep << rest << " " << extra_label;
+        std::cout << note << ".\n";
+    }
+}
+
+// Conservative remeshing: mark the QUIET part of the mesh MMG-required, so MMG mostly remeshes the
+// active region. Active = plastic strain still GROWING (R2, against plstrain_remesh), not
+// accumulated: every re-adapted element is re-interpolated, so keying on the accumulated strain
+// would smear the whole band at every remesh. A fossil band is carried verbatim (is_changed == 0).
+// The collapse path (remap non-NULL) renumbers the mesh: steps (1)-(4) below. R6 is needed
+// because flatten_* may squash elements after R1-R5 judged them. The collapse region carries the
+// init-size metric, so MMG re-refines it.
 void mark_quiet_required(const Param &param, const Variables &var,
                          const array_t &old_coord, const conn_t &old_connectivity,
                          int mnode, int melem,
@@ -3208,20 +3303,22 @@ void mark_quiet_required(const Param &param, const Variables &var,
         if (mnode != old_nnode || melem != old_nelem)
             die(EXIT_INTERNAL_ASSERT, "mark_quiet_required: direct-path mesh is not the old mesh");
         // R6: free what flatten broke.
+        int n_r6_free = 0;
         for (int e = 0; e < melem; ++e) {
             if (!flatten_broken[e]) continue;
+            if (m.elem_grade[e] != ELEM_FREE) ++n_r6_free;
             m.elem_grade[e] = ELEM_FREE;
             ConstConnAccessor conn = old_connectivity[e];
             for (int i = 0; i < NODES_PER_ELEM; ++i) m.node_movable[conn[i]] = 1;
         }
         derive_required(m, mnode, melem, mconn,
                         required_node, required_elem, n_req_node, n_req_elem);
-        std::cout << "    Conservative remesh: froze " << n_req_elem << "/" << melem
-                  << " elements (" << (melem - n_req_elem) << " modifiable), "
-                  << n_req_node << "/" << mnode << " nodes required.\n";
+        report_freeze_summary("direct path", m.counts, m.elem_grade, n_r6_free,
+                              "R6 flatten-broken", "", mnode, n_req_node, n_req_elem);
     }
     else {
-        // (2) translate OLD masks -> NEW (collapsed) masks
+        // (2) OLD masks -> NEW masks. t.node_rule stays unallocated and t.counts zero: R6/R7
+        //     write node_movable directly, and the report reads m.counts.
         FreezeMask t;
         t.node_movable.assign(mnode, 0);
         t.elem_grade.assign(melem, ELEM_FROZEN);
@@ -3235,6 +3332,7 @@ void mark_quiet_required(const Param &param, const Variables &var,
         for (std::size_t i = 0; i < remap->collapsed_pts->size(); ++i)
             is_pts[(*remap->collapsed_pts)[i]] = 1;
         std::vector<char> collapse_node(mnode, 0);
+        int n_r67_free = 0;
         for (int e = 0; e < melem; ++e) {
             const int old_e = (*remap->new_to_old_elem)[e];
             ConstConnAccessor oc = old_connectivity[old_e];
@@ -3242,6 +3340,7 @@ void mark_quiet_required(const Param &param, const Variables &var,
             for (int i = 0; i < NODES_PER_ELEM && !touched; ++i)
                 if (is_pts[oc[i]]) touched = true;
             if (!touched) continue;
+            if (t.elem_grade[e] != ELEM_FREE) ++n_r67_free;
             t.elem_grade[e] = ELEM_FREE;
             for (int i = 0; i < NODES_PER_ELEM; ++i) { int nn = mconn[e*NODES_PER_ELEM + i]; t.node_movable[nn] = 1; collapse_node[nn] = 1; }
         }
@@ -3249,15 +3348,19 @@ void mark_quiet_required(const Param &param, const Variables &var,
             bool touch = false;
             for (int i = 0; i < NODES_PER_ELEM; ++i) if (collapse_node[mconn[e*NODES_PER_ELEM + i]]) { touch = true; break; }
             if (!touch) continue;
+            if (t.elem_grade[e] != ELEM_FREE) ++n_r67_free;
             t.elem_grade[e] = ELEM_FREE;
             for (int i = 0; i < NODES_PER_ELEM; ++i) t.node_movable[mconn[e*NODES_PER_ELEM + i]] = 1;
         }
         // (4) derive required on the NEW connectivity
         derive_required(t, mnode, melem, mconn,
                         required_node, required_elem, n_req_node, n_req_elem);
-        std::cout << "    Conservative remesh (collapse path): froze " << n_req_elem << "/" << melem
-                  << " elements (" << (melem - n_req_elem) << " modifiable), "
-                  << n_req_node << "/" << mnode << " nodes required.\n";
+        // R1-R5 attribution was counted on the pre-collapse mesh (m); the totals are the
+        // translated mask actually handed to MMG.
+        report_freeze_summary("collapse path", m.counts, t.elem_grade, n_r67_free,
+                              "R6/R7 flatten-broken + collapse region",
+                              " (R1-R5 counted pre-collapse)",
+                              mnode, n_req_node, n_req_elem);
     }
 }
 
@@ -3424,11 +3527,11 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
             if (!req_node[el[k]]) { req_elem[e] = 0; ++nfreed_hinge; break; }
     }
     const int nfreed = nfreed_core + nfreed_hinge;
-    std::cout << "    Post-remesh quality check: " << nbad
-              << " output element(s) below min_quality/tiny; unfroze " << nfreed_core
+    std::cout << "      [quality] MMG output has " << nbad
+              << " below-min_quality/tiny element(s); unfroze " << nfreed_core
               << " core entities within " << rings << " connectivity ring(s) (+"
               << nfreed_hinge << " hinge element(s), nodes kept)"
-              << (nfreed ? "."
+              << (nfreed ? " for a retry."
                          : " -- nothing frozen in reach, keeping this mesh (a tiny element where the"
                            " free surface meets a wall can need a larger mmg_hausd_factor).")
               << "\n";
@@ -3452,16 +3555,16 @@ void mmg_adapt_quality_gated(const Param &param, const MMGInput &in, MMGOutput &
             // a silent bad element re-triggers remeshing a few steps later.
             const int nbad = collect_bad_output(param, out, NULL, NULL);
             if (nbad)
-                std::cout << "    Warning: post-remesh quality retries exhausted; keeping a mesh "
-                             "with " << nbad << " below-min_quality/tiny element(s). A tiny one "
-                             "where the free surface meets a wall can need a larger "
-                             "mmg_hausd_factor.\n";
+                std::cout << "      [quality] WARNING: retries exhausted; keeping a mesh with "
+                          << nbad << " below-min_quality/tiny element(s) "
+                             "(will re-trigger remeshing shortly; a tiny one where the free "
+                             "surface meets a wall can need a larger mmg_hausd_factor).\n";
             break;
         }
         if (unfreeze_near_bad_output(param, out, in.nnode, in.nelem, in.coord, in.conn,
                                      attempt, req_node, req_elem) == 0) break;
-        std::cout << "    Re-running MMG with the unfrozen neighbourhood (attempt "
-                  << attempt + 2 << ").\n";
+        std::cout << "      [quality] re-running MMG with the unfrozen neighbourhood (attempt "
+                  << attempt + 2 << "/4).\n";
     }
 }
 
@@ -4051,8 +4154,9 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
     rebuild_collapsed_segments(nseg, segment, segflag, remap, ne, nconn, new_to_old_node, bcflag, ncoord,
                                nsegment, nsegflag, ns);
     if (nadjusted)   // logged only for a collapse that went through
-        std::cout << "    Area-preserving collapse: repositioned " << nadjusted
-                  << " top-surface merge target(s), conserving " << a_conserved << " m^2.\n";
+        std::cout << "      [collapse] area-preserving merge: repositioned " << nadjusted
+                  << " top-surface merge target(s), conserving " << a_conserved
+                  << " m^2 of domain area a plain snap would have swept.\n";
     return ncoll;
 }
 #endif
@@ -4207,8 +4311,9 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     bool outside_material = !points_to_delete.empty();
     bool collapse_needed = outside_material;
     if (outside_material) {
-        std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
-                     "the boundary before MMG.\n";
+        std::cout << "      [collapse] material past, or within " << min_dist
+                  << " m of, a restored boundary; collapsing it onto the boundary plane "
+                     "before MMG (collapse path).\n";
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
@@ -4374,8 +4479,9 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     bool outside_material = !points_to_delete.empty();
     bool collapse_needed = outside_material;
     if (outside_material) {
-        std::cerr << "  Material moved outside a restored boundary; collapsing it back onto "
-                     "the boundary before MMG.\n";
+        std::cout << "      [collapse] material past, or within " << min_dist
+                  << " m of, a restored boundary; collapsing it onto the boundary plane "
+                     "before MMG (collapse path).\n";
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
@@ -4402,8 +4508,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                          c_coord, c_conn, c_seg, c_segflag, c_metric,
                          c_new_to_old_node, c_new_to_old_elem, removed, cn, ce, cs);
         if (n_surf > 0) {
-            std::cout << "    Collapsing " << n_surf
-                      << " node(s) of boundary segments below hmin before MMG.\n";
+            std::cout << "      [collapse] boundary segments below hmin: collapsing " << n_surf
+                      << " node(s) that MMG cannot fix itself (collapse path).\n";
             mnode = cn; melem = ce; mseg = cs;
             mcoord = c_coord.data();
             mconn1 = c_conn.data();
@@ -4489,7 +4595,11 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                 rn = req_node.data(); re = req_elem.data();
             }
         }
-        if (!iface_edges.empty()) { ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2; }
+        if (!iface_edges.empty()) {
+            ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2;
+            std::cout << "      [require] " << n_ie << " material-interface edge(s) handed to "
+                         "MMG as required (front tracking of the inflow-band layering).\n";
+        }
     }
 
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie };
@@ -5199,7 +5309,7 @@ void restore_side_fields(const Param &param, Variables &var,
         }
     }
     if (count_n || count_e)
-        std::cout << "    Restored the side profile on " << count_n
+        std::cout << "      [restore] side profile: re-imposed run-start fields on " << count_n
                   << " incoming node(s) and " << count_e << " incoming element(s)"
                   << " (cumulative wall shift x0/x1: "
                   << var.side_profile[iboundx0].wall_shift << "/"

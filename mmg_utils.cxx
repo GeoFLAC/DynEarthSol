@@ -158,11 +158,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 
     const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG3DLIB (strong failure, mesh unusable).\n");
         die(EXIT_MESH_MMG);
     } else if (ier == MMG5_LOWFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG3DLIB\n");
-        // Init tolerates a low failure (mesh is saved but imperfect); remesh treats it as fatal.
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG3DLIB (low failure, mesh saved but imperfect).\n");
         if (!in.tolerate_low_failure) die(EXIT_MESH_MMG);
     }
 
@@ -242,11 +241,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 
     const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG2DLIB: UNABLE TO SAVE MESH\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG2DLIB (strong failure, mesh unusable).\n");
         die(EXIT_MESH_MMG);
     } else if (ier == MMG5_LOWFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG2DLIB\n");
-        // Init tolerates a low failure (mesh is saved but imperfect); remesh treats it as fatal.
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG2DLIB (low failure, mesh saved but imperfect).\n");
         if (!in.tolerate_low_failure) die(EXIT_MESH_MMG);
     }
 

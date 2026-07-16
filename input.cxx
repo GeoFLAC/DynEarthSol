@@ -310,7 +310,15 @@ static void declare_parameters(po::options_description &cfg,
          "clamp, plastic-strain refinement, size floors). Recovers e.g. the ~resolution elements that "
          "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
          "wall size forever as they advect inland. Elements within the envelope (the legal size "
-         "transition around fine regions, the refined shear band) are never touched. "
+         "transition around fine regions, the refined shear band) are never touched. Never freed "
+         "either: an element refined for plastic-strain growth (mmg_remesh_active_plstrain); one "
+         "touching the top surface; one at a material interface (mixed or no markers, or a node "
+         "shared with an element whose markers are mixed, absent or of another material), so "
+         "wall-size elements on a layer boundary of the incoming column stay fine; and the "
+         "elements touching a restored wall that receives no "
+         "material plus 4 rings around them. The remesh log's '[unfreeze] size recovery' line "
+         "counts the top-surface, interface and fixed-side-band skips. Size recovery never "
+         "unpins a restored-wall or bottom node. "
          "0 disables (also the split of elements >= 2x their target); otherwise must be > 1 (hysteresis "
          "against re-freeing the legal transition). Default 1.4 ~ sqrt(2) in edge length: one "
          "bisection (area-halving) level in 2D, heuristic.")
@@ -1340,14 +1348,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         die(EXIT_CONFIG_VALUE);
     }
 
-    // Quality <= 1 (1 = equilateral). About a quarter of a remeshed MMG mesh lies below 0.875
-    // (measured in 2D and 3D; 0.875, not 0.9, as 0.6 * 1.5 rounds below 0.9) and all of it below
-    // 1, so R1 would repair that much at every remesh.
+    // Quality <= 1, so near a product of 1 R1 frees almost every element at every remesh.
+    // Threshold 0.9, heuristic; written 0.875 because 0.6 * 1.5 rounds below 0.9.
     if (p.mesh.meshing_elem_shape == 0 &&
         p.mesh.min_quality * p.mesh.mmg_remesh_defensive_quality_ratio >= 0.875) {
         std::cerr << "Warning: mesh.min_quality * mesh.mmg_remesh_defensive_quality_ratio "
-                     ">= 0.875: the MMG freeze repairs a quarter of the mesh or more at every "
-                     "remesh (all of it at >= 1).\n";
+                     ">= 0.875: at every remesh the MMG freeze unfreezes every element of quality "
+                     "below that product (all of them at >= 1) for MMG to repair, and an element "
+                     "MMG rebuilds is re-interpolated; the remesh log's 'R1 repair "
+                     "(low-quality/tiny)' count gives their number, tiny elements included.\n";
     }
 
     if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
