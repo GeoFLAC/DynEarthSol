@@ -4,7 +4,8 @@
 int bad_mesh_quality(const Param&, const Variables&, int&, double&);
 void remesh(const Param&, Variables&, int);
 void initialize_elem_size_n(const Variables&, double_vec &);
-void detect_side_profile(const Param&, Variables&);
+void detect_side_profile(const Param&, Variables&, uint side_bits);
+
 // Depth lookups in a recorded SideProfile (parameters.hpp); depths relative to the side's
 // top point. Used by the post-remesh field restore (remeshing.cxx) and the side-wall
 // marker replenishment (markerset.cxx). node_value interpolates any (depth, value) table

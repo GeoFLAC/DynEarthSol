@@ -79,6 +79,24 @@ void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &s
     segflag.resize(ns);
 }
 
+// Drop the facets carrying `ref` (the interface facets appended on input come back with it).
+static void drop_facets_with_ref(MMGOutput &out, int ref)
+{
+    int w = 0;
+    for (int i = 0; i < out.nseg; ++i) {
+        if (out.segflag[i] == ref) continue;
+        if (w != i) {
+            for (int j = 0; j < NODES_PER_FACET; ++j)
+                out.seg[(std::size_t)w*NODES_PER_FACET + j] = out.seg[(std::size_t)i*NODES_PER_FACET + j];
+            out.segflag[w] = out.segflag[i];
+        }
+        ++w;
+    }
+    out.nseg = w;
+    out.seg.resize((std::size_t)out.nseg * NODES_PER_FACET);
+    out.segflag.resize(out.nseg);
+}
+
 } // anonymous namespace
 
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
@@ -103,6 +121,17 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     if (mesh.is_discarding_internal_segments)
         drop_unflagged_facets(nseg_in, seg1, segref);   // stale interior echoes (see above)
     for (int &v : seg1) ++v;
+    // Material-interface front-tracking (option 13): append the interface facets after the boundary
+    // facets with a sentinel ref, mark them MMG-required below, and drop them from the returned
+    // segments (they are internal, not a boundary).
+    const int IFACE_REF = 1 << 24;   // distinct from every BOUND* flag combination
+    const int n_iface = (in.req_facets && in.n_req_facets > 0) ? in.n_req_facets : 0;
+    for (int k = 0; k < n_iface; ++k) {
+        for (int j = 0; j < NODES_PER_FACET; ++j)
+            seg1.push_back(in.req_facets[NODES_PER_FACET*k + j] + 1);
+        segref.push_back(IFACE_REF);
+    }
+    const int nseg_all = nseg_in + n_iface;
 
     MMG5_pMesh mmgMesh = NULL;
     MMG5_pSol  mmgSol  = NULL;
@@ -111,10 +140,12 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG3D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    MMG_OK(MMG3D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_in, 0, 0));
+    MMG_OK(MMG3D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_all, 0, 0));
     MMG_OK(MMG3D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
     MMG_OK(MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL));
     MMG_OK(MMG3D_Set_triangles(mmgMesh, seg1.data(), segref.data()));
+    for (int k = 0; k < n_iface; ++k)   // 1-based; interface triangles are the last n_iface entries
+        MMG_OK(MMG3D_Set_requiredTriangle(mmgMesh, nseg_in + k + 1));
 
     if (in.metric_aniso) {
         // metric_aniso is nnode*6 row-major (m11,m12,m13,m22,m23,m33) -- exactly the layout
@@ -144,10 +175,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 
     const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG3DLIB: UNABLE TO SAVE MESH\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG3DLIB (strong failure, mesh unusable).\n");
         die(EXIT_MESH_MMG);
     } else if (ier == MMG5_LOWFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG3DLIB\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG3DLIB (low failure, mesh saved but imperfect).\n");
         // Init tolerates a low failure (mesh is saved but imperfect); remesh treats it as fatal.
         if (!in.tolerate_low_failure) die(EXIT_MESH_MMG);
     }
@@ -172,6 +203,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         MMG_OK(MMG3D_Get_triangle(mmgMesh, &s[0], &s[1], &s[2], &out.segflag[i], NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
     }
+    if (n_iface) drop_facets_with_ref(out, IFACE_REF);   // interface facets are internal constraints
     // MMG returns each required-element facet as an extra ref=0 copy of the same node set;
     // merge duplicates so var.segment stays duplicate-free (see dedup_facets), then drop the
     // surviving ref=0 interior echoes so they cannot ratchet across remeshes (see
@@ -188,18 +220,6 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG2D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
-    // Material-interface front-tracking (option 13): append the interface edges after the
-    // boundary segments with a sentinel ref, so they can be marked MMG-required below (kept as a
-    // conforming edge) and then dropped from the returned segments (they are internal, not a
-    // boundary). seg1/segref hold nseg_in 1-indexed boundary edges; append the interface edges.
-    const int IFACE_EDGE_REF = 1 << 24;   // distinct from every BOUND* flag combination
-    const int n_iface = (in.req_edges && in.n_req_edges > 0) ? in.n_req_edges : 0;
-    for (int k = 0; k < n_iface; ++k) {
-        seg1.push_back(in.req_edges[2*k]     + 1);
-        seg1.push_back(in.req_edges[2*k + 1] + 1);
-        segref.push_back(IFACE_EDGE_REF);
-    }
-    const int nseg_all = nseg_in + n_iface;
 
     MMG_OK(MMG2D_Set_meshSize(mmgMesh, in.nnode, in.nelem, 0, nseg_all));
     MMG_OK(MMG2D_Set_vertices(mmgMesh, const_cast<double*>(in.coord), NULL));
@@ -236,10 +256,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 
     const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG2DLIB: UNABLE TO SAVE MESH\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG2DLIB (strong failure, mesh unusable).\n");
         die(EXIT_MESH_MMG);
     } else if (ier == MMG5_LOWFAILURE) {
-        std::fprintf(stdout, "BAD ENDING OF MMG2DLIB\n");
+        std::fprintf(stderr, "    [mmg] ERROR: bad ending of MMG2DLIB (low failure, mesh saved but imperfect).\n");
         // Init tolerates a low failure (mesh is saved but imperfect); remesh treats it as fatal.
         if (!in.tolerate_low_failure) die(EXIT_MESH_MMG);
     }
@@ -263,21 +283,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
         MMG_OK(MMG2D_Get_edge(mmgMesh, &s[0], &s[1], &out.segflag[i], NULL, NULL));
         for (int j = 0; j < NODES_PER_FACET; ++j) s[j] -= 1;
     }
-    if (n_iface) {   // drop the interface edges (internal constraints) from the boundary segments
-        int w = 0;
-        for (int i = 0; i < out.nseg; ++i) {
-            if (out.segflag[i] == IFACE_EDGE_REF) continue;
-            if (w != i) {
-                for (int j = 0; j < NODES_PER_FACET; ++j)
-                    out.seg[(std::size_t)w*NODES_PER_FACET + j] = out.seg[(std::size_t)i*NODES_PER_FACET + j];
-                out.segflag[w] = out.segflag[i];
-            }
-            ++w;
-        }
-        out.nseg = w;
-        out.seg.resize((std::size_t)out.nseg * NODES_PER_FACET);
-        out.segflag.resize(out.nseg);
-    }
+    if (n_iface) drop_facets_with_ref(out, IFACE_REF);   // interface facets are internal constraints
     // MMG returns each required-element facet as an extra ref=0 copy of the same node set;
     // merge duplicates so var.segment stays duplicate-free (see dedup_facets), then drop the
     // surviving ref=0 interior echoes so they cannot ratchet across remeshes (see
