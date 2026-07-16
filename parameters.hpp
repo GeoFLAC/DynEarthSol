@@ -942,6 +942,13 @@ struct Variables {
     // remesh() overwrite some of those copies (see there); the rest stay. Empty outside remeshing.
     std::vector<char> remesh_node_outside;
 
+    // Per-remesh scratch, per NEW element: if its part inside the old mesh lies in exactly one old
+    // element whose markers are all one mattype, that mattype, else -1; _time: that old element's
+    // lowest-index marker's time. Filled by nearest_neighbor_interpolation, read by the marker
+    // replenishment, cleared after remap_markers. Empty outside remeshing.
+    std::vector<int> remesh_elem_split_mat;
+    std::vector<double> remesh_elem_split_time;
+
     // tensor_t *stress_old;
 
     MatProps *mat;

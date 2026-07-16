@@ -434,9 +434,10 @@ static void declare_parameters(po::options_description &cfg,
          "12: if the element's surviving markers are all one mattype, use that mattype directly "
          "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
          "to option 2 (nearest marker). Exact in single-material elements.\n"
-         "(Independently of this option, when a remeshing_option restores the side walls (e.g. 13) "
-         "material returning at a restored side always keeps the layering auto-detected at run start "
-         "for that side, pinned to the side's top mesh point.)")
+         "At a remesh, independently of this option, an element whose part inside the old mesh lies "
+         "in one old element whose markers were all one mattype gets that mattype, and with "
+         "remeshing_option 13 an element at a receiving wall gets the wall's recorded layering (see "
+         "remeshing_option).")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;

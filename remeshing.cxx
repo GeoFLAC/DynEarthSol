@@ -6106,6 +6106,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
+        var.remesh_elem_split_mat.clear();   // single-parent maps are only valid for this remesh
+        var.remesh_elem_split_time.clear();
+
         // reset stray marker mattypes in the inflow band before they advect inland
         correct_inflow_band_marker_mattype(param, var, side_inflow.in);
   

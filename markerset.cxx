@@ -1492,12 +1492,12 @@ namespace {
 #endif
     }
 
-    // An element whose surviving markers are ALL one mattype is filled with that mattype directly
-    // (exact, no nearest-neighbour guess). A sediment marker also gets a deposition time: surface
-    // path as in the nn replenisher (compute_sed_marker_time_genesis), else copied from a surviving
-    // sediment marker. Caller guarantees exactly one nonzero mattype count per element. Serial.
+    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): the
+    // split parent's (var.remesh_elem_split_mat) when from_split_parent, else the only mattype
+    // among its surviving markers (the caller guarantees one). Serial.
     void replenish_markers_homogeneous(const Param& param, const Variables &var,
-            int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi)
+            int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi,
+            bool from_split_parent = false)
     {
         if (homo_elems.empty()) return;
         MarkerSet &ms = *var.markersets[0];
@@ -1509,17 +1509,21 @@ namespace {
             int e = pr.first;
             int num_marker_in_elem = pr.second;
 
-            // the single mattype present (exactly one nonzero count, per the caller's split)
             int mt = 0;
-            for (int t = 0; t < param.mat.nmat; ++t)
-                if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
+            if (from_split_parent)
+                mt = var.remesh_elem_split_mat[e];
+            else
+                for (int t = 0; t < param.mat.nmat; ++t)
+                    if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
 
-            // Baseline deposition time for a sediment marker: copy a surviving sediment
-            // marker of this element (all markers here share mt, so any is sediment). A
-            // non-sediment marker carries 0, as in replenish_markers_with_mattype_0/cpdf.
+            // Sediment: the lowest-index sediment survivor's time, else the split parent's
+            // (remesh_elem_split_time) rather than 0, an initial marker's. Other mattypes carry 0.
             double ti_base = 0.;
-            if (mt == param.mat.mattype_sed && !(*var.markers_in_elem)[e].empty())
-                ti_base = ms.get_time((*var.markers_in_elem)[e].front());
+            if (mt == param.mat.mattype_sed) {
+                const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[e], mt);
+                if (m0 >= 0) ti_base = ms.get_time(m0);
+                else if (from_split_parent) ti_base = var.remesh_elem_split_time[e];
+            }
 
             const int first_new = ms.get_nmarkers();
             while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
@@ -2022,9 +2026,8 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     nvtxRangePop();
 #endif
 
-    // Material entering at a RESTORED side wall keeps its original layering independent of
-    // replenishment_option: elements touching a wall with a profile are replenished from it,
-    // the rest go through the chosen option. `rest` points at the elements left for the chosen option.
+    // Fill order, independent of replenishment_option: elements on a profiled side wall from its
+    // profile, then split-parent elements, then the chosen option. `rest` = not yet replenished.
     int_pair_vec side_elems, filtered;
     int_pair_vec *rest = &unplenished_elems;
     bool have_side_profile = false;
@@ -2038,6 +2041,22 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         replenish_markers_by_side_profile(param, var, side_elems, 1);
         rest = &filtered;
     }
+
+    // elements with a single-mattype parent (var.remesh_elem_split_mat) inherit its mattype
+    if ((int)var.remesh_elem_split_mat.size() != var.nelem)
+        die(EXIT_INTERNAL_ASSERT, "remap_markers: the split-parent map is not for this mesh");
+    int_pair_vec split_elems, nonsplit;
+    nonsplit.reserve(rest->size());
+    for (const auto& pr : *rest)
+        if (var.remesh_elem_split_mat[pr.first] >= 0) split_elems.push_back(pr);
+        else nonsplit.push_back(pr);
+    if (!split_elems.empty()) {
+        replenish_markers_homogeneous(param, var, split_elems, 1, /*is_surface*/ false, EMI_vec(),
+                                      /*from_split_parent*/ true);
+        std::cout << "    Marker replenish (split-parent): " << split_elems.size()
+                  << " element(s) filled with their single parent's mattype.\n";
+    }
+    rest = &nonsplit;
 
     switch (param.markers.replenishment_option) {
     case 0:
