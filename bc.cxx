@@ -228,6 +228,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 // Normal velocity apply_vbcs prescribes on side wall t (0 = x0, 1 = x1, 2 = y0, 3 = y1) at
 // time_in_yr, before the 2D depth profile and the PT_jump hold: vbc_val_* times the wall's
 // period table; 0 for a code that leaves it free or holds it at 0 (1, 3, 6 set it, and 7 in 3D).
+namespace {
 double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
 {
     const bool lo = (t % 2 == 0), y = (t >= 2);
@@ -244,6 +245,21 @@ double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
     const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
                                 : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
     return v * interp1(time, ratio, time_in_yr);
+}
+} // anonymous namespace
+
+// True if side_wall_normal_vbc points into the domain (lower wall: > 0; upper wall: < 0).
+bool side_wall_vbc_is_inflow(const BC &bc, int t, double time_in_yr)
+{
+    const double v = side_wall_normal_vbc(bc, t, time_in_yr);
+    return (t % 2 == 0) ? (v > 0.) : (v < 0.);
+}
+
+// True if side_wall_normal_vbc points out of the domain (lower wall: < 0; upper wall: > 0).
+bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr)
+{
+    const double v = side_wall_normal_vbc(bc, t, time_in_yr);
+    return (t % 2 == 0) ? (v < 0.) : (v > 0.);
 }
 
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel)

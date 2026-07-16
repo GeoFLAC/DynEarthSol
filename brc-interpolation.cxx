@@ -320,9 +320,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 // using nearest old_coord instead
                 e = nn_elem[0];
                 bary.transform(old_coord[nn], e, r);
-                // record the miss: at a restored boundary these are the nodes of material
-                // that entered since the last remesh (consumed by remesh()'s
-                // restore_side_fields). Per-i write, thread-safe.
+                // var.remesh_node_outside; per-i write, thread-safe
                 if (outside_nodes)
                     (*outside_nodes)[i] = 1;
             }
@@ -364,8 +362,6 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     int_vec el(n);
     brc_t brc(n);
-    // Track which new nodes fell outside the old mesh (nearest-node fallback): remesh()
-    // uses this for restore_side_fields on incoming material.
     var.remesh_node_outside.assign(n, 0);
     prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el,
                           &var.remesh_node_outside);

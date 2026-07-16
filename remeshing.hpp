@@ -5,24 +5,49 @@ int bad_mesh_quality(const Param&, const Variables&, int&, double&);
 void remesh(const Param&, Variables&, int);
 void initialize_elem_size_n(const Variables&, double_vec &);
 void detect_side_profile(const Param&, Variables&, uint side_bits);
+double side_wall_top_z(const Variables&, int t);
 
-// Depth lookups in a recorded SideProfile (parameters.hpp); depths relative to the side's
-// top point. Used by the post-remesh field restore (remeshing.cxx); side_profile_elems_at also
-// by the side-wall marker replenishment (markerset.cxx). node_value interpolates any (depth, value) table
-// sorted by depth (node_reldepth vs node_temperature, node_coord0_z, ...).
-// side_profile_elems_at requires a recorded column (asserted) and always returns at least one
-// element.
-double side_profile_node_value(const double_vec &depths, const double_vec &values,
-                               double rel, double tol);
-void side_profile_elems_at(const SideProfile&, double rel, double tol, int_vec &out);
-int side_profile_mattype_at(const SideProfile&, double rel, double tol, int_vec &cand);
+// Along-strike coordinate of point x (indexed by axis) on restored side wall t: y on the x walls,
+// x on the y walls. A 2D wall is a line: 0.
+template <class X>
+inline double side_wall_strike(const X &x, int t)
+{
+#ifdef THREED
+    return x[1 - SIDEWALL_AXIS[t]];
+#else
+    (void)x; (void)t;
+    return 0.;
+#endif
+}
 
-// Same-depth tolerance of the side-profile lookups (tie runs, division levels, the division
-// snap's "already there" test). A degeneracy guard, untuned: 1e-6 x resolution lies far above
-// coordinate round-off (~1e-16 x domain size) and far below any node spacing (about hmin, a
-// fraction of resolution), and the lookups do not depend on it in that range. In 3D, wall
-// nodes tie into a row only where their depths agree to round-off: every row of a structured
-// wall under a level top, and on any wall a flat bottom edge and a level top edge.
-inline double side_profile_depth_tol(const Param &param) { return 1e-6 * param.mesh.resolution; }
+// SideProfile lookups at (s, rel): s along strike (side_wall_strike), rel below the column top
+// (SideProfile). Both locate the point as side_profile_locate does and assert a recorded column.
+// The recorded material of the profile element at (s, rel).
+int side_profile_mattype_at(const SideProfile&, double s, double rel);
+// Marks in in_win (nmat entries) every material the profile assigns at s within depths [lo, hi].
+void side_profile_mattypes_within(const SideProfile&, double s, double lo, double hi,
+                                  std::vector<char> &in_win);
+// Builds the derived lookup index; call after a profile is recorded or read back.
+void side_profile_index_elems(SideProfile&);
+
+#ifdef USEMMG
+struct MMGInput;
+struct MMGOutput;
+// mmg_adapt, re-run with the frozen entities around each bad output element unfrozen while the
+// output has an element below min_quality or the gate's tiny test (remeshing.cxx): at most 4 MMG
+// passes, keeping the last mesh (logged when still bad). Used by remesh() and the initial wall
+// refinement (mesh.cxx). req_node/req_elem must be the vectors in.required_node/required_elem
+// point into (asserted).
+void mmg_adapt_quality_gated(const Param&, const MMGInput &in, MMGOutput &out,
+                             std::vector<char> &req_node, std::vector<char> &req_elem);
+#ifndef THREED
+// Bisects the over-long required interface edges (iface) and their triangles before MMG; grows
+// the arrays in place. Called by remesh() (pull_down) and refine_initial_side_walls.
+void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &conn,
+                                  std::vector<double> &metric, std::vector<char> &reqn,
+                                  std::vector<char> &reqe, std::vector<int> &iface,
+                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down);
+#endif
+#endif
 
 #endif

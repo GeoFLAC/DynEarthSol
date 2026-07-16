@@ -24,6 +24,10 @@ struct MMGInput {
     // sentinel ref, dropped from out.seg). nullptr/0 => none.
     const int *req_edges;
     int n_req_edges;
+    // Optional ELEMENT references, nelem (nullptr => none; 2D only): MMG gives each new element
+    // its parent's, returned in MMGOutput::elem_ref (mesh.cxx: the initial wall band's regions).
+    // MMG keeps an edge between different references as an internal boundary; out.seg drops it.
+    const int *elem_ref;
 };
 
 // Adapted mesh returned by mmg_adapt (0-indexed, flat buffers ready for load_from_buffer).
@@ -33,6 +37,7 @@ struct MMGOutput {
     std::vector<int>    conn;     // nelem*NODES_PER_ELEM
     std::vector<int>    seg;      // nseg*NODES_PER_FACET
     std::vector<int>    segflag;  // nseg
+    std::vector<int>    elem_ref; // nelem when MMGInput::elem_ref is set, else empty
 };
 
 // Run one MMG (2D or 3D, per build) adaptation of `in` into `out`. The size band and solver

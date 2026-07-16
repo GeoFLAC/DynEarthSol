@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -1128,54 +1129,52 @@ void refine_surface_elem(const Param &param, const Variables &var,
 #endif
 }
 
-// Per-side INFLOW state of the restored side walls (remeshing_option 13), measured on the OLD
-// mesh: a side receives material when its wall moved inward off its restored plane since the
-// last remesh. Only a receiving side gets the inflow-gated treatments (R4 strip, field restore,
-// interface edges, aniso metric, division relocation, band marker correction); the wall metric
-// clamp, R3 pinning (which R5 never undoes) and R5's wall target clamp apply to every restored
-// wall; R5's skip of the wall band + 4 rings applies only to a side NOT receiving. remesh()'s
-// side-profile lifecycle (erase, late detection) and restore_side_fields' wall_shift bookkeeping
-// (every profiled wall) also read the state.
+// Drift state of the restored side walls (remeshing_option 13), measured on the OLD mesh. A side
+// RECEIVES material when its wall moved inward off its plane since the last remesh, and drifted
+// OUTWARD when it moved out (flatten_* snaps it back, which narrows the column beside it).
+// - Receiving: the R4 strip, field restore, aniso metric, division relocation, band marker
+//   correction, and in 2D required interface edges unless it also drifted outward.
+// - Outward: the R4 strip, in its outward form (rule_side_strip).
+// - Every restored wall: the wall metric clamp, R3 pinning and R5's wall target clamp. R5 skips
+//   the elements beside the wall of a side not receiving.
+// remesh()'s side-profile lifecycle and restore_side_fields' wall_shift also read the state.
 struct SideInflowState {
-    double x0_in, x1_in;    // inward extent of the old wall (x0: max x; x1: min x)
-    bool in_x0, in_x1;
-#ifdef THREED
-    double y0_in, y1_in;
-    bool in_y0, in_y1;
-#endif
-    SideInflowState() : x0_in(0.), x1_in(0.), in_x0(false), in_x1(false)
-#ifdef THREED
-        , y0_in(0.), y1_in(0.), in_y0(false), in_y1(false)
-#endif
-    {}
+    double pos_in[NSIDEWALL];   // inward extent of the old wall along its axis (lower: max; upper: min)
+    double pos_out[NSIDEWALL];  // outward extent of the old wall along its axis (lower: min; upper: max)
+    bool   in[NSIDEWALL];       // wall moved inward since the last remesh = receiving material
+    bool   out[NSIDEWALL];      // wall moved outward since the last remesh = column snapped narrower
+    SideInflowState() {
+        for (int t = 0; t < NSIDEWALL; ++t) { pos_in[t] = pos_out[t] = 0.; in[t] = out[t] = false; }
+    }
 };
 
-SideInflowState side_inflow_state(const Param &param, int nnode,
+SideInflowState side_inflow_state(const Param &param, double time_in_yr, int nnode,
                                   const array_t &coord, const uint_vec &bcflag)
 {
     SideInflowState s;
-    s.x0_in = 0.0; s.x1_in = param.mesh.xlength;
-#ifdef THREED
-    s.y0_in = 0.0; s.y1_in = param.mesh.ylength;
-#endif
+    for (int t = 0; t < NSIDEWALL; ++t) s.pos_in[t] = s.pos_out[t] = side_wall_plane(param.mesh, t);
     for (int n = 0; n < nnode; ++n) {
         const uint f = bcflag[n];
-        if (f & BOUNDX0) s.x0_in = std::max(s.x0_in, coord[n][0]);
-        if (f & BOUNDX1) s.x1_in = std::min(s.x1_in, coord[n][0]);
-#ifdef THREED
-        if (f & BOUNDY0) s.y0_in = std::max(s.y0_in, coord[n][1]);
-        if (f & BOUNDY1) s.y1_in = std::min(s.y1_in, coord[n][1]);
-#endif
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            if (!(f & SIDEWALL_FLAG[t])) continue;
+            const double c = coord[n][SIDEWALL_AXIS[t]];
+            s.pos_in[t]  = (t % 2 == 0) ? std::max(s.pos_in[t], c)  : std::min(s.pos_in[t], c);
+            s.pos_out[t] = (t % 2 == 0) ? std::min(s.pos_out[t], c) : std::max(s.pos_out[t], c);
+        }
     }
-    // above numeric jitter of a truly static wall, far below one remesh interval of any
-    // geological inflow rate
-    const double tol = 1e-3 * param.mesh.resolution;
-    s.in_x0 = s.x0_in > tol;
-    s.in_x1 = s.x1_in < param.mesh.xlength - tol;
-#ifdef THREED
-    s.in_y0 = s.y0_in > tol;
-    s.in_y1 = s.y1_in < param.mesh.ylength - tol;
-#endif
+    // A wall with an inflow vbc receives at ANY inward drift: flatten_* snaps it back at every
+    // remesh, so a slow wall remeshed often stays below any fixed tolerance. Any other wall
+    // receives past tol: 1e-3 * resolution, an admitted guess above a static wall's round-off,
+    // lowered to bad_mesh_quality's side-check distance so a drift that fires that check counts.
+    // Outward drift mirrors this; an outflow vbc counts any drift (the narrowing adds up).
+    const double tol = std::min(1e-3, param.mesh.max_boundary_distortion) * param.mesh.resolution;
+    for (int t = 0; t < NSIDEWALL; ++t) {
+        const double plane = side_wall_plane(param.mesh, t);
+        const double tol_t = side_wall_vbc_is_inflow(param.bc, t, time_in_yr) ? 0. : tol;
+        s.in[t] = (t % 2 == 0) ? (s.pos_in[t] > plane + tol_t) : (s.pos_in[t] < plane - tol_t);
+        const double tol_o = side_wall_vbc_is_outflow(param.bc, t, time_in_yr) ? 0. : tol;
+        s.out[t] = (t % 2 == 0) ? (s.pos_out[t] < plane - tol_o) : (s.pos_out[t] > plane + tol_o);
+    }
     return s;
 }
 
@@ -2401,26 +2400,25 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
     // may not appear in a shared() clause on some toolchains -- a plain local sidesteps that.
     double coeff = param.mesh.mmg_metric_refine_coeff;
 
-    // Do not inflate interior targets by exp(-div u * tau): no measurable effect (the 2D top
-    // elements keep it, below).
+    // Do not inflate interior targets by exp(-div u * tau): no measurable effect (the top elements
+    // keep it, below).
 
     // plastic-strain-reduced element volumes, aggregated to nodes below
     #pragma omp parallel for default(none) shared(var, etmp, coeff)
     for (int e = 0; e < var.nelem; e++)
         etmp[e] = (*var.volume)[e] / (1.0 + coeff * (*var.plstrain)[e]);
 
-#ifndef THREED
     // SURFACE-MOTION ANTICIPATION for the top elements: inflate a top element's target volume by
     // the deformation expected over one remesh interval, so it is rebuilt with room to be crushed.
-    // Movers: the surface-process dh (bc.cxx) and the advective nodal velocity (a fast slide
-    // moves the surface by km per interval; dh alone is blind to it).
-    //   dA2/dt  = shoelace area rate from (vx, vz + dh/dt), exact for the linear triangle;
-    //             uniform advection cancels, only DEFORMING motion inflates.
+    // Movers: the surface-process dh (bc.cxx) and the nodal velocity u. u's part of the rate is the
+    // element's div u (P1 gradient identity): compaction inflates, dilatation does not, and
+    // translation, rotation, shear or an isochoric slide give 0.
+    //   rate    = d(ln measure)/dt from (u + dh/dt e_z): shoelace (2D) / 6V gradient (3D), exact.
     //   inflate = exp(-rate * tau), tau = time since the last remesh, capped at 8x volume.
     // dh is the last surface-process step's (zero right after a remesh, restored on a restart). A
     // repeat remesh within one step (tau = 0) skips this: no time has passed to extrapolate over,
     // so the elements it rebuilds get no inflation.
-    // 2D only (dh is the 2D top-chain bookkeeping). *var.coord / *var.connectivity are EMPTY here.
+    // *var.coord / *var.connectivity are EMPTY here (steal_ref'd before the meshing phase).
     const double tau = var.time - var.last_remesh_time;
     if (var.top_elems && var.surfinfo.dh && var.dt > 0.0 && tau > 0.0) {
         // global node id -> last step's surface-process rate dh/dt (m/s)
@@ -2428,9 +2426,35 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
         for (int i = 0; i < var.surfinfo.ntop; ++i)
             dhdt[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i] / var.dt;
         int n_inflated = 0;
+        double max_inflate = 1.0;   // largest volume factor applied, for the log
         for (int k = 0; k < var.ntop_elems; ++k) {
             const int e = (*var.top_elems)[k];
             ConstConnAccessor conn = old_connectivity[e];
+            double rate;   // signed d(lnV)/dt of the element under the nodal motion rates
+#ifdef THREED
+            // 6V = (b-a).((c-a)x(d-a)); d(6V)/dt = sum_i grad_i(6V).u_i with
+            // grad_b = (c-a)x(d-a), grad_c = (d-a)x(b-a), grad_d = (b-a)x(c-a), grad_a = -(sum).
+            // The array u[] here holds the full motion rate u + dh/dt e_z of each node.
+            double ea[3][3], u[4][3];
+            for (int i = 0; i < 3; ++i)
+                for (int d = 0; d < 3; ++d)
+                    ea[i][d] = old_coord[conn[i+1]][d] - old_coord[conn[0]][d];
+            for (int i = 0; i < 4; ++i) {
+                const int n = conn[i];
+                for (int d = 0; d < 3; ++d) u[i][d] = (*var.vel)[n][d];
+                u[i][2] += dhdt[n];
+            }
+            auto cross = [](const double *p, const double *q, double *r) {
+                r[0] = p[1]*q[2] - p[2]*q[1]; r[1] = p[2]*q[0] - p[0]*q[2]; r[2] = p[0]*q[1] - p[1]*q[0];
+            };
+            double gb[3], gc[3], gd[3];
+            cross(ea[1], ea[2], gb); cross(ea[2], ea[0], gc); cross(ea[0], ea[1], gd);
+            const double vol6 = ea[0][0]*gb[0] + ea[0][1]*gb[1] + ea[0][2]*gb[2];
+            double dvol6dt = 0.0;
+            for (int d = 0; d < 3; ++d)
+                dvol6dt += gb[d]*(u[1][d] - u[0][d]) + gc[d]*(u[2][d] - u[0][d]) + gd[d]*(u[3][d] - u[0][d]);
+            rate = dvol6dt / vol6;
+#else
             const double xa = old_coord[conn[0]][0], za = old_coord[conn[0]][1];
             const double xb = old_coord[conn[1]][0], zb = old_coord[conn[1]][1];
             const double xc = old_coord[conn[2]][0], zc = old_coord[conn[2]][1];
@@ -2445,18 +2469,22 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
             // d(2A)/dt of the shoelace with moving vertices (exact for linear motion)
             const double dA2dt = ux[0]*(zb - zc) + ux[1]*(zc - za) + ux[2]*(za - zb)
                                + uz[0]*(xc - xb) + uz[1]*(xa - xc) + uz[2]*(xb - xa);
-            const double rate = dA2dt / area2;          // signed d(lnV)/dt
+            rate = dA2dt / area2;
+#endif
             if (rate < 0.0) {
-                // cap 8x volume (~2.8x edge in 2D): heuristic headroom for a fast slide, untuned
-                etmp[e] *= std::min(8.0, std::exp(-rate * tau));
+                // cap 8x volume (~2.8x edge in 2D, 2x in 3D): an untuned heuristic bound
+                const double inflate = std::min(8.0, std::exp(-rate * tau));
+                etmp[e] *= inflate;
+                max_inflate = std::max(max_inflate, inflate);
                 ++n_inflated;
             }
         }
+        // printf, not cout: earlier log lines leave cout in fixed or scientific format
         if (n_inflated)
-            std::cout << "      [metric] surface-motion anticipation: inflated the target of "
-                      << n_inflated << " shrinking top element(s).\n";
+            std::printf("      [metric] surface-motion anticipation: inflated the target of %d "
+                        "shrinking top element(s) (largest volume factor %.6f).\n",
+                        n_inflated, max_inflate);
     }
-#endif
 
     #pragma omp parallel for default(none) shared(var, metric, etmp)
     for (int n = 0; n < var.nnode; n++) {
@@ -2481,11 +2509,8 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
             metric[n] = std::max(metric[n], metric_floor);
     }
 
-    // RESTORED side walls (remeshing_option 13): incoming material is restored from per-side
-    // profiles sampled at wall-node spacing, so wall-faceted elements stay at ~resolution. Clamp
-    // only the METRIC (init_elem_size_n keeps the cfg size, so off-wall elements coarsen back).
-    // Applies to ALL restored sides (the inflow-gated treatments are listed at SideInflowState).
-    // *var.coord is EMPTY here: never feed side_inflow_state from var in this function.
+    // RESTORED side walls (remeshing_option 13): clamp the metric at every restored wall node to
+    // resolution, for the reason refine_initial_side_walls gives.
     if (param.mesh.remeshing_option == 13) {
         uint side_bits = BOUNDX0 | BOUNDX1;
 #ifdef THREED
@@ -2515,52 +2540,23 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //                    the old ones, so the band's plastic strain is carried verbatim);
 //          FROZEN -- MMG-required IF all its nodes ended up PINNED (DERIVED REQUIRED).
 //
-// Rules, applied in order by mark_quiet_required; each may only RAISE freedom:
-//   R1 REPAIR    quality < min_quality * mmg_remesh_defensive_quality_ratio, or volume <
-//                smallest_vol * mmg_remesh_defensive_tiny_ratio -> FREE (quality term: a node where
-//                disjoint bodies meet stays pinned).
-//   R2 REFINE    plstrain - plstrain_remesh > mmg_remesh_active_plstrain -> SPLIT.
-//   R3 BOUNDARY  quiet LID nodes (top nodes on no other boundary than a restored wall), every
-//                pure wall node of a restored side (option 13) and every BOTTOM node stay pinned,
-//                carried verbatim; every other boundary node is MOVABLE: ACTIVE lid nodes and the
-//                off-bottom nodes of an unrestored side wall (its top nodes included) or of a
-//                slant boundary. ACTIVE (2D only) = the last surface-process dh, as a rate over
-//                one remesh interval, moves the node > 1% of resolution; only
-//                surface_process_option 1 and 102 fill dh. So the whole lid is pinned (with
-//                remeshing_option 13 including the side walls' top nodes) in any of these cases:
-//                in 3D; with surface_process_option 0, 11 or 101; on a repeat remesh within one
-//                step (tau = 0 skips the gate); on a PT-loop remesh in the step after an
-//                end-of-step remesh (dh still zero: the PT loop skips surface_processes). A pinned
-//                lid is measured only in 2D with remeshing_option 11 (its top corners stay
-//                movable), and no failure there is caused by the pin: on core-complex-mmg.cfg
-//                with vbc_val_x0/x1 negated (shortening) and mmg_hausd_factor = 0.1,
-//                surface_process_option 0 stops at the surface fold that an all-movable lid (a
-//                code variant) also reaches, and surface_process_option 1 with the lid always
-//                pinned (a code variant: the activity gate removed) runs 500 kyr. Option 13's lid
-//                (the side walls' top nodes included) and the 3D lid are not measured.
-//   R4 SIDE STRIP (option 13, INFLOW sides) every element touching a wall node + 1 ring -> FREE
-//                with movable non-interface interior nodes (boundary nodes stay as R1/R3 left
-//                them), so the ~resolution wall band coarsens back once off the wall.
-//   R5 SIZE RECOVERY a quiet element FINER than the gradation envelope (the smallest size MMG's
-//                hgrad could legally assign, grown from every intentionally-fine target) by more
-//                than mmg_remesh_size_recovery_ratio -> FREE to coarsen; >= 2x its own target -> FREE
-//                to split. Skips R2 elements, top-connected elements, material-interface elements
-//                and the wall band + 4 rings of a FIXED (not receiving) side; never unpins a
-//                restored-wall or bottom node.
-//   R6 FLATTEN-BROKEN elements flatten_* broke (post-flatten quality < min_quality) -> FREE; on
-//                the collapse path they also get R7's ring.
-//   R7 COLLAPSE-REGION (collapse path) elements reshaped by collapse_outside_nodes or the 2D
-//                short-boundary-segment collapse + 1 ring -> FREE.
-//   DERIVED REQUIRED: required_node = NOT movable; required_elem = FROZEN with all nodes pinned.
-//   An element with any movable node is never required: the built-in one-element hinge layer.
+// Rules, in order; each may only raise freedom (details at each function):
+//   R1 REPAIR, R2 REFINE  rule_repair_and_refine: distorted or tiny -> FREE; yielding -> SPLIT.
+//   R3 BOUNDARY           rule_boundary_nodes: which boundary nodes are movable.
+//   R4 SIDE STRIP         rule_side_strip (option 13): the band of a receiving or outward wall.
+//   R5 SIZE RECOVERY      rule_size_recovery: fossil-fine or oversized quiet elements -> FREE.
+//   R6 FLATTEN-BROKEN     detect_flatten_broken, mark_quiet_required: what flatten_* broke -> FREE.
+//   R7 COLLAPSE-REGION    mark_quiet_required (collapse path): the collapse region + 1 ring.
 //
 // POST-OUTPUT QUALITY GATE (mmg_adapt_quality_gated): if MMG's output contains an element that
 // would re-trigger remeshing, unfreeze a graded region around it (CORE: full freedom, grown to
 // frozen contact + `attempt` rings; HINGE: bordering elements lose required-element status but
 // keep pinned nodes) and re-run MMG. Bounded attempts.
 //
-// INIT-TIME (mesh.cxx refine_initial_side_walls_2d, option 13): the same idea at t=0 --
-// everything required except the wall band + 2 rings.
+// INIT-TIME (mesh.cxx refine_initial_side_walls, option 13): the same idea at t=0 --
+// everything required except the wall band + 2 rings -- under the same post-output gate; in 2D
+// under mattype_option 0 the band's region boundaries are required interface edges, bisected
+// to MMG's graded size first.
 //
 // Rejected (measured), do not retry:
 //   an unbounded undersized flood-fill unfreeze, or R5 against init_elem_size_n instead of the
@@ -2589,7 +2585,7 @@ enum { NODE_RULE_CODES = 6 };
 // report_freeze_summary.
 struct FreezeCounts {
     int n_r1_free  = 0;               // R1 repair: low-quality / tiny
-    int n_r4_free  = 0;               // R4 inflow side strip
+    int n_r4_free  = 0;               // R4 side strip
     int n_r5_free  = 0;               // R5 size recovery (fossil-fine / oversized)
     // Movable-NODE attribution by node_rule (R3 grades nodes, not elements, so it only shows here).
     int n_mv[NODE_RULE_CODES] = {};
@@ -2611,10 +2607,10 @@ void free_node(FreezeMask &m, int n, char rule)
     m.node_rule[n] = rule;
 }
 
-// Wall-band ring growth shared by R4, R5's fixed-side band and build_interface_req_edges:
-// pass 0 marks the elements faceting a seed node, passes 1..nrings free one connectivity ring
-// each. band_node is in/out (seed with the wall nodes); band_elem receives the freed elements.
-// Returns the number freed.
+// Wall-band ring growth for R4, R5's fixed-side band and build_interface_req_edges (mesh.cxx keeps
+// its own, size-gated copy): pass 0 marks every element with a seed node, passes 1..nrings add
+// one connectivity ring each. band_node is in/out (seed it with the wall nodes); band_elem
+// receives the marked elements. Returns their number.
 // Array2D is SoA: never row-index .data() (conn.data() + e*NODES_PER_ELEM reads a transposed
 // triangle of valid node ids); use the accessors.
 int free_wall_band(int nnode, int nelem, const conn_t &conn, int nrings,
@@ -2708,11 +2704,15 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
                      "quality term (the interface must not move during the repair).\n";
 }
 
-// R3 BOUNDARY: quiet lid nodes (top nodes on no other boundary than a restored wall), pure wall
-// nodes of restored sides (clamp_side_bits) and bottom nodes stay pinned so their row/column is
-// carried verbatim; every other boundary node is made movable: active lid nodes and the
+// R3 BOUNDARY. Pinned: quiet LID nodes (top nodes on no boundary but a restored wall), the pure
+// wall nodes of restored sides (clamp_side_bits) and the bottom nodes (R4 frees some of them in an
+// outward side's band). Movable: every other boundary node, i.e. active lid nodes and the
 // off-bottom nodes of an unrestored side wall (its top nodes included) or of a slant boundary.
-// The activity gate is 2D only (#ifndef THREED).
+// ACTIVE (2D only): the last surface-process dh, as a rate over one remesh interval, moves the node
+// more than 1% of resolution. Only surface_process_option 1 and 102 fill dh, so the whole lid is
+// pinned in 3D, with surface_process_option 0, 11 or 101, on a repeat remesh within one step
+// (tau = 0: no time to extrapolate over) and on a PT-loop remesh in the step after an end-of-step
+// remesh (dh still zero). The pinned lid is validated only in 2D with remeshing_option 11.
 void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
                          uint clamp_side_bits, FreezeMask &m)
 {
@@ -2741,39 +2741,59 @@ void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
         // elements.
         if ((f & BOUNDZ1) && !(f & (BOUND_ANY & ~(BOUNDZ1 | clamp_side_bits)))
             && !top_active[n]) continue;
-        // Pure wall nodes of ANY restored side stay required (column carried verbatim). An R1
-        // REPAIR element still frees its wall nodes, bar a low-quality one's material-interface
-        // nodes (a tiny element, R6/R7 or the post-output gate may still free those).
+        // Pure wall nodes of a restored side stay pinned: flatten_* places them on the plane.
         if ((f & clamp_side_bits) && !(f & ~clamp_side_bits)) continue;
 
-        // BOTTOM nodes (incl. bottom corners) stay required: the boundary outline already places
-        // the row (1, 11 and 13 snap it, 12 slides its x0 end), so nothing needs them movable.
+        // Bottom nodes (corners included) stay pinned: the boundary outline already places the
+        // row (options 1, 11 and 13 snap it, 12 slides its x0 end).
         if (f & BOUNDZ0) continue;
         free_node(m, n, 3);                 // active lid, unrestored-wall and slant nodes: movable
     }
 }
 
-// R4 SIDE STRIP (option 13, INFLOW sides): wall-faceted elements are held at ~resolution while
-// their material advects inland; off the wall they would stay frozen fine forever and the band
-// would grow by the advection distance per remesh. Free every element touching a wall node + ONE
-// connectivity ring and make their non-interface INTERIOR nodes movable, so MMG merges the
-// just-off-wall elements into their coarse neighbours. R4 frees no boundary node: each stays as
-// R1/R3 left it, so an active top node or a node freed for an R1 repair stays movable. Nothing
-// wider: an unbounded undersized flood-fill re-frees the hgrad transition zone at every remesh.
-// Only sides actually RECEIVING material (side_inflow_state) are treated.
-void rule_inflow_side_strip(const Variables &var, const conn_t &connectivity,
-                            int nnode, int nelem, uint inflow_side_bits, FreezeMask &m)
+// R4 SIDE STRIP (option 13): free every element touching a wall node of side_bits (receiving or
+// drifted outward, SideInflowState) + ONE connectivity ring.
+//   receiving: the wall band is held at ~resolution while its material advects inland; frozen,
+//              it would stay fine off the wall and widen by the advection distance per remesh.
+//              Its non-interface INTERIOR nodes become movable, so MMG merges the off-wall
+//              elements into their coarse neighbours.
+//   outward:   flatten_* snaps the wall back, which narrows a frozen band by the drift. EVERY band
+//              node off that wall becomes movable (interface nodes, the top and bottom rows, in 3D
+//              the adjacent walls): only moving them restores the edges the snap shortened.
+// The band is chosen by the wall, not by the flatten displacement, and is no wider than a
+// receiving side's, so it is not the rejected flatten-damage freeing (FREEZE / REQUIRED POLICY).
+void rule_side_strip(const Param &param, const Variables &var, const conn_t &connectivity,
+                     int nnode, int nelem, const SideInflowState &sis, uint side_bits,
+                     FreezeMask &m)
 {
     std::vector<char> band_node(nnode, 0), band_elem(nelem, 0);
     for (int n = 0; n < nnode; ++n)
-        if ((*var.bcflag)[n] & inflow_side_bits)
+        if ((*var.bcflag)[n] & side_bits)
             band_node[n] = 1;                       // ring 0 grows from the wall nodes
     const int nrings = 1;
     const int n_freed = free_wall_band(nnode, nelem, connectivity, nrings, band_node, band_elem);
+    // The band of the OUTWARD sides alone (a subset of band_elem), for their off-wall nodes.
+    uint out_bits = 0;
+    for (int t = 0; t < NSIDEWALL; ++t)
+        if ((side_bits & SIDEWALL_FLAG[t]) && sis.out[t]) out_bits |= SIDEWALL_FLAG[t];
+    std::vector<char> out_elem(nelem, 0);
+    if (out_bits) {
+        std::vector<char> out_node(nnode, 0);
+        for (int n = 0; n < nnode; ++n)
+            if ((*var.bcflag)[n] & out_bits) out_node[n] = 1;
+        free_wall_band(nnode, nelem, connectivity, nrings, out_node, out_elem);
+    }
     for (int e = 0; e < nelem; ++e) {
         if (!band_elem[e]) continue;
         m.elem_grade[e] = ELEM_FREE;
         ConstConnAccessor conn = connectivity[e];
+
+        if (out_elem[e]) {
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (!((*var.bcflag)[conn[i]] & out_bits))
+                    free_node(m, conn[i], 4);       // off the outward wall: movable
+            continue;
+        }
 
         // Find the most abundant marker mattype in this element
         int_vec &a = (*var.elemmarkers)[e];
@@ -2798,11 +2818,23 @@ void rule_inflow_side_strip(const Variables &var, const conn_t &connectivity,
                 free_node(m, conn[i], 4);
         }
     }
-    if (n_freed)
-        std::cout << "      [unfreeze] inflow side strip: " << n_freed
-                  << " band element(s) free (wall band + " << nrings
-                  << " connectivity ring(s), R1 repairs included) so the incoming band"
-                     " resizes back.\n";
+    if (n_freed) {
+        std::cout << "      [unfreeze] side strip:";
+        const char *sep = " ";
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            if (!(side_bits & SIDEWALL_FLAG[t])) continue;
+            std::cout << sep << SIDEWALL_NAME[t];
+            if (sis.in[t]) std::cout << " receiving";
+            if (sis.out[t])
+                std::cout << (sis.in[t] ? " and" : "") << " drifted "
+                          << std::abs(sis.pos_out[t] - side_wall_plane(param.mesh, t))
+                          << " m outward";
+            sep = ", ";
+        }
+        std::cout << " -- " << n_freed << " band element(s) free (wall band + " << nrings
+                  << " connectivity ring(s), R1 repairs included) so MMG re-sizes the band"
+                     " beside the restored wall.\n";
+    }
 }
 
 #ifndef THREED
@@ -2844,16 +2876,19 @@ std::vector<int> build_interface_req_edges(const Variables &var, const conn_t &c
     return out;
 }
 
-// Pre-subdivide the required interface edges to ~metric BEFORE MMG: required edges (the only tag
-// that reliably KEEPS an internal line; opnbdy/ref edges let MMG curve or cross it) cannot be
-// split by MMG, so an over-long edge is bisected here at its midpoint (collinear -> exact line),
-// the two adjacent triangles split, and the midpoint + half-edges marked required. Converges
-// over remeshes (each pass halves an over-long edge). 2D only. Grows coord/conn/metric/reqn/reqe
-// in place and rewrites `iface`; a triangle is split at most once per pass (tri_consumed).
+} // anonymous namespace
+
+// Bisect each over-long required interface edge at its midpoint before MMG (2D only), since MMG
+// cannot split a required edge; a required edge is the only tag that reliably keeps an internal
+// line (opnbdy or ref edges let MMG curve or cross it). The two adjacent triangles are split, and
+// the midpoint and half-edges are marked required. A pass halves an edge at most once and splits
+// a triangle at most once (tri_consumed), so an edge can need several passes: remeshes, or
+// repeated calls at init. Grows coord, conn, metric, reqn, reqe (and elem_ref when non-null) in
+// place and rewrites `iface`.
 void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &conn,
                                   std::vector<double> &metric, std::vector<char> &reqn,
                                   std::vector<char> &reqe, std::vector<int> &iface,
-                                  int &nn, int &ne)
+                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down)
 {
     if (iface.empty()) return;
     const double FACTOR = 1.41;   // ~MMG2D's split threshold (MMG2D_LOPTL = 1.4); pre-do it here
@@ -2892,10 +2927,10 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         // mmg_aniso_wall_ratio > 0 only the new midpoints get the reduced (isotropic) size.
         const int c0 = tris[0].second, c1 = tris[1].second;
         const double h = std::min({metric[a], metric[b], metric[c0], metric[c1]});
-        if (!(h > 0.0))   // compute_metric_field's output is positive
+        if (!(h > 0.0))   // positive: compute_metric_field's output, mesh.cxx's graded wall size
             die(EXIT_INTERNAL_ASSERT, "presubdivide_interface_edges: non-positive metric");
         metric.push_back(h);
-        metric[a] = h; metric[b] = h; metric[c0] = h; metric[c1] = h;
+        if (pull_down) { metric[a] = h; metric[b] = h; metric[c0] = h; metric[c1] = h; }
         reqn.push_back(1);
         for (auto &tc : tris) {
             const int e = tc.first, c = tc.second;
@@ -2907,6 +2942,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
             conn[e*3] = a; conn[e*3+1] = fwd ? m : c; conn[e*3+2] = fwd ? c : m;   // reuse slot e
             conn.push_back(m); conn.push_back(fwd ? b : c); conn.push_back(fwd ? c : b);   // append
             reqe.push_back(reqe[e]); ++ne;                               // child inherits requiredness
+            if (elem_ref) elem_ref->push_back((*elem_ref)[e]);           // ... and the reference
         }
         out.push_back(a); out.push_back(m); out.push_back(m); out.push_back(b);
     }
@@ -2916,6 +2952,8 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
                   << " over-long interface edge(s) at their midpoints "
                      "(MMG cannot split a required edge itself).\n";
 }
+
+namespace {
 #endif  // !THREED
 
 // R5 SIZE RECOVERY: free fossil-fine quiet elements so MMG can coarsen them back. The wall clamp
@@ -2943,8 +2981,8 @@ void rule_size_recovery(const Param &param, const Variables &var,
     if (ratio <= 0.0) return;                                    // disabled
     if ((int)var.init_elem_size_n->size() != nnode) return;      // defensive: init() always fills it
 
-    // Fixed-side band: the FIXED restored wall column is carried verbatim, so mark every
-    // element touching its wall nodes + 4 rings and skip them below. Empty without a fixed side.
+    // Band of a side that does not receive: carried verbatim (static wall) or re-sized by R4
+    // alone (outward drift).
     std::vector<char> fixed_band_elem(nelem, 0);
     if (fixed_side_bits) {
         std::vector<char> fixed_band_node(nnode, 0);
@@ -3086,29 +3124,22 @@ FreezeMask compute_active_mask(const Param &param, const Variables &var,
     };
     m.counts.n_r1_free = count_grade(ELEM_FREE);
 
-    // Side-wall masks of the restored walls (option 13):
-    //   clamp_side_bits  = ALL restored sides (R3 pins; R5 clamps their target and never unpins
-    //                      their nodes; matches the metric clamp)
-    //   fixed_side_bits  = the NON-inflow sides (R5 skips their wall band + 4 rings)
-    //   inflow_side_bits = the sides receiving material (gates R4)
+    // Restored-wall masks (option 13); SideInflowState says which rule reads each.
     SideInflowState sis;
-    uint  clamp_side_bits = 0, fixed_side_bits = 0, inflow_side_bits = 0;
+    uint  clamp_side_bits = 0, fixed_side_bits = 0, strip_side_bits = 0;
     if (param.mesh.remeshing_option == 13) {
-        clamp_side_bits = BOUNDX0 | BOUNDX1;
-        sis = side_inflow_state(param, nnode, coord, *var.bcflag);
-        if (!sis.in_x0) fixed_side_bits |= BOUNDX0; else inflow_side_bits |= BOUNDX0;
-        if (!sis.in_x1) fixed_side_bits |= BOUNDX1; else inflow_side_bits |= BOUNDX1;
-#ifdef THREED
-        clamp_side_bits |= BOUNDY0 | BOUNDY1;
-        if (!sis.in_y0) fixed_side_bits |= BOUNDY0; else inflow_side_bits |= BOUNDY0;
-        if (!sis.in_y1) fixed_side_bits |= BOUNDY1; else inflow_side_bits |= BOUNDY1;
-#endif
+        sis = side_inflow_state(param, var.time / YEAR2SEC, nnode, coord, *var.bcflag);
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            clamp_side_bits |= SIDEWALL_FLAG[t];
+            if (!sis.in[t]) fixed_side_bits |= SIDEWALL_FLAG[t];
+            if (sis.in[t] || sis.out[t]) strip_side_bits |= SIDEWALL_FLAG[t];
+        }
     }
 
     rule_boundary_nodes(param, var, nnode, clamp_side_bits, m);          // R3
 
-    if (param.mesh.remeshing_option == 13 && inflow_side_bits)
-        rule_inflow_side_strip(var, connectivity, nnode, nelem, inflow_side_bits, m);  // R4
+    if (strip_side_bits)
+        rule_side_strip(param, var, connectivity, nnode, nelem, sis, strip_side_bits, m);  // R4
     m.counts.n_r4_free = count_grade(ELEM_FREE) - m.counts.n_r1_free;
 
     // Surface-churn alarm, before R5 so it reports R1-R4: when more than CHURN_ALARM_FRAC of the
@@ -3259,7 +3290,7 @@ static void report_freeze_summary(const char *path, const FreezeCounts &c,
         std::cout << "      [freeze]   free :";
         const char *sep = " ";
         if (c.n_r1_free) { std::cout << sep << c.n_r1_free << " R1 repair (low-quality/tiny)"; sep = ", "; }
-        if (c.n_r4_free) { std::cout << sep << c.n_r4_free << " R4 inflow side strip"; sep = ", "; }
+        if (c.n_r4_free) { std::cout << sep << c.n_r4_free << " R4 side strip"; sep = ", "; }
         if (c.n_r5_free) { std::cout << sep << c.n_r5_free << " R5 size recovery"; sep = ", "; }
         if (extra_free)  { std::cout << sep << extra_free << " " << extra_label; }
         std::cout << note << ".\n";
@@ -3273,7 +3304,7 @@ static void report_freeze_summary(const char *path, const FreezeCounts &c,
         const char *sep = " ";
         if (c.n_mv[1]) { std::cout << sep << c.n_mv[1] << " R1 repair"; sep = ", "; }
         if (c.n_mv[3]) { std::cout << sep << c.n_mv[3] << " R3 boundary"; sep = ", "; }
-        if (c.n_mv[4]) { std::cout << sep << c.n_mv[4] << " R4 inflow band interior"; sep = ", "; }
+        if (c.n_mv[4]) { std::cout << sep << c.n_mv[4] << " R4 side band"; sep = ", "; }
         if (c.n_mv[5]) { std::cout << sep << c.n_mv[5] << " R5 size recovery"; sep = ", "; }
         const int rest = n_movable - c.n_mv[1] - c.n_mv[3] - c.n_mv[4] - c.n_mv[5];
         if (rest != 0) std::cout << sep << rest << " " << extra_label;
@@ -3544,11 +3575,11 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
     return nfreed;
 }
 
-// Quality-gated adaptation: if the output would immediately re-trigger remeshing
-// (below-min_quality or tiny element), unfreeze the frozen entities around the bad
-// spots and re-run MMG. req_node/req_elem MUST be the vectors mmg_in.required_node/
-// required_elem point into: the retry unfreeze mutates them in place and re-runs MMG
-// on the same input. Bounded retries; a failed final attempt keeps the last mesh.
+} // anonymous namespace
+
+// mmg_adapt under the post-output gate: while the output has an element that would re-trigger
+// remeshing, unfreeze around it (unfreeze_near_bad_output) and re-run MMG on the same input; the
+// last mesh is kept (req_node / req_elem contract: remeshing.hpp).
 void mmg_adapt_quality_gated(const Param &param, const MMGInput &in, MMGOutput &out,
                              std::vector<char> &req_node, std::vector<char> &req_elem)
 {
@@ -3575,6 +3606,8 @@ void mmg_adapt_quality_gated(const Param &param, const MMGInput &in, MMGOutput &
 }
 
 // ======================= end FREEZE / REQUIRED POLICY =======================
+
+namespace {
 
 // Orientation + scale reference for a flat/inverted-element test: the measure of the first element
 // `pristine` accepts that is wound like the majority. Not simply the first: flatten_* can turn an
@@ -4166,50 +4199,44 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
     return ncoll;
 }
 #endif
-// Per-node ANISOTROPIC (tensor) metric for MMG from the scalar target: isotropic diag(1/h^2)
-// everywhere except nodes on an INFLOW restored wall (option 13, sides in `sis`): fine (h)
-// tangentially, coarse (h*ratio) wall-perpendicular, so the incoming column is carried by thin
-// wide elements. Wall membership is by COORDINATE (collapse-safe). `aniso` is nnode*NT
-// (2D: m11,m12,m22; 3D: m11,m12,m13,m22,m23,m33).
+// Per-node ANISOTROPIC (tensor) metric for MMG from the scalar target: diag(1/h^2), except at a node
+// on an INFLOW restored wall (option 13, sides in `sis`; membership by COORDINATE, collapse-safe):
+// h tangentially, h*ratio wall-normal, so the incoming column is carried by thin wide elements.
+// Only the normal axis: R3 pins the wall nodes and R4 frees the band, so inland is the only
+// direction with movable nodes, and wide wall elements absorb the incoming advection slowly;
+// coarsening along the wall lengthens the transition and degrades the profile's sampling.
+// Limitation: a wide wall element's centroid lies inland of the band, so restore_side_fields does
+// not re-impose its ELEMENT fields (it does re-impose the nodal temperature; deep-wall element
+// fields are ~0). `aniso` is nnode*NT (2D: m11,m12,m22; 3D: m11,m12,m13,m22,m23,m33).
 static void build_wall_anisotropic_metric(const Param &param, const SideInflowState &sis,
                                           int nnode, const double *coord, const double *scalar,
                                           double tol, double_vec &aniso)
 {
     const int NT = (NDIMS == 2) ? 3 : 6;
     const double ratio = param.mesh.mmg_aniso_wall_ratio;    // >= 1; coarsening normal to the wall
-    const double xlen = param.mesh.xlength;
-#ifdef THREED
-    const double ylen = param.mesh.ylength;
-#endif
-    // Coarsen the wall-PERPENDICULAR axis only: R3 pins the wall nodes and R4 frees the interior
-    // band, so inland is the only direction with movable nodes; wide wall elements also absorb the
-    // incoming advection slowly. Coarsening ALONG the wall instead lengthens the transition and
-    // degrades the profile's depth sampling. Limitation: a wide wall element's centroid sits
-    // inland of the band, so restore_side_fields does not re-impose its ELEMENT fields (nodal
-    // temperature still is; deep-wall element fields are ~0). 3D also coarsens the y walls.
+    const Mesh &mesh = param.mesh;
     aniso.assign((std::size_t)nnode * NT, 0.0);
     for (int n = 0; n < nnode; ++n) {
         const double *p = coord + (std::size_t)n * NDIMS;
         const double h = scalar[n];
-        double hx = h, hz = h;             // per-axis target; default isotropic (non-wall nodes)
-#ifdef THREED
-        double hy = h;
-#endif
-        if (sis.in_x0 && p[0] < tol)          hx = h * ratio;
-        if (sis.in_x1 && p[0] > xlen - tol)   hx = h * ratio;
-#ifdef THREED
-        if (sis.in_y0 && p[1] < tol)          hy = h * ratio;
-        if (sis.in_y1 && p[1] > ylen - tol)   hy = h * ratio;
-#endif
+        double hax[NDIMS];                 // per-axis target; default isotropic (non-wall nodes)
+        for (int d = 0; d < NDIMS; ++d) hax[d] = h;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            if (!sis.in[t]) continue;
+            const int a = SIDEWALL_AXIS[t];
+            const double plane = side_wall_plane(mesh, t);
+            const bool on_wall = (t % 2 == 0) ? (p[a] < plane + tol) : (p[a] > plane - tol);
+            if (on_wall) hax[a] = h * ratio;
+        }
         double *m = &aniso[(std::size_t)n * NT];
 #ifdef THREED
         // (m11,m12,m13,m22,m23,m33) = diag(1/hx^2, 1/hy^2, 1/hz^2)
-        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 0.0;
-        m[3] = 1.0/(hy*hy); m[4] = 0.0;
-        m[5] = 1.0/(hz*hz);
+        m[0] = 1.0/(hax[0]*hax[0]); m[1] = 0.0; m[2] = 0.0;
+        m[3] = 1.0/(hax[1]*hax[1]); m[4] = 0.0;
+        m[5] = 1.0/(hax[2]*hax[2]);
 #else
         // (m11,m12,m22) = diag(1/hx^2, 1/hz^2)  (2D coords are (x, z))
-        m[0] = 1.0/(hx*hx); m[1] = 0.0; m[2] = 1.0/(hz*hz);
+        m[0] = 1.0/(hax[0]*hax[0]); m[1] = 0.0; m[2] = 1.0/(hax[1]*hax[1]);
 #endif
     }
 }
@@ -4353,7 +4380,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     double_vec wall_aniso;
     const double *mmetric_aniso = nullptr;
     if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
-        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        SideInflowState sis = side_inflow_state(param, var.time / YEAR2SEC, old_nnode,
+                                                original_coord, old_bcflag);
         build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
         mmetric_aniso = wall_aniso.data();
     }
@@ -4546,23 +4574,25 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     double_vec wall_aniso;
     const double *mmetric_aniso = nullptr;
     if (param.mesh.remeshing_option == 13 && param.mesh.mmg_aniso_wall_ratio > 0.0) {
-        SideInflowState sis = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        SideInflowState sis = side_inflow_state(param, var.time / YEAR2SEC, old_nnode,
+                                                original_coord, old_bcflag);
         build_wall_anisotropic_metric(param, sis, mnode, mcoord, mmetric, min_dist, wall_aniso);
         mmetric_aniso = wall_aniso.data();
     }
 
-    // Front-tracking (option 13): keep the incoming material boundary an MMG-required edge. On the
-    // collapse path translate the old-mesh node ids through the remap (dropping edges whose
-    // endpoint was collapsed away); on the direct path old ids == MMG ids.
+    // Front tracking (option 13): required interface edges at a receiving wall that did not also
+    // drift outward (an outward band frees its interface nodes, rule_side_strip, which a required
+    // edge would pin). The collapse path drops an edge whose endpoint was collapsed away.
     std::vector<int> iface_edges;
     const int *ie_ptr = nullptr; int n_ie = 0;
     std::vector<double> aug_coord, aug_metric;   // augmented mmg-input mesh (interface pre-subdivision)
     std::vector<int>    aug_conn;                // kept alive through the quality-gate retries below
     if (param.mesh.remeshing_option == 13) {
-        SideInflowState sis_ie = side_inflow_state(param, old_nnode, original_coord, old_bcflag);
+        SideInflowState sis_ie = side_inflow_state(param, var.time / YEAR2SEC, old_nnode,
+                                                   original_coord, old_bcflag);
         uint inflow_bits = 0;
-        if (sis_ie.in_x0) inflow_bits |= BOUNDX0;
-        if (sis_ie.in_x1) inflow_bits |= BOUNDX1;
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (sis_ie.in[t] && !sis_ie.out[t]) inflow_bits |= SIDEWALL_FLAG[t];
         iface_edges = build_interface_req_edges(var, original_connectivity, old_nnode, old_nelem, inflow_bits);
         if (collapse_needed && !iface_edges.empty()) {
             std::vector<int> old_to_new(old_nnode, -1);
@@ -4586,7 +4616,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             aug_metric.assign(mmetric, mmetric + mnode);
             int nn = mnode, ne = melem;
             presubdivide_interface_edges(aug_coord, aug_conn, aug_metric, req_node, req_elem,
-                                         iface_edges, nn, ne);
+                                         iface_edges, nn, ne, nullptr, true);
             if (nn != mnode0) {
                 if (mmetric_aniso) {   // extend the aniso tensor for the new interior nodes (isotropic)
                     for (int i = mnode0; i < nn; ++i) {
@@ -4989,30 +5019,41 @@ void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &con
 #endif
 }
 
-// Incoming-material profile of each requested restored wall (x0/x1): snapshot into
-// var.side_profile[b] (SideProfile, parameters.hpp): wall node locations and temperatures
-// (top->bottom), node->element support, element fields and dominant marker material. Depths are
-// relative to the side's top point. Called at run start (option 13) and by remesh() when a wall
-// starts receiving; restore_side_fields re-imposes it after every remesh and the side-wall marker
-// replenishment (markerset.cxx) reads elem_mattype. Profile resolution = wall-node spacing, hence
-// the wall clamp.
+// Top point of restored side wall t (SIDEWALL_* order): the highest z of its nodes, or
+// -numeric_limits<double>::max() for a wall without nodes. A device reduction, async so that it
+// runs after the pending kernels: update_mesh calls it every step, and a host scan would migrate
+// coord and bcflag each time. max is order-independent.
+double side_wall_top_z(const Variables &var, int t)
+{
+    uint flag = SIDEWALL_FLAG[t];
+    double top_z = -std::numeric_limits<double>::max();
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) firstprivate(flag) reduction(max:top_z)
+#endif
+    #pragma acc parallel loop gang vector firstprivate(flag) reduction(max:top_z) async
+    for (int n = 0; n < var.nnode; ++n) {
+        if (!((*var.bcflag)[n] & flag)) continue;
+        const double z = (*var.coord)[n][NDIMS-1];
+        if (z > top_z) top_z = z;
+    }
+    #pragma acc wait
+    return top_z;
+}
+
+// Record var.side_profile[t] (SideProfile) for each restored wall in side_bits. Called at run start
+// for the walls with an inflow vbc (dynearthsol.cxx) and by remesh()'s side-profile lifecycle when
+// a wall starts receiving.
 void detect_side_profile(const Param& param, Variables& var, uint side_bits)
 {
     #pragma acc wait   // init_elem_size_n, temperature and coord0 come from async kernels
-    const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-    const int  side_idx [2] = { iboundx0, iboundx1 };
-    const char *side_name[2] = { "x0", "x1" };
-    for (int si = 0; si < 2; ++si) {
-        if (!(side_bits & side_flag[si])) continue;   // only the requested (incoming) sides
-        const uint F = side_flag[si];
-        SideProfile &prof = var.side_profile[side_idx[si]];
-        prof.clear();
+    for (int si = 0; si < NSIDEWALL; ++si) {
+        if (!(side_bits & SIDEWALL_FLAG[si])) continue;   // only the requested (incoming) sides
+        const uint F = SIDEWALL_FLAG[si];
+        SideProfile &prof = var.side_profile[si];
+        prof.clear_column();   // a re-detection continues the wall's entry reference
 
-        // top point of this side = highest node on the wall
-        double top_z = -std::numeric_limits<double>::max();
-        for (int n = 0; n < var.nnode; ++n)
-            if ((*var.bcflag)[n] & F)
-                top_z = std::max(top_z, (*var.coord)[n][NDIMS-1]);
+        // top point of this side = highest node on the wall (clear_column reset top_rise to 0)
+        const double top_z = side_wall_top_z(var, si);
 
         // wall nodes sorted top -> bottom (ties -- a constant-depth row in 3D -- broken by
         // the remaining coordinates for a deterministic order)
@@ -5031,59 +5072,86 @@ void detect_side_profile(const Param& param, Variables& var, uint side_bits)
             return a < b;
         });
 
-        // wall elements = union of the wall nodes' supports (every element with at least
-        // one node on the wall), ascending; e2l maps global -> local profile index
+        // wall elements (see SideProfile), ascending; e2l maps global -> local profile index
         std::vector<int> welem;
+#ifdef THREED
+        for (const auto &ef : *var.bfacets[SIDEWALL_BDRY[si]])
+            welem.push_back(ef.first);
+#else
         for (int n : wnode) {
             const int npatch = var.support.size(n);
             const int* patch = var.support.patch(n);
             for (int k = 0; k < npatch; ++k)
                 welem.push_back(patch[k]);
         }
+#endif
         std::sort(welem.begin(), welem.end());
         welem.erase(std::unique(welem.begin(), welem.end()), welem.end());
         std::map<int,int> e2l;
         for (std::size_t le = 0; le < welem.size(); ++le)
             e2l[welem[le]] = static_cast<int>(le);
 
-        // node arrays + CSR node -> element support
+#ifndef THREED
         prof.node_support_idx.push_back(0);
+#endif
         for (int n : wnode) {
             prof.node_reldepth.push_back(top_z - (*var.coord)[n][NDIMS-1]);
             prof.node_coord0_z.push_back((*var.coord0)[n][NDIMS-1]);
             prof.node_temperature.push_back((*var.temperature)[n]);
             if ((int)var.init_elem_size_n->size() == var.nnode)   // empty without USEMMG
                 prof.node_init_elem_size.push_back((*var.init_elem_size_n)[n]);
+#ifdef THREED
+            prof.node_strike.push_back(side_wall_strike((*var.coord)[n], si));
+#else
             const int npatch = var.support.size(n);
             const int* patch = var.support.patch(n);
             for (int k = 0; k < npatch; ++k)
                 prof.node_support_arr.push_back(e2l[patch[k]]);
             prof.node_support_idx.push_back(static_cast<int>(prof.node_support_arr.size()));
+#endif
         }
-        // per wall element: dominant marker material (the side's layering, read by the side-wall
-        // replenishment) and radiogenic source. Strain and stress are not recorded: incoming
-        // elements get zero strain; stress keeps its remap (restore_side_fields).
+#ifdef THREED
+        // the wall face's triangulation
+        {
+            int_vec n2l(var.nnode, -1);
+            for (std::size_t k = 0; k < wnode.size(); ++k) n2l[wnode[k]] = static_cast<int>(k);
+            for (const auto &ef : *var.bfacets[SIDEWALL_BDRY[si]]) {
+                ConstConnAccessor conn = (*var.connectivity)[ef.first];
+                for (int k = 0; k < NODES_PER_FACET; ++k) {
+                    const int l = n2l[conn[NODE_OF_FACET[ef.second][k]]];
+                    if (l < 0)
+                        die(EXIT_INTERNAL_ASSERT,
+                            "detect_side_profile: a wall facet node lacks the wall flag");
+                    prof.facet_node.push_back(l);
+                }
+                prof.facet_elem.push_back(e2l[ef.first]);
+            }
+        }
+#endif
+        // per wall element: dominant marker material and radiogenic source
+        std::vector<std::pair<double,int>> col;   // (centroid depth, material) for the log
         for (int e : welem) {
             ConstConnAccessor conn = (*var.connectivity)[e];
             double cz = 0;
             for (int i = 0; i < NODES_PER_ELEM; ++i)
                 cz += (*var.coord)[conn[i]][NDIMS-1];
             cz /= NODES_PER_ELEM;
+#ifndef THREED
             prof.elem_reldepth.push_back(top_z - cz);
+#endif
             const int_vec &em = (*var.elemmarkers)[e];
             int mt = 0, best = -1;
             for (int m = 0; m < (int)em.size(); ++m)
                 if (em[m] > best) { best = em[m]; mt = m; }
             prof.elem_mattype.push_back(mt);
             prof.elem_radiogenic_source.push_back((*var.radiogenic_source)[e]);
+            col.emplace_back(top_z - cz, mt);
         }
+        side_profile_index_elems(prof);
 
-        // layering summary: dominant materials top->bottom, consecutive repeats collapsed
-        std::vector<std::pair<double,int>> col;
-        for (int le = 0; le < prof.nelem(); ++le)
-            col.emplace_back(prof.elem_reldepth[le], prof.elem_mattype[le]);
+        // log the layering top -> bottom (3D: over the whole face), consecutive repeats collapsed
         std::sort(col.begin(), col.end());
-        std::cout << "  Incoming profile at side " << side_name[si]
+        std::cout << "  Incoming profile at side " << SIDEWALL_NAME[si]
                   << " (top z=" << top_z << "): " << prof.nnode() << " nodes, "
                   << prof.nelem() << " elements, T "
                   << prof.node_temperature.front() << " -> "
@@ -5098,87 +5166,308 @@ void detect_side_profile(const Param& param, Variables& var, uint side_bits)
 
 namespace {
 
-// Average of the profile values over the tie-run of nodes at (numerically) the same depth
-// as node k (3D: the wall nodes at node k's depth -- every row of a structured wall recorded
-// under a level top, and on any wall a flat bottom edge and a level top edge; elsewhere node k
-// alone; 2D: exact duplicates only).
-double side_profile_run_avg(const double_vec &d, const double_vec &v,
-                            std::size_t k, double tol)
+// A point (s, rel) located on a recorded SideProfile by side_profile_locate (s and rel: see
+// remeshing.hpp). 2D: linear between the wall nodes bracketing rel, clamped at the ends; the
+// element is the one between the nodes bracketing the clamped rel. 3D: barycentric in the wall
+// facet containing (s, rel) in the (along-strike, depth) plane; a point off the face (a deposit
+// included) takes the nearest facet, the point clamped onto it.
+struct SideProfileAt {
+    int    node[NODES_PER_FACET];   // profile nodes: 2D the bracketing pair, 3D the facet's
+    double w[NODES_PER_FACET];      // their weights (2D: w[1] = fraction toward node[1])
+    int    elem;                    // local profile element
+};
+
+#ifdef THREED
+// Cell of coordinate x along one axis of a side profile's facet grid (n cells of size dx from x0),
+// clamped to the grid.
+int side_profile_cell(double x, double x0, double dx, int n)
 {
-    std::size_t lo = k, hi = k;
-    while (lo > 0 && d[k] - d[lo-1] < tol) --lo;
-    while (hi + 1 < d.size() && d[hi+1] - d[k] < tol) ++hi;
-    double s = 0;
-    for (std::size_t m = lo; m <= hi; ++m) s += v[m];
-    return s / (hi - lo + 1);
+    return static_cast<int>(std::min(std::max((x - x0) / dx, 0.), n - 1.));
+}
+
+// Twice the signed area of wall facet f in the (along-strike, depth) plane.
+double side_profile_facet_area2(const SideProfile &p, int f)
+{
+    const int *fn = &p.facet_node[f * NODES_PER_FACET];
+    const double_vec &s = p.node_strike, &r = p.node_reldepth;
+    return (s[fn[1]] - s[fn[0]]) * (r[fn[2]] - r[fn[0]])
+         - (s[fn[2]] - s[fn[0]]) * (r[fn[1]] - r[fn[0]]);
+}
+
+// Squared distance from (qs, qr) to wall facet f in the (along-strike, depth) plane; w gets the
+// barycentric weights of the facet point nearest to it (the point itself when inside).
+double side_profile_facet_closest(const SideProfile &p, int f, double qs, double qr,
+                                  double w[NODES_PER_FACET])
+{
+    const int *fn = &p.facet_node[f * NODES_PER_FACET];
+    double s[NODES_PER_FACET], r[NODES_PER_FACET];
+    for (int k = 0; k < NODES_PER_FACET; ++k) {
+        s[k] = p.node_strike[fn[k]];
+        r[k] = p.node_reldepth[fn[k]];
+    }
+    const double a = side_profile_facet_area2(p, f);   // != 0 (side_profile_index_elems)
+    bool inside = true;
+    for (int k = 0; k < NODES_PER_FACET; ++k) {
+        const int i = (k + 1) % NODES_PER_FACET, j = (k + 2) % NODES_PER_FACET;
+        w[k] = ((s[i] - qs) * (r[j] - qr) - (s[j] - qs) * (r[i] - qr)) / a;
+        inside = inside && w[k] >= 0.;
+    }
+    if (inside) return 0.;
+    // outside: the nearest point on the edges
+    double best = -1.;
+    for (int i = 0; i < NODES_PER_FACET; ++i) {
+        const int j = (i + 1) % NODES_PER_FACET, o = (i + 2) % NODES_PER_FACET;
+        const double es = s[j] - s[i], er = r[j] - r[i];
+        const double t = std::min(std::max(((qs - s[i]) * es + (qr - r[i]) * er) /
+                                           (es * es + er * er), 0.), 1.);
+        const double ds = s[i] + t * es - qs, dr = r[i] + t * er - qr;
+        const double d2 = ds * ds + dr * dr;
+        if (best < 0. || d2 < best) {
+            best = d2;
+            w[i] = 1. - t;
+            w[j] = t;
+            w[o] = 0.;
+        }
+    }
+    return best;
+}
+
+// Depth range [rmin, rmax] where the vertical line at along-strike s crosses wall facet f; false
+// if it misses the facet.
+bool side_profile_facet_depths_at(const SideProfile &p, int f, double s,
+                                  double &rmin, double &rmax)
+{
+    const int *fn = &p.facet_node[f * NODES_PER_FACET];
+    bool hit = false;
+    for (int k = 0; k < NODES_PER_FACET; ++k) {
+        const int a = fn[k], b = fn[(k + 1) % NODES_PER_FACET];
+        const double sa = p.node_strike[a], sb = p.node_strike[b];
+        if (s < std::min(sa, sb) || s > std::max(sa, sb)) continue;
+        const double ra = p.node_reldepth[a], rb = p.node_reldepth[b];
+        // the edge's depths at s: both ends where it runs along the line
+        const double r0 = (sa == sb) ? ra : ra + (s - sa) / (sb - sa) * (rb - ra);
+        const double r1 = (sa == sb) ? rb : r0;
+        if (!hit) { rmin = r0; rmax = r0; hit = true; }
+        rmin = std::min(rmin, std::min(r0, r1));
+        rmax = std::max(rmax, std::max(r0, r1));
+    }
+    return hit;
+}
+
+void side_profile_locate(const SideProfile &p, double s, double rel, SideProfileAt &at)
+{
+    // the grid exists exactly when a column is recorded (side_profile_index_elems)
+    if (p.grid_idx.empty())
+        die(EXIT_INTERNAL_ASSERT, "side_profile_locate: profile without a recorded column");
+    if (std::isnan(s) || std::isnan(rel))
+        die(EXIT_RUNTIME_NAN, "side_profile_locate: NaN query point");
+    // The nearest facet, lowest index on a tie, searched over rings of grid cells around the cell
+    // of the query clamped into the grid box. A facet outside the rings searched lies in cells
+    // beyond them, at least ring * hmin from the clamped query; the clamp is the projection onto
+    // the box, which holds every facet, so that facet's squared distance to the query is at least
+    // off2 + (ring * hmin)^2. A query on a facet finds every facet containing it in its own cell.
+    const double cs = std::min(std::max(s, p.grid_s0), p.grid_s1);
+    const double cr = std::min(std::max(rel, p.grid_r0), p.grid_r1);
+    const double off2 = (s - cs) * (s - cs) + (rel - cr) * (rel - cr);
+    const int ci = side_profile_cell(cs, p.grid_s0, p.grid_ds, p.grid_ns);
+    const int cj = side_profile_cell(cr, p.grid_r0, p.grid_dr, p.grid_nr);
+    const double hmin = std::min(p.grid_ds, p.grid_dr);
+    int best = -1;
+    double best_d2 = 0., w[NODES_PER_FACET];
+    for (int ring = 0; ; ++ring) {
+        for (int j = std::max(cj - ring, 0); j <= std::min(cj + ring, p.grid_nr - 1); ++j)
+            for (int i = std::max(ci - ring, 0); i <= std::min(ci + ring, p.grid_ns - 1); ++i) {
+                if (std::max(std::abs(i - ci), std::abs(j - cj)) != ring) continue;   // inner ring
+                const int c = i + p.grid_ns * j;
+                for (int k = p.grid_idx[c]; k < p.grid_idx[c+1]; ++k) {
+                    const int f = p.grid_arr[k];
+                    const double d2 = side_profile_facet_closest(p, f, s, rel, w);
+                    if (best < 0 || d2 < best_d2 || (d2 == best_d2 && f < best)) {
+                        best = f;
+                        best_d2 = d2;
+                        for (int m = 0; m < NODES_PER_FACET; ++m) at.w[m] = w[m];
+                    }
+                }
+            }
+        if (best >= 0 && (best_d2 == 0. || best_d2 < off2 + (ring * hmin) * (ring * hmin)))
+            break;
+        if (ring >= std::max(p.grid_ns, p.grid_nr)) break;   // every cell searched
+    }
+    // Every facet is in a cell and a recorded face has one (side_profile_index_elems), so only a
+    // NaN query finds none: under -ffast-math (opt=3) the std::isnan test above is folded away.
+    if (best < 0)
+        die(EXIT_RUNTIME_NAN, "side_profile_locate: no wall facet found for the query point");
+    for (int m = 0; m < NODES_PER_FACET; ++m)
+        at.node[m] = p.facet_node[best * NODES_PER_FACET + m];
+    at.elem = p.facet_elem[best];
+}
+#else
+void side_profile_locate(const SideProfile &p, double s, double rel, SideProfileAt &at)
+{
+    (void)s;   // a 2D wall is a line
+    if (p.empty())
+        die(EXIT_INTERNAL_ASSERT, "side_profile_locate: profile without a recorded column");
+    if (std::isnan(rel)) die(EXIT_RUNTIME_NAN, "side_profile_locate: NaN query depth");
+    const double_vec &d = p.node_reldepth;
+    if (rel <= d.front()) {
+        at.node[0] = at.node[1] = 0;
+        at.w[1] = 0.;
+    } else if (rel >= d.back()) {
+        at.node[0] = at.node[1] = p.nnode() - 1;
+        at.w[1] = 0.;
+    } else {
+        // d[i-1] <= rel < d[i]
+        const int i = std::upper_bound(d.begin(), d.end(), rel) - d.begin();
+        at.node[0] = i - 1;
+        at.node[1] = i;
+        at.w[1] = (rel - d[i-1]) / (d[i] - d[i-1]);
+    }
+    at.w[0] = 1. - at.w[1];
+    // element: consecutive wall nodes are joined by a wall edge, so they share exactly its element
+    const double r = std::min(std::max(rel, d.front()), d.back());
+    std::size_t i = std::upper_bound(d.begin(), d.end(), r) - d.begin();   // >= 1: r >= d.front()
+    if (i == d.size()) --i;                 // r == d.back()
+    int nshared = 0;
+    for (int a = p.node_support_idx[i-1]; a < p.node_support_idx[i]; ++a)
+        for (int b = p.node_support_idx[i]; b < p.node_support_idx[i+1]; ++b)
+            if (p.node_support_arr[a] == p.node_support_arr[b]) {
+                at.elem = p.node_support_arr[a];
+                ++nshared;
+            }
+    if (nshared != 1)
+        die(EXIT_INTERNAL_ASSERT,
+            "side_profile_locate: consecutive wall nodes do not share exactly one element");
+}
+#endif
+
+// Nodal value at a located point; v holds one value per profile node (node_temperature,
+// node_coord0_z, node_init_elem_size).
+double side_profile_value(const SideProfileAt &at, const double_vec &v)
+{
+#ifdef THREED
+    double x = 0.;
+    for (int k = 0; k < NODES_PER_FACET; ++k)
+        x += at.w[k] * v[at.node[k]];
+    return x;
+#else
+    // this form returns a clamped end's value exactly
+    return v[at.node[0]] + at.w[1] * (v[at.node[1]] - v[at.node[0]]);
+#endif
 }
 
 } // anonymous namespace
 
-// Nodal profile value at relative depth `rel` in a depth-sorted (depth, value) table: linear
-// interpolation, clamped at the ends, same-depth rows averaged.
-double side_profile_node_value(const double_vec &d, const double_vec &v,
-                               double rel, double tol)
+int side_profile_mattype_at(const SideProfile &p, double s, double rel)
 {
-    if (rel <= d.front()) return side_profile_run_avg(d, v, 0, tol);
-    if (rel >= d.back())  return side_profile_run_avg(d, v, d.size()-1, tol);
-    std::size_t i = std::upper_bound(d.begin(), d.end(), rel) - d.begin();  // d[i-1] <= rel < d[i]
-    if (d[i] - d[i-1] < tol)   // rel sits inside one same-depth row
-        return side_profile_run_avg(d, v, i-1, tol);
-    double vl = side_profile_run_avg(d, v, i-1, tol);
-    double vh = side_profile_run_avg(d, v, i, tol);
-    double t = (rel - d[i-1]) / (d[i] - d[i-1]);
-    return vl + t * (vh - vl);
+    SideProfileAt at;
+    side_profile_locate(p, s, rel, at);
+    return p.elem_mattype[at.elem];
 }
 
-// Profile elements spanning relative depth `rel`, via the stored node->element support (2D: the
-// wall element of that interval; 3D: the element row); falls back to the nearest centroid.
-// Shared with markerset.cxx.
-void side_profile_elems_at(const SideProfile &p, double rel, double tol, int_vec &out)
+// Marks the materials at both ends and all inside the window, so a layer thinner than the
+// window is not missed. 2D: the material of each wall-node interval (its element's centroid can
+// lie outside the window) and of each recorded centroid in the window. 3D: the material of each
+// facet that the vertical segment at s crosses in the window.
+void side_profile_mattypes_within(const SideProfile &p, double s, double lo, double hi,
+                                  std::vector<char> &in_win)
 {
-    out.clear();
-    // a recorded column has nodes and elements (SideProfile::empty); the body indexes both
-    if (p.empty() || p.nelem() == 0)
-        die(EXIT_INTERNAL_ASSERT, "side_profile_elems_at: profile without a recorded column");
-    const double_vec &d = p.node_reldepth;
-    double r = std::min(std::max(rel, d.front()), d.back());
-    std::size_t i = std::upper_bound(d.begin(), d.end(), r) - d.begin();
-    // i >= 1: r >= d.front() after the clamp
-    if (i == 0) die(EXIT_INTERNAL_ASSERT, "side_profile_elems_at: depth above the profile top");
-    if (i == d.size()) --i;                 // r == d.back()
-    // union of the support over each bracketing tie-group
-    auto group_elems = [&](std::size_t k, int_vec &g) {
-        std::size_t lo = k, hi = k;
-        while (lo > 0 && d[k] - d[lo-1] < tol) --lo;
-        while (hi + 1 < d.size() && d[hi+1] - d[k] < tol) ++hi;
-        for (std::size_t m = lo; m <= hi; ++m)
-            for (int j = p.node_support_idx[m]; j < p.node_support_idx[m+1]; ++j)
-                g.push_back(p.node_support_arr[j]);
-        std::sort(g.begin(), g.end());
-        g.erase(std::unique(g.begin(), g.end()), g.end());
-    };
-    int_vec below, above;
-    group_elems(i-1, below);
-    group_elems(i, above);
-    std::set_intersection(below.begin(), below.end(), above.begin(), above.end(),
-                          std::back_inserter(out));
-    if (!out.empty()) return;
-    std::size_t best = 0;
-    for (std::size_t e = 1; e < p.elem_reldepth.size(); ++e)
-        if (std::fabs(p.elem_reldepth[e] - rel) < std::fabs(p.elem_reldepth[best] - rel))
-            best = e;
-    out.push_back(static_cast<int>(best));
+    in_win[side_profile_mattype_at(p, s, lo)] = 1;
+    in_win[side_profile_mattype_at(p, s, hi)] = 1;
+#ifdef THREED
+    // a segment off the face crosses no facet
+    if (s < p.grid_s0 || s > p.grid_s1 || hi < p.grid_r0 || lo > p.grid_r1) return;
+    const int i = side_profile_cell(s, p.grid_s0, p.grid_ds, p.grid_ns);
+    const int j0 = side_profile_cell(std::max(lo, p.grid_r0), p.grid_r0, p.grid_dr, p.grid_nr);
+    const int j1 = side_profile_cell(std::min(hi, p.grid_r1), p.grid_r0, p.grid_dr, p.grid_nr);
+    for (int j = j0; j <= j1; ++j) {
+        const int c = i + p.grid_ns * j;
+        for (int k = p.grid_idx[c]; k < p.grid_idx[c+1]; ++k) {
+            const int f = p.grid_arr[k];
+            double rmin, rmax;
+            if (side_profile_facet_depths_at(p, f, s, rmin, rmax) && rmax >= lo && rmin <= hi)
+                in_win[p.elem_mattype[p.facet_elem[f]]] = 1;
+        }
+    }
+#else
+    const double_vec &d = p.node_reldepth;   // ascending
+    for (std::size_t k = std::lower_bound(d.begin(), d.end(), lo) - d.begin();
+         k + 1 < d.size() && d[k+1] <= hi; ++k)
+        in_win[side_profile_mattype_at(p, s, 0.5 * (d[k] + d[k+1]))] = 1;
+    const double_vec &ed = p.elem_reldepth;
+    const int_vec &by_depth = p.elem_by_depth;
+    if (by_depth.size() != ed.size())
+        die(EXIT_INTERNAL_ASSERT, "side_profile_mattypes_within: elem_by_depth not built");
+    auto it = std::lower_bound(by_depth.begin(), by_depth.end(), lo,
+                               [&ed](int c, double v) { return ed[c] < v; });
+    for (; it != by_depth.end() && ed[*it] <= hi; ++it)
+        in_win[p.elem_mattype[*it]] = 1;
+#endif
 }
 
-// Material the side-wall marker replenishment gives relative depth `rel`: the recorded material of
-// the nearest centroid among the profile elements spanning it. cand is scratch.
-int side_profile_mattype_at(const SideProfile &p, double rel, double tol, int_vec &cand)
+void side_profile_index_elems(SideProfile &p)
 {
-    side_profile_elems_at(p, rel, tol, cand);
-    int le = cand.front();
-    for (int c : cand)
-        if (std::fabs(p.elem_reldepth[c] - rel) < std::fabs(p.elem_reldepth[le] - rel)) le = c;
-    return p.elem_mattype[le];
+#ifdef THREED
+    const int nf = p.nfacet();
+    if (nf == 0) die(EXIT_INTERNAL_ASSERT, "side_profile_index_elems: wall face without facets");
+    const double_vec &s = p.node_strike, &r = p.node_reldepth;
+    for (int i = 0; i < p.nnode(); ++i)   // the cell indices need comparable coordinates
+        if (std::isnan(s[i]) || std::isnan(r[i]))
+            die(EXIT_RUNTIME_NAN, "side_profile_index_elems: NaN wall-node coordinate");
+    for (int f = 0; f < nf; ++f)   // the barycentric weights divide by it
+        if (!(std::fabs(side_profile_facet_area2(p, f)) > 0.))
+            die(EXIT_INTERNAL_ASSERT, "side_profile_index_elems: wall facet without area in the "
+                "(along-strike, depth) plane");
+    p.grid_s0 = *std::min_element(s.begin(), s.end());
+    p.grid_s1 = *std::max_element(s.begin(), s.end());
+    p.grid_r0 = *std::min_element(r.begin(), r.end());
+    p.grid_r1 = *std::max_element(r.begin(), r.end());
+    // About one facet per cell, a sizing choice: a lookup then tests the facets of a few cells.
+    // ls, lr > 0: the facets have area.
+    const double ls = p.grid_s1 - p.grid_s0, lr = p.grid_r1 - p.grid_r0;
+    const double h = std::sqrt(ls * lr / nf);
+    p.grid_ns = std::max(1, static_cast<int>(std::ceil(ls / h)));
+    p.grid_nr = std::max(1, static_cast<int>(std::ceil(lr / h)));
+    p.grid_ds = ls / p.grid_ns;
+    p.grid_dr = lr / p.grid_nr;
+    // CSR of the facets whose bounding box meets each cell, ascending per cell
+    int_vec box(4 * nf);   // per facet: its first and last cell along s, then along depth
+    for (int f = 0; f < nf; ++f) {
+        const int *fn = &p.facet_node[f * NODES_PER_FACET];
+        double smin = s[fn[0]], smax = smin, rmin = r[fn[0]], rmax = rmin;
+        for (int k = 1; k < NODES_PER_FACET; ++k) {
+            smin = std::min(smin, s[fn[k]]);
+            smax = std::max(smax, s[fn[k]]);
+            rmin = std::min(rmin, r[fn[k]]);
+            rmax = std::max(rmax, r[fn[k]]);
+        }
+        box[4*f]   = side_profile_cell(smin, p.grid_s0, p.grid_ds, p.grid_ns);
+        box[4*f+1] = side_profile_cell(smax, p.grid_s0, p.grid_ds, p.grid_ns);
+        box[4*f+2] = side_profile_cell(rmin, p.grid_r0, p.grid_dr, p.grid_nr);
+        box[4*f+3] = side_profile_cell(rmax, p.grid_r0, p.grid_dr, p.grid_nr);
+    }
+    p.grid_idx.assign(p.grid_ns * p.grid_nr + 1, 0);
+    for (int f = 0; f < nf; ++f)
+        for (int j = box[4*f+2]; j <= box[4*f+3]; ++j)
+            for (int i = box[4*f]; i <= box[4*f+1]; ++i)
+                ++p.grid_idx[i + p.grid_ns * j + 1];
+    for (std::size_t c = 1; c < p.grid_idx.size(); ++c)
+        p.grid_idx[c] += p.grid_idx[c-1];
+    p.grid_arr.resize(p.grid_idx.back());
+    int_vec next(p.grid_idx.begin(), p.grid_idx.end() - 1);
+    for (int f = 0; f < nf; ++f)
+        for (int j = box[4*f+2]; j <= box[4*f+3]; ++j)
+            for (int i = box[4*f]; i <= box[4*f+1]; ++i)
+                p.grid_arr[next[i + p.grid_ns * j]++] = f;
+#else
+    const double_vec &ed = p.elem_reldepth;
+    for (double x : ed)   // the order needs comparable depths: with a NaN std::sort is undefined
+        if (std::isnan(x)) die(EXIT_RUNTIME_NAN, "side_profile_index_elems: NaN element depth");
+    p.elem_by_depth.resize(ed.size());
+    std::iota(p.elem_by_depth.begin(), p.elem_by_depth.end(), 0);
+    std::sort(p.elem_by_depth.begin(), p.elem_by_depth.end(), [&ed](int a, int b) {
+        return ed[a] < ed[b] || (ed[a] == ed[b] && a < b);
+    });
+#endif
 }
 
 namespace {
@@ -5210,124 +5499,225 @@ int nearest_patch_node(const Variables &var, int n, int nd, Use use)
 
 // Give material that entered through a RESTORED side wall its recorded field structure. Its new
 // nodes lie OUTSIDE the old mesh (var.remesh_node_outside: nearest-node fallback) and get, from the
-// profile at their depth below the side's CURRENT top: temperature, init_elem_size_n (re-pinned on
-// the whole wall column too) and coord0 (depth interpolated; wall-normal = plane + wall_shift, a
-// distinct Lagrangian entry per inflow generation; other horizontal components keep their remap).
+// profile at their position (side_profile_locate: depth below the side's column top,
+// SideProfile::top_rise, and in 3D the along-strike coordinate): temperature, init_elem_size_n
+// (re-pinned on the whole wall too) and coord0 (depth interpolated; wall-normal = plane +
+// wall_shift, a distinct Lagrangian entry per inflow generation; along strike in 3D: the
+// displacement of the nearest connected node inside the old mesh).
 // Band elements get zero plstrain/delta_plstrain/strain and the profile radiogenic source; stress
-// and RSF keep their remap. Inflow-gated per side (sis). MUST run before the plstrain_remesh
-// snapshot so the zeroed plstrain seeds the freeze baseline.
+// and RSF keep their remap. Inflow-gated per side (sis). At every option-13 remesh, inflow or not,
+// outside top and side-wall bottom nodes beyond every band get coord0 from a neighbour (end of
+// the function). MUST run before the plstrain_remesh snapshot so the zeroed plstrain seeds the
+// freeze baseline.
 void restore_side_fields(const Param &param, Variables &var,
                          const SideInflowState &sis)
 {
     if (param.mesh.remeshing_option != 13) return;
 
-    const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-    const int  side_idx [2] = { iboundx0, iboundx1 };
-    const bool   side_in[2] = { sis.in_x0, sis.in_x1 };
-    const double old_x0_in = sis.x0_in, old_x1_in = sis.x1_in;
-    // the planes the remesher snaps the restored walls back to (cf. has_outside_material /
-    // flatten_x0/x1): the wall-normal reference coordinate of incoming material
-    const double wall_plane[2] = { 0.0, param.mesh.xlength };
-    // Record every remesh's wall restore, also a snap-back below the inflow tolerance: the signed
-    // displacement accumulates in wall_shift so consecutive inflow generations get distinct
-    // entry references.
-    for (int t = 0; t < 2; ++t) {
-        SideProfile &prof = var.side_profile[side_idx[t]];
-        if (!prof.empty()) prof.wall_shift += wall_plane[t] - (t == 0 ? old_x0_in : old_x1_in);
+    // Accumulate each profiled wall's signed snap-back to its plane (SideProfile::wall_shift). A
+    // wall still profiled here receives, or has an inflow vbc and no drift, which adds 0 (remesh()'s
+    // side-profile lifecycle erased the other columns).
+    for (int t = 0; t < NSIDEWALL; ++t) {
+        SideProfile &prof = var.side_profile[t];
+        if (!prof.empty()) prof.wall_shift += side_wall_plane(param.mesh, t) - sis.pos_in[t];
     }
     // barycentric_node_interpolation recorded it for every new node
     if ((int)var.remesh_node_outside.size() != var.nnode)
         die(EXIT_INTERNAL_ASSERT, "restore_side_fields: remesh_node_outside is not per new node");
+
+    // in-band tolerance = the flatten_* deletion distance (min_dist)
     const double tol = refine_floors(param.mesh).min_dist;
-    const double depth_tol = side_profile_depth_tol(param);
-    int count_n = 0, count_e = 0;
-    for (int t = 0; t < 2; ++t) {
-        if (!side_in[t]) continue;   // no incoming material at this side
-        SideProfile &prof = var.side_profile[side_idx[t]];
+    int count_n = 0, count_e = 0;   // distinct: two 3D walls' bands can overlap
+    bool rose = false;   // a receiving wall's top moved: SideProfile::top_rise's temperature caveat
+    std::vector<char> node_done(var.nnode, 0), elem_done(var.nelem, 0);
+    for (int t = 0; t < NSIDEWALL; ++t) {
+        if (!sis.in[t]) continue;   // no incoming material at this side
+        SideProfile &prof = var.side_profile[t];
         if (prof.empty()) continue;
+        const int    axis   = SIDEWALL_AXIS[t];
+        const double plane  = side_wall_plane(param.mesh, t);
+        const double old_in = sis.pos_in[t];           // inward extent of the old wall
+        const bool   lower  = (t % 2 == 0);
 
-        const double entry_x = wall_plane[t] + prof.wall_shift;
+        const double entry = plane + prof.wall_shift;   // wall-normal Lagrangian entry reference
 
-        // current top point of this side; the profile depths are measured below it
-        double top_z = -std::numeric_limits<double>::max();
-        for (int n = 0; n < var.nnode; ++n)
-            if ((*var.bcflag)[n] & side_flag[t])
-                top_z = std::max(top_z, (*var.coord)[n][NDIMS-1]);
+        // column top (SideProfile)
+        const double top_z = side_wall_top_z(var, t);
         if (top_z == -std::numeric_limits<double>::max())   // option 13 rebuilds every wall
             die(EXIT_INTERNAL_ASSERT, "restore_side_fields: receiving wall without nodes");
+        const double ref_z = top_z - prof.top_rise;
+        if (prof.top_rise != 0.) rose = true;
 
+        SideProfileAt at;
         for (int n = 0; n < var.nnode; ++n) {
             if (!var.remesh_node_outside[n]) continue;
-            double x = (*var.coord)[n][0];
-            bool in_band = (t == 0) ? (x <= old_x0_in + tol) : (x >= old_x1_in - tol);
+            const double c = (*var.coord)[n][axis];
+            const bool in_band = lower ? (c <= old_in + tol) : (c >= old_in - tol);
             if (!in_band) continue;
-            double rel = top_z - (*var.coord)[n][NDIMS-1];
-            (*var.temperature)[n] =
-                side_profile_node_value(prof.node_reldepth, prof.node_temperature, rel, depth_tol);
-            (*var.coord0)[n][0] = entry_x;
-            (*var.coord0)[n][NDIMS-1] =
-                side_profile_node_value(prof.node_reldepth, prof.node_coord0_z, rel, depth_tol);
+            // above the column top (rel < 0): clamped onto the profile top (side_profile_locate)
+            const double rel = ref_z - (*var.coord)[n][NDIMS-1];
+            side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
+            (*var.temperature)[n] = side_profile_value(at, prof.node_temperature);
+            (*var.coord0)[n][axis] = entry;
+            (*var.coord0)[n][NDIMS-1] = side_profile_value(at, prof.node_coord0_z);
             if (!prof.node_init_elem_size.empty())   // empty without USEMMG
-                (*var.init_elem_size_n)[n] = side_profile_node_value(
-                    prof.node_reldepth, prof.node_init_elem_size, rel, depth_tol);
-            ++count_n;
+                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            if (!node_done[n]) ++count_n;
+            node_done[n] |= 1 << axis;   // bit = the horizontal component this band set
         }
 
-        // Re-pin the initial-size metric base on the wall column: the barycentric remap's nearest-node
-        // fallback smears init_elem_size_n there across inflow generations.
-        for (int n = 0; n < var.nnode; ++n) {
-            if (!((*var.bcflag)[n] & side_flag[t])) continue;
-            double rel = top_z - (*var.coord)[n][NDIMS-1];
-            if (!prof.node_init_elem_size.empty())   // empty without USEMMG
-                (*var.init_elem_size_n)[n] = side_profile_node_value(
-                    prof.node_reldepth, prof.node_init_elem_size, rel, depth_tol);
+        // Re-pin init_elem_size_n on the whole wall: a wall node inside the old mesh (the wall did
+        // not move inward there, e.g. a depth-varying velocity zero at its depth) still holds the
+        // remapped value. A band node gets the same value again.
+        if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
+            for (int n = 0; n < var.nnode; ++n) {
+                if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
+                const double rel = ref_z - (*var.coord)[n][NDIMS-1];
+                side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
+                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            }
         }
 
-        int_vec cand;
         for (int e = 0; e < var.nelem; ++e) {
             ConstConnAccessor conn = (*var.connectivity)[e];
             bool any_outside = false;
-            double cx = 0, cz = 0;
+            double cw = 0, cs = 0, cz = 0;   // centroid: wall-normal, along-strike, depth
             for (int i = 0; i < NODES_PER_ELEM; ++i) {
                 int n = conn[i];
                 if (var.remesh_node_outside[n]) any_outside = true;
-                cx += (*var.coord)[n][0];
+                cw += (*var.coord)[n][axis];
+                cs += side_wall_strike((*var.coord)[n], t);
                 cz += (*var.coord)[n][NDIMS-1];
             }
             if (!any_outside) continue;
-            cx /= NODES_PER_ELEM;
+            cw /= NODES_PER_ELEM;
+            cs /= NODES_PER_ELEM;
             cz /= NODES_PER_ELEM;
-            bool in_band = (t == 0) ? (cx <= old_x0_in + tol) : (cx >= old_x1_in - tol);
+            const bool in_band = lower ? (cw <= old_in + tol) : (cw >= old_in - tol);
             if (!in_band) continue;
             // pristine incoming material: no accumulated strain
             (*var.plstrain)[e] = 0.;
             (*var.delta_plstrain)[e] = 0.;
             for (int d = 0; d < NSTR; ++d)
                 (*var.strain)[e][d] = 0.;
-            // radiogenic source of the recorded wall elements spanning this depth
-            side_profile_elems_at(prof, top_z - cz, depth_tol, cand);
-            double rad = 0;
-            for (int le : cand)
-                rad += prof.elem_radiogenic_source[le];
-            (*var.radiogenic_source)[e] = rad / cand.size();
-            ++count_e;
+            // radiogenic source of the recorded wall element at this position
+            side_profile_locate(prof, cs, ref_z - cz, at);
+            (*var.radiogenic_source)[e] = prof.elem_radiogenic_source[at.elem];
+            if (!elem_done[e]) { elem_done[e] = 1; ++count_e; }
         }
     }
-    if (count_n || count_e)
+
+    // 3D: no band sets the along-strike coord0, so it is the fallback's copy, up to a wall spacing
+    // off. Take the displacement (coord - coord0) of the nearest connected node inside the old mesh.
+    // A 2D band sets every horizontal component.
+    const char all_horizontal = (1 << (NDIMS-1)) - 1;   // node_done if bands set every one
+    auto inside_old = [&var](int p) { return !var.remesh_node_outside[p]; };
+    int n_strike = 0, count_strike = 0;
+    for (int n = 0; n < var.nnode; ++n) {
+        if (!node_done[n] || node_done[n] == all_horizontal) continue;
+        ++n_strike;
+        const int m = nearest_patch_node(var, n, NDIMS, inside_old);
+        if (m < 0) continue;   // keeps the copy; the log below counts it
+        for (int d = 0; d < NDIMS-1; ++d)
+            if (!(node_done[n] & (1 << d)))
+                (*var.coord0)[n][d] = (*var.coord)[n][d] - ((*var.coord)[m][d] - (*var.coord0)[m][d]);
+        ++count_strike;
+    }
+
+    // Outside TOP and side-wall BOTTOM nodes beyond every band: a regenerated top or bottom can run
+    // just outside the old one, so the fallback copied coord0 from the nearest old node, up to an
+    // element away. Re-seat the horizontal components from the displacement of the nearest
+    // connected node whose coord0 is no such copy: a top node for a top node, a node above the
+    // floor for a bottom one (remesh() does the same for the pure-bottom nodes). A top node takes
+    // the source's vertical reference itself: along the top it varies only with the initial
+    // topography, the vertical displacement also with surface processes. remesh() resets a bottom
+    // node's vertical reference. The error left is |grad u| x one spacing. Only coord0 needs this:
+    // a smooth field is off only by its change over that distance, and update_temperature
+    // re-imposes the top temperature. The other outside nodes (mid-wall, interior) keep the copy,
+    // with a warning.
+    auto not_copy = [&var, &node_done](int p) { return !var.remesh_node_outside[p] || node_done[p]; };
+    auto top_source = [&var, &not_copy](int p) { return ((*var.bcflag)[p] & BOUNDZ1) && not_copy(p); };
+    auto above_floor = [&var, &not_copy](int p) { return !((*var.bcflag)[p] & BOUNDZ0) && not_copy(p); };
+    int n_top = 0, count_top = 0, n_bot = 0, count_bot = 0, n_other = 0;
+    for (int n = 0; n < var.nnode; ++n) {
+        if (!var.remesh_node_outside[n] || node_done[n]) continue;
+        const uint f = (*var.bcflag)[n];
+        const bool top = f & BOUNDZ1;
+        bool wall_bottom = false;
+        if (!top && (f & BOUNDZ0))
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (f & SIDEWALL_FLAG[t]) wall_bottom = true;
+        int m;
+        if (top) {
+            ++n_top;
+            m = nearest_patch_node(var, n, NDIMS-1, top_source);
+        } else if (wall_bottom) {
+            ++n_bot;
+            m = nearest_patch_node(var, n, NDIMS-1, above_floor);
+        } else {
+            if (!(f & BOUNDZ0)) ++n_other;
+            continue;
+        }
+        if (m < 0) continue;   // keeps the copy; the log below counts it
+        for (int d = 0; d < NDIMS-1; ++d)
+            (*var.coord0)[n][d] = (*var.coord)[n][d] - ((*var.coord)[m][d] - (*var.coord0)[m][d]);
+        if (top) {
+            (*var.coord0)[n][NDIMS-1] = (*var.coord0)[m][NDIMS-1];
+            ++count_top;
+        } else
+            ++count_bot;
+    }
+
+    if (count_n || count_e) {
+        // list the cumulative shift of the RECEIVING wall(s) only -- a static wall's is noise
         std::cout << "      [restore] side profile: re-imposed recorded fields on " << count_n
                   << " incoming node(s) and " << count_e << " incoming element(s)"
-                  << " (cumulative wall shift x0/x1: "
-                  << var.side_profile[iboundx0].wall_shift << "/"
-                  << var.side_profile[iboundx1].wall_shift << " m).\n";
+                  << " (cumulative wall shift";
+        const char *sep = " ";
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            if (!sis.in[t]) continue;
+            std::cout << sep << SIDEWALL_NAME[t] << ": "
+                      << var.side_profile[t].wall_shift;
+            sep = ", ";
+        }
+        std::cout << " m; surface-process top rise";
+        sep = " ";
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            if (!sis.in[t]) continue;
+            std::cout << sep << SIDEWALL_NAME[t] << ": "
+                      << var.side_profile[t].top_rise;
+            sep = ", ";
+        }
+        std::cout << " m)";
+        if (rose)
+            std::cout << "; incoming T is the recorded column's, not re-conducted under the top "
+                         "rise, so it can differ from the domain beside the wall by up to the "
+                         "near-surface T gradient x the rise (see mesh.remeshing_option in --help)";
+        std::cout << ".\n";
+    }
+    if (n_strike)
+        std::cout << "      [restore] re-seated the along-strike coord0 of " << count_strike << " of "
+                  << n_strike << " incoming node(s) from a neighbour inside the old mesh.\n";
+    if (n_top || n_bot)
+        std::cout << "      [restore] re-seated the coord0 of " << count_top << " of " << n_top
+                  << " top and " << count_bot << " of " << n_bot
+                  << " side-wall bottom node(s) outside the old mesh beyond any inflow band.\n";
+    if (n_other)
+        std::cout << "      [restore] warning: " << n_other << " node(s) outside the old mesh off the "
+                     "top and bottom and beyond any inflow band keep the coord0 copied from the "
+                     "nearest old node, up to an element away.\n";
 }
 
 #ifndef THREED
-// Material-division depths of a recorded side profile: the wall-NODE depths where the material
-// the side-wall replenishment assigns switches interval, evaluated by the replenishment's own
-// rule so they coincide with the marker boundaries by construction. Relative to the side's top.
-// Do not estimate a division as the centroid midpoint of the sorted element column: second-ring
-// element centroids interleave, and the midpoint carries an O(element size) bias that thickens
-// the incoming layer at every remesh.
+// Same-depth tolerance of the 2D division snap (division levels, the "already there" test). A
+// degeneracy guard, untuned: 1e-6 x resolution is far above coordinate round-off (~1e-16 x domain
+// size) and far below any node spacing, and the snap does not depend on it in that range.
+double side_profile_depth_tol(const Param &param) { return 1e-6 * param.mesh.resolution; }
+
+// Material-division depths of a recorded side profile, below the column top: the wall-NODE depths
+// where side_profile_mattype_at switches material, so they match the recorded layers by
+// construction. Do not use the centroid midpoints of the sorted element column: the second-ring
+// centroids interleave, and the O(element size) bias thickens the incoming layer at every remesh.
 void side_profile_division_depths(const SideProfile &prof, double tol, double_vec &div)
 {
     div.clear();
@@ -5336,12 +5726,11 @@ void side_profile_division_depths(const SideProfile &prof, double tol, double_ve
     for (double r : prof.node_reldepth)
         if (levels.empty() || r - levels.back() > tol)
             levels.push_back(r);
-    int_vec cand;
     int prev_mt = -1;
     for (std::size_t i = 0; i + 1 < levels.size(); ++i) {
         // material of the interval below levels[i]: the lookup at its midpoint
         double rel = 0.5 * (levels[i] + levels[i+1]);
-        int mt = side_profile_mattype_at(prof, rel, tol, cand);
+        int mt = side_profile_mattype_at(prof, 0., rel);
         if (i > 0 && mt != prev_mt && (div.empty() || levels[i] - div.back() > tol))
             div.push_back(levels[i]);
         prev_mt = mt;
@@ -5371,56 +5760,52 @@ bool snap_keeps_quality(const Param &param, const Variables &var, int n, double 
     return true;
 }
 
-// Align the new-mesh wall facets with the incoming material divisions: snap the wall node nearest
-// to each recorded division onto the division's depth below the side's CURRENT top, so element
-// and marker mattype boundaries coincide instead of straddling. Runs on the NEW mesh after its
-// boundary flags exist and BEFORE the field/marker remap. Inflow-gated per side. 2D only: in 3D a
-// division is a line across the wall face, which moving single nodes cannot align. A node moves
-// only along the wall, by less than half the distance to its nearest distinct-depth wall
-// neighbour (keeps the wall ordered), and only if snap_keeps_quality; otherwise the division waits
-// for the next remesh. Top and bottom corner nodes never move.
+// Snap the wall node nearest to each recorded division of a receiving wall (sis.in) onto the
+// division's depth, so no wall edge straddles one (incoming markers take their element centroid's
+// material). On the NEW mesh, after its boundary flags exist and BEFORE the field/marker remap.
+// 2D only: in 3D a division is a line across the wall face, which single node moves cannot align.
+// A node moves only along the wall, by less than half the gap to its nearest distinct-depth wall
+// neighbour (keeps the wall ordered), and only if snap_keeps_quality; else the division waits for
+// the next remesh. The top and bottom corner nodes never move.
 void relocate_wall_division_nodes(const Param &param, Variables &var,
                                   const SideInflowState &sis)
 {
     const double depth_tol = side_profile_depth_tol(param);
-    const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-    const int  side_idx [2] = { iboundx0, iboundx1 };
-    const bool side_in[2] = { sis.in_x0, sis.in_x1 };
     int count = 0, ndiv = 0, deferred = 0;
     int_vec shifts;                 // relocated node ids and their applied z displacement
     double_vec zshift;
     double_vec div;
-    for (int t = 0; t < 2; ++t) {
-        if (!side_in[t]) continue;
-        const SideProfile &prof = var.side_profile[side_idx[t]];
+    for (int t = 0; t < NSIDEWALL; ++t) {
+        if (!sis.in[t]) continue;
+        const SideProfile &prof = var.side_profile[t];
         if (prof.empty()) continue;
         side_profile_division_depths(prof, depth_tol, div);
         if (div.empty()) continue;
         ndiv += (int)div.size();
 
-        // movable wall nodes (not the top surface / bottom corners) and their depths
+        // movable wall nodes (not the top surface / bottom corners) and their depths below the
+        // column top
         int_vec wnode;
-        double top_z = -std::numeric_limits<double>::max();
         for (int n = 0; n < var.nnode; ++n) {
-            if (!((*var.bcflag)[n] & side_flag[t])) continue;
-            top_z = std::max(top_z, (*var.coord)[n][NDIMS-1]);
+            if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
             if ((*var.bcflag)[n] & (BOUNDZ0 | BOUNDZ1)) continue;
             wnode.push_back(n);
         }
         if (wnode.empty()) continue;
+        const double ref_z = side_wall_top_z(var, t) - prof.top_rise;
 
         // distinct depth levels of ALL wall nodes (corners included -- they bound the
         // movable nodes' gaps), for the half-gap move limit
         double_vec levels;
         for (int n = 0; n < var.nnode; ++n)
-            if ((*var.bcflag)[n] & side_flag[t])
-                levels.push_back(top_z - (*var.coord)[n][NDIMS-1]);
+            if ((*var.bcflag)[n] & SIDEWALL_FLAG[t])
+                levels.push_back(ref_z - (*var.coord)[n][NDIMS-1]);
         std::sort(levels.begin(), levels.end());
         levels.erase(std::unique(levels.begin(), levels.end(),
                                  [&](double a, double b) { return b - a < depth_tol; }),
                      levels.end());
         for (int n : wnode) {
-            double rel = top_z - (*var.coord)[n][NDIMS-1];
+            double rel = ref_z - (*var.coord)[n][NDIMS-1];
             // nearest division
             double best = div[0];
             for (double d : div)
@@ -5468,31 +5853,25 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     std::cout << "  Remeshing starts (#" << var.nremesh_prior + var.nremesh + 1
               << ", step " << var.steps << ", t = " << var.time / YEAR2SEC << " yr)...\n";
 
-    // Side-profile LIFECYCLE: a profile exists while its wall RECEIVES material. ERASE it
-    // when the inflow stops (no inward drift since the last remesh AND the applied BC rate is not
-    // inflow); LATE-DETECT a wall without one from its inward drift alone, whatever its vbc (e.g.
-    // a BC changed on a restart, a time-varying vbc). Runs here while var.coord still holds the
-    // old mesh.
+    // Side-profile LIFECYCLE, on the old mesh. ERASE a wall's column (wall_shift is kept) when the
+    // wall neither receives (side_inflow_state) nor has an inflow vbc; LATE-DETECT a wall with no
+    // profile once it receives, whatever its vbc (a time-varying vbc, or a vbc or remeshing_option
+    // changed at restart).
     if (param.mesh.remeshing_option == 13) {
-        SideInflowState pre = side_inflow_state(param, var.nnode, *var.coord, *var.bcflag);
         const double t_now = var.time / YEAR2SEC;
-        const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-        const int  side_idx [2] = { iboundx0, iboundx1 };
-        const char *side_name[2] = { "x0", "x1" };
-        const bool side_in[2] = { pre.in_x0, pre.in_x1 };
+        SideInflowState pre = side_inflow_state(param, t_now, var.nnode, *var.coord, *var.bcflag);
         uint late = 0;
-        for (int t = 0; t < 2; ++t) {
+        for (int t = 0; t < NSIDEWALL; ++t) {
             // the wall's vbc now, without its PT_jump hold: remesh() can run inside the PT loop,
             // where a receiving wall must not read as static
-            const double v = side_wall_normal_vbc(param.bc, t, t_now);
-            const bool inflow_bc = (t == 0) ? (v > 0.) : (v < 0.);
-            SideProfile &prof = var.side_profile[side_idx[t]];
-            if (!side_in[t] && !inflow_bc && !prof.empty()) {
-                prof.clear();
-                std::cout << "  Erased the side profile at " << side_name[t]
+            const bool inflow_bc = side_wall_vbc_is_inflow(param.bc, t, t_now);
+            SideProfile &prof = var.side_profile[t];
+            if (!pre.in[t] && !inflow_bc && !prof.empty()) {
+                prof.clear_column();
+                std::cout << "  Erased the side profile at " << SIDEWALL_NAME[t]
                           << " (no longer receiving material).\n";
             }
-            if (side_in[t] && prof.empty()) late |= side_flag[t];
+            if (pre.in[t] && prof.empty()) late |= SIDEWALL_FLAG[t];
         }
         if (late)
             detect_side_profile(param, var, late);
@@ -5591,7 +5970,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
         // while var.bcflag still describes the old mesh
         if (param.mesh.remeshing_option == 13)
-            side_inflow = side_inflow_state(param, old_nnode, old_coord, *var.bcflag);
+            side_inflow = side_inflow_state(param, var.time / YEAR2SEC, old_nnode, old_coord,
+                                            *var.bcflag);
 
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
@@ -5711,8 +6091,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
         remap_markers(param, var, old_coord, old_connectivity);
         // reset stray marker mattypes in the inflow band before they advect inland
-        const bool side_in[2] = { side_inflow.in_x0, side_inflow.in_x1 };
-        correct_inflow_band_marker_mattype(param, var, side_in);
+        correct_inflow_band_marker_mattype(param, var, side_inflow.in);
   
         // old_coord et al. are destroyed before exiting this block
     }
@@ -5751,9 +6130,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         restore_stress_from_ref(param, var, topo_new, var.stress, var.stressyy);
     }
 
-    // Incoming side material gets the recorded side profile (nodal temperature and coord0, zeroed
-    // strain and the profile radiogenic source on the band's elements). Before the plstrain_remesh
-    // snapshot, so the zeroed plstrain seeds the freeze baseline.
+    // before the plstrain_remesh snapshot below (see restore_side_fields)
     restore_side_fields(param, var, side_inflow);
     var.remesh_node_outside.clear();
 
@@ -5839,12 +6216,11 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
     }
 
-    // Option 13: re-seat the HORIZONTAL coord0 of pure-bottom nodes so the incoming reference is
-    // continuous down to the floor. The flat bottom edge is re-discretized every remesh, and the
-    // barycentric interpolation of coord0 there re-samples the OLD bottom edge, a 1-D chain that
-    // never receives the wall shift: a spurious coord0[x] jump at the inflow bottom corner. Copy
-    // the displacement (coord - coord0) of the nearest connected node ABOVE the floor. Side-wall
-    // bottom corners are skipped (the wall column owns their coord0).
+    // Option 13: re-seat the HORIZONTAL coord0 of the pure-bottom nodes. The bottom is
+    // re-discretized every remesh, and the interpolation re-samples the OLD bottom, which never gets
+    // the wall shift: a spurious coord0 jump at the inflow bottom corner. Copy the displacement
+    // (coord - coord0) of the nearest connected node above the floor. Side-wall bottom nodes are
+    // skipped: restore_side_fields re-seats those outside the old mesh, the others keep their remap.
     if (param.mesh.remeshing_option==13) {
         int nbot13 = static_cast<int>(var.bnodes[iboundz0]->size());   // not const: named in shared(), gcc 8 rejects a const there
         auto above_floor = [&var](int p) { return !((*var.bcflag)[p] & BOUNDZ0); };
@@ -5858,7 +6234,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifdef THREED
                 || is_y0(f) || is_y1(f)
 #endif
-               ) continue;                       // side-wall corner: owned by the wall logic
+               ) continue;                       // on a side wall: see above
             const int m = nearest_patch_node(var, n, NDIMS-1, above_floor);
             if (m < 0) continue;
             for (int d=0; d<NDIMS-1; ++d)

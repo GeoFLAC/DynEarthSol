@@ -1576,70 +1576,71 @@ namespace {
         replenish_markers_with_mattype_from_nn(param, var, mixed, genesis, is_surface, emi);
     }
 
-    // Restored side wall (0 = x0, 1 = x1) whose profile replenishes element e: the last wall with
-    // a profile that e touches (where two walls' bands overlap, the later wall wins, as in
-    // restore_side_fields), -1 if none. Shared by the replenishment and its caller.
+    // The restored side wall (SIDEWALL_* order) whose profile replenishes element e: the last
+    // profiled wall that e touches (the later wall wins, as in restore_side_fields), -1 if none.
     int side_profile_wall(const Variables &var, int e)
     {
-        const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-        const int  side_idx [2] = { iboundx0, iboundx1 };
         ConstConnAccessor conn = (*var.connectivity)[e];
-        for (int t = 1; t >= 0; --t) {
-            if (var.side_profile[side_idx[t]].nelem() == 0) continue;
+        for (int t = NSIDEWALL - 1; t >= 0; --t) {
+            if (var.side_profile[t].empty()) continue;
             for (int k = 0; k < NODES_PER_ELEM; ++k)
-                if ((*var.bcflag)[conn[k]] & side_flag[t]) return t;
+                if ((*var.bcflag)[conn[k]] & SIDEWALL_FLAG[t]) return t;
         }
         return -1;
     }
 
-    // Replenish markers at RESTORED side-wall elements from the AUTO-DETECTED side profile
-    // (remeshing_option 13): each new marker gets the recorded material of the profile wall element
-    // its depth falls into (SideProfile::elem_mattype, nearest centroid among the spanning
-    // elements), so incoming material keeps the side's layering. Depths are relative to the side's
-    // CURRENT top point. Serial; side_elems must all touch a side with a profile.
+    // Element e's centroid in side wall t's profile coordinates: along-strike position s and depth
+    // rel below the column top ref_z. The side-profile replenishment and the inflow-band
+    // correction both locate an element here, so they agree on its material.
+    void side_profile_elem_centroid(const Variables &var, int e, int t, double ref_z,
+                                    double &s, double &rel)
+    {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double cs = 0., cz = 0.;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            cs += side_wall_strike((*var.coord)[conn[k]], t);
+            cz += (*var.coord)[conn[k]][NDIMS-1];
+        }
+        s = cs / NODES_PER_ELEM;
+        rel = ref_z - cz / NODES_PER_ELEM;
+    }
+
+    // Replenish restored side-wall elements (remeshing_option 13) from the profile of the wall
+    // side_profile_wall picks: the recorded material at the element's centroid
+    // (side_profile_elem_centroid), time 0. An element centred in the wall-top deposit gets
+    // mattype_sed with its lowest-index sediment marker's time, else the current time. Serial.
     void replenish_markers_by_side_profile(const Param& param, const Variables &var,
                                            int_pair_vec &side_elems, int genesis)
     {
         if (side_elems.empty()) return;
         MarkerSet &ms = *var.markersets[0];
 
-        // Current top mesh point of each x-side; the profile depths are pinned to it.
-        const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-        const int  side_idx [2] = { iboundx0, iboundx1 };
-        double top_z[2] = { -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max() };
-        for (int n = 0; n < var.nnode; ++n)
-            for (int t = 0; t < 2; ++t)
-                if ((*var.bcflag)[n] & side_flag[t]) {
-                    double z = (*var.coord)[n][NDIMS-1];
-                    if (z > top_z[t]) top_z[t] = z;
-                }
+        // column top of each side wall (SideProfile)
+        double ref_z[NSIDEWALL];
+        for (int t = 0; t < NSIDEWALL; ++t)
+            ref_z[t] = side_wall_top_z(var, t) - var.side_profile[t].top_rise;
 
-        const double depth_tol = side_profile_depth_tol(param);
-        int_vec cand;
         for (const auto& pair : side_elems) {
             int e = pair.first;
             int num_marker_in_elem = pair.second;
-            ConstConnAccessor conn = (*var.connectivity)[e];
             const int t = side_profile_wall(var, e);
             if (t < 0)
                 die(EXIT_INTERNAL_UNREACHABLE, "side-profile replenishment: no profiled wall");
-            const SideProfile &prof = var.side_profile[side_idx[t]];
+            const SideProfile &prof = var.side_profile[t];
+            double s, rel;
+            side_profile_elem_centroid(var, e, t, ref_z[t], s, rel);
+            const bool deposit = prof.in_deposit(rel);
+            const int mt = deposit ? param.mat.mattype_sed : side_profile_mattype_at(prof, s, rel);
+            double ti = 0.;
+            if (deposit) {
+                const int m_sed = ms.lowest_index_marker((*var.markers_in_elem)[e],
+                                                         param.mat.mattype_sed);
+                ti = (m_sed >= 0) ? ms.get_time(m_sed) : var.time / YEAR2SEC;
+            }
             while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
                 double eta[NODES_PER_ELEM];
                 MarkerSet::random_eta_seed(eta, e + num_marker_in_elem + var.steps);
-                double z = 0.0;
-                for (int k = 0; k < NODES_PER_ELEM; ++k)
-                    z += eta[k] * (*var.coord)[conn[k]][NDIMS-1];
-                double rel = top_z[t] - z;                 // depth below this side's top point
-                side_profile_elems_at(prof, rel, depth_tol, cand);
-                // nearest centroid among the elements spanning this depth: the material
-                // switches at the centroid midpoint of the spanning elements
-                int le = cand.front();
-                for (int c : cand)
-                    if (std::fabs(prof.elem_reldepth[c] - rel) <
-                        std::fabs(prof.elem_reldepth[le] - rel)) le = c;
-                int mt = prof.elem_mattype[le];
-                ms.append_marker(eta, e, mt, var.time / YEAR2SEC, 0., 0., 0., genesis);
+                ms.append_marker(eta, e, mt, ti, 0., 0., 0., genesis);
                 ++(*var.elemmarkers)[e][mt];
                 (*var.markers_in_elem)[e].push_back(ms.get_nmarkers()-1);
                 ++num_marker_in_elem;
@@ -2027,8 +2028,8 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     int_pair_vec side_elems, filtered;
     int_pair_vec *rest = &unplenished_elems;
     bool have_side_profile = false;
-    for (int b = 0; b < nbdrytypes && !have_side_profile; ++b)
-        if (!var.side_profile[b].empty()) have_side_profile = true;
+    for (int t = 0; t < NSIDEWALL && !have_side_profile; ++t)
+        if (!var.side_profile[t].empty()) have_side_profile = true;
     if (have_side_profile) {
         for (const auto& pr : unplenished_elems) {
             if (side_profile_wall(var, pr.first) >= 0) side_elems.push_back(pr);
@@ -2061,44 +2062,43 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 }
 
-// Correct STRAY marker mattypes in the inflow band (remeshing_option 13), right after remap_markers.
-// The wall machinery moves geometry past markers (division relocation, wall snap-back, MMG
-// rebuilding the band), leaving a near-interface marker on the wrong side of a division; it would
-// advect inland and flip a split child at a later remesh. Range: elements with a node on an inflow
-// wall + 1 ring, where the material is the profile's layering by construction. Rule: the ELEMENT
-// decides -- the profile material at its centroid depth below the side's current top (the
-// replenishment's rule) -- so a tilted interface carried by the tessellation is followed. A marker
-// whose mattype is not one of the profile's layer materials has phase-changed and is left alone.
+// Correct STRAY marker mattypes in the inflow band (remeshing_option 13), right after
+// remap_markers. The wall machinery (division relocation, wall snap-back, MMG rebuilding the band)
+// moves geometry past markers and leaves a near-interface marker on the wrong side of a division,
+// which would advect inland and flip a split child at a later remesh. Band: the elements with a
+// node on an inflow wall + 1 ring; until incoming material fills it, it holds the domain's own
+// structure, which is re-layered too. Rule: the ELEMENT decides (the profile material at its
+// centroid, side_profile_elem_centroid), so a tilted interface carried by the tessellation is
+// followed. A stray carries a material the profile assigns within two element heights of that
+// depth; any other mismatch is a phase change.
+// Limitations: a phase-changed marker that close to a division is reset too (its rule fires again
+// at the next phase_changes call). In 3D (no division relocation) and at a 2D wall that also
+// drifted outward (no required interface edges), the band carries interfaces at element
+// resolution, so a marker near one can be reset at one remesh and back at a later one. Where two
+// 3D walls' bands overlap, one wall's pass can reset markers placed from the other's profile
+// (side_profile_wall). Elements centred in the wall-top deposit are left alone.
 void correct_inflow_band_marker_mattype(const Param& param, const Variables& var,
                                         const bool *side_in)
 {
     if (param.mesh.remeshing_option != 13) return;
     MarkerSet &ms = *var.markersets[0];
-    const double depth_tol = side_profile_depth_tol(param);
-    const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
-    const int  side_idx [2] = { iboundx0, iboundx1 };
-    int ncorr = 0;
-    for (int t = 0; t < 2; ++t) {
+    int ncorr = 0;   // distinct markers: two 3D walls' bands can overlap
+    std::vector<char> corrected(ms.get_nmarkers(), 0);
+    for (int t = 0; t < NSIDEWALL; ++t) {
         if (!side_in[t]) continue;
-        const SideProfile &prof = var.side_profile[side_idx[t]];
+        const SideProfile &prof = var.side_profile[t];
         if (prof.empty()) continue;
 
-        // the profile's layer materials (phase-changed markers are left alone)
-        std::vector<char> is_layer_mat(param.mat.nmat, 0);
-        for (int mt : prof.elem_mattype) is_layer_mat[mt] = 1;
-
-        // current top point of this side; profile depths are measured below it
-        double top_z = -std::numeric_limits<double>::max();
-        for (int n = 0; n < var.nnode; ++n)
-            if ((*var.bcflag)[n] & side_flag[t])
-                top_z = std::max(top_z, (*var.coord)[n][NDIMS-1]);
+        // column top (SideProfile)
+        const double top_z = side_wall_top_z(var, t);
         if (top_z == -std::numeric_limits<double>::max())   // option 13 rebuilds every wall
             die(EXIT_INTERNAL_ASSERT,
                 "correct_inflow_band_marker_mattype: receiving wall without nodes");
+        const double ref_z = top_z - prof.top_rise;
 
         std::vector<char> bnode(var.nnode, 0), belem(var.nelem, 0);
         for (int n = 0; n < var.nnode; ++n)
-            if ((*var.bcflag)[n] & side_flag[t]) bnode[n] = 1;
+            if ((*var.bcflag)[n] & SIDEWALL_FLAG[t]) bnode[n] = 1;
         for (int ring = 0; ring < 2; ++ring) {
             for (int e = 0; e < var.nelem; ++e) {
                 if (belem[e]) continue;
@@ -2114,29 +2114,39 @@ void correct_inflow_band_marker_mattype(const Param& param, const Variables& var
                         bnode[conn[i]] = 1;
                 }
         }
-        int_vec cand;
+        std::vector<char> in_win(param.mat.nmat);
         for (int e = 0; e < var.nelem; ++e) {
             if (!belem[e]) continue;
             ConstConnAccessor conn = (*var.connectivity)[e];
-            double cz = 0;
-            for (int i = 0; i < NODES_PER_ELEM; ++i)
-                cz += (*var.coord)[conn[i]][NDIMS-1];
-            cz /= NODES_PER_ELEM;
-            // expected material of THIS element: profile at the centroid's depth
-            side_profile_elems_at(prof, top_z - cz, depth_tol, cand);
-            if (cand.empty()) continue;
-            int le = cand.front();
-            for (int c : cand)
-                if (std::fabs(prof.elem_reldepth[c] - (top_z - cz)) <
-                    std::fabs(prof.elem_reldepth[le] - (top_z - cz))) le = c;
-            const int expected = prof.elem_mattype[le];
+            double zmin = std::numeric_limits<double>::max(), zmax = -zmin;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                const double z = (*var.coord)[conn[i]][NDIMS-1];
+                zmin = std::min(zmin, z);
+                zmax = std::max(zmax, z);
+            }
+            double cs, rel;
+            side_profile_elem_centroid(var, e, t, ref_z, cs, rel);
+            if (prof.in_deposit(rel)) continue;   // no recorded layering in the deposit
+            const int expected = side_profile_mattype_at(prof, cs, rel);
+            // Window 2h (h = this element's height): a marker that kept its own depth's material
+            // lies within h of the centroid; one set at an earlier remesh within h_old + h
+            // (assumed: h_old ~ h where the wall metric sets the size). Built at the element's
+            // first mismatching marker only.
+            bool win_built = false;
             for (int m : (*var.markers_in_elem)[e]) {
                 const int cur = ms.get_mattype(m);
-                if (cur == expected || !is_layer_mat[cur]) continue;
+                if (cur == expected) continue;
+                if (!win_built) {
+                    const double reach = 2. * (zmax - zmin);
+                    std::fill(in_win.begin(), in_win.end(), 0);
+                    side_profile_mattypes_within(prof, cs, rel - reach, rel + reach, in_win);
+                    win_built = true;
+                }
+                if (!in_win[cur]) continue;
                 ms.set_mattype(m, expected);
                 --(*var.elemmarkers)[e][cur];
                 ++(*var.elemmarkers)[e][expected];
-                ++ncorr;
+                if (!corrected[m]) { corrected[m] = 1; ++ncorr; }
             }
         }
     }

@@ -72,6 +72,17 @@ public:
     inline double get_time(int m) const { return (*_time)[m]; }
     inline void set_time(const int m, const double ti) { (*_time)[m] = ti; }
 
+    // Lowest-index marker of mattype mt in an element's markers_in_elem list, -1 if none: the
+    // survivor whose time a replenishment copies. Index order, unlike list order, survives a
+    // restart, which rebuilds every list in index order.
+    inline int lowest_index_marker(const int_vec &markers, int mt) const
+    {
+        int m0 = -1;
+        for (int m : markers)
+            if ((*_mattype)[m] == mt && (m0 < 0 || m < m0)) m0 = m;
+        return m0;
+    }
+
     inline double get_z(int m) const { return (*_z)[m]; }
     inline void set_z(const int m, const double z) { (*_z)[m] = z; }
 
@@ -110,7 +121,9 @@ private:
     int_vec *_mattype;
     // Unique id
     int_vec *_id;
-    // Cearte time
+    // Deposition time [yr]; 0 when none is set: run start, a hydrous marker, a homogeneous fill
+    // of a non-sediment element, replenishment_option 0 or 1, and the side-profile fill outside
+    // the deposit (even in a recorded mattype_sed layer), so a sediment marker can carry 0
     double_vec *_time;
     // Sedimentation: Depth
     double_vec *_z;

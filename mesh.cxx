@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <string>
 #include <sstream>
 #include <set>
@@ -45,6 +46,7 @@
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
 #include "markerset.hpp"
+#include "remeshing.hpp"
 
 #ifdef WIN32
 #ifndef _MSC_VER
@@ -991,7 +993,8 @@ static void mmg_refine_init_mesh_3d(
 
     // --- Propagate regattr via nearest-centroid from coarse ---
     // When per-region volumes were used (max_elem_size<=0 and n_regions>0),
-    // cra contains region indices (temporarily encoded by points_to_mesh).
+    // cra contains region indices (temporarily encoded by the use_mmg_init coarse pass of
+    // points_to_mesh or of the 3D .poly path).
     // Decode back to actual mattypes before propagation.
     if (!cra.empty()) {
         const double *mattype_src = cra.data();
@@ -1095,43 +1098,51 @@ static void mmg_refine_init_mesh_2d(
                 << nnode << " nodes, " << nelem << " elements\n";
 }
 
-// Refine the RESTORED side walls of the INITIAL mesh to ~mesh.resolution (remeshing_option 13):
-// the incoming-material profile is sampled at wall-node spacing, so a coarse initial wall would
-// freeze a kinked profile for the whole run. One MMG pass with the per-node size CLAMPED at the
-// wall nodes refines only the wall band. var.init_elem_size_n is filled from the UNCLAMPED sizes,
-// so the initial-size metric base keeps the cfg-intended size and off-wall elements coarsen back at
-// later remeshes (R4 strip, R5 size recovery). 2D only (3D walls are refined progressively by the remesh-time clamp).
-static void refine_initial_side_walls_2d(const Param &param, Variables &var,
+#endif // !THREED
+
+// Refine the restored side walls of the initial mesh to ~mesh.resolution (remeshing_option 13):
+// the incoming-material profile is sampled at wall-node spacing, so a coarse wall would freeze a
+// kinked profile for the whole run. MMG rebuilds the wall band (each element touching a wall node
+// + 2 rings, unless already at resolution) at a metric clamped at the wall nodes;
+// var.init_elem_size_n keeps the UNCLAMPED size, so off-wall elements coarsen back at later
+// remeshes. Regions: in 2D under mattype_option 0, their only reader, the band's region boundaries
+// are required interface edges and each new element keeps its region (element references);
+// otherwise a new element takes the nearest old centroid's.
+static void refine_initial_side_walls(const Param &param, Variables &var,
         int &nnode, int &nelem, int &nseg,
         double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
 {
     const double res = param.mesh.resolution;
 
-    // Per-node actual element size (edge length of the equilateral element of the same area,
-    // area-weighted nodal average -- the same convention as initialize_elem_size_n).
+    // Per-node actual element size (edge length of the equilateral element of the same measure,
+    // measure-weighted nodal average -- the same convention as initialize_elem_size_n).
     std::vector<double> size_n(nnode, 0.0), wsum(nnode, 0.0), esize(nelem, 0.0);
     for (int e = 0; e < nelem; ++e) {
         const int *c = pconn + e*NODES_PER_ELEM;
-        const double *a = pcoord + c[0]*NDIMS, *b = pcoord + c[1]*NDIMS, *d = pcoord + c[2]*NDIMS;
-        double area = 0.5 * std::abs((b[0]-a[0])*(d[1]-a[1]) - (d[0]-a[0])*(b[1]-a[1]));
-        esize[e] = std::sqrt(area / sizefactor);
+        const double measure = elem_measure(pcoord, pconn, e);
+        esize[e] = std::pow(measure / sizefactor, 1.0 / NDIMS);
         for (int k = 0; k < NODES_PER_ELEM; ++k) {
-            size_n[c[k]] += esize[e] * area;
-            wsum [c[k]] += area;
+            size_n[c[k]] += esize[e] * measure;
+            wsum [c[k]] += measure;
         }
     }
     for (int n = 0; n < nnode; ++n)
         if (wsum[n] > 0) size_n[n] /= wsum[n];
 
-    // Clamp the metric at the side-wall nodes of BOTH walls regardless of the BC: a static wall
-    // keeps a thin ~resolution column and a full-resolution profile should the flow turn inward;
-    // the inflow-gated remesh-time treatments are listed at SideInflowState (remeshing.cxx).
-    const double xtol = 1e-9 * param.mesh.xlength;
+    // Clamp at every restored wall, whatever its BC: a static wall keeps a full-resolution profile
+    // should the flow turn inward.
+    auto on_wall = [&](int n) {
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const double plane = side_wall_plane(param.mesh, t);
+            const double tol = 1e-9 * (SIDEWALL_AXIS[t] == 0 ? param.mesh.xlength : param.mesh.ylength);
+            if (std::abs(pcoord[n*NDIMS + SIDEWALL_AXIS[t]] - plane) < tol) return true;
+        }
+        return false;
+    };
     std::vector<double> metric(size_n);
     bool needs_refining = false;
     for (int n = 0; n < nnode; ++n) {
-        double x = pcoord[n*NDIMS];
-        if ((x < xtol || x > param.mesh.xlength - xtol) && metric[n] > res) {
+        if (on_wall(n) && metric[n] > res) {
             metric[n] = res;
             needs_refining = true;
         }
@@ -1144,15 +1155,11 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
     const double_vec hint = ((int)var.init_elem_size_n->size() == nnode)
                             ? *var.init_elem_size_n : size_n;
 
-    // Freeze everything except the wall bands: each element touching a wall node + TWO rings is
-    // modifiable (one ring wider than the remesh-time R4 strip), and only where the element is
-    // COARSER than the target; the rest of the initial mesh is carried verbatim.
+    // Free the wall band; the rest of the mesh is required.
     std::vector<char> free_elem(nelem, 0), free_node(nnode, 0);
-    for (int n = 0; n < nnode; ++n) {
-        double x = pcoord[n*NDIMS];
-        if (x < xtol || x > param.mesh.xlength - xtol)
+    for (int n = 0; n < nnode; ++n)
+        if (on_wall(n))
             free_node[n] = 1;                        // ring 0 grows from the wall nodes
-    }
     for (int r = 0; r <= 2; ++r) {
         std::vector<char> next(nnode, 0);
         for (int e = 0; e < nelem; ++e) {
@@ -1176,10 +1183,69 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
         if (req_elem[e])
             for (int k = 0; k < NODES_PER_ELEM; ++k) req_node[pconn[e*NODES_PER_ELEM + k]] = 1;
 
+#ifndef THREED
+    // An edge of two free elements of different regattr (truncated, as markerset reads it) is a
+    // required interface edge; a frozen element's edges are required anyway.
+    const bool keep_regions = (param.ic.mattype_option == 0);
+    std::vector<int> eref, iface;
+    if (keep_regions) {
+        eref.assign(nelem, 0);
+        if (pregattr)
+            for (int e = 0; e < nelem; ++e) eref[e] = (int)pregattr[e];
+        std::map<std::pair<int,int>, int> first_ref;   // edge -> its first free element's reference
+        for (int e = 0; e < nelem; ++e) {
+            if (!free_elem[e]) continue;
+            const int *c = pconn + e*NODES_PER_ELEM;
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                for (int j = i + 1; j < NODES_PER_ELEM; ++j) {
+                    const std::pair<int,int> key(std::min(c[i], c[j]), std::max(c[i], c[j]));
+                    auto ins = first_ref.emplace(key, eref[e]);
+                    if (!ins.second && ins.first->second != eref[e]) {
+                        iface.push_back(key.first);
+                        iface.push_back(key.second);
+                    }
+                }
+        }
+    }
+    // MMG cannot split a required edge, so bisect each to the size MMG grades up to from the wall,
+    // resolution + ln(1.3) x the wall distance (MMG5_gradsiz_iso; mmg_adapt keeps hgrad 1.3); a
+    // long one leaves poor elements beside it. The targets are scratch and never pulled down (a
+    // midpoint gets its own), so the wall size does not spread along an edge.
+    auto graded = [&](const double *x) {
+        double d = std::numeric_limits<double>::max();
+        for (int t = 0; t < NSIDEWALL; ++t)
+            d = std::min(d, std::abs(x[SIDEWALL_AXIS[t]] - side_wall_plane(param.mesh, t)));
+        return res + 0.26236426446 * d;   // MMG5_HGRAD = ln(1.3), mmgcommon_private.h
+    };
+    std::vector<double> in_coord(pcoord, pcoord + (std::size_t)nnode*NDIMS);
+    std::vector<int> in_conn(pconn, pconn + (std::size_t)nelem*NODES_PER_ELEM);
+    int in_nnode = nnode, in_nelem = nelem;
+    std::vector<double> tgt(nnode);
+    for (int n = 0; n < nnode; ++n) tgt[n] = graded(&in_coord[(std::size_t)n*NDIMS]);
+    for (int ne0 = -1; ne0 != in_nelem; ) {
+        ne0 = in_nelem;
+        const int nn0 = in_nnode;
+        presubdivide_interface_edges(in_coord, in_conn, tgt, req_node, req_elem, iface,
+                                     in_nnode, in_nelem, &eref, false);
+        // `metric` (MMG's sizes) takes each midpoint's h, as at a remesh; `tgt` its graded size.
+        metric.insert(metric.end(), tgt.begin() + nn0, tgt.end());
+        for (int n = nn0; n < in_nnode; ++n) tgt[n] = graded(&in_coord[(std::size_t)n*NDIMS]);
+    }
+    if (!iface.empty())
+        std::cout << "      [require] " << iface.size() / 2 << " material-interface edge(s) of the "
+                     "initial wall band handed to MMG as required.\n";
+    MMGInput  mmg_in = { in_nnode, in_nelem, nseg, in_coord.data(), in_conn.data(), pseg, psegflag,
+                         metric.data(), req_node.data(), req_elem.data(), true, nullptr,
+                         iface.empty() ? nullptr : iface.data(), (int)iface.size() / 2,
+                         keep_regions ? eref.data() : nullptr };
+#else
     MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
                          metric.data(), req_node.data(), req_elem.data(), true, nullptr };
+#endif
     MMGOutput mmg_out;
-    mmg_adapt(param.mesh, mmg_in, mmg_out);
+    // Gated as at a remesh: a bad output element would make the first quality check remesh. The
+    // gate scans the whole output, so it also repairs a bad element left from the initial mesh.
+    mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
     {
         CentroidCloud cloud(pcoord, nnode);   // plain AoS point cloud; works for nodes too
@@ -1198,9 +1264,12 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
         }
     }
 
-    // Material regions follow via nearest old element centroid.
+    // Material regions: the MMG element references when set (2D, mattype_option 0), else the
+    // nearest old element centroid's.
     double *fine_regattr = new double[mmg_out.nelem];
-    if (pregattr)
+    if (!mmg_out.elem_ref.empty())
+        for (int e = 0; e < mmg_out.nelem; ++e) fine_regattr[e] = mmg_out.elem_ref[e];
+    else if (pregattr)
         propagate_regattr_nearest(nelem, pcoord, pconn, pregattr,
                                   mmg_out.nelem, mmg_out.coord.data(), mmg_out.conn.data(),
                                   fine_regattr);
@@ -1224,7 +1293,6 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
     std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
               << nnode << " nodes, " << nelem << " elements\n";
 }
-#endif // !THREED
 #endif // USEMMG
 
 
@@ -1339,6 +1407,34 @@ void tetrahedralize_polyhedron
 #endif
 
 
+// Shared tail of every Triangle/TetGen-built initial mesh (points_to_mesh and the 3D .poly path of
+// new_mesh_from_polyfile): the option-13 initial wall refinement, then var copies the mesh
+// buffers, which are freed. An imported .exo mesh (meshing_option 95) does not come through
+// here and keeps its own wall spacing.
+void adopt_initial_mesh(const Param &param, Variables &var,
+                        double *pcoord, int *pconnectivity, int *psegment, int *psegflag,
+                        double *pregattr)
+{
+#ifdef USEMMG
+    if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
+        refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
+                                  pcoord, pconnectivity, psegment, psegflag, pregattr);
+#endif
+
+    var.coord = new array_t(pcoord, var.nnode);
+    var.connectivity = new conn_t(pconnectivity, var.nelem);
+    var.segment = new segment_t(psegment, var.nseg);
+    var.segflag = new segflag_t(psegflag, var.nseg);
+    var.regattr = new regattr_t(pregattr, var.nelem);
+
+    delete [] pcoord;
+    delete [] pconnectivity;
+    delete [] psegment;
+    delete [] psegflag;
+    delete [] pregattr;
+}
+
+
 void points_to_mesh(const Param &param, Variables &var,
                     int npoints, const double *points,
                     int n_init_segments, const int *init_segments, const int *init_segflags,
@@ -1409,7 +1505,7 @@ void points_to_mesh(const Param &param, Variables &var,
     } else {
         // Plain triangle/tetgen path — init_elem_size_n left empty;
         // initialize_elem_size_n() will compute it from the mesh at step 0, unless
-        // refine_initial_side_walls_2d (2D, remeshing_option 13) fills it below.
+        // refine_initial_side_walls (remeshing_option 13, adopt_initial_mesh) fills it.
         points_to_new_mesh(param.mesh, npoints, points,
                            n_init_segments, init_segments, init_segflags,
                            nregions, regattr,
@@ -1426,26 +1522,7 @@ void points_to_mesh(const Param &param, Variables &var,
                        pcoord, pconnectivity, psegment, psegflag, pregattr);
 #endif
 
-#if defined(USEMMG) && !defined(THREED)
-    // Restored side walls (remeshing_option 13) must start at ~mesh.resolution so the recorded
-    // incoming-material profiles (temperature, layering) resolve the initial structure. The
-    // cfg-intended sizes are preserved in init_elem_size_n (see refine_initial_side_walls_2d).
-    if (param.mesh.remeshing_option == 13)
-        refine_initial_side_walls_2d(param, var, var.nnode, var.nelem, var.nseg,
-                                     pcoord, pconnectivity, psegment, psegflag, pregattr);
-#endif
-
-    var.coord = new array_t(pcoord, var.nnode);
-    var.connectivity = new conn_t(pconnectivity, var.nelem);
-    var.segment = new segment_t(psegment, var.nseg);
-    var.segflag = new segflag_t(psegflag, var.nseg);
-    var.regattr = new regattr_t(pregattr, var.nelem);
-
-    delete [] pcoord;
-    delete [] pconnectivity;
-    delete [] psegment;
-    delete [] psegflag;
-    delete [] pregattr;
+    adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 }
 
 void new_mesh_regular(const Param& param, Variables& var)
@@ -2162,7 +2239,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     if ( has_max_size ) max_elem_size = 0; // special value, see set_volume_str() above.
 
 #ifdef THREED
-    // shortcutting points_to_mesh() for polygon boundary
+    // shortcutting points_to_mesh() for polygon boundary; the tail is shared (adopt_initial_mesh)
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag;
 
@@ -2238,17 +2315,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                               &psegment, &psegflag, &pregattr);
 #endif
 
-    var.coord = new array_t(pcoord, var.nnode);
-    var.connectivity = new conn_t(pconnectivity, var.nelem);
-    var.segment = new segment_t(psegment, var.nseg);
-    var.segflag = new segflag_t(psegflag, var.nseg);
-    var.regattr = new regattr_t(pregattr, var.nelem);
-
-    delete [] pcoord;
-    delete [] pconnectivity;
-    delete [] psegment;
-    delete [] psegflag;
-    delete [] pregattr;
+    adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 #else
     points_to_mesh(param, var, npoints, points,
                    n_init_segments, init_segments, init_segflags, nregions, regattr,

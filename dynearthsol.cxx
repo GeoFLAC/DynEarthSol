@@ -402,34 +402,28 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Incoming side-material profiles (remeshing_option 13): restore every stored side profile
-    // (recorded at run start or when its wall began receiving). The incoming side may change at a
-    // restart (a new vbc sign), so the per-side existence check is required: a side without stored
-    // data is detected by main() from its current column, and a stored profile whose wall no longer
-    // receives material is erased at the first remesh (side-profile lifecycle). No profiles at
-    // all = none held when the checkpoint was written (none recorded yet, always so in the initial
-    // checkpoint written before main() detects them, or all erased); main() and remesh() then
-    // detect them as on a fresh run. A restart that leaves option 13 drops them: nothing would
-    // erase them, and the marker replenishment would keep refilling side-wall elements from them.
+    // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
+    // column and no shift at the checkpoint. remesh()'s side-profile lifecycle handles a side that
+    // changed at the restart. A restart without option 13 drops them: nothing would erase them,
+    // and the marker replenishment would keep refilling from them.
     if (param.mesh.remeshing_option == 13 && bin_chkpt.has_array("side_prof_sizes")) {
-        // side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
-        // support x1}; per-side arrays follow (see SideProfile).
-        int_vec psz(6);
+        int_vec psz(3 * NSIDEWALL);
         bin_chkpt.read_array(psz, "side_prof_sizes");
-        const int side_idx[2] = { iboundx0, iboundx1 };
-        const char *sfx[2] = { "x0", "x1" };
         char aname[64];
-        double_vec shifts(2, 0.);   // cumulative wall-restore shifts
+        double_vec shifts(NSIDEWALL, 0.), rises(NSIDEWALL, 0.);   // wall-restore shifts, top rises
         bin_chkpt.read_array(shifts, "side_prof_wall_shift");
-        for (int t = 0; t < 2; ++t) {
-            SideProfile &prof = var.side_profile[side_idx[t]];
-            prof.clear();
+        bin_chkpt.read_array(rises, "side_prof_top_rise");
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[t];
+            prof.clear_column();
             prof.wall_shift = shifts[t];
-            const int nn = psz[t], ne = psz[2 + t], ns = psz[4 + t];
+            prof.top_rise = rises[t];
+            const int nn = psz[t], ne = psz[NSIDEWALL + t], ns = psz[2 * NSIDEWALL + t];
             if (nn <= 0) continue;
+            const char *sfx_t = SIDEWALL_NAME[t];
             auto rd = [&](double_vec &a, const char *name, int size) {
                 a.resize(size);
-                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx_t);
                 bin_chkpt.read_array(a, aname);
             };
             rd(prof.node_reldepth, "node_reldepth", nn);
@@ -440,22 +434,36 @@ void restart(const Param& param, Variables& var)
             // tests before it indexes var.init_elem_size_n
             rd(prof.node_init_elem_size, "node_init_elem_size", nn);
 #endif
+#ifdef THREED
+            rd(prof.node_strike, "node_strike", nn);
+            prof.facet_node.resize(ns * NODES_PER_FACET);
+            std::snprintf(aname, 64, "side_prof_facet_node.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_node, aname);
+            prof.facet_elem.resize(ns);
+            std::snprintf(aname, 64, "side_prof_facet_elem.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_elem, aname);
+#else
             prof.node_support_idx.resize(nn + 1);
-            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx[t]);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx_t);
             bin_chkpt.read_array(prof.node_support_idx, aname);
             prof.node_support_arr.resize(ns);
-            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx[t]);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx_t);
             bin_chkpt.read_array(prof.node_support_arr, aname);
             rd(prof.elem_reldepth, "elem_reldepth", ne);
+#endif
             prof.elem_mattype.resize(ne);
-            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx[t]);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx_t);
             bin_chkpt.read_array(prof.elem_mattype, aname);
             rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+            side_profile_index_elems(prof);
         }
-        std::cout << "  Restored incoming side profiles from checkpoint (x0/x1: "
-                  << psz[0] << "/" << psz[1] << " nodes, "
-                  << psz[2] << "/" << psz[3] << " elements, wall shift "
-                  << shifts[0] << "/" << shifts[1] << " m).\n";
+        std::cout << "  Restored incoming side profiles from checkpoint:";
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (psz[t] > 0 || shifts[t] != 0.)
+                std::cout << " " << SIDEWALL_NAME[t] << " (" << psz[t] << " nodes, "
+                          << psz[NSIDEWALL + t] << " elements, wall shift " << shifts[t]
+                          << " m, top rise " << rises[t] << " m)";
+        std::cout << ".\n";
     }
 
     // the following fields are not required for restarting, yet
@@ -541,9 +549,25 @@ void update_mesh(const Param& param, Variables& var)
 
     if(!param.control.PT_jump)
     {
+        // option 13: each profiled wall's top rise (SideProfile::top_rise)
+        double top_before[NSIDEWALL] = {};
+        const bool track_tops = param.mesh.remeshing_option == 13 &&
+                                param.control.surface_process_option != 0;
+        if (track_tops) {
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (!var.side_profile[t].empty())
+                    top_before[t] = side_wall_top_z(var, t);
+        }
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+        if (track_tops) {
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                SideProfile &prof = var.side_profile[t];
+                if (!prof.empty())
+                    prof.top_rise += side_wall_top_z(var, t) - top_before[t];
+            }
+        }
     }
 
 #ifdef NPROF_DETAIL
@@ -743,28 +767,22 @@ int main(int argc, const char* argv[])
 
         var.dt = compute_dt(param, var);
 
+        // Option 13: record the inflow walls' columns (detect_side_profile) after mesh and markers
+        // exist and before the initial checkpoint. A restart reads the checkpointed ones instead.
+        if (param.mesh.remeshing_option == 13) {
+            const double t_now = var.time / YEAR2SEC;
+            uint bits = 0;
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (side_wall_vbc_is_inflow(param.bc, t, t_now)) bits |= SIDEWALL_FLAG[t];
+            if (bits)
+                detect_side_profile(param, var, bits);
+        }
+
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
-    }
-
-    // Restored side walls (remeshing_option 13): snapshot each receiving side's initial wall
-    // column (SideProfile) after mesh + markers exist, so incoming material keeps its original
-    // structure (restore_side_fields, side-wall marker replenishment).
-    if (param.mesh.remeshing_option == 13) {
-        // Only walls that RECEIVE material get a profile (a static backstop keeps evolving): at run
-        // start read from the velocity BC sign. A restart restored the checkpointed profiles above,
-        // so only detect what it did not provide; remesh() also late-detects a wall that starts moving.
-        const double t_now = var.time / YEAR2SEC;
-        uint bits = 0;
-        if (side_wall_normal_vbc(param.bc, 0, t_now) > 0. && var.side_profile[iboundx0].empty())
-            bits |= BOUNDX0;
-        if (side_wall_normal_vbc(param.bc, 1, t_now) < 0. && var.side_profile[iboundx1].empty())
-            bits |= BOUNDX1;
-        if (bits)
-            detect_side_profile(param, var, bits);
     }
 
     // var.dt_PT = var.dt;

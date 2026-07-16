@@ -450,36 +450,44 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     }
 #endif
 
-    // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
-    // recorded structure. side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
-    // support x1}; per-side arrays follow (see SideProfile).
+    // Restored side-wall columns (remeshing_option 13, SideProfile): side_prof_sizes = {nnode,
+    // nelem, 2D node-support size / 3D facet count}, NSIDEWALL each, then the per-wall arrays.
     {
-        const int side_idx[2] = { iboundx0, iboundx1 };
-        const char *sfx[2] = { "x0", "x1" };
         char aname[64];
-        int_vec psz(6, 0);
-        for (int t = 0; t < 2; ++t) {
-            const SideProfile &prof = var.side_profile[side_idx[t]];
-            psz[t]     = prof.nnode();
-            psz[2 + t] = prof.nelem();
-            psz[4 + t] = (int)prof.node_support_arr.size();
+        int_vec psz(3 * NSIDEWALL, 0);
+        int total = 0;
+        bool shifted = false;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const SideProfile &prof = var.side_profile[t];
+            psz[t]                 = prof.nnode();
+            psz[NSIDEWALL + t]     = prof.nelem();
+#ifdef THREED
+            psz[2 * NSIDEWALL + t] = prof.nfacet();
+#else
+            psz[2 * NSIDEWALL + t] = (int)prof.node_support_arr.size();
+#endif
+            total += prof.nnode();
+            shifted = shifted || prof.wall_shift != 0.;
         }
-        if (psz[0] + psz[1] > 0) {
+        // also with every column erased: the kept wall shifts continue the entry reference
+        if (total > 0 || shifted) {
             bin.write_aux_array(psz, "side_prof_sizes", psz.size());
-            // cumulative wall-restore shifts (the profile's only evolving state)
-            double_vec shifts(2);
-            shifts[0] = var.side_profile[iboundx0].wall_shift;
-            shifts[1] = var.side_profile[iboundx1].wall_shift;
+            double_vec shifts(NSIDEWALL), rises(NSIDEWALL);
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                shifts[t] = var.side_profile[t].wall_shift;
+                rises[t]  = var.side_profile[t].top_rise;
+            }
             bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
-            for (int t = 0; t < 2; ++t) {
-                const SideProfile &prof = var.side_profile[side_idx[t]];
+            bin.write_aux_array(rises, "side_prof_top_rise", rises.size());
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                const SideProfile &prof = var.side_profile[t];
                 if (prof.empty()) continue;
                 auto wrd = [&](const double_vec &a, const char *name) {
-                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
                     bin.write_aux_array(a, aname, a.size());
                 };
                 auto wri = [&](const int_vec &a, const char *name) {
-                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
                     bin.write_aux_array(a, aname, a.size());
                 };
                 wrd(prof.node_reldepth, "node_reldepth");
@@ -490,9 +498,15 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
                 // HDF5, and the des-binary restart would read nn values from the NEXT record.
                 wrd(prof.node_init_elem_size, "node_init_elem_size");
 #endif
+#ifdef THREED
+                wrd(prof.node_strike, "node_strike");
+                wri(prof.facet_node, "facet_node");
+                wri(prof.facet_elem, "facet_elem");
+#else
                 wri(prof.node_support_idx, "node_support_idx");
                 wri(prof.node_support_arr, "node_support_arr");
                 wrd(prof.elem_reldepth, "elem_reldepth");
+#endif
                 wri(prof.elem_mattype, "elem_mattype");
                 wrd(prof.elem_radiogenic_source, "elem_radiogenic_source");
             }
