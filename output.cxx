@@ -416,41 +416,47 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #endif
 
     // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
-    // run-start structure. side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
-    // support x1}; per-side arrays follow (see SideProfile).
+    // run-start structure. side_prof_sizes = {nnode, nelem, support size} per restored wall,
+    // NSIDEWALL each; per-wall arrays follow (see SideProfile).
     {
-        const int side_idx[2] = { iboundx0, iboundx1 };
-        const char *sfx[2] = { "x0", "x1" };
+        // side_prof_sizes = {nnode per wall, nelem per wall, support size per wall}, NSIDEWALL each
         char aname[64];
-        int_vec psz(6, 0);
-        for (int t = 0; t < 2; ++t) {
-            const SideProfile &prof = var.side_profile[side_idx[t]];
-            psz[t]     = prof.nnode();
-            psz[2 + t] = prof.nelem();
-            psz[4 + t] = (int)prof.node_support_arr.size();
+        int_vec psz(3 * NSIDEWALL, 0);
+        int total = 0;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+            psz[t]                 = prof.nnode();
+            psz[NSIDEWALL + t]     = prof.nelem();
+            psz[2 * NSIDEWALL + t] = (int)prof.node_support_arr.size();
+            total += prof.nnode();
         }
-        if (psz[0] + psz[1] > 0) {
+        if (total > 0) {
             bin.write_aux_array(psz, "side_prof_sizes", psz.size());
             // cumulative wall-restore shifts (the profile's only evolving state)
-            double_vec shifts(2);
-            shifts[0] = var.side_profile[iboundx0].wall_shift;
-            shifts[1] = var.side_profile[iboundx1].wall_shift;
+            double_vec shifts(NSIDEWALL);
+            for (int t = 0; t < NSIDEWALL; ++t) shifts[t] = var.side_profile[SIDEWALL_IDX[t]].wall_shift;
             bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
-            for (int t = 0; t < 2; ++t) {
-                const SideProfile &prof = var.side_profile[side_idx[t]];
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
                 if (prof.empty()) continue;
                 auto wrd = [&](const double_vec &a, const char *name) {
-                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
                     bin.write_aux_array(a, aname, a.size());
                 };
                 auto wri = [&](const int_vec &a, const char *name) {
-                    std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx[t]);
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
                     bin.write_aux_array(a, aname, a.size());
                 };
                 wrd(prof.node_reldepth, "node_reldepth");
                 wrd(prof.node_coord, "node_coord");
                 wrd(prof.node_coord0, "node_coord0");
                 wrd(prof.node_temperature, "node_temperature");
+#ifdef USEMMG
+                // Only a USEMMG build fills this (the frozen metric base is MMG-only); writing it
+                // unconditionally stored a zero-length record, which HDF5 refuses to chunk and the
+                // des-binary restart read back at nn from the NEXT record's bytes.
+                wrd(prof.node_init_elem_size, "node_init_elem_size");
+#endif
                 wri(prof.node_support_idx, "node_support_idx");
                 wri(prof.node_support_arr, "node_support_arr");
                 wrd(prof.elem_reldepth, "elem_reldepth");
