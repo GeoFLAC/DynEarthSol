@@ -1097,43 +1097,50 @@ static void mmg_refine_init_mesh_2d(
                 << nnode << " nodes, " << nelem << " elements\n";
 }
 
+#endif // !THREED
+
 // Refine the RESTORED side walls of the INITIAL mesh to ~mesh.resolution (remeshing_option 13):
 // the incoming-material profile is sampled at wall-node spacing, so a coarse initial wall would
 // freeze a kinked profile for the whole run. One MMG pass with the per-node size CLAMPED at the
 // wall nodes refines only the wall band. var.init_elem_size_n is filled from the UNCLAMPED sizes,
 // so the frozen metric base keeps the cfg-intended size and off-wall elements coarsen back at the
-// next remesh. 2D only (3D walls are refined progressively by the remesh-time clamp).
-static void refine_initial_side_walls_2d(const Param &param, Variables &var,
+// next remesh. Both dimensions: x0/x1 (and y0/y1 in 3D), the restored walls of option 13.
+static void refine_initial_side_walls(const Param &param, Variables &var,
         int &nnode, int &nelem, int &nseg,
         double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
 {
     const double res = param.mesh.resolution;
 
-    // Per-node actual element size (edge length of the equilateral element of the same area,
-    // area-weighted nodal average -- the same convention as initialize_elem_size_n).
+    // Per-node actual element size (edge length of the equilateral element of the same measure,
+    // measure-weighted nodal average -- the same convention as initialize_elem_size_n).
     std::vector<double> size_n(nnode, 0.0), wsum(nnode, 0.0), esize(nelem, 0.0);
     for (int e = 0; e < nelem; ++e) {
         const int *c = pconn + e*NODES_PER_ELEM;
-        const double *a = pcoord + c[0]*NDIMS, *b = pcoord + c[1]*NDIMS, *d = pcoord + c[2]*NDIMS;
-        double area = 0.5 * std::abs((b[0]-a[0])*(d[1]-a[1]) - (d[0]-a[0])*(b[1]-a[1]));
-        esize[e] = std::sqrt(area / sizefactor);
+        const double measure = elem_measure(pcoord, pconn, e);
+        esize[e] = std::pow(measure / sizefactor, 1.0 / NDIMS);
         for (int k = 0; k < NODES_PER_ELEM; ++k) {
-            size_n[c[k]] += esize[e] * area;
-            wsum [c[k]] += area;
+            size_n[c[k]] += esize[e] * measure;
+            wsum [c[k]] += measure;
         }
     }
     for (int n = 0; n < nnode; ++n)
         if (wsum[n] > 0) size_n[n] /= wsum[n];
 
-    // Clamp the metric at the side-wall nodes of BOTH walls regardless of the BC: a static wall
-    // keeps a thin ~resolution column and a full-resolution profile should the flow turn inward;
-    // only the unfreeze and the field restore are inflow-gated at remesh time.
-    const double xtol = 1e-9 * param.mesh.xlength;
+    // Clamp the metric at the side-wall nodes of ALL restored walls regardless of the BC: a static
+    // wall keeps a thin ~resolution column and a full-resolution profile should the flow turn
+    // inward; only the unfreeze and the field restore are inflow-gated at remesh time.
+    auto on_wall = [&](int n) {
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const double plane = side_wall_plane(param.mesh, t);
+            const double tol = 1e-9 * (SIDEWALL_AXIS[t] == 0 ? param.mesh.xlength : param.mesh.ylength);
+            if (std::abs(pcoord[n*NDIMS + SIDEWALL_AXIS[t]] - plane) < tol) return true;
+        }
+        return false;
+    };
     std::vector<double> metric(size_n);
     bool needs_refining = false;
     for (int n = 0; n < nnode; ++n) {
-        double x = pcoord[n*NDIMS];
-        if ((x < xtol || x > param.mesh.xlength - xtol) && metric[n] > res) {
+        if (on_wall(n) && metric[n] > res) {
             metric[n] = res;
             needs_refining = true;
         }
@@ -1150,11 +1157,9 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
     // modifiable (one ring wider than the remesh-time R4 strip), and only where the element is
     // COARSER than the target; the rest of the initial mesh is carried verbatim.
     std::vector<char> free_elem(nelem, 0), free_node(nnode, 0);
-    for (int n = 0; n < nnode; ++n) {
-        double x = pcoord[n*NDIMS];
-        if (x < xtol || x > param.mesh.xlength - xtol)
+    for (int n = 0; n < nnode; ++n)
+        if (on_wall(n))
             free_node[n] = 1;                        // ring 0 grows from the wall nodes
-    }
     for (int r = 0; r <= 2; ++r) {
         std::vector<char> next(nnode, 0);
         for (int e = 0; e < nelem; ++e) {
@@ -1223,7 +1228,6 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
     std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
               << nnode << " nodes, " << nelem << " elements\n";
 }
-#endif // !THREED
 #endif // USEMMG
 
 
@@ -1424,13 +1428,13 @@ void points_to_mesh(const Param &param, Variables &var,
                        pcoord, pconnectivity, psegment, psegflag, pregattr);
 #endif
 
-#if defined(USEMMG) && !defined(THREED)
+#ifdef USEMMG
     // Restored side walls (remeshing_option 13) must start at ~mesh.resolution so the recorded
     // incoming-material profiles (temperature, layering) resolve the initial structure. The
-    // cfg-intended sizes are preserved in init_elem_size_n (see refine_initial_side_walls_2d).
-    if (param.mesh.remeshing_option == 13)
-        refine_initial_side_walls_2d(param, var, var.nnode, var.nelem, var.nseg,
-                                     pcoord, pconnectivity, psegment, psegflag, pregattr);
+    // cfg-intended sizes are preserved in init_elem_size_n (see refine_initial_side_walls).
+    if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
+        refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
+                                  pcoord, pconnectivity, psegment, psegflag, pregattr);
 #endif
 
     var.coord = new array_t(pcoord, var.nnode);

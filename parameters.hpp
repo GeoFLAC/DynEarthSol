@@ -619,6 +619,9 @@ struct SideProfile {
     double_vec node_coord;         // run-start coordinates, NDIMS per node
     double_vec node_coord0;        // run-start REFERENCE coordinates (var.coord0), NDIMS per node
     double_vec node_temperature;   // nodal temperature at run start
+    double_vec node_init_elem_size; // run-start frozen metric base (var.init_elem_size_n) at the
+                                    // wall; re-pinned on the inflow wall/band after every remesh
+                                    // (restore_side_fields).
     int_vec    node_support_idx;   // CSR row pointer, size nnode()+1
     int_vec    node_support_arr;   // CSR column data: local element indices
     // elements with at least one node on the wall. Only the material and the radiogenic
@@ -631,8 +634,8 @@ struct SideProfile {
 
     // Cumulative signed shift of the restored wall (the only EVOLVING member): every remesh
     // displaces the drifted wall back to its initial plane, and those displacements sum here
-    // (x0 inflow: negative; x1 inflow: positive). Incoming nodes get the reference coordinate
-    // coord0[x] = plane + wall_shift -- a material (Lagrangian) entry coordinate outside the
+    // (lower wall inflow: negative; upper wall inflow: positive). Incoming nodes get the reference
+    // coordinate coord0[axis] = plane + wall_shift -- a material (Lagrangian) entry coordinate outside the
     // domain, so coord - coord0 stays a consistent displacement across inflow generations.
     double wall_shift = 0.;
 
@@ -641,6 +644,34 @@ struct SideProfile {
     bool empty() const { return node_reldepth.empty(); }
     void clear() { *this = SideProfile(); }
 };
+
+// Restored side walls of remeshing_option 13: x0, x1 in 2D; x0, x1, y0, y1 in 3D. Even entries are
+// the lower plane (coordinate 0), odd entries the upper plane (xlength / ylength) of their axis.
+#ifdef THREED
+const int NSIDEWALL = 4;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1 };
+const int   SIDEWALL_IDX [NSIDEWALL] = { iboundx0, iboundx1, iboundy0, iboundy1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0, 1, 1 };
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1", "y0", "y1" };
+#else
+const int NSIDEWALL = 2;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1 };
+const int   SIDEWALL_IDX [NSIDEWALL] = { iboundx0, iboundx1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0 };
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1" };
+#endif
+inline double side_wall_plane(const Mesh &mesh, int t)   // restored plane coordinate of wall t
+{
+    if (t % 2 == 0) return 0.0;
+    return SIDEWALL_AXIS[t] == 0 ? mesh.xlength : mesh.ylength;
+}
+inline double side_wall_vbc(const BC &bc, int t)   // prescribed normal velocity of wall t (constant part)
+{
+#ifdef THREED
+    if (SIDEWALL_AXIS[t] == 1) return (t % 2 == 0) ? bc.vbc_val_y0 : bc.vbc_val_y1;
+#endif
+    return (t % 2 == 0) ? bc.vbc_val_x0 : bc.vbc_val_x1;
+}
 
 //
 // Structures for surface processes
@@ -886,6 +917,14 @@ struct Variables {
     // remesh() consults it to re-impose the recorded side profile (var.side_profile) on the
     // incoming band, nodes and elements (restore_side_fields). Empty outside remeshing.
     std::vector<char> remesh_node_outside;
+
+    // Per-remesh scratch: for each NEW-mesh element, the mattype to give replenished markers
+    // when the element was SPLIT from (or is an unmoved copy of) exactly ONE old element
+    // whose markers were all one mattype; -1 otherwise. Built from the ancestor-cover map in
+    // nearest_neighbor_interpolation (while var.elemmarkers still describes the OLD mesh),
+    // consumed by the marker replenishment ahead of replenishment_option (markerset.cxx),
+    // cleared right after remap_markers. Empty outside remeshing.
+    std::vector<int> remesh_elem_split_mat;
 
     // tensor_t *stress_old;
 

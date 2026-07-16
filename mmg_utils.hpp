@@ -22,12 +22,13 @@ struct MMGInput {
     // (2D: m11,m12,m22 ; 3D: m11,m12,m13,m22,m23,m33). When non-null it REPLACES `metric`
     // (MMG uses a tensor solution instead of the scalar edge-length one). nullptr => scalar.
     const double *metric_aniso;
-    // Optional MATERIAL-INTERFACE edges to keep as conforming, MMG-required edges (2D only):
-    // 2*n_req_edges node ids (0-based, pairs). Appended to the edge list with a sentinel ref and
-    // marked required so the remesh cannot coarsen an element across the material boundary; the
-    // sentinel edges are filtered out of the returned segments. nullptr/0 => none.
-    const int *req_edges;
-    int n_req_edges;
+    // Optional MATERIAL-INTERFACE facets (edges in 2D, triangles in 3D) to keep as conforming,
+    // MMG-required facets: NODES_PER_FACET*n_req_facets node ids (0-based). Appended to the
+    // boundary facet list with a sentinel ref and marked required so the remesh cannot coarsen an
+    // element across the material boundary; the sentinel facets are filtered out of the returned
+    // segments. nullptr/0 => none.
+    const int *req_facets;
+    int n_req_facets;
 };
 
 // Adapted mesh returned by mmg_adapt (0-indexed, flat buffers ready for load_from_buffer).
