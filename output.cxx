@@ -451,7 +451,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #endif
 
     // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
-    // run-start structure. side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
+    // recorded structure. side_prof_sizes = {nnode x0, nnode x1, nelem x0, nelem x1, support x0,
     // support x1}; per-side arrays follow (see SideProfile).
     {
         const int side_idx[2] = { iboundx0, iboundx1 };
@@ -483,8 +483,13 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
                     bin.write_aux_array(a, aname, a.size());
                 };
                 wrd(prof.node_reldepth, "node_reldepth");
-                wrd(prof.node_coord0, "node_coord0");
+                wrd(prof.node_coord0_z, "node_coord0_z");
                 wrd(prof.node_temperature, "node_temperature");
+#ifdef USEMMG
+                // USEMMG only (init_elem_size_n is MMG-only): an empty record cannot be chunked by
+                // HDF5, and the des-binary restart would read nn values from the NEXT record.
+                wrd(prof.node_init_elem_size, "node_init_elem_size");
+#endif
                 wri(prof.node_support_idx, "node_support_idx");
                 wri(prof.node_support_arr, "node_support_arr");
                 wrd(prof.elem_reldepth, "elem_reldepth");

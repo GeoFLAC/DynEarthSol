@@ -1125,7 +1125,7 @@ static void refine_initial_side_walls_2d(const Param &param, Variables &var,
 
     // Clamp the metric at the side-wall nodes of BOTH walls regardless of the BC: a static wall
     // keeps a thin ~resolution column and a full-resolution profile should the flow turn inward;
-    // only the unfreeze and the field restore are inflow-gated at remesh time.
+    // the inflow-gated remesh-time treatments are listed at SideInflowState (remeshing.cxx).
     const double xtol = 1e-9 * param.mesh.xlength;
     std::vector<double> metric(size_n);
     bool needs_refining = false;

@@ -146,6 +146,8 @@ private:
 
 void remap_markers(const Param&, Variables &,
                    const array_t &, const conn_t &);
+void correct_inflow_band_marker_mattype(const Param&, const Variables&,
+                                        const bool *side_in);
 void advect_hydrous_markers(const Param &, const Variables &, double,
                             MarkerSet &, Array2D<int,1> &);
 

@@ -1614,7 +1614,7 @@ namespace {
                     if (z > top_z[t]) top_z[t] = z;
                 }
 
-        const double depth_tol = 1e-6 * param.mesh.resolution;  // same-depth node merge tolerance
+        const double depth_tol = side_profile_depth_tol(param);
         int_vec cand;
         for (const auto& pair : side_elems) {
             int e = pair.first;
@@ -2059,6 +2059,90 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
+}
+
+// Correct STRAY marker mattypes in the inflow band (remeshing_option 13), right after remap_markers.
+// The wall machinery moves geometry past markers (division relocation, wall snap-back, MMG
+// rebuilding the band), leaving a near-interface marker on the wrong side of a division; it would
+// advect inland and flip a split child at a later remesh. Range: elements with a node on an inflow
+// wall + 1 ring, where the material is the profile's layering by construction. Rule: the ELEMENT
+// decides -- the profile material at its centroid depth below the side's current top (the
+// replenishment's rule) -- so a tilted interface carried by the tessellation is followed. A marker
+// whose mattype is not one of the profile's layer materials has phase-changed and is left alone.
+void correct_inflow_band_marker_mattype(const Param& param, const Variables& var,
+                                        const bool *side_in)
+{
+    if (param.mesh.remeshing_option != 13) return;
+    MarkerSet &ms = *var.markersets[0];
+    const double depth_tol = side_profile_depth_tol(param);
+    const uint side_flag[2] = { BOUNDX0, BOUNDX1 };
+    const int  side_idx [2] = { iboundx0, iboundx1 };
+    int ncorr = 0;
+    for (int t = 0; t < 2; ++t) {
+        if (!side_in[t]) continue;
+        const SideProfile &prof = var.side_profile[side_idx[t]];
+        if (prof.empty()) continue;
+
+        // the profile's layer materials (phase-changed markers are left alone)
+        std::vector<char> is_layer_mat(param.mat.nmat, 0);
+        for (int mt : prof.elem_mattype) is_layer_mat[mt] = 1;
+
+        // current top point of this side; profile depths are measured below it
+        double top_z = -std::numeric_limits<double>::max();
+        for (int n = 0; n < var.nnode; ++n)
+            if ((*var.bcflag)[n] & side_flag[t])
+                top_z = std::max(top_z, (*var.coord)[n][NDIMS-1]);
+        if (top_z == -std::numeric_limits<double>::max())   // option 13 rebuilds every wall
+            die(EXIT_INTERNAL_ASSERT,
+                "correct_inflow_band_marker_mattype: receiving wall without nodes");
+
+        std::vector<char> bnode(var.nnode, 0), belem(var.nelem, 0);
+        for (int n = 0; n < var.nnode; ++n)
+            if ((*var.bcflag)[n] & side_flag[t]) bnode[n] = 1;
+        for (int ring = 0; ring < 2; ++ring) {
+            for (int e = 0; e < var.nelem; ++e) {
+                if (belem[e]) continue;
+                ConstConnAccessor conn = (*var.connectivity)[e];
+                for (int i = 0; i < NODES_PER_ELEM; ++i)
+                    if (bnode[conn[i]]) { belem[e] = 1; break; }
+            }
+            if (ring == 0)
+                for (int e = 0; e < var.nelem; ++e) {
+                    if (!belem[e]) continue;
+                    ConstConnAccessor conn = (*var.connectivity)[e];
+                    for (int i = 0; i < NODES_PER_ELEM; ++i)
+                        bnode[conn[i]] = 1;
+                }
+        }
+        int_vec cand;
+        for (int e = 0; e < var.nelem; ++e) {
+            if (!belem[e]) continue;
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            double cz = 0;
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                cz += (*var.coord)[conn[i]][NDIMS-1];
+            cz /= NODES_PER_ELEM;
+            // expected material of THIS element: profile at the centroid's depth
+            side_profile_elems_at(prof, top_z - cz, depth_tol, cand);
+            if (cand.empty()) continue;
+            int le = cand.front();
+            for (int c : cand)
+                if (std::fabs(prof.elem_reldepth[c] - (top_z - cz)) <
+                    std::fabs(prof.elem_reldepth[le] - (top_z - cz))) le = c;
+            const int expected = prof.elem_mattype[le];
+            for (int m : (*var.markers_in_elem)[e]) {
+                const int cur = ms.get_mattype(m);
+                if (cur == expected || !is_layer_mat[cur]) continue;
+                ms.set_mattype(m, expected);
+                --(*var.elemmarkers)[e][cur];
+                ++(*var.elemmarkers)[e][expected];
+                ++ncorr;
+            }
+        }
+    }
+    if (ncorr)
+        std::cout << "      [restore] corrected " << ncorr
+                  << " stray marker mattype(s) in the inflow band (element-location rule).\n";
 }
 
 

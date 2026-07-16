@@ -603,21 +603,22 @@ struct Param {
 };
 
 //
-// Snapshot of the initial wall column at a restored side (mesh.remeshing_option 13), recorded at
-// run start by detect_side_profile() and re-imposed after every remesh on the material that entered
-// through the wall: restore_side_fields() restores nodal temperature and coord0, zeroes the
-// incoming elements' strain and restores their radiogenic source; the marker replenishment assigns
-// new side-wall markers the elem_mattype of their depth. Depths are RELATIVE to the side's top
-// point. Node -> element connectivity is CSR (node i:
-// node_support_arr[node_support_idx[i] .. node_support_idx[i+1])).
-// Lookups: side_profile_node_value / side_profile_elems_at.
-// Checkpointed, so a restart keeps the RUN-START profile.
+// Snapshot of the wall column at a restored side (mesh.remeshing_option 13), recorded by
+// detect_side_profile() at run start or when the wall starts receiving material (remesh()
+// lifecycle), and re-imposed after every remesh on the material that entered through the wall:
+// restore_side_fields() restores nodal temperature and coord0, zeroes the incoming elements' strain
+// and restores their radiogenic source; the marker replenishment assigns new side-wall markers the
+// elem_mattype of their depth. Depths are RELATIVE to the side's top point. Node -> element
+// connectivity is CSR (node i: node_support_arr[node_support_idx[i] .. node_support_idx[i+1])).
+// Lookups: side_profile_node_value / side_profile_elems_at / side_profile_mattype_at.
+// Checkpointed, so a restart keeps the recorded profile.
 //
 struct SideProfile {
     // wall nodes, sorted top -> bottom
     double_vec node_reldepth;      // depth below the side's top point (ascending)
-    double_vec node_coord0;        // run-start REFERENCE coordinates (var.coord0), NDIMS per node
-    double_vec node_temperature;   // nodal temperature at run start
+    double_vec node_coord0_z;      // recorded REFERENCE depth coordinate, var.coord0[NDIMS-1]
+    double_vec node_temperature;   // nodal temperature when recorded
+    double_vec node_init_elem_size; // var.init_elem_size_n (restore_side_fields re-pins it)
     int_vec    node_support_idx;   // CSR row pointer, size nnode()+1
     int_vec    node_support_arr;   // CSR column data: local element indices
     // elements with at least one node on the wall. Only the material and the radiogenic
@@ -786,9 +787,9 @@ struct Variables {
     std::vector< std::pair<int,int> > *bfacets[nbdrytypes];
     array_t *bnormals;
 
-    // Incoming-material profile per side wall (SideProfile), detected once at run start and
-    // re-applied after every remesh to the material that entered through a restored side wall
-    // (restore_side_fields; side-wall marker replenishment).
+    // Incoming-material profile per side wall (SideProfile), detected at run start or when the wall
+    // starts receiving (remesh() lifecycle) and re-applied after every remesh to the material that
+    // entered through a restored side wall (restore_side_fields; side-wall marker replenishment).
     SideProfile side_profile[nbdrytypes];
     int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
