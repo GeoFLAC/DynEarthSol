@@ -4,6 +4,9 @@ from __future__ import print_function, unicode_literals
 import sys, os
 import numpy as np
 
+# must match constants.hpp
+YEAR2SEC = 365.2422 * 86400
+
 # must match binaryio.cxx
 HEADERLEN = 4096
 
@@ -11,17 +14,20 @@ HEADERLEN = 4096
 def _scan_frame_hdf5(fname):
     import h5py
     with h5py.File(fname, 'r') as f:
-        def get(name):
-            return f[name][0]
-        return dict(
-            steps = get('steps'),
-            time = float(get('time_sec')),
-            dt = float(get('dt_sec')),
-            walltime = float(get('walltime_sec')),
-            nnode = get('nnode'),
-            nelem = get('nelem'),
-            nseg = get('nseg'),
-        )
+        # HDF5Output links every dataset to the root under its plain name, so
+        # the .info columns are read the same way as any field.
+        try:
+            return dict(
+                steps=int(f['steps'][0]),
+                time=float(f['time_sec'][0]),
+                dt=float(f['dt_sec'][0]),
+                walltime=float(f['walltime_sec'][0]),
+                nnode=int(f['nnode'][0]),
+                nelem=int(f['nelem'][0]),
+                nseg=int(f['nseg'][0]),
+            )
+        except KeyError as e:
+            raise KeyError('%s missing in %s' % (e, fname))
 
 
 def _scan_frame_binary(fname):
@@ -94,14 +100,32 @@ class Dynearthsol:
 
 
     def read_info(self):
-        tmp = np.fromfile(self.modelname + '.info', dtype=float, sep=' ')
-        tmp.shape = (-1, 8)
-        self.frames = list(tmp[:,0].astype(int))
-        self.steps = list(tmp[:,1].astype(int))
-        self.time = list(tmp[:,2].astype(float))
-        self.nnode_list = tmp[:,5].astype(int)
-        self.nelem_list = tmp[:,6].astype(int)
-        return
+        # The .info index is one small file, so it is read when present; the
+        # metadata embedded in every .save frame is scanned only without it.
+        info = self.modelname + '.info'
+        if os.path.isfile(info):
+            tmp = np.fromfile(info, dtype=float, sep=' ')
+            tmp.shape = (-1, 8)
+            self.frames = list(tmp[:,0].astype(int))
+            self.steps = list(tmp[:,1].astype(int))
+            self.time = list(tmp[:,2].astype(float))
+            self.nnode_list = tmp[:,5].astype(int)
+            self.nelem_list = tmp[:,6].astype(int)
+            return
+        print('Warning: cannot open info file {0}; using metadata embedded in '
+              'the {1}.save.* frames.'.format(info, self.modelname), file=sys.stderr)
+        try:
+            rows = scan_frames(self.modelname)
+        except KeyError as e:
+            raise IOError('{0}; no {1} fallback found'.format(e, info))
+        if not rows:
+            raise IOError('neither {0}.save.* frame files nor {0}.info '
+                          'found'.format(self.modelname))
+        self.frames = [r['frame'] for r in rows]
+        self.steps = [r['steps'] for r in rows]
+        self.time = [r['time'] for r in rows]
+        self.nnode_list = np.array([r['nnode'] for r in rows], dtype=int)
+        self.nelem_list = np.array([r['nelem'] for r in rows], dtype=int)
 
 
     def get_fn(self, frame):
