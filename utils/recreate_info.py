@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 '''Recreate <modelname>.info from DynEarthSol .save.NNNNNN[.vtkhdf] frame files.
 
-Dynearthsol.py and restart read the frame files directly by default, so this
-script is only needed to materialize the file again (e.g. for tools that
-parse .info themselves). It rebuilds it from the per-frame metadata written by output.cxx:
+Dynearthsol.py and restart fall back to the frame files when .info is missing,
+so this script is only needed to materialize the file again (e.g. for tools
+that parse .info themselves). It rebuilds it from the per-frame metadata written by output.cxx:
 FieldData in HDF5 (.vtkhdf) frames, or header scalars in plain binary frames.
 
 Frames written before this metadata was added get 0 in the missing columns

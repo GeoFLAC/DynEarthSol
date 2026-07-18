@@ -275,9 +275,9 @@ void restart(const Param& param, Variables& var)
         }
         std::fclose(f);
         if (!got_meta) {
-            std::cerr << "Error: frame " << param.sim.restarting_from_frame
-                    << " not found in " << filename << ".\n";
-            die(EXIT_IO_RESTART);
+            std::cerr << "Warning: frame " << param.sim.restarting_from_frame
+                      << " not found in " << filename << "; using metadata embedded in "
+                      << filename_save << ".\n";
         }
     } else {
         std::cerr << "Warning: cannot open info file " << filename
