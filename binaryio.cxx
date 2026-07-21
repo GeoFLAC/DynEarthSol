@@ -384,6 +384,13 @@ HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
     if (rename_if_exists) rename_to_old_backup(filename);
 
     hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+    // Locking off (use_file_locking = false) so ParaView can read a frame while the run
+    // still holds it; ignore_when_disabled = true tolerates builds that already disabled
+    // it. HDF5 then no longer refuses a second writer, so two runs sharing a modelname
+    // corrupt the file silently. H5Pset_file_locking needs HDF5 >= 1.10.7.
+#if H5_VERSION_GE(1, 10, 7)
+    H5Pset_file_locking(fapl_id, false, true);
+#endif
     file_id = H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, fapl_id);
     H5Pclose(fapl_id);
 
@@ -914,7 +921,14 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 
 HDF5Input::HDF5Input(const char *filename)
 {
-    file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
+    hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+    // Locking off so a restart can read a file ParaView holds open; the trade-off is
+    // spelled out in the HDF5Output constructor above.
+#if H5_VERSION_GE(1, 10, 7)
+    H5Pset_file_locking(fapl_id, false, true);
+#endif
+    file_id = H5Fopen(filename, H5F_ACC_RDONLY, fapl_id);
+    H5Pclose(fapl_id);
     if (file_id < 0) {
         std::cerr << "Error: cannot open HDF5 file for reading: " << filename << "\n";
         die(EXIT_IO_OPEN);
