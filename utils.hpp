@@ -311,81 +311,90 @@ static void print_time_ns(const int64_t duration) {
 }
 
 
-#pragma acc routine seq
-static int out_nan_error(const char* msg, const int idx0, const int idx1 = -1) {
-    if (idx1 >= 0)
-        printf("Error: %s[%d][%d] becomes NaN\n", msg, idx0, idx1);
-    else
-        printf("Error: %s[%d] becomes NaN\n", msg, idx0);
-    return 1;
-}
-
 static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
-
-    // Host scalar: the two loops below reduce into it and the host reads it.
-    int is_nan = 0;
+    // Count NaNs per field and report one summary line -- a blow-up can hold
+    // 1e5+ NaN values, so printing each one floods the screen.
+    int n_volume = 0, n_dpressure = 0, n_viscosity = 0, n_stress = 0;
+    int n_temperature = 0, n_tmass = 0, n_force = 0, n_vel = 0, n_coord = 0;
+    int first_elem = var.nelem, first_node = var.nnode;
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(var,is_nan)
+    #pragma omp parallel default(none) shared(var) \
+        reduction(+: n_volume, n_dpressure, n_viscosity, n_stress) \
+        reduction(+: n_temperature, n_tmass, n_force, n_vel, n_coord) \
+        reduction(min: first_elem, first_node)
 #endif
     {
 #ifndef ACC
-        #pragma omp for reduction(+:is_nan)
+        #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector reduction(+:is_nan)
-        for (int e=0; e<var.nelem;e++) {
-            if (std::isnan((*var.volume)[e]))
-                is_nan += out_nan_error("volume", e);
-            
-            if (std::isnan((*var.dpressure)[e]))
-                is_nan += out_nan_error("dpressure", e);
-
-            if (std::isnan((*var.viscosity)[e]))
-               is_nan +=  out_nan_error("viscosity", e);
-            
-            for (int i=0; i<NODES_PER_ELEM;i++)
-                if(std::isnan((*var.connectivity)[e][i]))
-                    is_nan += out_nan_error("connectivity", e, i);
-
+        #pragma acc parallel loop gang vector \
+            reduction(+: n_volume, n_dpressure, n_viscosity, n_stress) \
+            reduction(min: first_elem)
+        for (int e=0; e<var.nelem; e++) {
+            int nvol = std::isnan((*var.volume)[e]);
+            int ndp = std::isnan((*var.dpressure)[e]);
+            int nvis = std::isnan((*var.viscosity)[e]);
+            int nstr = 0;
             for (int i=0; i<NSTR; i++)
-                if (std::isnan((*var.stress)[e][i]))
-                    is_nan += out_nan_error("stress", e, i);
+                nstr += std::isnan((*var.stress)[e][i]);
 
+            n_volume += nvol;
+            n_dpressure += ndp;
+            n_viscosity += nvis;
+            n_stress += nstr;
+            if (nvol + ndp + nvis + nstr > 0)
+                first_elem = std::min(first_elem, e);
         }
 
 #ifndef ACC
-        #pragma omp for reduction(+:is_nan)
+        #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector reduction(+:is_nan)
+        #pragma acc parallel loop gang vector \
+            reduction(+: n_temperature, n_tmass, n_force, n_vel, n_coord) \
+            reduction(min: first_node)
         for (int n=0; n<var.nnode; n++) {
-            if (std::isnan((*var.temperature)[n]))
-                is_nan += out_nan_error("temperature", n);
-
-            if (std::isnan((*var.tmass)[n]))
-                is_nan += out_nan_error("tmass", n);
-
+            int ntemp = std::isnan((*var.temperature)[n]);
+            int ntm = std::isnan((*var.tmass)[n]);
+            int nfo = 0, nv = 0, nco = 0;
             for (int i=0; i<NDIMS; i++) {
-                if (std::isnan((*var.force)[n][i]))
-                    is_nan += out_nan_error("force", n, i);
-
-                if (std::isnan((*var.vel)[n][i]))
-                    is_nan += out_nan_error("vel", n, i);
-
-                if (std::isnan((*var.coord)[n][i]))
-                    is_nan += out_nan_error("coord", n, i);                
+                nfo += std::isnan((*var.force)[n][i]);
+                nv += std::isnan((*var.vel)[n][i]);
+                nco += std::isnan((*var.coord)[n][i]);
             }
+
+            n_temperature += ntemp;
+            n_tmass += ntm;
+            n_force += nfo;
+            n_vel += nv;
+            n_coord += nco;
+            if (ntemp + ntm + nfo + nv + nco > 0)
+                first_node = std::min(first_node, n);
         }
     }
 
-    if (is_nan > 0) {
-        if (func_name) {
-            std::cerr << "Error: " << is_nan << " NaN values found in the variables in " << func_name << "." << std::endl;
-        } else {
-            std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
-        }
+    int total = n_volume + n_dpressure + n_viscosity + n_stress
+              + n_temperature + n_tmass + n_force + n_vel + n_coord;
+    if (total > 0) {
+        const char* names[] = {"volume", "dpressure", "viscosity", "stress",
+                               "temperature", "tmass", "force", "vel", "coord"};
+        const int counts[] = {n_volume, n_dpressure, n_viscosity, n_stress,
+                              n_temperature, n_tmass, n_force, n_vel, n_coord};
+        std::cerr << "Error: " << total << " NaN values";
+        if (func_name)
+            std::cerr << " in " << func_name;
+        std::cerr << " --";
+        for (std::size_t i=0; i<sizeof(counts)/sizeof(counts[0]); i++)
+            if (counts[i] > 0)
+                std::cerr << ' ' << names[i] << '=' << counts[i];
+        if (first_elem < var.nelem)
+            std::cerr << " (first elem " << first_elem << ")";
+        if (first_node < var.nnode)
+            std::cerr << " (first node " << first_node << ")";
+        std::cerr << std::endl;
         die(EXIT_RUNTIME_NAN);
     }
 #ifdef NPROF
