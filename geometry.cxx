@@ -1561,15 +1561,16 @@ double compute_dt(const Param& param, Variables& var,
     // double global_max_vem = std::max(std::max(var.max_vbc_val, 0.0), 1E-20);
     double global_max_vem = 0.0;  // 
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
+    int nan_elem_count = 0;
 
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) \
+        reduction(max: global_max_vem) reduction(+: nan_elem_count) \
         default(none) shared(param, var) firstprivate(rsf_dtheta_max)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
     #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) async
+        reduction(max: global_max_vem) reduction(+: nan_elem_count) async
     for (int e=0; e<var.nelem; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -1604,6 +1605,9 @@ double compute_dt(const Param& param, Variables& var,
 
         // Find global max velocity
         global_max_vem = std::max(global_max_vem, max_vem);
+        // max() silently drops NaN, deflating vmax and inflating the velocity-based dt
+        // limits -- count NaN here so a blow-up fails fast instead of spewing frames.
+        nan_elem_count += (max_vem != max_vem);
 
         // std::cout<< "Element: " << e << " max_vem: " << global_max_vem << std::scientific << std::setprecision(5) << std::endl;
 
@@ -1669,6 +1673,20 @@ double compute_dt(const Param& param, Variables& var,
     }
 
     #pragma acc wait
+
+    // check_nan() is the broad detector, but the regular frame path Output::write() never
+    // calls it (only write_exact() does), so this narrow check closes that gap. Not a
+    // universal net: compute_dt runs every slow_updates_interval steps, so a NaN that
+    // reaches the markers first exits EXIT_RUNTIME_LOOKUP instead.
+    if (nan_elem_count > 0) {
+        std::cerr << "Error: NaN velocity in " << nan_elem_count
+                  << " elements at step " << var.steps
+                  << " -- stopping before writing further frames.\n";
+        // write_exact_error() runs check_nan(), which dies on any NaN it finds in vel;
+        // the die() below still covers an element mean gone NaN from Inf - Inf.
+        var.output->write_exact_error(var);
+        die(EXIT_RUNTIME_NAN);
+    }
 
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
