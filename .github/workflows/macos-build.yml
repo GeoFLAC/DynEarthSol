@@ -49,15 +49,15 @@ jobs:
         make -j4 && make install && cd ../../
 
     - name: make debug 2d
-      run: make clean; make ndims=2 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=2; make ndims=2 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
     - name: make debug 3d
-      run: make clean; make ndims=3 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=3; make ndims=3 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
     - name: make 2d
-      run: make clean; make ndims=2 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=2; make ndims=2 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
     - name: make 3d
-      run: make clean; make ndims=3 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
     - name: make 3d hdf5
-      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=1
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1
             BOOST_ROOT_DIR=$(brew --prefix boost)
             HDF5_INCLUDE_DIR=$(brew --prefix hdf5)/include
             HDF5_LIB_DIR=$(brew --prefix hdf5)/lib

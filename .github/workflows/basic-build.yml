@@ -40,15 +40,15 @@ jobs:
         echo "HDF5_LIB_DIR=${HDF5_LIB_DIR}" >> $GITHUB_ENV
   
     - name: make debug 2d
-      run: make clean; make ndims=2 opt=0 openmp=0 hdf5=0
+      run: make clean ndims=2; make ndims=2 opt=0 openmp=0 hdf5=0
     - name: make debug 3d
-      run: make clean; make ndims=3 opt=0 openmp=0 hdf5=0
+      run: make clean ndims=3; make ndims=3 opt=0 openmp=0 hdf5=0
     - name: make 2d
-      run: make clean; make ndims=2 opt=2 openmp=1 hdf5=0
+      run: make clean ndims=2; make ndims=2 opt=2 openmp=1 hdf5=0
     - name: make 3d
-      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=0
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=0
     - name: make 3d hdf5
-      run: make clean; make ndims=3 opt=2 openmp=1 hdf5=1 \
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1 \
             HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR
     # - name: make check
     #   run: make check
