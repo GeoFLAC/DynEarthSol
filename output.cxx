@@ -352,6 +352,10 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
                    may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
+#else
+    std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
+    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
+#endif
 
     bin.write_scalar(var.time, "time");
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");
@@ -360,20 +364,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.dt, "dt");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
-#else
-    std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
-
-    double_vec tmp(7);
-    tmp[0] = var.time;
-    tmp[1] = var.info_display_next_step;
-    tmp[2] = var.compensation_pressure;
-    tmp[3] = var.bottom_temperature;
-    tmp[4] = var.dt;
-    tmp[5] = var.max_global_vel_mag;
-    tmp[6] = var.reference_frame_time;
-    bin.write_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time", tmp.size());
-#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());

@@ -32,6 +32,9 @@ public:
     ~BinaryOutput();
 
     template <typename T>
+    void write_scalar(const T& A, const std::string& name);
+
+    template <typename T>
     void write_array(const std::vector<T>& A, const char *name, std::size_t size);
 
     void write_array(const std::vector<uint>& A, const char *name, std::size_t size);
@@ -57,6 +60,9 @@ public:
     ~BinaryInput();
 
     bool has_array(const char *name) const;
+
+    template <typename T>
+    void read_scaler(T& A, const std::string& name);
 
     template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);

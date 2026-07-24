@@ -323,7 +323,6 @@ void restart(const Param& param, Variables& var)
 
     // Misc. items
     {
-#ifdef HDF5
         bin_chkpt.read_scaler(var.time, "time");
         bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
         bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
@@ -331,17 +330,6 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scaler(var.dt, "dt");
         bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
-#else
-        double_vec tmp(7);
-        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time");
-        var.time = tmp[0];
-        var.info_display_next_step = tmp[1];
-        var.compensation_pressure = tmp[2];
-        var.bottom_temperature = tmp[3];
-        var.dt = tmp[4];
-        var.max_global_vel_mag = tmp[5];
-        var.reference_frame_time = tmp[6];
-#endif
     }
 
     // Initializing field variables

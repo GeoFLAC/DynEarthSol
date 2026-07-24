@@ -119,6 +119,21 @@ void BinaryOutput::write_header(const char *name)
     hd_pos = std::strncat(hd_pos, buffer, len);
 }
 
+template <typename T>
+void BinaryOutput::write_scalar(const T& A, const std::string& name)
+{
+    write_header(name.c_str());
+    std::size_t n = std::fwrite(&A, sizeof(T), 1, f);
+    eof_pos += n * sizeof(T);
+}
+
+
+// explicit instantiation
+template
+void BinaryOutput::write_scalar<int>(const int& A, const std::string& name);
+template
+void BinaryOutput::write_scalar<double>(const double& A, const std::string& name);
+
 // XXX: when A is *var.bcflag, i.e. T is uint, g++ cannot instantiate the template
 template <typename T>
 void BinaryOutput::write_array(const std::vector<T>& A, const char *name, std::size_t size)
@@ -266,6 +281,25 @@ void BinaryInput::seek_to_array(const char *name)
     //std::cout << name << ' ' << loc << '\n';
     std::fseek(f, loc, SEEK_SET);
 }
+
+
+template <typename T>
+void BinaryInput::read_scaler(T& A, const std::string& name)
+{
+    seek_to_array(name.c_str());
+    std::size_t n = std::fread(&A, sizeof(T), 1, f);
+    if (n != 1) {
+        std::cerr << "Error: cannot read scalar: " << name << '\n';
+        std::exit(1);
+    }
+}
+
+
+// explicit instantiation
+template
+void BinaryInput::read_scaler<int>(int& A, const std::string& name);
+template
+void BinaryInput::read_scaler<double>(double& A, const std::string& name);
 
 
 template <typename T>
