@@ -332,6 +332,10 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
     }
 
+    if (var.steps % param.mesh.quality_check_step_interval == 0 &&
+        var.steps >= var.info_display_next_step)
+        var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
+
     // Initializing field variables
     {
         bin_save.read_array(*var.vel, "velocity");
