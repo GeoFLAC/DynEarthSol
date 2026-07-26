@@ -584,6 +584,11 @@ namespace {
             double_vec *new_volume_old = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
 
+            // NN-remap the element stress alongside the other element fields;
+            // spr_node_to_elem still owns the final stress on the new mesh.
+            tensor_t *new_stress = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
+
             delete var.plstrain;
             var.plstrain = new_plstrain;
 
@@ -606,6 +611,9 @@ namespace {
 
             delete var.volume_old;
             var.volume_old = new_volume_old;
+
+            delete var.stress;
+            var.stress = new_stress;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);

@@ -176,8 +176,9 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
-    delete var.stress;
-    var.stress = new tensor_t(e);
+    // var.stress is NOT reallocated here: the NN interpolation already swapped
+    // in a remapped copy sized to the new mesh, which spr_node_to_elem reads
+    // before overwriting with the SPR average.
 
     // TODO: keep this reallocation because rheology always reads double& syy
     delete var.stressyy;

@@ -708,12 +708,43 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 #endif
 }
 
-void spr_node_to_elem(const Param &param, const Variables &var, 
+void spr_node_to_elem(const Param &param, const Variables &var,
                       tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
+    // Pin the free-surface nodal stress before averaging back to elements: the SPR
+    // patch fit is one-sided at surface nodes, its least reliable spot, while the
+    // free-surface condition is known exactly (total sigma_zz = 0, zero shear).
+    // In the pressure-centered variable sigma_zz = 0 maps to stress_n = +p_ref.
+    #pragma omp parallel for default(none) shared(param, var)
+    for (int i = 0; i < var.surfinfo.ntop; ++i) {
+        int n = (*var.surfinfo.top_nodes)[i];
+
+        double z_node = (*var.coord)[n][NDIMS-1];
+        double p_ref_node = ref_pressure(param, z_node);
+
+        (*var.stress_n)[n][NDIMS-1] = p_ref_node;
+        (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
+#ifdef THREED
+        (*var.stress_n)[n][5] = 0.0;
+#endif
+    }
+
+    // Snapshot the NN-remapped stress before the SPR average overwrites it. On
+    // entry *stress holds the NN-remapped copy (nn_interpolate_elem_fields),
+    // already pressure-centered on the old mesh, so the snapshot, the SPR average
+    // and the p_ref restore (Step C') all live in the same centered variable.
+    // Consumer: the surface fallback below.
+    tensor_t stress_nn(var.nelem);
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstTensorAccessor s = (*stress)[e];
+        TensorAccessor s_nn = stress_nn[e];
+        for (int d = 0; d < NSTR; ++d)
+            s_nn[d] = s[d];
+    }
+
     // ----------------------------------------------------------------
     // Step C: Average SPR nodal stresses -> new element stresses.
     // ----------------------------------------------------------------
@@ -723,7 +754,24 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
     if (param.mat.is_plane_strain)
         average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
-                                var.nelem, stressyy->data());
+                              var.nelem, stressyy->data());
+
+    // Fallback: where the SPR average left a surface element LESS compressive
+    // (spurious tension) than before the remesh, restore the pre-remesh stress.
+    // The measure is the mean stress (trace).
+    for (int i = 0; i < var.ntop_elems; ++i) {
+        int e = (*var.top_elems)[i];
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        double p = 0.0, p_spr = 0.0;
+        for (int d = 0; d < NDIMS; ++d) {
+            p_spr += s[d];
+            p += s_nn[d];
+        }
+        if (p < p_spr) {
+            for (int d = 0; d < NSTR; ++d) s[d] = s_nn[d];
+        }
+    }
 
     // Step C': Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each
