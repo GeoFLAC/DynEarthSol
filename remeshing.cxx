@@ -2914,6 +2914,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     var.stress_n = new tensor_t(var.nnode);
     if (param.mat.is_plane_strain)
         var.stressyy_n = new double_vec(var.nnode);
+    var.spr_blend_weight = new double_vec(var.nelem);
 
     spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
 
@@ -3056,6 +3057,11 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     delete var.stress_n;
     if (param.mat.is_plane_strain)
         delete var.stressyy_n;
+    delete var.spr_blend_weight;
+    var.spr_blend_weight = nullptr;
+
+    // Timescale reference for the next remesh's Deborah-number stress blend.
+    var.last_remesh_time = var.time;
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
 

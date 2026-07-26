@@ -603,6 +603,12 @@ namespace {
             double_vec *new_stressyy = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
 
+            // Deborah-blend weight (computed on the old mesh in spr_elem_to_node):
+            // ride it through the remesh so spr_node_to_elem can blend per new element.
+            double_vec *new_blend_w = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.spr_blend_weight, *new_blend_w, e);
+
+
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
 
@@ -622,6 +628,9 @@ namespace {
 
             delete var.stressyy;
             var.stressyy = new_stressyy;
+
+            delete var.spr_blend_weight;
+            var.spr_blend_weight = new_blend_w;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);

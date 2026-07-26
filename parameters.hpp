@@ -195,6 +195,10 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
+    double remesh_deborah_min;
+    double remesh_deborah_max;
+
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
@@ -646,6 +650,7 @@ class MatProps;
 class MarkerSet;
 struct Variables {
     double time;
+    double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
     // double dt_PT;
     double l2_residual;
@@ -763,6 +768,9 @@ struct Variables {
     // For remeshing
     tensor_t *stress_n;
     double_vec *stressyy_n;
+    // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise:
+    // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
+    double_vec *spr_blend_weight;
 
     // tensor_t *stress_old;
 
@@ -776,6 +784,7 @@ struct Variables {
 
     Variables()
     {
+        spr_blend_weight = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

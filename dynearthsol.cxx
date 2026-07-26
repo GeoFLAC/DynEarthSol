@@ -36,6 +36,7 @@ namespace std { using ::snprintf; }
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
+    var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -353,6 +354,15 @@ void restart(const Param& param, Variables& var)
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
         var.steps >= var.info_display_next_step)
         var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
+
+    // Restore the last remesh time (sets the Deborah blend weight at the next
+    // remesh). Old checkpoints lack the field: fall back to var.time, which
+    // shortens the first post-restart interval and biases the blend toward the
+    // NN stress -- the conservative direction.
+    if (bin_chkpt.has_array("last_remesh_time"))
+        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+    else
+        var.last_remesh_time = var.time;
 
     // Initializing field variables
     {

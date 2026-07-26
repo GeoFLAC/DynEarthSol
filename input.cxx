@@ -233,6 +233,18 @@ static void declare_parameters(po::options_description &cfg,
          "12: flatten x0 when using fixed bottom boundary.\n"
          "13: move all bottom, left, and right nodes to initial dimensions.\n")
 
+        ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
+         "During remeshing the element stress is a Deborah-number-weighted blend of "
+         "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
+         "the last remesh, smoothstep in log10(De): high-De (cold, effectively "
+         "elastic) elements keep the NN stress, preserving elastic stress memory; "
+         "low-De (weak, viscous) elements take the SPR average, which suppresses "
+         "element-scale noise. This sets the De at or below which the remeshed "
+         "stress is purely the SPR recovery.")
+
+        ("mesh.remesh_deborah_max", po::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
+         "De at or above which the remeshed stress is purely the NN-remapped stress.")
+
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
          "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
@@ -1113,6 +1125,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         std::cerr << "Error: mesh.smallest_size is greater than mesh.largest_size.\n";
+        std::exit(1);
+    }
+
+    if (p.mesh.remesh_deborah_min <= 0 ||
+        p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
+        std::cerr << "Error: mesh.remesh_deborah_min must be positive and less than mesh.remesh_deborah_max.\n";
         std::exit(1);
     }
 

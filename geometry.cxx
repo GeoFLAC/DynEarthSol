@@ -1003,6 +1003,29 @@ void spr_elem_to_node(const Param &param, const Variables &var,
     SurfaceTopo topo;
     topo.build(param, var);   // old mesh: coord/bnodes still pre-remesh here
 
+    // Deborah-number blend weight toward the NN-remapped stress: w = 1 keeps NN
+    // (high De, elastic stress memory), w = 0 takes the SPR average (low De,
+    // smoothing). Evaluated on the OLD mesh; visc() reads the stress trace, so
+    // this must precede the pressure-centering below. The weight rides through
+    // the remesh with the other element fields and is consumed in spr_node_to_elem.
+    {
+        // De is measured against the time the stress evolved since the last remesh.
+        const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
+        const double lde0 = std::log10(param.mesh.remesh_deborah_min);
+        const double lde1 = std::log10(param.mesh.remesh_deborah_max);
+        // Host loop: visc()/shearm() read the host-side MatProps.
+        #pragma acc wait
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, var, dt_remesh, lde0, lde1)
+#endif
+        for (int e = 0; e < var.nelem; ++e) {
+            const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
+            double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
+            t = std::min(std::max(t, 0.0), 1.0);
+            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);  // smoothstep
+        }
+    }
+
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, topo)
 #endif
@@ -1022,6 +1045,7 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 
         if (param.mat.is_plane_strain)
             (*var.stressyy)[e] += p_ref_old;
+
     }
 
     // dynamic registration of all fields involved in SPR
@@ -1101,7 +1125,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // entry *stress holds the NN-remapped copy (nn_interpolate_elem_fields),
     // already pressure-centered on the old mesh, so the snapshot, the SPR average
     // and the p_ref restore (Step C') all live in the same centered variable.
-    // Consumer: the surface fallback below.
+    // Consumers: the surface fallback and the Deborah blend below.
     tensor_t stress_nn(var.nelem);
     double_vec stressyy_nn(param.mat.is_plane_strain ? var.nelem : 0);
 #ifndef ACC
@@ -1155,6 +1179,24 @@ void spr_node_to_elem(const Param &param, const Variables &var,
             for (int d = 0; d < NSTR; ++d) s[d] = s_nn[d];
             if (param.mat.is_plane_strain) (*stressyy)[e] = stressyy_nn[e];
         }
+    }
+
+    // Deborah blend of NN (w: elastic stress memory) vs the SPR average
+    // (1 - w: smooths element-scale noise in low-viscosity regions). Runs after
+    // the surface fallback: where the fallback restored the NN stress the blend
+    // is a no-op, never making a surface element less compressive again.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        const double w = (*var.spr_blend_weight)[e];
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        for (int d = 0; d < NSTR; ++d)
+            s[d] = w * s_nn[d] + (1.0 - w) * s[d];
+        if (param.mat.is_plane_strain)
+            (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
     }
 
     // Step C': Restore reference pressure at new element centroids.
