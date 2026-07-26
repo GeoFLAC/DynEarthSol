@@ -666,18 +666,34 @@ INCS =	\
 	array2d.hpp \
 	ats_output_scheduler.hpp \
 	barycentric-fn.hpp \
+	bc.hpp \
 	binaryio.hpp \
+	brc-interpolation.hpp \
 	constants.hpp \
 	earthquake_state.hpp \
-	monitor.hpp \
-	parameters.hpp \
-	matprops.hpp \
-	sortindex.hpp \
-	utils.hpp \
-	mesh.hpp \
+	fields.hpp \
+	geometry.hpp \
+	ic.hpp \
+	ic-read-temp.hpp \
+	input.hpp \
+	knn.hpp \
 	markerset.hpp \
+	matprops.hpp \
+	mesh.hpp \
+	monitor.hpp \
+	nn-interpolation.hpp \
 	output.hpp \
-	knn.hpp
+	parameters.hpp \
+	phasechanges.hpp \
+	remeshing.hpp \
+	rheology.hpp \
+	runtime_info.hpp \
+	sortindex.hpp \
+	utils.hpp
+
+ifeq ($(use_gospl), 1)
+	INCS += gospl_driver/gospl-driver.hpp
+endif
 
 OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
