@@ -1081,7 +1081,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // free-surface condition is known exactly (total sigma_zz = 0, zero shear).
     // In the pressure-centered variable sigma_zz = 0 maps to stress_n = +p_ref,
     // and z - z_surf = 0 at a top node makes the pin exact, ref_pressure(0) = 0.
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, topo)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
         int n = (*var.surfinfo.top_nodes)[i];
 
@@ -1100,6 +1103,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // and the p_ref restore (Step C') all live in the same centered variable.
     // Consumer: the surface fallback below.
     tensor_t stress_nn(var.nelem);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, stress, stress_nn)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstTensorAccessor s = (*stress)[e];
         TensorAccessor s_nn = stress_nn[e];
@@ -1121,6 +1128,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // Fallback: where the SPR average left a surface element LESS compressive
     // (spurious tension) than before the remesh, restore the pre-remesh stress.
     // The measure is the mean stress (trace).
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, stress, stress_nn)
+#endif
+    #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.ntop_elems; ++i) {
         int e = (*var.top_elems)[i];
         TensorAccessor s = (*stress)[e];

@@ -584,11 +584,6 @@ namespace {
             double_vec *new_volume_old = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
 
-            // NN-remap the element stress alongside the other element fields;
-            // spr_node_to_elem still owns the final stress on the new mesh.
-            tensor_t *new_stress = new tensor_t(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
-
             delete var.plstrain;
             var.plstrain = new_plstrain;
 
@@ -599,6 +594,11 @@ namespace {
             var.strain = new_strain;
 
             #pragma acc wait
+
+            // NN-remap the element stress alongside the other element fields;
+            // spr_node_to_elem still owns the final stress on the new mesh.
+            tensor_t *new_stress = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
@@ -611,6 +611,8 @@ namespace {
 
             delete var.volume_old;
             var.volume_old = new_volume_old;
+
+            #pragma acc wait
 
             delete var.stress;
             var.stress = new_stress;
