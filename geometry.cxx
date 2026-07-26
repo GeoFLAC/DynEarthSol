@@ -1103,8 +1103,9 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // and the p_ref restore (Step C') all live in the same centered variable.
     // Consumer: the surface fallback below.
     tensor_t stress_nn(var.nelem);
+    double_vec stressyy_nn(param.mat.is_plane_strain ? var.nelem : 0);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, stress, stress_nn)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
@@ -1112,10 +1113,14 @@ void spr_node_to_elem(const Param &param, const Variables &var,
         TensorAccessor s_nn = stress_nn[e];
         for (int d = 0; d < NSTR; ++d)
             s_nn[d] = s[d];
+        if (param.mat.is_plane_strain)
+            stressyy_nn[e] = (*stressyy)[e];
     }
 
     // ----------------------------------------------------------------
     // Step C: Average SPR nodal stresses -> new element stresses.
+    // In plane strain the out-of-plane sigma_yy is part of the mean stress and
+    // enters the compressiveness test below, so it is averaged here too.
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
         average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
@@ -1127,9 +1132,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
     // Fallback: where the SPR average left a surface element LESS compressive
     // (spurious tension) than before the remesh, restore the pre-remesh stress.
-    // The measure is the mean stress (trace).
+    // The measure is the mean stress (trace); sigma_yy is reverted atomically
+    // with the in-plane tensor so the element is never left in a mixed state.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, stress, stress_nn)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
     #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.ntop_elems; ++i) {
@@ -1141,8 +1147,13 @@ void spr_node_to_elem(const Param &param, const Variables &var,
             p_spr += s[d];
             p += s_nn[d];
         }
+        if (param.mat.is_plane_strain) {
+            p_spr += (*stressyy)[e];
+            p += stressyy_nn[e];
+        }
         if (p < p_spr) {
             for (int d = 0; d < NSTR; ++d) s[d] = s_nn[d];
+            if (param.mat.is_plane_strain) (*stressyy)[e] = stressyy_nn[e];
         }
     }
 

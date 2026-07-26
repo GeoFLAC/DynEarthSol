@@ -67,12 +67,12 @@ void allocate_variables(const Param &param, Variables& var)
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
 
-    var.stress = new tensor_t(e, 0);
-    var.stressyy = new double_vec(e, 0);
     var.old_mean_stress = new double_vec(e, 0);
 
     {
         // these fields are reallocated during remeshing interpolation
+        var.stress = new tensor_t(e, 0);
+        var.stressyy = new double_vec(e, 0);
         var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
@@ -176,13 +176,9 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
-    // var.stress is NOT reallocated here: the NN interpolation already swapped
-    // in a remapped copy sized to the new mesh, which spr_node_to_elem reads
-    // before overwriting with the SPR average.
-
-    // TODO: keep this reallocation because rheology always reads double& syy
-    delete var.stressyy;
-    var.stressyy = new double_vec(var.nelem);
+    // var.stress and var.stressyy are NOT reallocated here: the NN interpolation
+    // already swapped in remapped copies sized to the new mesh, which
+    // spr_node_to_elem reads before overwriting with the SPR average.
 
     if (param.control.has_hydraulic_diffusion) {
         delete var.old_mean_stress;

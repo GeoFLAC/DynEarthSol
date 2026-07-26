@@ -600,6 +600,9 @@ namespace {
             tensor_t *new_stress = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
 
+            double_vec *new_stressyy = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
+
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
 
@@ -616,6 +619,9 @@ namespace {
 
             delete var.stress;
             var.stress = new_stress;
+
+            delete var.stressyy;
+            var.stressyy = new_stressyy;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
