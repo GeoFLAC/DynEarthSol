@@ -1046,6 +1046,9 @@ void spr_elem_to_node(const Param &param, const Variables &var,
         if (param.mat.is_plane_strain)
             (*var.stressyy)[e] += p_ref_old;
 
+        // Record the reference ADDED here so an unchanged element can subtract the
+        // identical value in Step C' (the new-mesh topo table differs globally).
+        (*var.spr_p_ref_old)[e] = p_ref_old;
     }
 
     // dynamic registration of all fields involved in SPR
@@ -1125,7 +1128,8 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // entry *stress holds the NN-remapped copy (nn_interpolate_elem_fields),
     // already pressure-centered on the old mesh, so the snapshot, the SPR average
     // and the p_ref restore (Step C') all live in the same centered variable.
-    // Consumers: the surface fallback and the Deborah blend below.
+    // Consumers: the surface fallback, the Deborah blend and the untouched-element
+    // carry-through below.
     tensor_t stress_nn(var.nelem);
     double_vec stressyy_nn(param.mat.is_plane_strain ? var.nelem : 0);
 #ifndef ACC
@@ -1181,22 +1185,33 @@ void spr_node_to_elem(const Param &param, const Variables &var,
         }
     }
 
-    // Deborah blend of NN (w: elastic stress memory) vs the SPR average
-    // (1 - w: smooths element-scale noise in low-viscosity regions). Runs after
-    // the surface fallback: where the fallback restored the NN stress the blend
-    // is a no-op, never making a surface element less compressive again.
+    // Untouched elements (STRICTLY is_changed == 0: -1 = ACM-failed nearest-copy
+    // is NOT an identity map) keep the pre-remesh stress verbatim (bit-exact), the
+    // same treatment every other element field gets from inject_field; the remaining
+    // elements take the Deborah blend of NN (w: elastic stress memory) vs the SPR
+    // average (1 - w: smooths element-scale noise in low-viscosity regions).
+    // Runs after the surface fallback: where the fallback restored the NN stress
+    // the blend is a no-op, never making a surface element less compressive again.
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
-        const double w = (*var.spr_blend_weight)[e];
         TensorAccessor s = (*stress)[e];
         ConstTensorAccessor s_nn = stress_nn[e];
-        for (int d = 0; d < NSTR; ++d)
-            s[d] = w * s_nn[d] + (1.0 - w) * s[d];
-        if (param.mat.is_plane_strain)
-            (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
+        if ((*var.remesh_is_changed)[e] == 0) {
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = s_nn[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = stressyy_nn[e];
+        }
+        else {
+            const double w = (*var.spr_blend_weight)[e];
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = w * s_nn[d] + (1.0 - w) * s[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
+        }
     }
 
     // Step C': Restore reference pressure at new element centroids.
@@ -1207,14 +1222,21 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        double c[NDIMS] = {0.0};
-        for (int k = 0; k < NODES_PER_ELEM; ++k)
+        double p_ref;
+        if ((*var.remesh_is_changed)[e] == 0) {
+            // Untouched element: subtract exactly what spr_elem_to_node added, so
+            // the round trip is a bit-exact no-op (the new topo table differs).
+            p_ref = (*var.spr_p_ref_old)[e];
+        } else {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            double c[NDIMS] = {0.0};
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int d = 0; d < NDIMS; ++d)
+                    c[d] += (*var.coord)[conn[k]][d];
             for (int d = 0; d < NDIMS; ++d)
-                c[d] += (*var.coord)[conn[k]][d];
-        for (int d = 0; d < NDIMS; ++d)
-            c[d] /= NODES_PER_ELEM;
-        double p_ref = ref_pressure(param, topo.zeff(c));
+                c[d] /= NODES_PER_ELEM;
+            p_ref = ref_pressure(param, topo.zeff(c));
+        }
         TensorAccessor s = (*stress)[e];
         for (int d = 0; d < NDIMS; ++d) s[d] -= p_ref;
 

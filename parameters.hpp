@@ -770,7 +770,12 @@ struct Variables {
     double_vec *stressyy_n;
     // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise:
     // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
+    // - spr_p_ref_old: reference pressure added at pressure-centering, per element
+    // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
+    //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
     double_vec *spr_blend_weight;
+    double_vec *spr_p_ref_old;
+    int_vec *remesh_is_changed;
 
     // tensor_t *stress_old;
 
@@ -785,6 +790,8 @@ struct Variables {
     Variables()
     {
         spr_blend_weight = nullptr;
+        spr_p_ref_old = nullptr;
+        remesh_is_changed = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

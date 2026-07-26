@@ -2915,6 +2915,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     if (param.mat.is_plane_strain)
         var.stressyy_n = new double_vec(var.nnode);
     var.spr_blend_weight = new double_vec(var.nelem);
+    var.spr_p_ref_old = new double_vec(var.nelem);
 
     spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
 
@@ -2979,6 +2980,11 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 #endif
         reallocate_tmp(param, var);
+
+        // Per-NEW-element is_changed mapping, filled by the element NN pass
+        // and consumed by spr_node_to_elem; freed with the other stress-remap
+        // transients below.
+        var.remesh_is_changed = new int_vec(var.nelem);
 
         if (param.mesh.meshing_elem_shape == 0) {
             // renumbering mesh
@@ -3059,6 +3065,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         delete var.stressyy_n;
     delete var.spr_blend_weight;
     var.spr_blend_weight = nullptr;
+    delete var.spr_p_ref_old;
+    var.spr_p_ref_old = nullptr;
+    delete var.remesh_is_changed;
+    var.remesh_is_changed = nullptr;
 
     // Timescale reference for the next remesh's Deborah-number stress blend.
     var.last_remesh_time = var.time;
