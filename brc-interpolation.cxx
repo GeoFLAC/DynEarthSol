@@ -433,4 +433,6 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
     prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
+
+    #pragma acc wait
 }

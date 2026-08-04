@@ -807,7 +807,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma wait // here is not ACC parallelized
+    #pragma acc wait
 
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
@@ -1449,6 +1449,8 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush(__FUNCTION__);
 #endif
+        #pragma acc wait
+
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
         const int_vec& top_nodes = *surfinfo.top_nodes;
