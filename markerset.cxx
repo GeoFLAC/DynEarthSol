@@ -1811,7 +1811,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     int nunplenished = 0;
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param, var) reduction(+:nunplenished)
+    #pragma omp parallel for default(none) shared(param, var) reduction(+:nunplenished)
 #endif
     #pragma acc parallel loop gang vector reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {
