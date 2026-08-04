@@ -272,10 +272,10 @@ void restart(const Param& param, Variables& var)
 
     if (!got_meta) {
         if (bin_save.has_array("steps") && bin_save.has_array("nseg")) {
-            bin_save.read_scaler(var.steps, "steps");
-            bin_save.read_scaler(var.nnode, "nnode");
-            bin_save.read_scaler(var.nelem, "nelem");
-            bin_save.read_scaler(var.nseg, "nseg");
+            bin_save.read_scalar(var.steps, "steps");
+            bin_save.read_scalar(var.nnode, "nnode");
+            bin_save.read_scalar(var.nelem, "nelem");
+            bin_save.read_scalar(var.nseg, "nseg");
         } else {
             std::cerr << "Error: cannot read frame metadata from " << filename
                       << " and " << filename_save << " has none embedded.\n";
@@ -341,13 +341,13 @@ void restart(const Param& param, Variables& var)
 
     // Misc. items
     {
-        bin_chkpt.read_scaler(var.time, "time");
-        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
-        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
-        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
-        bin_chkpt.read_scaler(var.dt, "dt");
-        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
-        bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
+        bin_chkpt.read_scalar(var.time, "time");
+        bin_chkpt.read_scalar(var.info_display_next_step, "info_display_next_step");
+        bin_chkpt.read_scalar(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scalar(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scalar(var.dt, "dt");
+        bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
+        bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&

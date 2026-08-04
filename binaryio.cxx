@@ -284,7 +284,7 @@ void BinaryInput::seek_to_array(const char *name)
 
 
 template <typename T>
-void BinaryInput::read_scaler(T& A, const std::string& name)
+void BinaryInput::read_scalar(T& A, const std::string& name)
 {
     seek_to_array(name.c_str());
     std::size_t n = std::fread(&A, sizeof(T), 1, f);
@@ -297,9 +297,9 @@ void BinaryInput::read_scaler(T& A, const std::string& name)
 
 // explicit instantiation
 template
-void BinaryInput::read_scaler<int>(int& A, const std::string& name);
+void BinaryInput::read_scalar<int>(int& A, const std::string& name);
 template
-void BinaryInput::read_scaler<double>(double& A, const std::string& name);
+void BinaryInput::read_scalar<double>(double& A, const std::string& name);
 
 
 template <typename T>
@@ -965,7 +965,7 @@ bool HDF5Input::has_array(const char *name) const
 }
 
 template <typename T>
-void HDF5Input::read_scaler(T& A, const std::string& name)
+void HDF5Input::read_scalar(T& A, const std::string& name)
 {
     hid_t dset_id = H5Dopen2(file_id, name.c_str(), H5P_DEFAULT);
     if (dset_id < 0) {
@@ -1013,9 +1013,9 @@ void HDF5Input::read_scaler(T& A, const std::string& name)
 }
 
 template
-void HDF5Input::read_scaler<int>(int& A, const std::string& name);
+void HDF5Input::read_scalar<int>(int& A, const std::string& name);
 template
-void HDF5Input::read_scaler<double>(double& A, const std::string& name);
+void HDF5Input::read_scalar<double>(double& A, const std::string& name);
 
 template <typename T>
 void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size)

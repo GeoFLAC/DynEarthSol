@@ -62,7 +62,7 @@ public:
     bool has_array(const char *name) const;
 
     template <typename T>
-    void read_scaler(T& A, const std::string& name);
+    void read_scalar(T& A, const std::string& name);
 
     template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
@@ -135,7 +135,7 @@ public:
     bool has_array(const char *name) const;
 
     template <typename T>
-    void read_scaler(T& A, const std::string& name);
+    void read_scalar(T& A, const std::string& name);
 
     template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);

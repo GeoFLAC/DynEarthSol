@@ -899,9 +899,9 @@ template <class T>
 void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 {
 #ifdef HDF5
-    bin_save.read_scaler(_nmarkers, _name + ".nmarkers");
-    bin_chkpt.read_scaler(_last_id, _name + ".last_id");
-    bin_chkpt.read_scaler(_reserved_space, _name + ".reserved_space");
+    bin_save.read_scalar(_nmarkers, _name + ".nmarkers");
+    bin_chkpt.read_scalar(_last_id, _name + ".last_id");
+    bin_chkpt.read_scalar(_reserved_space, _name + ".reserved_space");
 #else
     int_vec itmp(3);
     bin_chkpt.read_array(itmp, (_name + " size").c_str());
