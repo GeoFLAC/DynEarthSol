@@ -865,7 +865,7 @@ double compute_dt(const Param& param, Variables& var)
         minl = std::min(minl, minh);
 
         // Find global min delta t to meet CFL condition
-        global_dt_min = std::min(global_dt_min, minl/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
+        global_dt_min = std::min(global_dt_min, minh/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
     }
 
     #pragma acc wait
