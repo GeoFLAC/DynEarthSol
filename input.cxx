@@ -326,9 +326,10 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.ref_pressure_option", po::value<int>(&p.control.ref_pressure_option)->default_value(0),
          "How to define reference pressure?\n"
-         "0: using density of the 0-th element to compute lithostatic pressure.\n"
+         "0: using density of the mat.mattype_ref-th material to compute lithostatic pressure.\n"
          "1: computing reference pressure from the PREM model.\n"
-         "2: computing reference pressure from the PREM model, modified for continent.\n")
+         "2: computing reference pressure from the PREM model, modified for continent.\n"
+         "Any other value is rejected at startup.\n")
 //        ("control.surface_pressure_correction", po::value<bool>(&p.control.surface_pressure_correction)->default_value(false),
 //         "Correct the pressure of surface elements"
 //         "which has positive stress 1st invariant"
@@ -1318,6 +1319,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
         if ( p.control.damping_factor < 0 || p.control.damping_factor > 1 ) {
             std::cerr << "Error: control.damping_factor must be between 0 and 1.\n";
+            std::exit(1);
+        }
+        // ref_pressure() is 'acc routine seq' and cannot reject an option itself; it
+        // returns 0. Keep this range in step with its branches and the help above.
+        if (p.control.ref_pressure_option < 0 || p.control.ref_pressure_option > 2) {
+            std::cerr << "Error: control.ref_pressure_option must be 0, 1, or 2 (got "
+                      << p.control.ref_pressure_option << ").\n";
             std::exit(1);
         }
 

@@ -149,9 +149,9 @@ double ref_pressure(const Param& param, double z)
 {
     // Get pressure at this depth
     double depth = -z;
-    double p;
+    double p = 0;
 
-    if (param.control.ref_pressure_option == 0)
+    if (param.control.ref_pressure_option == 0) {
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
             p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
@@ -160,7 +160,7 @@ double ref_pressure(const Param& param, double z)
             // Standard reference pressure without hydraulic diffusion
             p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
         }
-
+    }
     else if (param.control.ref_pressure_option == 1)
         p = get_prem_pressure(depth);
     else if (param.control.ref_pressure_option == 2)
