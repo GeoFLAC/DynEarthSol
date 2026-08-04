@@ -780,7 +780,7 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
-         "Index of reference material. For compute_dt(), ref_pressure()")
+         "Index of reference material. For compute_dt(), compute_mass() and ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
@@ -1420,6 +1420,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
         if (p.mat.nmat < 1) {
             std::cerr << "Error: mat.num_materials must be greater than 0.\n";
+            std::exit(1);
+        }
+
+        // mattype_ref indexes the per-material arrays directly in ref_pressure(),
+        // compute_dt() and compute_mass(), so it must be a valid material.
+        if (p.mat.mattype_ref < 0 || p.mat.mattype_ref >= p.mat.nmat) {
+            std::cerr << "Error: mat.mattype_ref (" << p.mat.mattype_ref
+                      << ") must be within [0, mat.num_materials-1] = [0, "
+                      << p.mat.nmat - 1 << "].\n";
             std::exit(1);
         }
 

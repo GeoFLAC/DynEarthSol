@@ -1753,37 +1753,28 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    double diff_e;
+    if (param.control.has_hydraulic_diffusion) {
+        // Index the per-material arrays: the MatProps accessors take an ELEMENT index.
+        // LIMITATION: compares m/s against m^2/s (wants a length, diff/minl) and covers
+        // only mattype_ref, not the domain-wide max that dt_hydro_diffusion uses.
+        const int mt = param.mat.mattype_ref;
+        const double perm_m = param.mat.hydraulic_perm[mt];               // Intrinsic permeability
+        const double mu_m = param.mat.fluid_visc[mt];                     // Fluid dynamic viscosity
+        const double alpha_b = param.mat.biot_coeff[mt];                  // Biot coefficient
+        const double phi_m = param.mat.porosity[mt];                      // Porosity
+        const double comp_fluid = 1.0 / param.mat.fluid_bulk_modulus[mt]; // Fluid compressibility
+        const double matrix_comp = 1.0 / (param.mat.bulk_modulus[mt] + 4.0*param.mat.shear_modulus[mt]/3.0);
 
-    #pragma acc serial async
-    {
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(param.mat.mattype_ref);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(param.mat.mattype_ref);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(param.mat.mattype_ref);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(param.mat.mattype_ref);            // Fluid density
-        double phi_e = var.mat->phi(param.mat.mattype_ref);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(param.mat.mattype_ref);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(param.mat.mattype_ref);
-        double shearm = var.mat->shearm(param.mat.mattype_ref);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+        // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
+        // weight cancels between conductivity and storage, so it is not carried.
+        const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
 
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        
-        // Compute element diffusivity and update max using reduction
-        diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
-    }
-
-    #pragma acc wait
-
-    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
-    {
-        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
-        std::exit(11);
+        if (pseudo_speed < diff_ref) {
+            std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
+                      << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
+                      << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
+            std::exit(11);
+        }
     }
 
 #ifndef ACC
