@@ -301,8 +301,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
     // Initialize diff_max_local for reduction
     double diff_max_local = 1.0e-38;
 
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param, diff_max_local)
-    // #pragma acc parallel loop
+    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
+        reduction(max:diff_max_local)
+    // #pragma acc parallel loop reduction(max:diff_max_local)
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
