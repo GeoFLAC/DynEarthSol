@@ -938,6 +938,12 @@ void HDF5Input::read_header()
     H5Tclose(atype);
     H5Aclose(attr);
 
+    if (ndims != NDIMS) {
+        std::cerr << "Error: mismatching ndims in HDF5 file\n"
+                  << "  Expect: " << NDIMS << "  Got: " << ndims << '\n';
+        std::exit(1);
+    }
+
     if (H5Aexists(file_id, "revision") <= 0) {
         std::cerr << "Error: missing attribute revision in HDF5 file\n";
         std::exit(1);
@@ -950,6 +956,12 @@ void HDF5Input::read_header()
     H5Aread(attr, atype, &revision);
     H5Tclose(atype);
     H5Aclose(attr);
+
+    if (revision != BINARY_FILE_REVISION) {
+        std::cerr << "Error: mismatching revision in HDF5 file\n"
+                  << "  Expect: " << BINARY_FILE_REVISION << "  Got: " << revision << '\n';
+        std::exit(1);
+    }
 }
 
 HDF5Input::~HDF5Input()
