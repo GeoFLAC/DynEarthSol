@@ -26,15 +26,17 @@ namespace std { using ::snprintf; }
  * 2  The rests are binary data.
  ****************************************************************************/
 
+// Revision number of the binary file format. Bump it whenever the layout
+// of the header or of the data written after it changes.
+#define BINARY_FILE_REVISION 4
+/* Revision notes:
+ * 4: Add write/read scalar for binary io
+ */
+
 namespace {
     const std::size_t headerlen = 4096;
-    const char revision_str[] = "# DynEarthSol ndims="
-#ifdef THREED
-        "3"
-#else
-        "2"
-#endif
-        " revision=3\n";
+    const std::string revision_str = "# DynEarthSol ndims=" + std::to_string(NDIMS)
+                                   + " revision=" + std::to_string(BINARY_FILE_REVISION) + "\n";
 }
 
 
@@ -72,7 +74,7 @@ BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
     }
 
     header = new char[headerlen]();
-    hd_pos = std::strcat(header, revision_str);
+    hd_pos = std::strcat(header, revision_str.c_str());
     eof_pos = headerlen;
 
     std::fseek(f, eof_pos, SEEK_SET);
@@ -241,7 +243,7 @@ void BinaryInput::read_header()
 
     // Compare revision string (excluding the trailing new line)
     line = std::strtok(header, "\n");
-    if (strncmp(line, revision_str, strlen(revision_str)-1) != 0) {
+    if (strncmp(line, revision_str.c_str(), revision_str.size()-1) != 0) {
         std::cerr << "Error: mismatching revision string in header\n"
                   << "  Expect: " << revision_str
                   << "  Got: "<< line << '\n';
@@ -438,7 +440,7 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
 void HDF5Output::write_header()
 {
     write_attribute(NDIMS, "ndims", file_id);
-    write_attribute(3, "revision", file_id);
+    write_attribute(BINARY_FILE_REVISION, "revision", file_id);
 
     hid_t gid = create_group_with_order("/VTKHDF");
 
