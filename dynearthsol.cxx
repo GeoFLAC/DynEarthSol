@@ -228,31 +228,6 @@ void restart(const Param& param, Variables& var)
 {
     std::cout << "Initializing mesh and field data from checkpoints...\n";
 
-    /* Reading info file */
-    {
-        char filename[256];
-        std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
-        std::FILE *f = std::fopen(filename, "r");
-        int frame, steps, nnode, nelem, nseg;
-        while (1) {
-            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
-                                &frame, &steps, &nnode, &nelem, &nseg);
-            if (n != 5) {
-                std::cerr << "Error: reading info file: " << filename << '\n';
-                std::exit(2);
-            }
-            if (frame == param.sim.restarting_from_frame)
-                break;
-        }
-
-        var.steps = steps;
-        var.nnode = nnode;
-        var.nelem = nelem;
-        var.nseg = nseg;
-
-        std::fclose(f);
-    }
-
     char filename_save[256];
 #ifdef HDF5
     std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
@@ -264,6 +239,49 @@ void restart(const Param& param, Variables& var)
     BinaryInput bin_save(filename_save);
 #endif
     std::cout << "  Reading " << filename_save << "...\n";
+
+    char filename[256];
+    std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
+    bool got_meta = false;
+    std::FILE *f = std::fopen(filename, "r");
+    if (f != NULL) {
+        int frame, steps, nnode, nelem, nseg;
+        while (1) {
+            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
+                                &frame, &steps, &nnode, &nelem, &nseg);
+            if (n != 5) break;   // EOF or malformed line: stop scanning, fall back
+            if (frame == param.sim.restarting_from_frame) {
+                var.steps = steps;
+                var.nnode = nnode;
+                var.nelem = nelem;
+                var.nseg = nseg;
+                got_meta = true;
+                break;
+            }
+        }
+        std::fclose(f);
+        if (!got_meta) {
+            std::cerr << "Error: frame " << param.sim.restarting_from_frame
+                    << " not found in " << filename << ".\n";
+            exit(2);
+        }
+    } else {
+        std::cerr << "Warning: cannot open info file " << filename
+                << "; using metadata embedded in " << filename_save << ".\n";
+    }
+
+    if (!got_meta) {
+        if (bin_save.has_array("steps") && bin_save.has_array("nseg")) {
+            bin_save.read_scalar(var.steps, "steps");
+            bin_save.read_scalar(var.nnode, "nnode");
+            bin_save.read_scalar(var.nelem, "nelem");
+            bin_save.read_scalar(var.nseg, "nseg");
+        } else {
+            std::cerr << "Error: cannot read frame metadata from " << filename
+                      << " and " << filename_save << " has none embedded.\n";
+            std::exit(2);
+        }
+    }
 
     char filename_chkpt[256];
 #ifdef HDF5
@@ -323,26 +341,18 @@ void restart(const Param& param, Variables& var)
 
     // Misc. items
     {
-#ifdef HDF5
-        bin_chkpt.read_scaler(var.time, "time");
-        bin_chkpt.read_scaler(var.info_display_next_step, "info_display_next_step");
-        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
-        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
-        bin_chkpt.read_scaler(var.dt, "dt");
-        bin_chkpt.read_scaler(var.max_global_vel_mag, "max_global_vel_mag");
-        bin_chkpt.read_scaler(var.reference_frame_time, "reference_frame_time");
-#else
-        double_vec tmp(7);
-        bin_chkpt.read_array(tmp, "time info_display_next_step compensation_pressure bottom_temperature dt max_global_vel_mag reference_frame_time");
-        var.time = tmp[0];
-        var.info_display_next_step = tmp[1];
-        var.compensation_pressure = tmp[2];
-        var.bottom_temperature = tmp[3];
-        var.dt = tmp[4];
-        var.max_global_vel_mag = tmp[5];
-        var.reference_frame_time = tmp[6];
-#endif
+        bin_chkpt.read_scalar(var.time, "time");
+        bin_chkpt.read_scalar(var.info_display_next_step, "info_display_next_step");
+        bin_chkpt.read_scalar(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scalar(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scalar(var.dt, "dt");
+        bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
+        bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
     }
+
+    if (var.steps % param.mesh.quality_check_step_interval == 0 &&
+        var.steps >= var.info_display_next_step)
+        var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
 
     // Initializing field variables
     {
@@ -373,6 +383,8 @@ void restart(const Param& param, Variables& var)
         // for tidal heating
         bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
+        // delta_plstrain carries per-element state across steps:
+        bin_save.read_array(*var.delta_plstrain, "plastic strain-rate");
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
@@ -627,7 +639,7 @@ int main(int argc, const char* argv[])
         restart(param, var);
     }
 
-    var.dt_PT = var.dt;
+    // var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -953,7 +965,10 @@ int main(int argc, const char* argv[])
         nvtxRangePop();
 #endif
 
-    } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+    } while (var.steps < param.sim.max_steps &&
+             (var.time <= param.sim.max_time_in_yr * YEAR2SEC ||
+              (param.sim.is_outputting_averaged_fields &&
+               var.steps % param.mesh.quality_check_step_interval != 0)));
 
     monitor_finalize(var);
 

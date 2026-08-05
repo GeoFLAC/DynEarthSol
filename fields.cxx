@@ -746,22 +746,22 @@ void update_velocity(const Variables& var, array_t& vel)
 #endif
 }
 
-void update_velocity_PT(const Variables& var, array_t& vel)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
+// void update_velocity_PT(const Variables& var, array_t& vel)
+// {
+// #ifdef NPROF_DETAIL
+//     nvtxRangePush(__FUNCTION__);
+// #endif
 
-    #pragma omp parallel for default(none) shared(var, vel)
-    // #pragma acc parallel loop
-    for (int i=0; i<var.nnode; ++i)
-        for (int j=0;j<NDIMS;j++)
-            vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
+//     #pragma omp parallel for default(none) shared(var, vel)
+//     // #pragma acc parallel loop
+//     for (int i=0; i<var.nnode; ++i)
+//         for (int j=0;j<NDIMS;j++)
+//             vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
 
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
+// #ifdef NPROF_DETAIL
+//     nvtxRangePop();
+// #endif
+// }
 
 void update_coordinate(const Variables& var, array_t& coord)
 {

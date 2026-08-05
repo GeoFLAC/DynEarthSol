@@ -30,7 +30,7 @@ jobs:
         sudo apt update
         sudo apt install libboost-program-options-dev
     - name: make 2d with mmg
-      run: make clean; make ndims=2 usemmg=1
+      run: make clean ndims=2; make ndims=2 usemmg=1
     - name: make 3d with mmg
-      run: make clean; make ndims=3 usemmg=1
+      run: make clean ndims=3; make ndims=3 usemmg=1
       

@@ -183,6 +183,7 @@ struct Mesh {
     double largest_size;
     double sediment_size;
     double min_angle;  // for 2D only
+    double max_steiner_factor; // cap Triangle Steiner points at factor*npoints; <=0 unlimited (2D only)
     double min_tet_angle, max_ratio; // for 3D only
     double min_quality;
     double max_boundary_distortion;
@@ -646,7 +647,7 @@ class MarkerSet;
 struct Variables {
     double time;
     double dt;
-    double dt_PT;
+    // double dt_PT;
     double l2_residual;
     double reference_frame_time;
     int steps;

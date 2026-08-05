@@ -4,6 +4,83 @@ from __future__ import print_function, unicode_literals
 import sys, os
 import numpy as np
 
+# must match binaryio.cxx
+HEADERLEN = 4096
+
+
+def _scan_frame_hdf5(fname):
+    import h5py
+    with h5py.File(fname, 'r') as f:
+        def get(name):
+            return f[name][0]
+        return dict(
+            steps = get('steps'),
+            time = float(get('time_sec')),
+            dt = float(get('dt_sec')),
+            walltime = float(get('walltime_sec')),
+            nnode = get('nnode'),
+            nelem = get('nelem'),
+            nseg = get('nseg'),
+        )
+
+
+def _scan_frame_binary(fname):
+    import struct
+    with open(fname, 'rb') as f:
+        header = f.read(HEADERLEN).splitlines()
+        if not header[0].startswith(b'# DynEarthSol'):
+            raise KeyError(fname + ' is not a DynEarthSol binary frame')
+        pos = {}
+        for line in header[1:]:
+            if not line or line[0] in (0, b'\x00'[0]):
+                break
+            name, p = line.split(b'\t')
+            pos[name.decode('ascii')] = int(p)
+
+        def get(name, fmt, default=None):
+            if name not in pos:
+                return default
+            f.seek(pos[name])
+            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+
+        if 'steps' not in pos or 'time_sec' not in pos:
+            raise KeyError('steps/time_sec scalars missing in ' + fname +
+                           ' (frame predates the .info metadata in binary '
+                           'output; a .info file is required)')
+        return dict(
+            steps=get('steps', '<i'),
+            time=get('time_sec', '<d'),
+            dt=get('dt_sec', '<d'),
+            walltime=get('walltime_sec', '<d', 0.0),
+            nnode=get('nnode', '<i'),
+            nelem=get('nelem', '<i'),
+            nseg=get('nseg', '<i'),
+        )
+
+
+def scan_frames(modelname):
+    '''Read the per-frame .info metadata (frame, steps, time, dt, walltime,
+    nnode, nelem, nseg) directly from <modelname>.save.NNNNNN[.vtkhdf] frame
+    files, sorted by frame number. dt/nseg are None for frames written
+    before they were added to the frame metadata.'''
+    import glob, re
+    pat = re.compile(re.escape(os.path.basename(modelname))
+                     + r'\.save\.(\d+)(\.vtkhdf)?$')
+    found = []
+    for fname in glob.glob(modelname + '.save.*'):
+        m = pat.search(os.path.basename(fname))
+        if m:
+            found.append((int(m.group(1)), fname, bool(m.group(2))))
+    found.sort()
+
+    rows = []
+    for frame, fname, is_hdf5 in found:
+        d = _scan_frame_hdf5(fname) if is_hdf5 else _scan_frame_binary(fname)
+        d['frame'] = frame
+        rows.append(d)
+    return rows
+
+
 class Dynearthsol:
     '''Read output file of 2D/3D DynEarthSol'''
 
