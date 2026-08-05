@@ -120,9 +120,13 @@ ifeq ($(HDF5_DETECT), yes)
 		endif
 	endif
 
-	## Without a .pc file, probe the layouts real installs use. Debian splits
-	## the serial build across two trees, so the header and the library are
-	## searched separately instead of under one prefix.
+	## Without a .pc file, probe the layouts real installs use -- Fedora and
+	## RHEL need this branch unconditionally, as their hdf5-devel ships no
+	## pkg-config file at all. Debian splits its serial build across two trees
+	## (/usr/include/hdf5/serial and .../hdf5/serial under the multiarch libdir),
+	## so the header and the library are searched separately, not under one
+	## prefix. /usr/local comes before the system directories so a hand-built
+	## HDF5 installed there wins over the distro package.
 	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
 		HDF5_INCLUDE_DIR := $(shell for d in \
 				$(HDF5_BREW)/opt/hdf5/include \
@@ -134,8 +138,9 @@ ifeq ($(HDF5_DETECT), yes)
 		HDF5_LIB_DIR := $(shell for d in \
 				$(HDF5_BREW)/opt/hdf5/lib \
 				/usr/lib/$(shell uname -m)-linux-gnu/hdf5/serial \
-				/usr/local/lib \
-				/usr/lib/$(shell uname -m)-linux-gnu /usr/lib; do \
+				/usr/local/lib /usr/local/lib64 \
+				/usr/lib/$(shell uname -m)-linux-gnu \
+				/usr/lib64 /usr/lib; do \
 			ls $$d/libhdf5.* >/dev/null 2>&1 && { echo $$d; break; }; done)
 	endif
 
