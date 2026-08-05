@@ -136,14 +136,10 @@ jobs:
     - name: Fix git safe directory
       run: git config --global --add safe.directory '*'
 
-    - name: set path for nvc and hdf5 (${{ matrix.ndims }}D)
+    - name: set path for nvc (${{ matrix.ndims }}D)
+      # No HDF5_*_DIR: the Makefile finds the paths itself.
       run: |
-        HDF5_INC=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
-        HDF5_LIB=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
-        
-        echo "HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
-        echo "HDF5_LIB_DIR=$HDF5_LIB" >> $GITHUB_ENV
-        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
+        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR" >> $GITHUB_ENV
 
     - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
       run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 SM=80 -j

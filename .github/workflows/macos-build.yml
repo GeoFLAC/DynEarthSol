@@ -57,7 +57,8 @@ jobs:
     - name: make 3d
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
     - name: make 3d hdf5
+      # No HDF5_*_DIR: the Makefile finds the paths itself, and on macOS it
+      # picks the Homebrew prefix matching the build architecture rather than
+      # whichever brew happens to be first on PATH.
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1
             BOOST_ROOT_DIR=$(brew --prefix boost)
-            HDF5_INCLUDE_DIR=$(brew --prefix hdf5)/include
-            HDF5_LIB_DIR=$(brew --prefix hdf5)/lib
