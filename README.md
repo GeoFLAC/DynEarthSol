@@ -74,7 +74,8 @@ git submodule update --init --recursive
       ```
     * The header files and built shared library will be in `mmg/build/include` and `mmg/build/lib`. 
 * [HDF5](https://www.hdfgroup.org/solutions/hdf5/) for outputting model results in HDF5-based vtkhdf format, which is compressed (reducing size by up to 50%) and can be visualized directly in Paraview.
-  * The HDF5 Library is generally pre-installed on modern computer operating systems. User can use `which h5cc` to find the path to the HDF5 Library.
+  * The HDF5 Library is generally pre-installed on modern computer operating systems; otherwise `brew install hdf5` (macOS), `apt install libhdf5-dev` (Debian/Ubuntu) or `dnf install hdf5-devel` (Fedora/RHEL). `make hdf5=1` locates it on its own, via `pkg-config` and then the usual install layouts.
+    * Prefer that search over `which h5cc`: on a Mac that has ever used both Homebrew prefixes, `h5cc` and `pkg-config` on `PATH` are often the `/usr/local` (x86_64) ones while the build is arm64, and their paths link an HDF5 of the wrong architecture. The Makefile picks the prefix matching the host architecture instead.
   * The HDF5-based vtkhdf format follows the data structure of VTK, which can be visualized directly in Paraview. Please refer to the official [VTKHDF File Format](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format) documentation for more information.
 
 <div id="llvm"></div>
@@ -161,9 +162,13 @@ git submodule update --init --recursive
     * Set `use_gospl = 1`.
     * Set `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` if they differ from the defaults (`~/opt/gospl_extensions` and `~/miniconda3/envs/gospl`).
   * If outputing in HDF5-based vtkhdf format:
-    * set `hdf5 = 1`.
-    * set `HDF5_INCLUDE_DIR` to the HDF5 header file directory.
-    * set `HDF5_LIB_DIR` to the HDF5 library directory.
+    * set `hdf5 = 1`. The paths are found automatically on Linux and macOS, so
+      normally there is nothing else to set.
+    * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` override that search. Set them
+      (in the Makefile or on the command line) to build against one specific
+      HDF5 -- an HPC module, a conda env, a hand-built copy:
+      `make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
+      Either one alone is enough; the other is still detected.
     * Install python HDF5 lib by `pip install h5py` for further analyzed vtk visualization.
   * If enabling openMP on macOS:
     *  set `OPENMP_ROOT_DIR` path if it differs from the default value.

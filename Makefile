@@ -66,9 +66,102 @@ else
 endif
 CXX_BACKEND = ${CXX}
 
-## path to HDF5's base directory, if not in standard system location
-HDF5_INCLUDE_DIR = #/path/to/include/hdf5/serial
-HDF5_LIB_DIR = #/path/to/lib/x86_64-linux-gnu/hdf5/serial
+## path to HDF5's base directory. Leave both blank to auto-detect; set them
+## (here or on the command line) to force one specific install -- an HPC
+## module, a conda env, a hand-built HDF5 -- which skips detection entirely.
+## The layouts the search below knows about, if you would rather set them:
+##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
+##   Fedora/RHEL    /usr/include              /usr/lib64
+##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
+HDF5_INCLUDE_DIR = #/usr/include/hdf5/serial
+HDF5_LIB_DIR = #/usr/lib/x86_64-linux-gnu/hdf5/serial
+
+ifeq ($(hdf5), 1)
+## Every stage below fills only what is still blank, so a path set by hand is
+## never overwritten, and setting just one of the two still leaves the other
+## detected instead of empty (a blank -L would eat the -lhdf5 that follows it).
+HDF5_DETECT :=
+ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
+	HDF5_DETECT := yes
+endif
+ifeq ($(strip $(HDF5_LIB_DIR)),)
+	HDF5_DETECT := yes
+endif
+ifeq ($(HDF5_DETECT), yes)
+	ifeq ($(OSNAME), Darwin)
+		## Homebrew has two prefixes -- /opt/homebrew (arm64) and /usr/local
+		## (x86_64) -- and a machine that has ever run the other one keeps its
+		## pkg-config and h5cc on PATH. Trusting PATH there silently links an
+		## HDF5 of the wrong architecture, so choose the prefix by host arch
+		## and use that prefix's own pkg-config.
+		ifeq ($(shell uname -m), arm64)
+			HDF5_BREW = /opt/homebrew
+		else
+			HDF5_BREW = /usr/local
+		endif
+		PKGCONFIG := $(HDF5_BREW)/bin/pkg-config
+	else
+		HDF5_BREW =
+		PKGCONFIG := pkg-config
+	endif
+
+	## Ask pkg-config for directories rather than parsing --cflags/--libs:
+	## h5cc -show and --libs mix in inline .a paths and -lsz/-lz/-ldl, which
+	## are painful to filter and differ per build. Debian and Ubuntu name the
+	## serial module hdf5-serial; everyone else ships plain hdf5.
+	HDF5_PC := $(shell for m in hdf5 hdf5-serial; do \
+		$(PKGCONFIG) --exists $$m 2>/dev/null && { echo $$m; break; }; done)
+	ifneq ($(HDF5_PC),)
+		ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
+			HDF5_INCLUDE_DIR := $(shell $(PKGCONFIG) --variable=includedir $(HDF5_PC))
+		endif
+		ifeq ($(strip $(HDF5_LIB_DIR)),)
+			HDF5_LIB_DIR := $(shell $(PKGCONFIG) --variable=libdir $(HDF5_PC))
+		endif
+	endif
+
+	## Without a .pc file, probe the layouts real installs use -- Fedora and
+	## RHEL need this branch unconditionally, as their hdf5-devel ships no
+	## pkg-config file at all. Debian splits its serial build across two trees
+	## (/usr/include/hdf5/serial and .../hdf5/serial under the multiarch libdir),
+	## so the header and the library are searched separately, not under one
+	## prefix. /usr/local comes before the system directories so a hand-built
+	## HDF5 installed there wins over the distro package.
+	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
+		HDF5_INCLUDE_DIR := $(shell for d in \
+				$(HDF5_BREW)/opt/hdf5/include \
+				/usr/include/hdf5/serial \
+				/usr/local/include /usr/include; do \
+			test -f $$d/hdf5.h && { echo $$d; break; }; done)
+	endif
+	ifeq ($(strip $(HDF5_LIB_DIR)),)
+		HDF5_LIB_DIR := $(shell for d in \
+				$(HDF5_BREW)/opt/hdf5/lib \
+				/usr/lib/$(shell uname -m)-linux-gnu/hdf5/serial \
+				/usr/local/lib /usr/local/lib64 \
+				/usr/lib/$(shell uname -m)-linux-gnu \
+				/usr/lib64 /usr/lib; do \
+			ls $$d/libhdf5.* >/dev/null 2>&1 && { echo $$d; break; }; done)
+	endif
+
+	## Checked separately: finding one without the other is still unbuildable,
+	## and failing here beats a confusing link error hundreds of lines later.
+	## Indented with SPACES, not a tab: a tab-indented $(error) this early
+	## reads as a recipe line and make reports "commands commence before first
+	## target" instead of the message below.
+	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
+        $(error hdf5=1 but no HDF5 headers found. Install HDF5 (macOS: brew install hdf5; \
+Debian/Ubuntu: apt install libhdf5-dev; Fedora/RHEL: dnf install hdf5-devel), \
+or set the paths by hand: \
+make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib)
+	endif
+	ifeq ($(strip $(HDF5_LIB_DIR)),)
+        $(error hdf5=1: found HDF5 headers in $(HDF5_INCLUDE_DIR) but no libhdf5. \
+Set HDF5_LIB_DIR to the directory holding libhdf5, \
+e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
+	endif
+endif
+endif
 
 ## path to cuda's base directory
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
