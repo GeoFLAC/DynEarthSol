@@ -274,6 +274,7 @@ struct BC {
     bool has_elastic_foundation;
 
     bool has_water_loading;
+    double sea_water_density;
 
     int vbc_x0;
     int vbc_x1;

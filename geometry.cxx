@@ -1103,21 +1103,26 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     SurfaceTopo topo;
     topo.build(param, var);
 
-    // Pin the free-surface nodal stress before averaging back to elements: the SPR
+    // Pin the top-boundary nodal stress before averaging back to elements: the SPR
     // patch fit is one-sided at surface nodes, its least reliable spot, while the
-    // free-surface condition is known exactly (total sigma_zz = 0, zero shear).
-    // In the pressure-centered variable sigma_zz = 0 maps to stress_n = +p_ref,
-    // and z - z_surf = 0 at a top node makes the pin exact, ref_pressure(0) = 0.
+    // traction there is known exactly -- sigma.n = -p_water n, mirroring the load
+    // apply_stress_bcs puts on this boundary. Centered that is p_ref - p_water,
+    // with p_ref exact because z_eff = 0 at a top node.
+    const double sea_level = param.control.surf_base_level;
+    const double rho_w_g = param.bc.has_water_loading
+                         ? param.bc.sea_water_density * param.control.gravity : 0.0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo)
+    #pragma omp parallel for default(none) shared(param, var, topo, sea_level, rho_w_g)
 #endif
     #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
         int n = (*var.surfinfo.top_nodes)[i];
+        double z = (*var.coord)[n][NDIMS-1];
+        double p_water = (z < sea_level) ? rho_w_g * (sea_level - z) : 0.0;
 
         double p_ref_node = ref_pressure(param, topo.zeff((*var.coord)[n]));
 
-        (*var.stress_n)[n][NDIMS-1] = p_ref_node;
+        (*var.stress_n)[n][NDIMS-1] = p_ref_node - p_water;
         (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
 #ifdef THREED
         (*var.stress_n)[n][5] = 0.0;

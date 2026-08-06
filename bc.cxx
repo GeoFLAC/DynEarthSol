@@ -726,8 +726,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                     p = 0;
                     if (zcenter < param.control.surf_base_level) {
                         // below sea level
-                        const double sea_water_density = 1030;
-                        p = sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
+                        p = param.bc.sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
                     }
                 }
                 else {

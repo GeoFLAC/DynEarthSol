@@ -433,6 +433,10 @@ static void declare_parameters(po::options_description &cfg,
         ("bc.has_water_loading", po::value<bool>(&p.bc.has_water_loading)->default_value(true),
          "Applying water loading for top boundary that is below sea level?")
 
+        ("bc.sea_water_density", po::value<double>(&p.bc.sea_water_density)->default_value(1030),
+         "Density of the loading water (in kg/m^3). Used for the top-boundary "
+         "water load and for the free-surface stress pin that must match it.")
+
          // pore pressure boundary condition
         ("bc.hbc_x0", po::value<int>(&p.bc.hbc_x0)->default_value(0),
          "Type of boundary condition for the left/western side"
