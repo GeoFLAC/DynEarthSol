@@ -68,7 +68,7 @@ jobs:
         with:
           filters: |
             docker_changed:
-              - 'docker/Dockerfile.cuda'
+              - 'docker/**'
 
   build-and-push-image:
     needs: detect-changes
@@ -101,11 +101,17 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile.cuda
-          push: true
           tags: ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:latest
 
+          # zstd layers decompress far faster than gzip, which is most of what
+          # "Starting job container" spends its time on. It needs OCI media
+          # types, and the provenance attestation is disabled so the pushed tag
+          # stays a plain image manifest for the runner to pull.
+          outputs: type=image,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          provenance: false
+
           cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max
+          cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max,compression=zstd
 
   nvc-build:
     needs: [check-duplicate, detect-changes, build-and-push-image]
