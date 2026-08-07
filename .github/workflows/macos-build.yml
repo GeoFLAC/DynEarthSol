@@ -59,6 +59,21 @@ jobs:
     - name: make 3d
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1
 
+    # Changing a build flag must rebuild. Objects are named only for ndims and the
+    # openacc suffix, so before the flag stamp `make openmp=0` followed by `make`
+    # relinked nothing and silently left a single-threaded executable -- and the
+    # `make clean` on every line above is what hid it. Deliberately no clean here.
+    - name: changing a flag rebuilds
+      run: |
+        make clean ndims=2
+        make ndims=2 opt=2 openmp=0
+        otool -L dynearthsol2d | grep -q libomp \
+          && { echo "::error::openmp=0 build is linked against libomp"; exit 1; }
+        sleep 1   # make 3.81 compares mtimes to the second
+        make ndims=2 opt=2 openmp=1
+        otool -L dynearthsol2d | grep -q libomp \
+          || { echo "::error::openmp=1 after openmp=0 did not relink against libomp"; exit 1; }
+
     # The in-tree external/openmp-install prefix still takes priority over the
     # package managers, so a checkout that already has one keeps building against
     # it. Staged from the Homebrew libomp rather than rebuilt from LLVM source --

@@ -751,10 +751,31 @@ CXXFLAGS += -DSOA
 
 ## Action
 
-.PHONY: all clean take-snapshot prepare build check-deps config
+.PHONY: all clean take-snapshot prepare build check-deps config FORCE
 
 all: prepare
 	$(MAKE) build
+
+## Rebuild when the FLAGS change, not just when a source file does.
+##
+## Objects are named only for ndims and the openacc suffix, so every other switch
+## -- openmp, opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was
+## built last. `make openmp=0` then `make` reports success, relinks nothing, and
+## leaves a single-threaded executable behind. The stamp holds the last build's
+## flags; its recipe runs every time (FORCE) but only rewrites the file when they
+## differ, so a changed flag rebuilds and an unchanged one costs one `cmp`.
+## make 3.81 compares mtimes to the second, so a flag flipped inside the same
+## second as the previous build can be missed -- unreachable with a 23-file build.
+BUILD_STAMP = .build-flags.$(ndims)d$(suffix)
+
+$(BUILD_STAMP): FORCE
+	@echo '$(CXX)|$(CXXFLAGS)|$(BOOST_CXXFLAGS)|$(LDFLAGS)|$(BOOST_LDFLAGS)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
+		test -f $@ && echo "   build flags changed since the last build -- rebuilding"; \
+		mv $@.tmp $@; \
+	fi
+
+FORCE:
 
 ## Name the missing dependency and the command that installs it, rather than
 ## letting it surface as a linker error hundreds of lines down. A recipe, not
@@ -898,7 +919,7 @@ endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB)
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB) $(BUILD_STAMP)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -977,26 +998,26 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(KNN_BVH_LIB):
 	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
 
-$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
+$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS)
+tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS) $(BUILD_STAMP)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS)
+tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
@@ -1034,4 +1055,4 @@ endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 
 clean:
-	@rm -f $(OBJS) $(EXE)
+	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP)

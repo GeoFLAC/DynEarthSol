@@ -38,3 +38,4 @@ dynearthsol-gospl
 *.npz
 *.pvsm
 *.vtkhdf
+.build-flags.*
