@@ -39,3 +39,6 @@ dynearthsol-gospl
 *.pvsm
 *.vtkhdf
 .build-flags.*
+.build-flags-*
+.link-flags.*
+.feature-deps.*

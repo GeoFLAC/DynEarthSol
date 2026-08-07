@@ -7,6 +7,8 @@
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
+## - A flag rebuilds only what it reaches (hdf5: 4 of 23 units; LDFLAGS: relink
+##   only). `make feature-map` prints the reach; `make config` summarises it.
 ## Common configuration variables (set on the make command line or edit below):
 ##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
 ##  - opt = 0..3 : optimization level. 0 = debugging (no optimizations),
@@ -622,7 +624,10 @@ else
 endif
 
 ifeq ($(hdf5), 1)
-	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	## Named, like MMG_CXXFLAGS, so the stamp split can subtract it. Folded into
+	## CXXFLAGS it would perturb the global stamp and rebuild everything.
+	HDF5_CXXFLAGS = -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	CXXFLAGS += $(HDF5_CXXFLAGS)
 	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
 	ifneq ($(OSNAME), Darwin)
 		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
@@ -714,9 +719,11 @@ ifeq ($(ndims), 3)
 endif
 
 ifeq ($(adaptive_time_step), 1)
-	CXXFLAGS += -DATS
+	ATS_CXXFLAGS = -DATS
+	CXXFLAGS += $(ATS_CXXFLAGS)
 ifeq ($(use_R_S), 1)
-	CXXFLAGS += -DRS
+	RS_CXXFLAGS = -DRS
+	CXXFLAGS += $(RS_CXXFLAGS)
 endif
 endif
 
@@ -763,22 +770,104 @@ all: prepare
 
 ## Rebuild when the FLAGS change, not just when a source file does.
 ##
-## Objects are named only for ndims and the openacc suffix, so every other switch
-## -- openmp, opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was
-## built last. `make openmp=0` then `make` reports success, relinks nothing, and
-## leaves a single-threaded executable behind. The stamp holds the last build's
-## flags; its recipe runs every time (FORCE) but only rewrites the file when they
+## Objects are named only for ndims and suffix, so every other switch -- openmp,
+## opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was built
+## last. `make openmp=0` then `make` reports success, relinks nothing, and leaves
+## a single-threaded executable behind. The stamp holds the last build's flags;
+## its recipe runs every time (FORCE) but only rewrites the file when they
 ## differ, so a changed flag rebuilds and an unchanged one costs one `cmp`.
-## make 3.81 compares mtimes to the second, so a flag flipped inside the same
-## second as the previous build can be missed -- unreachable with a 23-file build.
-BUILD_STAMP = .build-flags.$(ndims)d$(suffix)
+##
+## One stamp per configuration (key $(ndims)d$(suffix)), split three ways:
+##   BUILD_STAMP    flags every object sees -- rebuild all 23.
+##   FEATURE_STAMPS one per FEATURES macro -- rebuild only what it reaches.
+##   LINK_STAMP     LDFLAGS -- relink only, never recompile.
+BUILD_STAMP  = .build-flags.$(ndims)d$(suffix)
+LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 
+## Feature table: macros whose flags are separable and that reach only part of
+## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
+## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
+## (in parameters.hpp, so it reaches everything).
+FEATURES = HDF5 USEMMG USEEXODUS ATS RS
+FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
+FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
+FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+FEATURE_ATS_FLAGS       = $(ATS_CXXFLAGS)
+FEATURE_RS_FLAGS        = $(RS_CXXFLAGS)
+
+FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
+FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
+FEATURE_STAMPS = $(foreach f,$(FEATURES),$(call FEATURE_STAMP,$(f)))
+
+## What is left once every feature chunk is removed (filter-out is exact-token).
+GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS) $(BOOST_CXXFLAGS))
+
+## Stamps DELETE what they invalidate; mtime is not trustworthy here. make 3.81
+## compares to the whole second and treats equal as up to date, and a 4-object
+## feature rebuild finishes in the same second the stamp was written -- two
+## back-to-back builds then linked an object still carrying -DHDF5 with no
+## -lhdf5. A deleted object has no mtime to be wrong about.
+##
+## The delete must run in an earlier PROCESS: make 3.81 stats a target before its
+## prerequisites' recipes and reuses that mtime, so deleting from the stamp
+## recipe dropped 4 objects but rebuilt 3. Hence FLAG_STAMPS hangs off `prepare`,
+## which the outer make finishes before `all` runs `$(MAKE) build`. The map's
+## dependency edges stay too: they cover a stamp that does not exist yet.
+FLAG_STAMPS = $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS)
 $(BUILD_STAMP): FORCE
-	@echo '$(CXX)|$(CXXFLAGS)|$(BOOST_CXXFLAGS)|$(LDFLAGS)|$(BOOST_LDFLAGS)' > $@.tmp
+	@echo '$(CXX)|$(GLOBAL_CXXFLAGS)' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
-		test -f $@ && echo "   build flags changed since the last build -- rebuilding"; \
-		mv $@.tmp $@; \
+		test -f $@ && echo "   compile flags changed since the last build -- rebuilding"; \
+		mv $@.tmp $@; rm -f $(OBJS) $(M_OBJS); \
 	fi
+
+$(LINK_STAMP): FORCE
+	@echo '$(CXX)|$(LDFLAGS)|$(BOOST_LDFLAGS)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
+		test -f $@ && echo "   link flags changed since the last build -- relinking"; \
+		mv $@.tmp $@; rm -f $(EXE); \
+	fi
+
+## One rule per feature via eval, so FEATURES stays the only place one is named.
+## FEATURE_<macro>_OBJS comes from the map; empty makes the rm a harmless no-op.
+define FEATURE_STAMP_RULE
+$(call FEATURE_STAMP,$(1)): FORCE
+	@echo '$$(FEATURE_$(1)_FLAGS)' > $$@.tmp
+	@if cmp -s $$@.tmp $$@; then rm -f $$@.tmp; else \
+		test -f $$@ && echo "   $(1) changed since the last build -- rebuilding what uses it"; \
+		mv $$@.tmp $$@; rm -f $$(FEATURE_$(1)_OBJS); \
+	fi
+endef
+$(foreach f,$(FEATURES),$(eval $(call FEATURE_STAMP_RULE,$(f))))
+
+## Which objects each feature reaches. DERIVED every build, never hand-written;
+## regenerated on any source or header change, so a new #ifdef widens the set
+## first. If the generator cannot run, the fallback depends every object on every
+## feature -- slow and correct. Under-reporting would mean a stale object in a
+## plausible binary, so nothing here may risk it.
+FEATURE_DEPS = .feature-deps.$(ndims)d$(suffix).mk
+
+$(FEATURE_DEPS): $(SRCS) $(INCS) utils/gen_feature_deps.py
+	@python3 utils/gen_feature_deps.py \
+		--obj-suffix .$(ndims)d$(suffix).o \
+		--stamp-prefix .build-flags- --stamp-suffix .$(ndims)d$(suffix) \
+		--sources $(SRCS) --headers $(INCS) -- $(FEATURES) > $@.tmp \
+	  && mv $@.tmp $@ \
+	  || { rm -f $@.tmp; \
+	       echo "   feature map unavailable -- every object depends on every feature" >&2; \
+	       { echo '$$(OBJS): $$(FEATURE_STAMPS)'; \
+	         $(foreach f,$(FEATURES),echo 'FEATURE_$(f)_OBJS = $$(OBJS)';) } > $@; }
+
+## Build goals only: under `make clean` this would generate the map just to
+## delete it, and warn about a missing python3 during a clean.
+ifeq (,$(filter clean cleanall deepclean config check-deps show-exe,$(MAKECMDGOALS)))
+-include $(FEATURE_DEPS)
+endif
+
+## The map for the current flags -- first thing to check on a surprise rebuild.
+.PHONY: feature-map
+feature-map: $(FEATURE_DEPS)
+	@cat $<
 
 FORCE:
 
@@ -857,6 +946,13 @@ endif
 	@echo
 	@echo "CXXFLAGS           $(CXXFLAGS) $(BOOST_CXXFLAGS)"
 	@echo "LDFLAGS            $(LDFLAGS) $(BOOST_LDFLAGS)"
+	@echo
+	@echo "rebuild scope      global compile flags -> all objects"
+	@echo "                   LDFLAGS              -> relink only"
+	@$(foreach f,$(FEATURES),r=$$(sed -n 's/^# $(f): //p' $(FEATURE_DEPS) 2>/dev/null); \
+		printf "                   %-10s %-5s -> %s\n" "$(f)" \
+		"$(if $(strip $(FEATURE_$(f)_FLAGS)),[on],[off])" \
+		"$${r:-? run make feature-map}";)
 
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
@@ -871,7 +967,7 @@ endif
 ## check-deps first, as a prerequisite rather than another line in this recipe,
 ## so that the ordering holds under `make -j` and `make check-deps` still works
 ## on its own.
-prepare: check-deps
+prepare: check-deps $(FLAG_STAMPS)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
@@ -924,7 +1020,9 @@ endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB) $(BUILD_STAMP)
+## LINK_STAMP, not BUILD_STAMP: objects already carry the compile-flag edge, so
+## only LDFLAGS is new here -- and that must relink without recompiling.
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB) $(LINK_STAMP)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -1060,4 +1158,4 @@ endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 
 clean:
-	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP)
+	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS) $(FEATURE_DEPS)
