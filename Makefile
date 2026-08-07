@@ -47,6 +47,36 @@ endif
 
 OSNAME := $(shell uname -s)
 
+## Prefixes every dependency search below starts from. Chosen by host
+## architecture, never from PATH: a Mac that has run both Homebrews keeps the
+## other one's pkg-config and headers on PATH, and building against those links
+## the wrong architecture. `brew --prefix <formula>` is not used either -- it
+## prints the would-be path and exits 0 for a formula that is not installed.
+ifeq ($(OSNAME), Darwin)
+	ifeq ($(shell uname -m), arm64)
+		BREW_PREFIX ?= /opt/homebrew
+	else
+		BREW_PREFIX ?= /usr/local
+	endif
+	MACPORTS_PREFIX ?= /opt/local
+endif
+
+## $(call firstdir,<file>,<candidate dirs>) -- first directory in the list that
+## really holds <file>, else empty. Globs allowed in both arguments
+## (`lib/clang/*/include`, `libhdf5.*`); the candidate list is a priority list.
+##
+## $(wildcard) expands the globs, `test -f` decides. Not `ls` and not $(wildcard)
+## alone: both accept a DANGLING SYMLINK, and $(BREW_PREFIX)/opt/<formula> is a
+## symlink into the Cellar, so a half-removed keg would stop the search on a dud
+## instead of falling through to a provider that works.
+firstdir = $(patsubst %/,%,$(dir $(call firstfile,$(1),$(2))))
+firstfile = $(firstword $(shell for f in $(wildcard $(addsuffix /$(1),$(2))); do \
+	test -f "$$f" && { echo $$f; break; }; done))
+
+## Drop a candidate whose prefix is empty, so an unset CONDA_PREFIX contributes
+## nothing rather than a bare, plausible-looking /include or /lib.
+under = $(if $(strip $(1)),$(addprefix $(strip $(1)),$(2)))
+
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
 	CXX = nvc++
@@ -89,17 +119,10 @@ ifeq ($(strip $(HDF5_LIB_DIR)),)
 endif
 ifeq ($(HDF5_DETECT), yes)
 	ifeq ($(OSNAME), Darwin)
-		## Homebrew has two prefixes -- /opt/homebrew (arm64) and /usr/local
-		## (x86_64) -- and a machine that has ever run the other one keeps its
-		## pkg-config and h5cc on PATH. Trusting PATH there silently links an
-		## HDF5 of the wrong architecture, so choose the prefix by host arch
-		## and use that prefix's own pkg-config.
-		ifeq ($(shell uname -m), arm64)
-			HDF5_BREW = /opt/homebrew
-		else
-			HDF5_BREW = /usr/local
-		endif
-		PKGCONFIG := $(HDF5_BREW)/bin/pkg-config
+		## Use the architecture-matched Homebrew prefix (see BREW_PREFIX above)
+		## and that prefix's own pkg-config, not whichever one PATH offers.
+		HDF5_BREW = $(BREW_PREFIX)
+		PKGCONFIG := $(BREW_PREFIX)/bin/pkg-config
 	else
 		HDF5_BREW =
 		PKGCONFIG := pkg-config
@@ -127,21 +150,19 @@ ifeq ($(HDF5_DETECT), yes)
 	## so the header and the library are searched separately, not under one
 	## prefix. /usr/local comes before the system directories so a hand-built
 	## HDF5 installed there wins over the distro package.
+	HDF5_INC_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/include) \
+		/usr/include/hdf5/serial \
+		/usr/local/include /usr/include
+	HDF5_LIB_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/lib) \
+		/usr/lib/*-linux-gnu/hdf5/serial \
+		/usr/local/lib /usr/local/lib64 \
+		/usr/lib/*-linux-gnu \
+		/usr/lib64 /usr/lib
 	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-		HDF5_INCLUDE_DIR := $(shell for d in \
-				$(HDF5_BREW)/opt/hdf5/include \
-				/usr/include/hdf5/serial \
-				/usr/local/include /usr/include; do \
-			test -f $$d/hdf5.h && { echo $$d; break; }; done)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(HDF5_INC_DIRS))
 	endif
 	ifeq ($(strip $(HDF5_LIB_DIR)),)
-		HDF5_LIB_DIR := $(shell for d in \
-				$(HDF5_BREW)/opt/hdf5/lib \
-				/usr/lib/$(shell uname -m)-linux-gnu/hdf5/serial \
-				/usr/local/lib /usr/local/lib64 \
-				/usr/lib/$(shell uname -m)-linux-gnu \
-				/usr/lib64 /usr/lib; do \
-			ls $$d/libhdf5.* >/dev/null 2>&1 && { echo $$d; break; }; done)
+		HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(HDF5_LIB_DIRS))
 	endif
 
 	## Checked separately: finding one without the other is still unbuildable,
@@ -166,19 +187,61 @@ endif
 ## path to cuda's base directory
 NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
-## path to Boost's base directory, if not in standard system location
+## path to Boost's base directory. Blank = auto-detect; set it here or on the
+## command line to force one install (an HPC module, a conda env, a hand-built
+## Boost), which skips detection.
+##
+## Plain `=`, not `?=`: an EXPORTED BOOST_ROOT_DIR is ignored on purpose. It is
+## DES's own variable name, so an exported value is almost always a stale shell
+## profile line -- and since setting it skips detection, one forgotten export
+## defeats a good install and reports it as "Boost missing".
 BOOST_ROOT_DIR = # /path/to/boost
 
-## Use conda environment only if boost is actually installed there, otherwise system boost
+## Candidate prefixes, in priority order. macOS has no system Boost, so /usr is
+## never the answer there and these tiers are what remove the old requirement to
+## pass BOOST_ROOT_DIR=$(brew --prefix boost) by hand.
+##
+## Package managers come BEFORE conda: a shell that auto-activates `base` has
+## conda on for everything, not just the work that wants it, so it is the weaker
+## signal of intent. A conda Boost is still used when it is the only one.
+## The `opt/boost` keg beats the bare $(BREW_PREFIX) farm -- it pins the version.
+## Linux keeps the tiers it had: conda, else the /usr default below.
+ifeq ($(OSNAME), Darwin)
+	BOOST_PREFIXES = $(BREW_PREFIX)/opt/boost $(MACPORTS_PREFIX) $(BREW_PREFIX) \
+		$(CONDA_PREFIX)
+else
+	BOOST_PREFIXES = $(CONDA_PREFIX)
+endif
+
+## Both halves required: a headers-only tree (extracted tarball, half-removed
+## keg, conda's libboost-headers without libboost) would otherwise be selected
+## and then fail at the link. The `libboost_program_options.*` glob matches
+## exactly what -lboost_program_options can link, and not MacPorts' `-mt` variant.
+## `override` so a command-line `BOOST_ROOT_DIR=` still falls through to
+## detection -- a command-line value otherwise outranks even the /usr fallback.
 ifndef BOOST_ROOT_DIR
-	ifdef CONDA_PREFIX
-		ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
-			BOOST_ROOT_DIR = $(CONDA_PREFIX)
-		else
-			BOOST_ROOT_DIR = /usr
-		endif
-	else
-		BOOST_ROOT_DIR = /usr
+	override BOOST_ROOT_DIR := $(shell for d in $(BOOST_PREFIXES); do \
+		test -f $$d/include/boost/program_options.hpp || continue; \
+		set -- $$d/lib/libboost_program_options.*; \
+		test -f "$$1" || continue; \
+		echo $$d; break; done)
+endif
+
+## Nothing found: keep the historical /usr default so that `make clean`, `make
+## config` and a hand-set BOOST_LIB_DIR all still work, and record that this is
+## a failed search rather than a deliberate choice. On macOS the difference is
+## decisive -- there is no system Boost under /usr (this macOS has no
+## /usr/include at all), so the fallback there always means "not found", and
+## check-deps says so instead of letting the link produce a wall of undefined
+## symbols.
+ifndef BOOST_ROOT_DIR
+	override BOOST_ROOT_DIR = /usr
+	## Only on macOS does the fallback mean "the search failed" -- on Linux /usr
+	## is the normal, correct answer and the compiler finds Boost there on its
+	## own. Keeping that distinction is what lets check-deps be decisive on
+	## macOS without misreporting a healthy Linux build.
+	ifeq ($(OSNAME), Darwin)
+		BOOST_NOT_FOUND := yes
 	endif
 endif
 
@@ -217,8 +280,21 @@ ifdef BOOST_ROOT_DIR
 		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)
 		BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/stage/lib
 	endif
-	BOOST_LDFLAGS += -L$(BOOST_LIB_DIR)
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	## Full path on macOS, for the same reason as libomp above: a -L dir also
+	## answers the implicit -lc++, and a conda prefix ships its own libc++.dylib
+	## (left on -L, the executable loads two libc++ images and says nothing).
+	## Only when the .dylib exists -- a static-only Boost still needs -l -- and
+	## via firstfile so a dangling Cellar symlink falls back to -l too.
+	## Linux keeps -L/-l, right for .so versioning and the stage layout.
+	BOOST_DYLIB = $(call firstfile,libboost_program_options.dylib,$(BOOST_LIB_DIR))
+	ifeq ($(OSNAME)$(if $(BOOST_DYLIB),yes,), Darwinyes)
+		BOOST_LDFLAGS = $(BOOST_DYLIB)
+	else
+		BOOST_LDFLAGS += -L$(BOOST_LIB_DIR)
+	endif
+	ifneq ($(OSNAME), Darwin)
+		# Apple's ld supports -rpath only in the comma form, so Darwin gets its
+		# rpath from the install_name_tool step after the link instead.
 		BOOST_LDFLAGS += -Wl,-rpath=$(BOOST_LIB_DIR)
 	endif
 endif
@@ -290,6 +366,7 @@ endif
 
 
 ifneq (, $(findstring clang++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x -DGPP1X
 	LDFLAGS = -lm
 	TETGENFLAG = 
@@ -314,18 +391,81 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
  
 	ifeq ($(openmp), 1)
-		# path to OpenMP library directory (for clang++ on macOS)
-		OPENMP_ROOT_DIR = external/openmp-install
-		ifeq ($(filter /%,$(OPENMP_ROOT_DIR)),$(OPENMP_ROOT_DIR))
-			OPENMP_RPATH := $(OPENMP_ROOT_DIR)/lib
-		else
-			OPENMP_RPATH := $(CURDIR)/$(OPENMP_ROOT_DIR)/lib
+	ifeq ($(OSNAME), Darwin)
+		## Apple clang ships no OpenMP runtime, so one has to be found. Set
+		## OPENMP_ROOT_DIR to force a prefix (its include/ and lib/), or
+		## OPENMP_INCLUDE_DIR / OPENMP_LIB_DIR when they are not siblings.
+		## Plain `=`: an exported value is ignored, as for BOOST_ROOT_DIR.
+		OPENMP_ROOT_DIR = # /path/to/openmp
+		ifneq ($(strip $(OPENMP_ROOT_DIR)),)
+			ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
+				OPENMP_INCLUDE_DIR := $(OPENMP_ROOT_DIR)/include
+			endif
+			ifeq ($(strip $(OPENMP_LIB_DIR)),)
+				OPENMP_LIB_DIR := $(OPENMP_ROOT_DIR)/lib
+			endif
 		endif
-		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
-		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
+
+		## Candidate lists in priority order, named once and reused by the
+		## search, the check-deps `Searched:` line and `make config`, so the
+		## three cannot disagree. external/openmp-install is first: it is where
+		## this project's build-from-source instructions put LLVM OpenMP.
+		## Header and library are searched separately because Homebrew's llvm
+		## keeps omp.h under lib/clang/<ver>/include, not beside the library.
+		OPENMP_INC_DIRS = external/openmp-install/include \
+			$(BREW_PREFIX)/opt/libomp/include \
+			$(BREW_PREFIX)/opt/llvm/lib/clang/*/include \
+			$(MACPORTS_PREFIX)/include/libomp \
+			$(call under,$(CONDA_PREFIX),/include)
+		OPENMP_LIB_DIRS = external/openmp-install/lib \
+			$(BREW_PREFIX)/opt/libomp/lib \
+			$(BREW_PREFIX)/opt/llvm/lib \
+			$(MACPORTS_PREFIX)/lib/libomp \
+			$(call under,$(CONDA_PREFIX),/lib)
+
+		ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
+			OPENMP_INCLUDE_DIR := $(call firstdir,omp.h,$(OPENMP_INC_DIRS))
+		endif
+		ifeq ($(strip $(OPENMP_LIB_DIR)),)
+			OPENMP_LIB_DIR := $(call firstdir,libomp.dylib,$(OPENMP_LIB_DIRS))
+		endif
+
+		## Flags only when both halves were found, so a half-detected runtime
+		## cannot produce a truncated command line; check-deps does the
+		## reporting, which keeps `make clean` and `make config` working.
+		ifneq ($(strip $(OPENMP_INCLUDE_DIR)),)
+		ifneq ($(strip $(OPENMP_LIB_DIR)),)
+			## rpath must be absolute, so a relative OPENMP_LIB_DIR
+			## (external/... above) is anchored at the build directory. It is
+			## needed when the dylib's install name is @rpath-relative --
+			## conda's libomp is, Homebrew's is not.
+			ifeq ($(filter /%,$(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR))
+				OPENMP_RPATH := $(OPENMP_LIB_DIR)
+			else
+				OPENMP_RPATH := $(CURDIR)/$(OPENMP_LIB_DIR)
+			endif
+			## -idirafter, not -I: placed after the system directories it can
+			## only supply a header the toolchain lacks, i.e. omp.h. With -I,
+			## Homebrew llvm's omp.h dir -- a compiler *resource* dir holding
+			## its own stdint.h -- breaks the SDK ("unknown type name
+			## 'uint8_t'" from sys/resource.h). Conda shadows the same way.
+			##
+			## Full path, not -L/-lomp: every -L dir also answers the implicit
+			## -lc++/-lz/-lm, and a conda prefix ships its own libc++.dylib.
+			CXXFLAGS += -Xpreprocessor -fopenmp -idirafter $(OPENMP_INCLUDE_DIR)
+			LDFLAGS += $(OPENMP_LIB_DIR)/libomp.dylib
+		endif
+		endif
+	else
+		## Non-Apple clang drives OpenMP itself: -fopenmp both enables the
+		## pragmas and links the runtime, with no paths to find.
+		CXXFLAGS += -fopenmp
+		LDFLAGS += -fopenmp
+	endif
 	endif
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x
 	LDFLAGS = -lm
 	TETGENFLAG = -Wno-unused-but-set-variable -Wno-int-to-pointer-cast
@@ -361,6 +501,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	endif
 
 else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tested with v14
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x
 	LDFLAGS = -lm
 
@@ -380,6 +521,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -Minfo=mp,accel
 	LDFLAGS =
 	TETGENFLAGS = 
@@ -421,6 +563,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -march=core2
 	LDFLAGS = 
 	TETGENFLAGS = 
@@ -446,10 +589,10 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else
-# the only way to display the error message in Makefile ...
-all:
-	@echo "Unknown compiler, check the definition of 'CXX' in the Makefile."
-	@false
+## Unsupported compiler: leave CXX_SUPPORTED unset. `make config` says so, and
+## check-deps refuses the build -- which used to be done with a second `all:`
+## target here, whose recipe was silently overridden by the real `all:` further
+## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
 ifeq ($(hdf5), 1)
@@ -582,10 +725,86 @@ CXXFLAGS += -DSOA
 
 ## Action
 
-.PHONY: all clean take-snapshot prepare build
+.PHONY: all clean take-snapshot prepare build check-deps config
 
 all: prepare
 	$(MAKE) build
+
+## Name the missing dependency and the command that installs it, rather than
+## letting it surface as a linker error hundreds of lines down. A recipe, not
+## $(error), so `make clean` and `make config` still work on a machine that
+## cannot build yet.
+##
+## Fatal on macOS only: there this detection is the sole source of -I/-L and
+## there is no system Boost nor Apple omp.h, so a miss is certain. Elsewhere the
+## toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
+## module sysroot), so a failed guess must not block a working build.
+ifeq ($(OSNAME), Darwin)
+DEP_FATAL = exit 1
+BOOST_INSTALL_HINT = brew install boost
+else
+DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a module)"
+BOOST_INSTALL_HINT = apt install libboost-program-options-dev / dnf install boost-devel
+endif
+
+check-deps:
+	@test -n "$(CXX_SUPPORTED)" || { \
+		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
+		echo "g++, icpc, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
+	@test -f "$(BOOST_ROOT_DIR)/include/boost/program_options.hpp" \
+	  || test -f "$(BOOST_ROOT_DIR)/boost/program_options.hpp" \
+	  || test -f /usr/include/boost/program_options.hpp || { \
+		echo "Missing: Boost.ProgramOptions.   Install: $(BOOST_INSTALL_HINT)"; \
+		echo "         Searched: $(strip $(BOOST_PREFIXES)) /usr"; \
+		echo "         Or name one: make BOOST_ROOT_DIR=/prefix   (now $(BOOST_ROOT_DIR))"; \
+		$(DEP_FATAL); }
+ifeq ($(OSNAME), Darwin)
+ifeq ($(openmp), 1)
+ifneq (, $(findstring clang++, $(CXX)))
+	@test -f "$(OPENMP_INCLUDE_DIR)/omp.h" \
+	  && test -f "$(OPENMP_LIB_DIR)/libomp.dylib" || { \
+		echo "Missing: an OpenMP runtime -- Apple clang has the pragmas, ships none."; \
+		echo "         Install: brew install libomp        (or https://brew.sh)"; \
+		echo "         Searched: $(strip $(OPENMP_LIB_DIRS))"; \
+		echo "         Or: make openmp=0        make OPENMP_ROOT_DIR=/prefix"; \
+		echo "             make BREW_PREFIX=/your/prefix   (now $(BREW_PREFIX))"; \
+		exit 1; }
+endif
+endif
+endif
+
+## Print what the build resolved to -- the first thing to ask for when a build
+## misbehaves elsewhere. Each library's architecture is shown because a path
+## alone does not tell you whether it matches the host.
+config:
+	@echo "target             $(EXE)   (ndims=$(ndims), opt=$(opt))"
+	@echo "platform           $(OSNAME) $(shell uname -m)"
+	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
+	@echo "openmp             $(strip $(openmp))"
+ifeq ($(OSNAME), Darwin)
+	@echo "brew prefix        $(BREW_PREFIX)"
+ifeq ($(openmp), 1)
+	@echo "  omp.h from       $(if $(strip $(OPENMP_INCLUDE_DIR)),$(OPENMP_INCLUDE_DIR),** NOT FOUND **)"
+	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
+endif
+	@echo "boost prefix       $(BOOST_ROOT_DIR)$(if $(BOOST_NOT_FOUND),   ** NOT FOUND -- fallback **)"
+else
+	@echo "boost prefix       $(BOOST_ROOT_DIR)"
+endif
+	@echo "  boost lib dir    $(BOOST_LIB_DIR)$(if $(filter Darwin,$(OSNAME)), [`lipo -archs $(BOOST_LIB_DIR)/libboost_program_options.dylib 2>/dev/null || echo 'no .dylib'`])"
+	@echo "  boost -I         $(if $(strip $(BOOST_CXXFLAGS)),$(BOOST_CXXFLAGS),none -- relying on the compiler default search path)"
+	@echo "hdf5               $(strip $(hdf5))"
+ifeq ($(hdf5), 1)
+	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
+	@echo "  hdf5 lib dir     $(HDF5_LIB_DIR)"
+endif
+	@echo "usemmg             $(strip $(usemmg))"
+	@echo "useexo             $(strip $(useexo))"
+	@echo "use_gospl          $(strip $(use_gospl))"
+	@echo "openacc            $(strip $(openacc))"
+	@echo
+	@echo "CXXFLAGS           $(CXXFLAGS) $(BOOST_CXXFLAGS)"
+	@echo "LDFLAGS            $(LDFLAGS) $(BOOST_LDFLAGS)"
 
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
@@ -597,7 +816,10 @@ install-gospl-wrapper:
 	@chmod +x dynearthsol-gospl
 endif
 
-prepare:
+## check-deps first, as a prerequisite rather than another line in this recipe,
+## so that the ordering holds under `make -j` and `make check-deps` still works
+## on its own.
+prepare: check-deps
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
@@ -672,13 +894,18 @@ ifeq ($(use_gospl), 1)
 	@echo ""
 endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
+		@# A Boost built by hand with b2 records a bare install name, which the
+		@# loader cannot resolve; rewrite it to the full path. A no-op for a
+		@# packaged Boost, whose install name is already absolute.
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
-		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
-ifeq ($(openmp), 1)
-		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_RPATH)" ]; then \
-			install_name_tool -add_rpath $(OPENMP_RPATH) $@; \
-		fi
-endif
+		@# Record each dependency's directory as an rpath, skipping any that is
+		@# already there: install_name_tool fails outright on a duplicate, and
+		@# these two are the same directory whenever Boost and libomp come from
+		@# one prefix (an activated conda env, say). An empty OPENMP_RPATH --
+		@# openmp=0, or a runtime that was not found -- drops out of the loop.
+		@for d in $(BOOST_LIB_DIR) $(OPENMP_RPATH); do \
+			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
+		done
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif
