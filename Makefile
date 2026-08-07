@@ -251,10 +251,14 @@ endif
 ########################################################################
 
 BOOST_LDFLAGS = -lboost_program_options
-# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other
-MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
-ifeq ($(MULTIARCH),)
-	MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other.
+# Skipped on macOS, where there is no multiarch layout and `gcc` is Apple clang,
+# which has no -print-multiarch: two shell-outs per make invocation for nothing.
+ifneq ($(OSNAME), Darwin)
+	MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
+	ifeq ($(MULTIARCH),)
+		MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+	endif
 endif
 ifdef BOOST_ROOT_DIR
 	# check existence of stage/ directory
@@ -607,7 +611,7 @@ endif
 HAS_GIT := $(shell git --version 2>/dev/null)
 ifneq ($(HAS_GIT),)
         ## Is this a git repository?
-        IS_REPO := $(shell git rev-parse --s-inside-work-tree 2>/dev/null)
+        IS_REPO := $(shell git rev-parse --is-inside-work-tree 2>/dev/null)
 endif
 
 SRCS =	\
@@ -977,7 +981,10 @@ tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
+	@# CUDA_DIR only when there is an NVHPC_DIR to build it from; otherwise this
+	@# handed the sub-make a literal "/cuda" on every single build.
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) \
+		$(if $(strip $(NVHPC_DIR)),CUDA_DIR=$(NVHPC_DIR)/cuda)
 
 clean-submodules:
 	@echo "   Cleaning external submodules..."
