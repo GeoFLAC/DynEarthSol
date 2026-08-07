@@ -46,10 +46,8 @@ jobs:
             echo "ERROR: APP_TOKEN is empty — token generation failed"
             exit 1
           fi
-          payload=$(cat <<EOF
-{"event_type":"input-cxx-changed","client_payload":{"sha":"${GITHUB_SHA}","ref":"${GITHUB_REF}","commit_url":"https://github.com/GeoFLAC/DynEarthSol/commit/${GITHUB_SHA}"}}
-EOF
-)
+          payload=$(jq -n --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" --arg url "https://github.com/GeoFLAC/DynEarthSol/commit/$GITHUB_SHA" \
+            '{"event_type":"input-cxx-changed","client_payload":{"sha":$sha,"ref":$ref,"commit_url":$url}}')
           http_code=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer $APP_TOKEN" \
