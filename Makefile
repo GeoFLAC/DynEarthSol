@@ -684,18 +684,23 @@ INCS =	\
 
 OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
+# INVARIANT: a flag either renames the output or lands in the build stamp.
+# BUILD_STAMP uses this same $(ndims)d$(suffix) key, so the two cannot drift --
+# else configs writing disjoint files share a stamp and invalidate each other.
 EXE = dynearthsol$(ndims)d$(suffix)
 
 
 ## Libraries
 
+## Same $(ndims)d$(suffix) key as everything else. On $(suffix) alone, one
+## triangle.o served both 2d and 3d despite -DTHREED: last build won.
 TET_SRCS = tetgen/predicates.cxx tetgen/tetgen.cxx
 TET_INCS = tetgen/tetgen.h
-TET_OBJS = $(TET_SRCS:.cxx=$(suffix).o)
+TET_OBJS = $(TET_SRCS:.cxx=.$(ndims)d$(suffix).o)
 
 TRI_SRCS = triangle/triangle.c
 TRI_INCS = triangle/triangle.h
-TRI_OBJS = $(TRI_SRCS:.c=$(suffix).o)
+TRI_OBJS = $(TRI_SRCS:.c=.$(ndims)d$(suffix).o)
 
 M_SRCS = $(TRI_SRCS)
 M_INCS = $(TRI_INCS)
@@ -1004,20 +1009,20 @@ $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 $(KNN_BVH_LIB):
 	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
 
-$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
+$(TRI_OBJS): %.$(ndims)d$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS) $(BUILD_STAMP)
+tetgen/predicates.$(ndims)d$(suffix).o: tetgen/predicates.cxx $(TET_INCS) $(BUILD_STAMP)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS) $(BUILD_STAMP)
+tetgen/tetgen.$(ndims)d$(suffix).o: tetgen/tetgen.cxx $(TET_INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx

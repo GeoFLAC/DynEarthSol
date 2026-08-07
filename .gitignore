@@ -9,8 +9,8 @@
 *.vtkhdf
 confdefs.h
 snapshot.diff
-dynearthsol[2,3]d
-dynearthsol[2,3]d.gpu
+dynearthsol[23]d
+dynearthsol[23]d.*
 *.code*
 orig-*
 .vscode
