@@ -171,8 +171,8 @@ Nothing else to configure: `make` locates the header and the library itself.
   outright, rather than leaving it to the linker.
 
 * **Overrides**, when the runtime is somewhere the search does not look, or when
-  you want a specific one. Set these on the command line, or edit them near the
-  top of the `Makefile`:
+  you want a specific one. Set these on the command line, or edit them in the
+  clang++ branch of the `Makefile`, where the OpenMP search lives:
 
   ```bash
   make OPENMP_ROOT_DIR=/prefix                        # /prefix/include + /prefix/lib
@@ -250,6 +250,12 @@ everything below is for the cases where the defaults are not what you want.
 * Options can be set either on the command line (`make ndims=2 hdf5=1`) or by
   editing the corresponding variable at the top of the `Makefile`. A value given
   on the command line wins.
+* `BOOST_ROOT_DIR`, `HDF5_INCLUDE_DIR`, `HDF5_LIB_DIR` and `NVHPC_DIR` are
+  declared together in an **Optional paths** block near the top of the `Makefile`;
+  all may stay blank, and are only there to force one specific install. Every
+  other dependency's path is declared beside the code that uses it — `OPENMP_*` in
+  the clang++ branch, and `EXO_*`, `MMG_*` and the GoSPL group with their own
+  features — so it is read together with the flags it feeds.
 * `make config` prints the resolved compiler, flags and dependency paths.
   `make check-deps` verifies the external libraries without building anything.
 * Edit `Makefile`

@@ -22,6 +22,9 @@
 ##  - adaptive_time_step = 1 : enable adaptive time stepping.
 ##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
+## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
+## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
+## other dependency's path is declared beside the code that uses it.
 
 ndims = 3
 opt = 2
@@ -47,7 +50,49 @@ endif
 
 OSNAME := $(shell uname -s)
 
-## Prefixes every dependency search below starts from. Chosen by host
+########################################################################
+## Optional paths -- Boost, HDF5 and NVHPC. All of these may stay blank.
+##
+## The build locates them by itself; `make config` prints what it found. Set a
+## variable here, or on the make command line, only to force one specific install
+## -- an HPC module, a conda env, a hand-built library -- which skips detection
+## for that dependency entirely.
+##
+## Every other dependency's path is declared beside the code that consumes it, so
+## it is read together with the flags it feeds: OPENMP_* in the clang++ branch, and
+## EXO_*, MMG_* and the GoSPL and PYTHON_* group inside their useexo=1, usemmg=1
+## and use_gospl=1 blocks.
+##
+## Everything here uses `?=`, so an EXPORTED value is honoured -- that is how a
+## module file or a conda activate hook can name a prefix once instead of every
+## make invocation repeating it. A value on the make command line still outranks
+## both. The same holds for OPENMP_ROOT_DIR, declared with the OpenMP search.
+##
+## The catch, since naming a path skips detection for that dependency: a stale
+## export is preferred over a perfectly good installed copy. It is not silent --
+## `make check-deps` names the prefix it was given and what it expected under it,
+## and `make config` prints every resolved path with each library's architecture --
+## but it is the one way these knobs surprise people, so unset what you no longer
+## use rather than leaving it in a shell profile.
+########################################################################
+
+## Boost. Either an install prefix, holding include/ and lib/, or a b2 build
+## directory, recognised by its stage/ subdirectory.
+BOOST_ROOT_DIR ?= # /path/to/boost
+
+## HDF5, for hdf5=1. Set either or both; whichever is left blank is still
+## detected. Layouts the search knows about, if you would rather name them:
+##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
+##   Fedora/RHEL    /usr/include              /usr/lib64
+##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
+HDF5_INCLUDE_DIR ?= # /usr/include/hdf5/serial
+HDF5_LIB_DIR ?= # /usr/lib/x86_64-linux-gnu/hdf5/serial
+
+## NVHPC, for openacc=1 and nprof=1. Also where the CUDA toolkit is found, for
+## the nprof profiling build and the 3x3-C sub-make.
+NVHPC_DIR ?= # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
+
+## Package-manager prefixes the macOS searches start from. Chosen by host
 ## architecture, never from PATH: a Mac that has run both Homebrews keeps the
 ## other one's pkg-config and headers on PATH, and building against those links
 ## the wrong architecture. `brew --prefix <formula>` is not used either -- it
@@ -95,16 +140,6 @@ else
 	endif
 endif
 CXX_BACKEND = ${CXX}
-
-## path to HDF5's base directory. Leave both blank to auto-detect; set them
-## (here or on the command line) to force one specific install -- an HPC
-## module, a conda env, a hand-built HDF5 -- which skips detection entirely.
-## The layouts the search below knows about, if you would rather set them:
-##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
-##   Fedora/RHEL    /usr/include              /usr/lib64
-##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
-HDF5_INCLUDE_DIR = #/usr/include/hdf5/serial
-HDF5_LIB_DIR = #/usr/lib/x86_64-linux-gnu/hdf5/serial
 
 ifeq ($(hdf5), 1)
 ## Every stage below fills only what is still blank, so a path set by hand is
@@ -183,19 +218,6 @@ e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
 	endif
 endif
 endif
-
-## path to cuda's base directory
-NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
-
-## path to Boost's base directory. Blank = auto-detect; set it here or on the
-## command line to force one install (an HPC module, a conda env, a hand-built
-## Boost), which skips detection.
-##
-## Plain `=`, not `?=`: an EXPORTED BOOST_ROOT_DIR is ignored on purpose. It is
-## DES's own variable name, so an exported value is almost always a stale shell
-## profile line -- and since setting it skips detection, one forgotten export
-## defeats a good install and reports it as "Boost missing".
-BOOST_ROOT_DIR = # /path/to/boost
 
 ## Candidate prefixes, in priority order. macOS has no system Boost, so /usr is
 ## never the answer there and these tiers are what remove the old requirement to
@@ -400,7 +422,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 		## OPENMP_ROOT_DIR to force a prefix (its include/ and lib/), or
 		## OPENMP_INCLUDE_DIR / OPENMP_LIB_DIR when they are not siblings.
 		## Plain `=`: an exported value is ignored, as for BOOST_ROOT_DIR.
-		OPENMP_ROOT_DIR = # /path/to/openmp
+		OPENMP_ROOT_DIR ?= # /path/to/openmp
 		ifneq ($(strip $(OPENMP_ROOT_DIR)),)
 			ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
 				OPENMP_INCLUDE_DIR := $(OPENMP_ROOT_DIR)/include
