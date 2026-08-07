@@ -21,8 +21,6 @@
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
-##  - adaptive_time_step = 1 : enable adaptive time stepping.
-##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
@@ -35,8 +33,6 @@ openmp = 1
 nprof = 0
 gprof = 0
 usemmg = 0
-adaptive_time_step = 0
-use_R_S = 0
 useexo = 0
 use_gospl = 0
 hdf5 = 0
@@ -44,10 +40,6 @@ nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
-endif
-
-ifneq ($(adaptive_time_step), 1)
-	use_R_S = 0   # Rate - State friction law only works with adaptive time stepping technique
 endif
 
 OSNAME := $(shell uname -s)
@@ -718,15 +710,6 @@ ifeq ($(ndims), 3)
 	CXXFLAGS += -DTHREED
 endif
 
-ifeq ($(adaptive_time_step), 1)
-	ATS_CXXFLAGS = -DATS
-	CXXFLAGS += $(ATS_CXXFLAGS)
-ifeq ($(use_R_S), 1)
-	RS_CXXFLAGS = -DRS
-	CXXFLAGS += $(RS_CXXFLAGS)
-endif
-endif
-
 ifeq ($(useexo), 1)
 	CXXFLAGS += $(EXO_CXXFLAGS)
 	LDFLAGS += $(EXO_LDFLAGS)
@@ -788,12 +771,10 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS ATS RS
+FEATURES = HDF5 USEMMG USEEXODUS
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
 FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
-FEATURE_ATS_FLAGS       = $(ATS_CXXFLAGS)
-FEATURE_RS_FLAGS        = $(RS_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
 FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
