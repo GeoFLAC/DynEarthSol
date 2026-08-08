@@ -403,7 +403,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	else ifeq ($(opt), 3)
 		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
 	else # debugging
-		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unknown-pragmas
+		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function
 		ifeq ($(opt), -1)
 			CXXFLAGS += -fsanitize=address
 			LDFLAGS += -fsanitize=address
