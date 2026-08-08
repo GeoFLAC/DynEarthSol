@@ -202,6 +202,8 @@ void init(const Param& param, Variables& var)
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
+    // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
+    var.mat->refresh_elem_cache();
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -472,6 +474,9 @@ void update_mesh(const Param& param, Variables& var)
 #endif
 
     compute_volume(var, *var.volume);
+
+    // surface_processes() above can move elemmarkers via correct_surface_marker().
+    var.mat->refresh_elem_cache();
 
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
@@ -765,6 +770,8 @@ int main(int argc, const char* argv[])
 #endif
         var.steps ++;
         var.time += var.dt;
+        // Pick up what the previous step's phase changes and remeshing moved.
+        var.mat->refresh_elem_cache();
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
@@ -877,6 +884,8 @@ int main(int argc, const char* argv[])
             // The functions inside this if-block are expensive in computation is expensive,
             // and only changes slowly. Don't have to do it every time step
             phase_changes(param, var);
+            // phase_changes() moved elemmarkers; compute_dt() below reads them.
+            var.mat->refresh_elem_cache();
 
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,

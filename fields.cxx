@@ -185,6 +185,9 @@ void reallocate_variables(const Param& param, Variables& var)
         var.old_mean_stress = new double_vec(var.nelem);
     }
 
+    // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
+    // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
+    // Called earlier the cache is built from empty counts -- wrong means, not a crash.
     delete var.mat;
     var.mat = new MatProps(param, var);
 
