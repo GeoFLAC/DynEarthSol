@@ -225,6 +225,24 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     characteristic_velocity = p.mat.characteristic_velocity;
     characteristic_distance = p.mat.characteristic_distance;
     // static_friction_coefficient = p.mat.static_friction_coefficient;
+
+    // Material-only terms of the creep law, in the association visc() evaluates them in
+    // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
+    // under -ffast-math and on openacc=1 (device -> host libm).
+    {
+        // J mol^-1 K^-1, as the Chen & Morgan creep law uses it.
+        const double gas_constant = 8.3144;
+        const int nm = nmat;   // == visc_exponent.size(); nmat is the bound visc() loops to
+        visc_pow_edot.resize(nm);
+        visc_coef_term.resize(nm);
+        visc_nR.resize(nm);
+        for (int m = 0; m < nm; ++m) {
+            visc_pow_edot[m] = 1 / visc_exponent[m] - 1;
+            const double pow1 = -1 / visc_exponent[m];
+            visc_coef_term[m] = pow_safe(log_table, 0.75 * visc_coefficient[m], pow1);
+            visc_nR[m] = visc_exponent[m] * gas_constant;
+        }
+    }
 }
 
 
@@ -257,7 +275,6 @@ double MatProps::shearm(int e) const
 
 double MatProps::visc(int e) const
 {
-    const double gas_constant = 8.3144;
     const double min_strain_rate = 1e-30;
 
     // average temperature of this element
@@ -282,13 +299,16 @@ double MatProps::visc(int e) const
     int n = 0;
 
     for (int m=0; m<nmat; m++) {
-        double pow = 1 / visc_exponent[m] - 1;
-        double pow1 = -1 / visc_exponent[m];
-        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table, 0.75 * visc_coefficient[m], pow1)
+        // Absent materials add 0/visc0 == 0, so the skip is exact, and it keeps
+        // visc0 == 0 from contributing a NaN.
+        const int marker_count = elemmarkers[e][m];
+        if (marker_count == 0) continue;
+
+        double visc0 = 0.25 * pow_safe(log_table,edot, visc_pow_edot[m]) * visc_coef_term[m]
             * std::exp((visc_activation_energy[m] + visc_activation_volume[m] * s0)
-            / (visc_exponent[m] * gas_constant * T)) * 1e6;
-        result += elemmarkers[e][m] / visc0;
-        n += elemmarkers[e][m];
+            / (visc_nR[m] * T)) * 1e6;
+        result += marker_count / visc0;
+        n += marker_count;
     }
 
     double visc = n / result;

@@ -107,6 +107,10 @@ private:
     double_vec bulk_modulus, shear_modulus;
     double_vec visc_exponent, visc_coefficient, visc_activation_energy;
     double_vec visc_activation_volume;
+
+    // Material-only terms of the Chen & Morgan creep law, built by the constructor.
+    // Pure function of visc_exponent / visc_coefficient, never mutated.
+    double_vec visc_pow_edot, visc_coef_term, visc_nR;
     double_vec heat_capacity, therm_cond;
     double_vec pls0, pls1;
     double_vec cohesion0, cohesion1;
