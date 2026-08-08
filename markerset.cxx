@@ -481,11 +481,14 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
 //    std::cout << "Try to remap in ";
     for (int i = 0; i < NODES_PER_ELEM; i++) {
         int n = conn[i];        
-        for(auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
-            if (searched[*ee]) continue;
-            searched[*ee]=1;
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int pi = 0; pi < npatch; ++pi) {
+            const int ee_v = patch[pi];
+            if (searched[ee_v]) continue;
+            searched[ee_v]=1;
 
-            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[*ee]);
+            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[ee_v]);
 
             double volume = compute_volume(coord);
             Barycentric_transformation bary(coord, volume);
@@ -495,7 +498,7 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
                 for (int j=0; j<NDIMS; j++)
                     new_eta[j] = eta[j];
 
-                new_elem = *ee;
+                new_elem = ee_v;
                 inc = 1;
                 return;
             }
@@ -1211,15 +1214,18 @@ namespace {
                 // Looping over all neighboring elements (excluding self)
                 for( int kk = 0; kk < NODES_PER_ELEM; kk++) {
                     int n = (*var.connectivity)[e][kk]; // node of this element
-                    for( auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
-                        if (*ee == e) continue;
+                    const int npatch = var.support.size(n);
+                    const int* patch = var.support.patch(n);
+                    for( int pi = 0; pi < npatch; ++pi) {
+                        const int ee_v = patch[pi];
+                        if (ee_v == e) continue;
                         // Note: some (NODES_PER_ELEM) elements will be iterated
                         // more than once (NDIMS times). These elements are direct neighbors,
                         // i.e. they share facets (3D) or edges (2D) with element e.
                         // So they are counted multiple times to reprensent a greater weight.
                         for( int i = 0; i < param.mat.nmat; i++ ) {
-                            cpdf[i] += (*(var.elemmarkers))[*ee][i];
-                            num_markers_in_nbr_elems += (*(var.elemmarkers))[*ee][i];
+                            cpdf[i] += (*(var.elemmarkers))[ee_v][i];
+                            num_markers_in_nbr_elems += (*(var.elemmarkers))[ee_v][i];
                         }
                     }
                 }
@@ -1931,8 +1937,9 @@ void advect_hydrous_markers(const Param& param, const Variables& var, double dt_
         else {
             // Marker has moved out of el. Find the new containing element.
             for(int j=0; j<NODES_PER_ELEM; j++) {
-                const int_vec& supp = (*var.support)[ conn[j] ];
-                for (std::size_t k=0; k<supp.size(); k++) {
+                const int npatch = var.support.size(conn[j]);
+                const int* supp = var.support.patch(conn[j]);
+                for (int k=0; k<npatch; k++) {
                     int ee = supp[k];
                     ConstConnAccessor conn2 = (*var.connectivity)[ee];
                     bary = get_bary_from_cache(cache, ee, *var.coord, conn2, *var.volume);

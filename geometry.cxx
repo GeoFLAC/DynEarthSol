@@ -229,10 +229,12 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dvoldt[n] = 0.;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-	        dvoldt[n] += etmp[*e];
-        dvoldt[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0.;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dvoldt[n] = acc / (*var.volume_n)[n];
     }
 
     // std::cout << "dvoldt:\n";
@@ -298,10 +300,12 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dp_nd[n] = 0;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            dp_nd[n] += etmp[*e];
-        dp_nd[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dp_nd[n] = acc / (*var.volume_n)[n];
     }
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
@@ -482,10 +486,10 @@ static void spr_fused_fields(const Variables &var,
     #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
     for (int i = 0; i < var.nnode; ++i) {
-        const int npatch = var.sup.size(i);
+        const int npatch = var.support.size(i);
 
         double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
-        const int* patch = var.sup.patch(i);
+        const int* patch = var.support.patch(i);
         const int e0 = patch[0];
         
         #pragma acc loop seq
@@ -616,7 +620,7 @@ static void spr_fused_fields(const Variables &var,
                 // if the matrix is degenerate, the polynomial fit is unreliable. 
                 // Fall back to volume-weighted average, which is stable but less accurate. 
                 // The clamping range is still valid since it's based on the patch values.
-                spr_volume_weighted_avg_strided(var.sup.size(i), var.sup.patch(i),
+                spr_volume_weighted_avg_strided(var.support.size(i), var.support.patch(i),
                                                 *var.volume, in_ptrs[f], in_strides[f]);
 
             out_ptrs[f][i * out_strides[f]] = temp_val;
@@ -1202,7 +1206,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
     //    Without it the copy carries the source's lithostat and lands ~rho*g*dz
     //    wrong.
     //
-    // Must run before prepare_interpolation (reads old var.stress, *var.support,
+    // Must run before prepare_interpolation (reads old var.stress, var.support,
     // old_coord, old_connectivity — all still old here). Undone by
     // restore_stress_from_ref on the new mesh.
     // ----------------------------------------------------------------
@@ -1847,8 +1851,10 @@ void compute_mass(const Param &param, const Variables &var,
             hmass[n]=0;
             ymass[n]=0;
         
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstElemCacheAccessor tr = tmp_result[*e];
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            for (int i=0; i<npatch; ++i) {
+                ConstElemCacheAccessor tr = tmp_result[patch[i]];
                 volume_n[n] += tr[0];
                 mass[n] += tr[1];
                 if (param.control.has_thermal_diffusion)

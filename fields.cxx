@@ -245,17 +245,12 @@ void update_temperature(const Param &param, const Variables &var,
             else {
                 double tdot = 0;
 
-                for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                    ConstConnAccessor conn = (*var.connectivity)[*e];
-                    ConstElemCacheAccessor tr = tmp_result[*e];
-                    bool found = false;
-                    for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
-                        if (n == conn[i]) {
-                            tdot += tr[i];
-                            found= true;
-                        }
-                    }
-                }
+                // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                const int* lpatch = var.support.local(n);
+                for (int k=0; k<npatch; ++k)
+                    tdot += tmp_result[patch[k]][lpatch[k]];
                 // Combining temperature update and bc in the same loop for efficiency,
                 // since only the top boundary has Dirichlet bc, and all the other boundaries
                 // have no heat flux bc.
@@ -371,15 +366,12 @@ void update_pore_pressure(const Param &param, const Variables &var,
     // #pragma acc parallel loop
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
-        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[*e];
-            ConstElemCacheAccessor tr = tmp_result[*e];
-            for (int i = 0; i < NODES_PER_ELEM; i++) {
-                if (n == conn[i]) {
-                    tdot[n] += tr[i];
-                    break;
-                }
-            }
+        {
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k = 0; k < npatch; ++k)
+                tdot[n] += tmp_result[patch[k]][lpatch[k]];
         }
 
         // Update pore pressure for non-boundary nodes
@@ -662,18 +654,16 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             f = 0;
             ArrayAccessor f_residual = force_residual[n];
             f_residual = 0;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[*e];
-                ConstElemCacheAccessor tr = tmp_result[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        for (int j=0;j<NDIMS;j++)
-                        {
-                            f[j] -= tr[i+NODES_PER_ELEM*j];
-                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
-                        }
-                        break;
-                    }
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k=0;k<npatch;++k) {
+                ConstElemCacheAccessor tr = tmp_result[patch[k]];
+                const int i = lpatch[k];
+                for (int j=0;j<NDIMS;j++)
+                {
+                    f[j] -= tr[i+NODES_PER_ELEM*j];
+                    f_residual[j] = tr[i+NODES_PER_ELEM*j];
                 }
             }
         }

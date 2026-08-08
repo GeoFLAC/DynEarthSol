@@ -2906,9 +2906,11 @@ void create_top_elems(Variables& var)
     {
         int n = top_nodes[i];
         // grep the element connected surface
-        for (std::size_t j=0; j<(*var.support)[n].size(); j++)
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int j=0; j<npatch; j++)
             //use set to avoid duplicated elements.
-            elem_set.insert((*var.support)[n][j]);
+            elem_set.insert(patch[j]);
     }
     // turn set to vector
     for (auto it = elem_set.begin(); it != elem_set.end();it++)
@@ -2924,6 +2926,36 @@ void create_top_elems(Variables& var)
     nvtxRangePop();
 #endif
 }
+
+// Inverse of elem_and_nodes, which the caller must have filled. Same two passes
+// as create_support(); lidx is left empty because only facet ids are read.
+static void create_support_surf(SurfaceInfo& surfinfo, int ntop, size_t etop)
+{
+    Support& sup = surfinfo.support_surf;
+    // assign, not resize: pass 1 accumulates, so idx must start zeroed.
+    sup.idx_data.assign(ntop + 1, 0);
+
+    // Pass 1: count the facets touching each surface node.
+    for (size_t i=0; i<etop; i++)
+        for (int k=0; k<NDIMS; k++)
+            sup.idx_data[(*surfinfo.elem_and_nodes)[i][k] + 1]++;
+    // prefix-sum counts into start offsets
+    for (int n=1; n<=ntop; ++n)
+        sup.idx_data[n] += sup.idx_data[n-1];
+
+    sup.arr_data.resize(sup.idx_data[ntop]);
+
+    // Pass 2: fill, in the same facet order as pass 1, so each node's patch comes
+    // out ascending in facet id -- the order the total_dx gather sums in.
+    {
+        int_vec cursor(sup.idx_data.begin(), sup.idx_data.end() - 1);
+        for (size_t i=0; i<etop; i++)
+            for (int k=0; k<NDIMS; k++)
+                sup.arr_data[cursor[(*surfinfo.elem_and_nodes)[i][k]]++] = i;
+    }
+    sup.rebind();
+}
+
 
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
 {
@@ -2977,23 +3009,17 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
 
-    delete surfinfo.node_and_elems;
-    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
-        auto j = (*(var.bfacets[iboundz1]))[i];
-        int e = j.first;
-        int f = j.second;
+        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
 
-        (*surfinfo.top_facet_elems)[i] = e;
-
-        // the nodes of element
-        for (int k=0; k<NDIMS; k++) {
-            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n;
-            // store the elements connect to node
-            (*surfinfo.node_and_elems)[n].push_back(i);
-        }
+        // Same facets in the same order, so connectivity_surface has already gathered
+        // this facet's global node ids: elem_and_nodes is just those mapped into the
+        // surface numbering -- one contiguous read, not a second random gather.
+        for (int k=0; k<NDIMS; k++)
+            (*surfinfo.elem_and_nodes)[i][k] =
+                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
+    create_support_surf(surfinfo, ntop, etop);
 
 }
 
@@ -3054,22 +3080,17 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
-    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
-        auto j = (*(var.bfacets[iboundz1]))[i];
-        int e = j.first;
-        int f = j.second;
+        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
 
-        (*surfinfo.top_facet_elems)[i] = e;
-
-        // the nodes of element
-        for (int k=0; k<NDIMS; k++) {
-            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n;
-            // store the elements connect to node
-            (*surfinfo.node_and_elems)[n].push_back(i);
-        }
+        // Same facets in the same order, so connectivity_surface has already gathered
+        // this facet's global node ids: elem_and_nodes is just those mapped into the
+        // surface numbering -- one contiguous read, not a second random gather.
+        for (int k=0; k<NDIMS; k++)
+            (*surfinfo.elem_and_nodes)[i][k] =
+                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
+    create_support_surf(surfinfo, ntop, etop);
 
     //***** to do *****
 //    surface_edhacc_geometry_interpolation(var,info);
@@ -3263,39 +3284,40 @@ void create_support(Variables& var)
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    var.support = new int_vec2D(var.nnode);
-    // CSR row-pointer format: size nnode+1, support_idx[n] = start of node n
-    var.support_idx = new int_vec(var.nnode + 1, 0);
+    // assign, not resize: pass 1 accumulates, so idx must start zeroed.
+    var.support.idx_data.assign(var.nnode + 1, 0);
 
-    // create the inverse mapping of connectivity
+    // Pass 1: count the elements supporting each node.
     for (int e=0; e<var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
-        for (int i=0; i<NODES_PER_ELEM; ++i) {
-            (*var.support)[conn[i]].push_back(e);
-            (*var.support_idx)[conn[i] + 1]++;
-        }
+        for (int i=0; i<NODES_PER_ELEM; ++i)
+            var.support.idx_data[conn[i] + 1]++;
     }
     // prefix-sum counts into start offsets
     for (int n=1; n<=var.nnode; ++n)
-        (*var.support_idx)[n] += (*var.support_idx)[n-1];
+        var.support.idx_data[n] += var.support.idx_data[n-1];
 
-    int nsup = (*var.support_idx)[var.nnode];
+    int nsup = var.support.idx_data[var.nnode];
 
-    var.support_arr = new int_vec(nsup);
+    var.support.arr_data.resize(nsup);
+    var.support.lidx_data.resize(nsup);
 
-    // fill support_arr
-    for (int n=0; n<var.nnode; ++n) {
-        int start = (*var.support_idx)[n];
-        int end   = (*var.support_idx)[n+1];
-        for (int i=start; i<end; ++i) {
-            (*var.support_arr)[i] = (*var.support)[n][i-start];
+    // Pass 2: fill, in the same element order as pass 1, so each node's patch
+    // comes out ascending in element id -- the order every gather sums in.
+    {
+        int_vec cursor(var.support.idx_data.begin(), var.support.idx_data.end() - 1);
+        for (int e=0; e<var.nelem; ++e) {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            for (int i=0; i<NODES_PER_ELEM; ++i) {
+                const int n = conn[i];
+                const int slot = cursor[n]++;
+                var.support.arr_data[slot] = e;
+                var.support.lidx_data[slot] = i;   // free here: it is the loop counter
+            }
         }
     }
-    var.sup = {var.support_arr->data(), var.support_idx->data()};
+    var.support.rebind();
 
-    // std::cout << "support:\n";
-    // print(std::cout, *var.support);
-    // std::cout << "\n";
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -3342,10 +3364,11 @@ void create_neighbor(Variables& var)
                 }
             }
 
-            // reference, not a copy: a copy heap-allocates per iteration.
-            const int_vec& sup = (*var.support)[n[0]];
+            // CSR row, not a copy of it: copying the patch heap-allocated per iteration.
+            const int nsup = var.support.size(n[0]);
+            const int* sup = var.support.patch(n[0]);
             bool found = false;
-            for (int j=0; j<sup.size() && !found; ++j) {
+            for (int j=0; j<nsup && !found; ++j) {
                 int neigh = sup[j];
                 if (neigh > e) {
                     ConstConnAccessor conn2 = (*var.connectivity)[neigh];

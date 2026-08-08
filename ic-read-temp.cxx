@@ -120,7 +120,7 @@ void read_external_temperature_from_comsol(const Param &param,
     /* Write nodes to conn_t connectivity(nelem).*/
     int nelem = es.size();
     conn_t input_connectivity(nelem);	// connectivity[elem#][0-NODES_PER_ELEM-1]
-    int_vec2D input_support(nnodes); //create input_support
+    int_vec input_sup_idx(nnodes + 1, 0);   // CSR row-pointers for the input mesh
     for (size_t m=0; m<es.size(); ++m) {
   	input_connectivity[m][0] = n0s[m];
    	input_connectivity[m][1] = n1s[m];
@@ -130,9 +130,25 @@ void read_external_temperature_from_comsol(const Param &param,
 #endif
 	ConstConnAccessor conn = input_connectivity[m];
 	for (size_t l=0; l<NODES_PER_ELEM; ++l) {
-	    (input_support)[conn[l]].push_back(m);
+	    input_sup_idx[conn[l] + 1]++;
 	}
     }
+    // prefix-sum the counts into start offsets, then fill
+    for (int n=1; n<=nnodes; ++n) input_sup_idx[n] += input_sup_idx[n-1];
+    int_vec input_sup_arr(input_sup_idx[nnodes]);
+    {
+        int_vec cursor(input_sup_idx.begin(), input_sup_idx.end() - 1);
+        for (size_t m=0; m<es.size(); ++m) {
+            ConstConnAccessor conn = input_connectivity[m];
+            for (size_t l=0; l<NODES_PER_ELEM; ++l)
+                input_sup_arr[cursor[conn[l]]++] = m;
+        }
+    }
+    // lidx left empty: prepare_interpolation reads element ids only.
+    Support input_support;
+    input_support.arr_data.swap(input_sup_arr);
+    input_support.idx_data.swap(input_sup_idx);
+    input_support.rebind();
     double_vec volume(es.size());
     compute_volume(input_coord, input_connectivity, volume);
     //print(std::cout, volume);

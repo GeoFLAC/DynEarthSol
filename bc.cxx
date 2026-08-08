@@ -779,9 +779,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
             #pragma acc parallel loop gang vector async
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = (*var.bnodes[i])[j];
-                const int_vec& sup = (*var.support)[n];
-                for (int k=0; k<sup.size(); ++k) {
-                    int e = sup[k];
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                for (int k=0; k<npatch; ++k) {
+                    int e = patch[k];
                     int ibound = (*var.etmp_int)[e];
                     if (ibound < 0) continue;  // not a boundary element
 
@@ -1041,9 +1042,10 @@ namespace {
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
-                int_vec &surf_sup = (*var.surfinfo.node_and_elems)[i];
+                const int nsurf_sup = var.surfinfo.support_surf.size(i);
+                const int* surf_sup = var.surfinfo.support_surf.patch(i);
 
-                for (int j=0; j<surf_sup.size(); ++j) {
+                for (int j=0; j<nsurf_sup; ++j) {
                     int k = surf_sup[j];
                     total_dx[n] += (*var.etmp)[k];
 
@@ -1687,10 +1689,12 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
         #pragma acc parallel loop gang vector async
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
-            int_vec &sup = (*var.support)[nt];
-            volume_n[nt] = 0.;
-            for (size_t i=0;i<sup.size();i++)
-                volume_n[nt] += volume[sup[i]];
+            const int npatch = var.support.size(nt);
+            const int* patch = var.support.patch(nt);
+            double acc = 0.;
+            for (int i=0;i<npatch;i++)
+                acc += volume[patch[i]];
+            volume_n[nt] = acc;
         }
     }
 

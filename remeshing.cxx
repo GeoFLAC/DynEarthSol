@@ -2181,8 +2181,10 @@ void compute_metric_field(const Variables &var, double_vec &metric, double_vec &
 
     #pragma omp parallel for default(none) shared(var, metric, etmp)
     for (int n = 0; n < var.nnode; n++) {
-        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            metric[n] += etmp[*e];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int i=0; i<npatch; ++i)
+            metric[n] += etmp[patch[i]];
         metric[n] *= (*var.init_elem_size_n)[n] / (*var.volume_n)[n];
     }
 }
@@ -2738,8 +2740,10 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 #endif
     #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
-        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            init_elem_size_n[n] += (*var.etmp)[*e];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int i=0; i<npatch; ++i)
+            init_elem_size_n[n] += (*var.etmp)[patch[i]];
         init_elem_size_n[n] /= (*var.volume_n)[n];
     }
 }
@@ -3030,9 +3034,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
         }
 
-        delete var.support;
-        delete var.support_arr;
-        delete var.support_idx;
         create_support(var);
         // delete var.neighbor;
         // delete var.contact;
@@ -3070,11 +3071,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     create_top_elems(var);
 
     update_surface_info(var, var.surfinfo);
-
-    /* // moved before remap_markers()
-     * delete var.support;
-     * create_support(var);
-     */
 
     {
         SurfaceTopo topo_new;

@@ -806,9 +806,10 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
                 if ( z >= layer_bdy[i])
                     rs = hp[i];
 
-            int_vec &sup = (*var.support)[n];
-            for (int i=0;i<sup.size();i++)
-                radiogenic_source[sup[i]] += rs/NODES_PER_ELEM;
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            for (int i=0;i<npatch;i++)
+                radiogenic_source[patch[i]] += rs/NODES_PER_ELEM;
         }
 
         temperature[n] = t;
