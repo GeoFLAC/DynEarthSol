@@ -7,6 +7,8 @@
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
+## - A flag rebuilds only what it reaches (hdf5: 4 of 23 units; LDFLAGS: relink
+##   only). `make feature-map` prints the reach; `make config` summarises it.
 ## Common configuration variables (set on the make command line or edit below):
 ##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
 ##  - opt = 0..3 : optimization level. 0 = debugging (no optimizations),
@@ -19,9 +21,10 @@
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
-##  - adaptive_time_step = 1 : enable adaptive time stepping.
-##  - use_R_S = 1 : enable Rate-and-State friction (requires adaptive_time_step).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
+## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
+## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
+## other dependency's path is declared beside the code that uses it.
 
 ndims = 3
 opt = 2
@@ -30,8 +33,6 @@ openmp = 1
 nprof = 0
 gprof = 0
 usemmg = 0
-adaptive_time_step = 0
-use_R_S = 0
 useexo = 0
 use_gospl = 0
 hdf5 = 0
@@ -41,11 +42,79 @@ ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
 endif
 
-ifneq ($(adaptive_time_step), 1)
-	use_R_S = 0   # Rate - State friction law only works with adaptive time stepping technique
+OSNAME := $(shell uname -s)
+
+########################################################################
+## Optional paths -- Boost, HDF5 and NVHPC. All of these may stay blank.
+##
+## The build locates them by itself; `make config` prints what it found. Set a
+## variable here, or on the make command line, only to force one specific install
+## -- an HPC module, a conda env, a hand-built library -- which skips detection
+## for that dependency entirely.
+##
+## Every other dependency's path is declared beside the code that consumes it, so
+## it is read together with the flags it feeds: OPENMP_* in the clang++ branch, and
+## EXO_*, MMG_* and the GoSPL and PYTHON_* group inside their useexo=1, usemmg=1
+## and use_gospl=1 blocks.
+##
+## Everything here uses `?=`, so an EXPORTED value is honoured -- that is how a
+## module file or a conda activate hook can name a prefix once instead of every
+## make invocation repeating it. A value on the make command line still outranks
+## both. The same holds for OPENMP_ROOT_DIR, declared with the OpenMP search.
+##
+## The catch, since naming a path skips detection for that dependency: a stale
+## export is preferred over a perfectly good installed copy. It is not silent --
+## `make check-deps` names the prefix it was given and what it expected under it,
+## and `make config` prints every resolved path with each library's architecture --
+## but it is the one way these knobs surprise people, so unset what you no longer
+## use rather than leaving it in a shell profile.
+########################################################################
+
+## Boost. Either an install prefix, holding include/ and lib/, or a b2 build
+## directory, recognised by its stage/ subdirectory.
+BOOST_ROOT_DIR ?= # /path/to/boost
+
+## HDF5, for hdf5=1. Set either or both; whichever is left blank is still
+## detected. Layouts the search knows about, if you would rather name them:
+##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
+##   Fedora/RHEL    /usr/include              /usr/lib64
+##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
+HDF5_INCLUDE_DIR ?= # /usr/include/hdf5/serial
+HDF5_LIB_DIR ?= # /usr/lib/x86_64-linux-gnu/hdf5/serial
+
+## NVHPC, for openacc=1 and nprof=1. Also where the CUDA toolkit is found, for
+## the nprof profiling build and the 3x3-C sub-make.
+NVHPC_DIR ?= # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
+
+## Package-manager prefixes the macOS searches start from. Chosen by host
+## architecture, never from PATH: a Mac that has run both Homebrews keeps the
+## other one's pkg-config and headers on PATH, and building against those links
+## the wrong architecture. `brew --prefix <formula>` is not used either -- it
+## prints the would-be path and exits 0 for a formula that is not installed.
+ifeq ($(OSNAME), Darwin)
+	ifeq ($(shell uname -m), arm64)
+		BREW_PREFIX ?= /opt/homebrew
+	else
+		BREW_PREFIX ?= /usr/local
+	endif
+	MACPORTS_PREFIX ?= /opt/local
 endif
 
-OSNAME := $(shell uname -s)
+## $(call firstdir,<file>,<candidate dirs>) -- first directory in the list that
+## really holds <file>, else empty. Globs allowed in both arguments
+## (`lib/clang/*/include`, `libhdf5.*`); the candidate list is a priority list.
+##
+## $(wildcard) expands the globs, `test -f` decides. Not `ls` and not $(wildcard)
+## alone: both accept a DANGLING SYMLINK, and $(BREW_PREFIX)/opt/<formula> is a
+## symlink into the Cellar, so a half-removed keg would stop the search on a dud
+## instead of falling through to a provider that works.
+firstdir = $(patsubst %/,%,$(dir $(call firstfile,$(1),$(2))))
+firstfile = $(firstword $(shell for f in $(wildcard $(addsuffix /$(1),$(2))); do \
+	test -f "$$f" && { echo $$f; break; }; done))
+
+## Drop a candidate whose prefix is empty, so an unset CONDA_PREFIX contributes
+## nothing rather than a bare, plausible-looking /include or /lib.
+under = $(if $(strip $(1)),$(addprefix $(strip $(1)),$(2)))
 
 ## Select C++ compiler and set paths to necessary libraries
 ifeq ($(openacc), 1)
@@ -66,16 +135,6 @@ else
 endif
 CXX_BACKEND = ${CXX}
 
-## path to HDF5's base directory. Leave both blank to auto-detect; set them
-## (here or on the command line) to force one specific install -- an HPC
-## module, a conda env, a hand-built HDF5 -- which skips detection entirely.
-## The layouts the search below knows about, if you would rather set them:
-##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
-##   Fedora/RHEL    /usr/include              /usr/lib64
-##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
-HDF5_INCLUDE_DIR = #/usr/include/hdf5/serial
-HDF5_LIB_DIR = #/usr/lib/x86_64-linux-gnu/hdf5/serial
-
 ifeq ($(hdf5), 1)
 ## Every stage below fills only what is still blank, so a path set by hand is
 ## never overwritten, and setting just one of the two still leaves the other
@@ -89,17 +148,10 @@ ifeq ($(strip $(HDF5_LIB_DIR)),)
 endif
 ifeq ($(HDF5_DETECT), yes)
 	ifeq ($(OSNAME), Darwin)
-		## Homebrew has two prefixes -- /opt/homebrew (arm64) and /usr/local
-		## (x86_64) -- and a machine that has ever run the other one keeps its
-		## pkg-config and h5cc on PATH. Trusting PATH there silently links an
-		## HDF5 of the wrong architecture, so choose the prefix by host arch
-		## and use that prefix's own pkg-config.
-		ifeq ($(shell uname -m), arm64)
-			HDF5_BREW = /opt/homebrew
-		else
-			HDF5_BREW = /usr/local
-		endif
-		PKGCONFIG := $(HDF5_BREW)/bin/pkg-config
+		## Use the architecture-matched Homebrew prefix (see BREW_PREFIX above)
+		## and that prefix's own pkg-config, not whichever one PATH offers.
+		HDF5_BREW = $(BREW_PREFIX)
+		PKGCONFIG := $(BREW_PREFIX)/bin/pkg-config
 	else
 		HDF5_BREW =
 		PKGCONFIG := pkg-config
@@ -127,21 +179,19 @@ ifeq ($(HDF5_DETECT), yes)
 	## so the header and the library are searched separately, not under one
 	## prefix. /usr/local comes before the system directories so a hand-built
 	## HDF5 installed there wins over the distro package.
+	HDF5_INC_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/include) \
+		/usr/include/hdf5/serial \
+		/usr/local/include /usr/include
+	HDF5_LIB_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/lib) \
+		/usr/lib/*-linux-gnu/hdf5/serial \
+		/usr/local/lib /usr/local/lib64 \
+		/usr/lib/*-linux-gnu \
+		/usr/lib64 /usr/lib
 	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-		HDF5_INCLUDE_DIR := $(shell for d in \
-				$(HDF5_BREW)/opt/hdf5/include \
-				/usr/include/hdf5/serial \
-				/usr/local/include /usr/include; do \
-			test -f $$d/hdf5.h && { echo $$d; break; }; done)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(HDF5_INC_DIRS))
 	endif
 	ifeq ($(strip $(HDF5_LIB_DIR)),)
-		HDF5_LIB_DIR := $(shell for d in \
-				$(HDF5_BREW)/opt/hdf5/lib \
-				/usr/lib/$(shell uname -m)-linux-gnu/hdf5/serial \
-				/usr/local/lib /usr/local/lib64 \
-				/usr/lib/$(shell uname -m)-linux-gnu \
-				/usr/lib64 /usr/lib; do \
-			ls $$d/libhdf5.* >/dev/null 2>&1 && { echo $$d; break; }; done)
+		HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(HDF5_LIB_DIRS))
 	endif
 
 	## Checked separately: finding one without the other is still unbuildable,
@@ -163,22 +213,51 @@ e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
 endif
 endif
 
-## path to cuda's base directory
-NVHPC_DIR = # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
+## Candidate prefixes, in priority order. macOS has no system Boost, so /usr is
+## never the answer there and these tiers are what remove the old requirement to
+## pass BOOST_ROOT_DIR=$(brew --prefix boost) by hand.
+##
+## Package managers come BEFORE conda: a shell that auto-activates `base` has
+## conda on for everything, not just the work that wants it, so it is the weaker
+## signal of intent. A conda Boost is still used when it is the only one.
+## The `opt/boost` keg beats the bare $(BREW_PREFIX) farm -- it pins the version.
+## Linux keeps the tiers it had: conda, else the /usr default below.
+ifeq ($(OSNAME), Darwin)
+	BOOST_PREFIXES = $(BREW_PREFIX)/opt/boost $(MACPORTS_PREFIX) $(BREW_PREFIX) \
+		$(CONDA_PREFIX)
+else
+	BOOST_PREFIXES = $(CONDA_PREFIX)
+endif
 
-## path to Boost's base directory, if not in standard system location
-BOOST_ROOT_DIR = # /path/to/boost
-
-## Use conda environment only if boost is actually installed there, otherwise system boost
+## Both halves required: a headers-only tree (extracted tarball, half-removed
+## keg, conda's libboost-headers without libboost) would otherwise be selected
+## and then fail at the link. The `libboost_program_options.*` glob matches
+## exactly what -lboost_program_options can link, and not MacPorts' `-mt` variant.
+## `override` so a command-line `BOOST_ROOT_DIR=` still falls through to
+## detection -- a command-line value otherwise outranks even the /usr fallback.
 ifndef BOOST_ROOT_DIR
-	ifdef CONDA_PREFIX
-		ifneq ($(wildcard $(CONDA_PREFIX)/include/boost),)
-			BOOST_ROOT_DIR = $(CONDA_PREFIX)
-		else
-			BOOST_ROOT_DIR = /usr
-		endif
-	else
-		BOOST_ROOT_DIR = /usr
+	override BOOST_ROOT_DIR := $(shell for d in $(BOOST_PREFIXES); do \
+		test -f $$d/include/boost/program_options.hpp || continue; \
+		set -- $$d/lib/libboost_program_options.*; \
+		test -f "$$1" || continue; \
+		echo $$d; break; done)
+endif
+
+## Nothing found: keep the historical /usr default so that `make clean`, `make
+## config` and a hand-set BOOST_LIB_DIR all still work, and record that this is
+## a failed search rather than a deliberate choice. On macOS the difference is
+## decisive -- there is no system Boost under /usr (this macOS has no
+## /usr/include at all), so the fallback there always means "not found", and
+## check-deps says so instead of letting the link produce a wall of undefined
+## symbols.
+ifndef BOOST_ROOT_DIR
+	override BOOST_ROOT_DIR = /usr
+	## Only on macOS does the fallback mean "the search failed" -- on Linux /usr
+	## is the normal, correct answer and the compiler finds Boost there on its
+	## own. Keeping that distinction is what lets check-deps be decisive on
+	## macOS without misreporting a healthy Linux build.
+	ifeq ($(OSNAME), Darwin)
+		BOOST_NOT_FOUND := yes
 	endif
 endif
 
@@ -188,10 +267,14 @@ endif
 ########################################################################
 
 BOOST_LDFLAGS = -lboost_program_options
-# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other
-MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
-ifeq ($(MULTIARCH),)
-	MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other.
+# Skipped on macOS, where there is no multiarch layout and `gcc` is Apple clang,
+# which has no -print-multiarch: two shell-outs per make invocation for nothing.
+ifneq ($(OSNAME), Darwin)
+	MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
+	ifeq ($(MULTIARCH),)
+		MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+	endif
 endif
 ifdef BOOST_ROOT_DIR
 	# check existence of stage/ directory
@@ -217,8 +300,21 @@ ifdef BOOST_ROOT_DIR
 		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)
 		BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/stage/lib
 	endif
-	BOOST_LDFLAGS += -L$(BOOST_LIB_DIR)
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	## Full path on macOS, for the same reason as libomp above: a -L dir also
+	## answers the implicit -lc++, and a conda prefix ships its own libc++.dylib
+	## (left on -L, the executable loads two libc++ images and says nothing).
+	## Only when the .dylib exists -- a static-only Boost still needs -l -- and
+	## via firstfile so a dangling Cellar symlink falls back to -l too.
+	## Linux keeps -L/-l, right for .so versioning and the stage layout.
+	BOOST_DYLIB = $(call firstfile,libboost_program_options.dylib,$(BOOST_LIB_DIR))
+	ifeq ($(OSNAME)$(if $(BOOST_DYLIB),yes,), Darwinyes)
+		BOOST_LDFLAGS = $(BOOST_DYLIB)
+	else
+		BOOST_LDFLAGS += -L$(BOOST_LIB_DIR)
+	endif
+	ifneq ($(OSNAME), Darwin)
+		# Apple's ld supports -rpath only in the comma form, so Darwin gets its
+		# rpath from the install_name_tool step after the link instead.
 		BOOST_LDFLAGS += -Wl,-rpath=$(BOOST_LIB_DIR)
 	endif
 endif
@@ -290,6 +386,7 @@ endif
 
 
 ifneq (, $(findstring clang++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x -DGPP1X
 	LDFLAGS = -lm
 	TETGENFLAG = 
@@ -314,18 +411,81 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
  
 	ifeq ($(openmp), 1)
-		# path to OpenMP library directory (for clang++ on macOS)
-		OPENMP_ROOT_DIR = external/openmp-install
-		ifeq ($(filter /%,$(OPENMP_ROOT_DIR)),$(OPENMP_ROOT_DIR))
-			OPENMP_RPATH := $(OPENMP_ROOT_DIR)/lib
-		else
-			OPENMP_RPATH := $(CURDIR)/$(OPENMP_ROOT_DIR)/lib
+	ifeq ($(OSNAME), Darwin)
+		## Apple clang ships no OpenMP runtime, so one has to be found. Set
+		## OPENMP_ROOT_DIR to force a prefix (its include/ and lib/), or
+		## OPENMP_INCLUDE_DIR / OPENMP_LIB_DIR when they are not siblings.
+		## Plain `=`: an exported value is ignored, as for BOOST_ROOT_DIR.
+		OPENMP_ROOT_DIR ?= # /path/to/openmp
+		ifneq ($(strip $(OPENMP_ROOT_DIR)),)
+			ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
+				OPENMP_INCLUDE_DIR := $(OPENMP_ROOT_DIR)/include
+			endif
+			ifeq ($(strip $(OPENMP_LIB_DIR)),)
+				OPENMP_LIB_DIR := $(OPENMP_ROOT_DIR)/lib
+			endif
 		endif
-		CXXFLAGS += -Xpreprocessor -fopenmp -I$(OPENMP_ROOT_DIR)/include
-		LDFLAGS += -L$(OPENMP_ROOT_DIR)/lib -lomp
+
+		## Candidate lists in priority order, named once and reused by the
+		## search, the check-deps `Searched:` line and `make config`, so the
+		## three cannot disagree. external/openmp-install is first: it is where
+		## this project's build-from-source instructions put LLVM OpenMP.
+		## Header and library are searched separately because Homebrew's llvm
+		## keeps omp.h under lib/clang/<ver>/include, not beside the library.
+		OPENMP_INC_DIRS = external/openmp-install/include \
+			$(BREW_PREFIX)/opt/libomp/include \
+			$(BREW_PREFIX)/opt/llvm/lib/clang/*/include \
+			$(MACPORTS_PREFIX)/include/libomp \
+			$(call under,$(CONDA_PREFIX),/include)
+		OPENMP_LIB_DIRS = external/openmp-install/lib \
+			$(BREW_PREFIX)/opt/libomp/lib \
+			$(BREW_PREFIX)/opt/llvm/lib \
+			$(MACPORTS_PREFIX)/lib/libomp \
+			$(call under,$(CONDA_PREFIX),/lib)
+
+		ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
+			OPENMP_INCLUDE_DIR := $(call firstdir,omp.h,$(OPENMP_INC_DIRS))
+		endif
+		ifeq ($(strip $(OPENMP_LIB_DIR)),)
+			OPENMP_LIB_DIR := $(call firstdir,libomp.dylib,$(OPENMP_LIB_DIRS))
+		endif
+
+		## Flags only when both halves were found, so a half-detected runtime
+		## cannot produce a truncated command line; check-deps does the
+		## reporting, which keeps `make clean` and `make config` working.
+		ifneq ($(strip $(OPENMP_INCLUDE_DIR)),)
+		ifneq ($(strip $(OPENMP_LIB_DIR)),)
+			## rpath must be absolute, so a relative OPENMP_LIB_DIR
+			## (external/... above) is anchored at the build directory. It is
+			## needed when the dylib's install name is @rpath-relative --
+			## conda's libomp is, Homebrew's is not.
+			ifeq ($(filter /%,$(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR))
+				OPENMP_RPATH := $(OPENMP_LIB_DIR)
+			else
+				OPENMP_RPATH := $(CURDIR)/$(OPENMP_LIB_DIR)
+			endif
+			## -idirafter, not -I: placed after the system directories it can
+			## only supply a header the toolchain lacks, i.e. omp.h. With -I,
+			## Homebrew llvm's omp.h dir -- a compiler *resource* dir holding
+			## its own stdint.h -- breaks the SDK ("unknown type name
+			## 'uint8_t'" from sys/resource.h). Conda shadows the same way.
+			##
+			## Full path, not -L/-lomp: every -L dir also answers the implicit
+			## -lc++/-lz/-lm, and a conda prefix ships its own libc++.dylib.
+			CXXFLAGS += -Xpreprocessor -fopenmp -idirafter $(OPENMP_INCLUDE_DIR)
+			LDFLAGS += $(OPENMP_LIB_DIR)/libomp.dylib
+		endif
+		endif
+	else
+		## Non-Apple clang drives OpenMP itself: -fopenmp both enables the
+		## pragmas and links the runtime, with no paths to find.
+		CXXFLAGS += -fopenmp
+		LDFLAGS += -fopenmp
+	endif
 	endif
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x
 	LDFLAGS = -lm
 	TETGENFLAG = -Wno-unused-but-set-variable -Wno-int-to-pointer-cast
@@ -361,6 +521,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	endif
 
 else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tested with v14
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++0x
 	LDFLAGS = -lm
 
@@ -380,6 +541,7 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -Minfo=mp,accel
 	LDFLAGS =
 	TETGENFLAGS = 
@@ -421,6 +583,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -g
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
+	CXX_SUPPORTED = yes
 	CXXFLAGS = -march=core2
 	LDFLAGS = 
 	TETGENFLAGS = 
@@ -446,14 +609,17 @@ else ifneq (, $(findstring pgc++, $(CXX)))
 			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
 	endif
 else
-# the only way to display the error message in Makefile ...
-all:
-	@echo "Unknown compiler, check the definition of 'CXX' in the Makefile."
-	@false
+## Unsupported compiler: leave CXX_SUPPORTED unset. `make config` says so, and
+## check-deps refuses the build -- which used to be done with a second `all:`
+## target here, whose recipe was silently overridden by the real `all:` further
+## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
 ifeq ($(hdf5), 1)
-	CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	## Named, like MMG_CXXFLAGS, so the stamp split can subtract it. Folded into
+	## CXXFLAGS it would perturb the global stamp and rebuild everything.
+	HDF5_CXXFLAGS = -DHDF5 -I$(HDF5_INCLUDE_DIR)
+	CXXFLAGS += $(HDF5_CXXFLAGS)
 	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
 	ifneq ($(OSNAME), Darwin)
 		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
@@ -464,7 +630,7 @@ endif
 HAS_GIT := $(shell git --version 2>/dev/null)
 ifneq ($(HAS_GIT),)
         ## Is this a git repository?
-        IS_REPO := $(shell git rev-parse --s-inside-work-tree 2>/dev/null)
+        IS_REPO := $(shell git rev-parse --is-inside-work-tree 2>/dev/null)
 endif
 
 SRCS =	\
@@ -515,18 +681,23 @@ INCS =	\
 
 OBJS = $(SRCS:.cxx=.$(ndims)d$(suffix).o)
 
+# INVARIANT: a flag either renames the output or lands in the build stamp.
+# BUILD_STAMP uses this same $(ndims)d$(suffix) key, so the two cannot drift --
+# else configs writing disjoint files share a stamp and invalidate each other.
 EXE = dynearthsol$(ndims)d$(suffix)
 
 
 ## Libraries
 
+## Same $(ndims)d$(suffix) key as everything else. On $(suffix) alone, one
+## triangle.o served both 2d and 3d despite -DTHREED: last build won.
 TET_SRCS = tetgen/predicates.cxx tetgen/tetgen.cxx
 TET_INCS = tetgen/tetgen.h
-TET_OBJS = $(TET_SRCS:.cxx=$(suffix).o)
+TET_OBJS = $(TET_SRCS:.cxx=.$(ndims)d$(suffix).o)
 
 TRI_SRCS = triangle/triangle.c
 TRI_INCS = triangle/triangle.h
-TRI_OBJS = $(TRI_SRCS:.c=$(suffix).o)
+TRI_OBJS = $(TRI_SRCS:.c=.$(ndims)d$(suffix).o)
 
 M_SRCS = $(TRI_SRCS)
 M_INCS = $(TRI_INCS)
@@ -537,13 +708,6 @@ ifeq ($(ndims), 3)
 	M_INCS += $(TET_INCS)
 	M_OBJS += $(TET_OBJS)
 	CXXFLAGS += -DTHREED
-endif
-
-ifeq ($(adaptive_time_step), 1)
-	CXXFLAGS += -DATS
-ifeq ($(use_R_S), 1)
-	CXXFLAGS += -DRS
-endif
 endif
 
 ifeq ($(useexo), 1)
@@ -582,10 +746,194 @@ CXXFLAGS += -DSOA
 
 ## Action
 
-.PHONY: all clean take-snapshot prepare build
+.PHONY: all clean take-snapshot prepare build check-deps config FORCE
 
 all: prepare
 	$(MAKE) build
+
+## Rebuild when the FLAGS change, not just when a source file does.
+##
+## Objects are named only for ndims and suffix, so every other switch -- openmp,
+## opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was built
+## last. `make openmp=0` then `make` reports success, relinks nothing, and leaves
+## a single-threaded executable behind. The stamp holds the last build's flags;
+## its recipe runs every time (FORCE) but only rewrites the file when they
+## differ, so a changed flag rebuilds and an unchanged one costs one `cmp`.
+##
+## One stamp per configuration (key $(ndims)d$(suffix)), split three ways:
+##   BUILD_STAMP    flags every object sees -- rebuild all 23.
+##   FEATURE_STAMPS one per FEATURES macro -- rebuild only what it reaches.
+##   LINK_STAMP     LDFLAGS -- relink only, never recompile.
+BUILD_STAMP  = .build-flags.$(ndims)d$(suffix)
+LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
+
+## Feature table: macros whose flags are separable and that reach only part of
+## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
+## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
+## (in parameters.hpp, so it reaches everything).
+FEATURES = HDF5 USEMMG USEEXODUS
+FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
+FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
+FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+
+FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
+FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
+FEATURE_STAMPS = $(foreach f,$(FEATURES),$(call FEATURE_STAMP,$(f)))
+
+## What is left once every feature chunk is removed (filter-out is exact-token).
+GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS) $(BOOST_CXXFLAGS))
+
+## Stamps DELETE what they invalidate; mtime is not trustworthy here. make 3.81
+## compares to the whole second and treats equal as up to date, and a 4-object
+## feature rebuild finishes in the same second the stamp was written -- two
+## back-to-back builds then linked an object still carrying -DHDF5 with no
+## -lhdf5. A deleted object has no mtime to be wrong about.
+##
+## The delete must run in an earlier PROCESS: make 3.81 stats a target before its
+## prerequisites' recipes and reuses that mtime, so deleting from the stamp
+## recipe dropped 4 objects but rebuilt 3. Hence FLAG_STAMPS hangs off `prepare`,
+## which the outer make finishes before `all` runs `$(MAKE) build`. The map's
+## dependency edges stay too: they cover a stamp that does not exist yet.
+FLAG_STAMPS = $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS)
+$(BUILD_STAMP): FORCE
+	@echo '$(CXX)|$(GLOBAL_CXXFLAGS)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
+		test -f $@ && echo "   compile flags changed since the last build -- rebuilding"; \
+		mv $@.tmp $@; rm -f $(OBJS) $(M_OBJS); \
+	fi
+
+$(LINK_STAMP): FORCE
+	@echo '$(CXX)|$(LDFLAGS)|$(BOOST_LDFLAGS)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
+		test -f $@ && echo "   link flags changed since the last build -- relinking"; \
+		mv $@.tmp $@; rm -f $(EXE); \
+	fi
+
+## One rule per feature via eval, so FEATURES stays the only place one is named.
+## FEATURE_<macro>_OBJS comes from the map; empty makes the rm a harmless no-op.
+define FEATURE_STAMP_RULE
+$(call FEATURE_STAMP,$(1)): FORCE
+	@echo '$$(FEATURE_$(1)_FLAGS)' > $$@.tmp
+	@if cmp -s $$@.tmp $$@; then rm -f $$@.tmp; else \
+		test -f $$@ && echo "   $(1) changed since the last build -- rebuilding what uses it"; \
+		mv $$@.tmp $$@; rm -f $$(FEATURE_$(1)_OBJS); \
+	fi
+endef
+$(foreach f,$(FEATURES),$(eval $(call FEATURE_STAMP_RULE,$(f))))
+
+## Which objects each feature reaches. DERIVED every build, never hand-written;
+## regenerated on any source or header change, so a new #ifdef widens the set
+## first. If the generator cannot run, the fallback depends every object on every
+## feature -- slow and correct. Under-reporting would mean a stale object in a
+## plausible binary, so nothing here may risk it.
+FEATURE_DEPS = .feature-deps.$(ndims)d$(suffix).mk
+
+$(FEATURE_DEPS): $(SRCS) $(INCS) utils/gen_feature_deps.py
+	@python3 utils/gen_feature_deps.py \
+		--obj-suffix .$(ndims)d$(suffix).o \
+		--stamp-prefix .build-flags- --stamp-suffix .$(ndims)d$(suffix) \
+		--sources $(SRCS) --headers $(INCS) -- $(FEATURES) > $@.tmp \
+	  && mv $@.tmp $@ \
+	  || { rm -f $@.tmp; \
+	       echo "   feature map unavailable -- every object depends on every feature" >&2; \
+	       { echo '$$(OBJS): $$(FEATURE_STAMPS)'; \
+	         $(foreach f,$(FEATURES),echo 'FEATURE_$(f)_OBJS = $$(OBJS)';) } > $@; }
+
+## Build goals only: under `make clean` this would generate the map just to
+## delete it, and warn about a missing python3 during a clean.
+ifeq (,$(filter clean cleanall deepclean config check-deps show-exe,$(MAKECMDGOALS)))
+-include $(FEATURE_DEPS)
+endif
+
+## The map for the current flags -- first thing to check on a surprise rebuild.
+.PHONY: feature-map
+feature-map: $(FEATURE_DEPS)
+	@cat $<
+
+FORCE:
+
+## Name the missing dependency and the command that installs it, rather than
+## letting it surface as a linker error hundreds of lines down. A recipe, not
+## $(error), so `make clean` and `make config` still work on a machine that
+## cannot build yet.
+##
+## Fatal on macOS only: there this detection is the sole source of -I/-L and
+## there is no system Boost nor Apple omp.h, so a miss is certain. Elsewhere the
+## toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
+## module sysroot), so a failed guess must not block a working build.
+ifeq ($(OSNAME), Darwin)
+DEP_FATAL = exit 1
+BOOST_INSTALL_HINT = brew install boost
+else
+DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a module)"
+BOOST_INSTALL_HINT = apt install libboost-program-options-dev / dnf install boost-devel
+endif
+
+check-deps:
+	@test -n "$(CXX_SUPPORTED)" || { \
+		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
+		echo "g++, icpc, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
+	@test -f "$(BOOST_ROOT_DIR)/include/boost/program_options.hpp" \
+	  || test -f "$(BOOST_ROOT_DIR)/boost/program_options.hpp" \
+	  || test -f /usr/include/boost/program_options.hpp || { \
+		echo "Missing: Boost.ProgramOptions.   Install: $(BOOST_INSTALL_HINT)"; \
+		echo "         Searched: $(strip $(BOOST_PREFIXES)) /usr"; \
+		echo "         Or name one: make BOOST_ROOT_DIR=/prefix   (now $(BOOST_ROOT_DIR))"; \
+		$(DEP_FATAL); }
+ifeq ($(OSNAME), Darwin)
+ifeq ($(openmp), 1)
+ifneq (, $(findstring clang++, $(CXX)))
+	@test -f "$(OPENMP_INCLUDE_DIR)/omp.h" \
+	  && test -f "$(OPENMP_LIB_DIR)/libomp.dylib" || { \
+		echo "Missing: an OpenMP runtime -- Apple clang has the pragmas, ships none."; \
+		echo "         Install: brew install libomp        (or https://brew.sh)"; \
+		echo "         Searched: $(strip $(OPENMP_LIB_DIRS))"; \
+		echo "         Or: make openmp=0        make OPENMP_ROOT_DIR=/prefix"; \
+		echo "             make BREW_PREFIX=/your/prefix   (now $(BREW_PREFIX))"; \
+		exit 1; }
+endif
+endif
+endif
+
+## Print what the build resolved to -- the first thing to ask for when a build
+## misbehaves elsewhere. Each library's architecture is shown because a path
+## alone does not tell you whether it matches the host.
+config:
+	@echo "target             $(EXE)   (ndims=$(ndims), opt=$(opt))"
+	@echo "platform           $(OSNAME) $(shell uname -m)"
+	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
+	@echo "openmp             $(strip $(openmp))"
+ifeq ($(OSNAME), Darwin)
+	@echo "brew prefix        $(BREW_PREFIX)"
+ifeq ($(openmp), 1)
+	@echo "  omp.h from       $(if $(strip $(OPENMP_INCLUDE_DIR)),$(OPENMP_INCLUDE_DIR),** NOT FOUND **)"
+	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
+endif
+	@echo "boost prefix       $(BOOST_ROOT_DIR)$(if $(BOOST_NOT_FOUND),   ** NOT FOUND -- fallback **)"
+else
+	@echo "boost prefix       $(BOOST_ROOT_DIR)"
+endif
+	@echo "  boost lib dir    $(BOOST_LIB_DIR)$(if $(filter Darwin,$(OSNAME)), [`lipo -archs $(BOOST_LIB_DIR)/libboost_program_options.dylib 2>/dev/null || echo 'no .dylib'`])"
+	@echo "  boost -I         $(if $(strip $(BOOST_CXXFLAGS)),$(BOOST_CXXFLAGS),none -- relying on the compiler default search path)"
+	@echo "hdf5               $(strip $(hdf5))"
+ifeq ($(hdf5), 1)
+	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
+	@echo "  hdf5 lib dir     $(HDF5_LIB_DIR)"
+endif
+	@echo "usemmg             $(strip $(usemmg))"
+	@echo "useexo             $(strip $(useexo))"
+	@echo "use_gospl          $(strip $(use_gospl))"
+	@echo "openacc            $(strip $(openacc))"
+	@echo
+	@echo "CXXFLAGS           $(CXXFLAGS) $(BOOST_CXXFLAGS)"
+	@echo "LDFLAGS            $(LDFLAGS) $(BOOST_LDFLAGS)"
+	@echo
+	@echo "rebuild scope      global compile flags -> all objects"
+	@echo "                   LDFLAGS              -> relink only"
+	@$(foreach f,$(FEATURES),r=$$(sed -n 's/^# $(f): //p' $(FEATURE_DEPS) 2>/dev/null); \
+		printf "                   %-10s %-5s -> %s\n" "$(f)" \
+		"$(if $(strip $(FEATURE_$(f)_FLAGS)),[on],[off])" \
+		"$${r:-? run make feature-map}";)
 
 ifeq ($(use_gospl), 1)
 .PHONY: install-gospl-wrapper
@@ -597,7 +945,10 @@ install-gospl-wrapper:
 	@chmod +x dynearthsol-gospl
 endif
 
-prepare:
+## check-deps first, as a prerequisite rather than another line in this recipe,
+## so that the ordering holds under `make -j` and `make check-deps` still works
+## on its own.
+prepare: check-deps $(FLAG_STAMPS)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
@@ -650,7 +1001,9 @@ endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
-$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB)
+## LINK_STAMP, not BUILD_STAMP: objects already carry the compile-flag edge, so
+## only LDFLAGS is new here -- and that must relink without recompiling.
+$(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB) $(LINK_STAMP)
 		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
@@ -672,13 +1025,18 @@ ifeq ($(use_gospl), 1)
 	@echo ""
 endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
+		@# A Boost built by hand with b2 records a bare install name, which the
+		@# loader cannot resolve; rewrite it to the full path. A no-op for a
+		@# packaged Boost, whose install name is already absolute.
 		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
-		install_name_tool -add_rpath $(BOOST_LIB_DIR) $@
-ifeq ($(openmp), 1)
-		@if [ "$(BOOST_LIB_DIR)" != "$(OPENMP_RPATH)" ]; then \
-			install_name_tool -add_rpath $(OPENMP_RPATH) $@; \
-		fi
-endif
+		@# Record each dependency's directory as an rpath, skipping any that is
+		@# already there: install_name_tool fails outright on a duplicate, and
+		@# these two are the same directory whenever Boost and libomp come from
+		@# one prefix (an activated conda env, say). An empty OPENMP_RPATH --
+		@# openmp=0, or a runtime that was not found -- drops out of the loop.
+		@for d in $(BOOST_LIB_DIR) $(OPENMP_RPATH); do \
+			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
+		done
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif
@@ -724,33 +1082,36 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
-$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS)
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(KNN_BVH_LIB):
 	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
 
-$(TRI_OBJS): %$(suffix).o : %.c $(TRI_INCS)
+$(TRI_OBJS): %.$(ndims)d$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
 	@# Triangle cannot be compiled with -O2
 	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
 
 triangle/triangle: triangle/triangle.c
 	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
 
-tetgen/predicates$(suffix).o: tetgen/predicates.cxx $(TET_INCS)
+tetgen/predicates.$(ndims)d$(suffix).o: tetgen/predicates.cxx $(TET_INCS) $(BUILD_STAMP)
 	@# Compiling J. Shewchuk predicates, should always be
 	@# equal to -O0 (no optimization). Otherwise, TetGen may not
 	@# work properly.
 	$(CXX) $(CXXFLAGS) -DTETLIBRARY -O0 -c $< -o $@
 
-tetgen/tetgen$(suffix).o: tetgen/tetgen.cxx $(TET_INCS)
+tetgen/tetgen.$(ndims)d$(suffix).o: tetgen/tetgen.cxx $(TET_INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) -DNDEBUG -DTETLIBRARY $(TETGENFLAG) -c $< -o $@
 
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
 $(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) CUDA_DIR=$(NVHPC_DIR)/cuda
+	@# CUDA_DIR only when there is an NVHPC_DIR to build it from; otherwise this
+	@# handed the sub-make a literal "/cuda" on every single build.
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) \
+		$(if $(strip $(NVHPC_DIR)),CUDA_DIR=$(NVHPC_DIR)/cuda)
 
 clean-submodules:
 	@echo "   Cleaning external submodules..."
@@ -778,4 +1139,4 @@ endif
 	@+$(MAKE) -C $(C3X3_DIR) clean
 
 clean:
-	@rm -f $(OBJS) $(EXE)
+	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS) $(FEATURE_DEPS)

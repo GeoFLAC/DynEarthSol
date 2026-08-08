@@ -28,37 +28,69 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Everything DES needs on macOS. libomp replaces what used to be a
+    # from-source LLVM OpenMP build here (two tarballs, a cmake configure and a
+    # -j4 make, several minutes every run, with the target architecture
+    # hardcoded to arm64). The Makefile finds a Homebrew libomp on its own.
     - name: install dependencies
-      run: brew install boost cmake hdf5
+      run: brew install boost libomp hdf5
 
-    - name: build LLVM OpenMP
+    # Print the resolved compiler and dependency paths before building, so a
+    # mis-detection is visible in the log instead of showing up as a compile
+    # error further down. Also asserts that detection found libomp at all: the
+    # point of the steps below is that no path has to be passed by hand.
+    - name: show resolved build configuration
       run: |
-        mkdir -p external && cd external
-        curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/cmake-19.1.7.src.tar.xz -o cmake-19.1.7.src.tar.xz
-        tar xf cmake-19.1.7.src.tar.xz
-        curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/openmp-19.1.7.src.tar.xz -o openmp-19.1.7.src.tar.xz
-        tar xf openmp-19.1.7.src.tar.xz
+        make ndims=2 config
+        make ndims=2 config | grep -q 'libomp from *'"$(brew --prefix libomp)" \
+          || { echo "::error::libomp was not auto-detected from $(brew --prefix libomp)"; exit 1; }
+        make ndims=2 config | grep -q 'boost prefix *'"$(brew --prefix boost)" \
+          || { echo "::error::boost was not auto-detected from $(brew --prefix boost)"; exit 1; }
 
-        mkdir -p openmp-19.1.7.src/build && cd openmp-19.1.7.src/build
-        cmake -DCMAKE_INSTALL_PREFIX=$(pwd)/../../openmp-install \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_MODULE_PATH=$(pwd)/../../cmake-19.1.7.src/Modules \
-              -DCMAKE_OSX_ARCHITECTURES=arm64 \
-              -DLIBOMP_INSTALL_ALIASES=OFF \
-              ..
-        make -j4 && make install && cd ../../
-
+    # No BOOST_ROOT_DIR and no OPENMP_ROOT_DIR on any line below: these are the
+    # exact commands the README gives a new user, so CI fails if the zero-config
+    # path regresses.
     - name: make debug 2d
-      run: make clean ndims=2; make ndims=2 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=2; make ndims=2 opt=0 openmp=0
     - name: make debug 3d
-      run: make clean ndims=3; make ndims=3 opt=0 openmp=0 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=3; make ndims=3 opt=0 openmp=0
     - name: make 2d
-      run: make clean ndims=2; make ndims=2 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=2; make ndims=2 opt=2 openmp=1
     - name: make 3d
-      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 BOOST_ROOT_DIR=$(brew --prefix boost)
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1
+
+    # Changing a build flag must rebuild. Objects are named only for ndims and the
+    # openacc suffix, so before the flag stamp `make openmp=0` followed by `make`
+    # relinked nothing and silently left a single-threaded executable -- and the
+    # `make clean` on every line above is what hid it. Deliberately no clean here.
+    - name: changing a flag rebuilds
+      run: |
+        make clean ndims=2
+        make ndims=2 opt=2 openmp=0
+        otool -L dynearthsol2d | grep -q libomp \
+          && { echo "::error::openmp=0 build is linked against libomp"; exit 1; }
+        sleep 1   # make 3.81 compares mtimes to the second
+        make ndims=2 opt=2 openmp=1
+        otool -L dynearthsol2d | grep -q libomp \
+          || { echo "::error::openmp=1 after openmp=0 did not relink against libomp"; exit 1; }
+
+    # The in-tree external/openmp-install prefix still takes priority over the
+    # package managers, so a checkout that already has one keeps building against
+    # it. Staged from the Homebrew libomp rather than rebuilt from LLVM source --
+    # this checks the Makefile's precedence, not LLVM's build.
+    - name: in-tree external/openmp-install still takes priority
+      run: |
+        mkdir -p external/openmp-install/include external/openmp-install/lib
+        cp "$(brew --prefix libomp)/include/omp.h" external/openmp-install/include/
+        cp "$(brew --prefix libomp)/lib/libomp.dylib" external/openmp-install/lib/
+        make ndims=2 config | grep -q 'libomp from *external/openmp-install/lib' \
+          || { echo "::error::in-tree external/openmp-install was not preferred"; exit 1; }
+        make clean ndims=2; make ndims=2 opt=2 openmp=1
+        otool -L dynearthsol2d | grep -q libomp \
+          || { echo "::error::dynearthsol2d is not linked against libomp"; exit 1; }
+        rm -rf external
     - name: make 3d hdf5
-      # No HDF5_*_DIR: the Makefile finds the paths itself, and on macOS it
-      # picks the Homebrew prefix matching the build architecture rather than
-      # whichever brew happens to be first on PATH.
+      # No HDF5_*_DIR and no BOOST_ROOT_DIR: the Makefile finds every path
+      # itself, and on macOS it picks the Homebrew prefix matching the build
+      # architecture rather than whichever brew happens to be first on PATH.
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1
-            BOOST_ROOT_DIR=$(brew --prefix boost)
