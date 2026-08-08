@@ -1145,7 +1145,8 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
         // Host loop: visc()/shearm() read the host-side MatProps.
         #pragma acc wait
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(param, var, dt_remesh, lde0, lde1)
+        #pragma omp parallel for default(none) shared(param, var) \
+                firstprivate(dt_remesh, lde0, lde1)
 #endif
         for (int e = 0; e < var.nelem; ++e) {
             const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
@@ -1303,7 +1304,8 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     const double rho_w_g = param.bc.has_water_loading
                          ? param.bc.sea_water_density * param.control.gravity : 0.0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo, sea_level, rho_w_g)
+    #pragma omp parallel for default(none) shared(param, var, topo) \
+            firstprivate(sea_level, rho_w_g)
 #endif
     #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
@@ -1492,8 +1494,8 @@ double compute_dt(const Param& param, Variables& var)
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
-        default(none) shared(param, var) //, velocity_x_element, velocity_y_element, velocity_z_element) \
-        private(vx_element, vy_element, vz_element)
+        default(none) shared(param, var)
+    // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
     #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) async

@@ -3306,6 +3306,8 @@ void create_support(Variables& var)
 #endif
 }
 
+// Currently unused: all three call sites are commented out, so var.neighbor /
+// var.contact / var.ctmp are written and read by nobody.
 void create_neighbor(Variables& var)
 {
 #ifdef NPROF_DETAIL
@@ -3331,7 +3333,8 @@ void create_neighbor(Variables& var)
     #pragma acc parallel loop collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            if ((*var.neighbor)[e][i] != -1) continue; // already set
+            // No "already set" early-exit: it would race the cross-row write below, and the
+            // `neigh > e` filter already registers each internal facet exactly once.
             int n[NDIMS], n2[NDIMS];
             for (int j=0; j<NDIMS; ++j)
                 n[j] = (*var.connectivity)[e][NODE_OF_FACET[i][j]];
@@ -3344,7 +3347,8 @@ void create_neighbor(Variables& var)
                 }
             }
 
-            const int_vec sup = (*var.support)[n[0]];
+            // reference, not a copy: a copy heap-allocates per iteration.
+            const int_vec& sup = (*var.support)[n[0]];
             bool found = false;
             for (int j=0; j<sup.size() && !found; ++j) {
                 int neigh = sup[j];

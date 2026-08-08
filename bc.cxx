@@ -646,7 +646,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     //
 
 #ifndef ACC
-    #pragma omp parallel for
+    #pragma omp parallel for default(none) shared(var)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)

@@ -285,7 +285,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma acc serial
+    // Host scalar: the two loops below reduce into it and the host reads it.
     int is_nan = 0;
 
 #ifndef ACC

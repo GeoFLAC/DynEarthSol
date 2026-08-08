@@ -185,12 +185,13 @@ public:
             n_ = count;
         }
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(count > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
-                (*this)[i][d] = buffer[i * N + d]; 
+                (*this)[i][d] = buffer[i * N + d];
             }
         }
     }
@@ -214,7 +215,8 @@ public:
         buffer.resize(total_elements);
 
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(n_ > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
@@ -273,7 +275,8 @@ public:
             if (aos_data != nullptr) {
 #ifdef SOA
 #ifndef ACC
-                #pragma omp parallel for collapse(2) if(n_ > 10000)
+                #pragma omp parallel for default(none) shared(aos_data) \
+                    collapse(2) if(n_ > 10000)
 #endif
                 #pragma acc parallel loop gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
@@ -388,7 +391,8 @@ public:
 #endif
 
 #ifndef ACC
-        #pragma omp parallel for if(n_ > 10000)
+        #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
+            if(n_ > 10000)
 #endif
         #pragma acc parallel loop gang vector
         for (int i = 0; i < n_; ++i) {
