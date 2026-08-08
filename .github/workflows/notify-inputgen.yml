@@ -13,10 +13,11 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: softprops/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: des-inputgen
 
       - name: Test generated token
         env:
