@@ -978,7 +978,12 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
 }
 
 
-void delete_points_on_boundary(int_vec &points_to_delete,
+// Delete every point in points_to_delete, merging the neighbouring boundary
+// segments (2D) / facets (3D) for the points that lie on a boundary so the
+// boundary stays closed. Non-boundary points are simply removed. This is the
+// deletion path for remeshing_option >= 10 (boundaries may be modified); it fully
+// handles the removal, so the caller must NOT also call delete_points().
+void delete_points_and_merge_boundary(int_vec &points_to_delete,
                                const int_vec (&bnodes)[nbdrytypes],
                                const int_vec (&bdry_polygons)[nbdrytypes],
                                const array_t &bnormals,
@@ -1236,12 +1241,19 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
     case 12:
     case 13:
-        // deleting points, some of them might be on the boundary
-        delete_points_on_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
+        // deleting points, some of them might be on the boundary.
+        // delete_points_and_merge_boundary() already removes every point in
+        // points_to_delete (merging segments for the boundary ones) and reduces
+        // old_nnode accordingly. Calling delete_points() again on the same list
+        // would be a *second* deletion pass over an already-compacted array with
+        // now-stale indices: its swap-delete + std::replace(segment, end, *i)
+        // rewrites the boundary segments of the highest-index nodes (typically the
+        // most recently added surface/corner nodes), which detaches the top surface
+        // from the side wall and collapses the corner into a spurious cliff. Do NOT
+        // call delete_points() here.
+        delete_points_and_merge_boundary(points_to_delete, old_bnodes, bdry_polygons, *var.bnormals,
                                   old_nnode, old_nseg,
                                   qcoord, qsegment, qsegflag, old_bcflag, min_dist);
-        delete_points(points_to_delete, old_nnode, old_nseg,
-                      qcoord, qsegment);
         break;
     }
 
@@ -3075,8 +3087,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (1.0 + (*var.volume_old)[e]);
 
-    if(param.control.use_global_velocity_scaling)
-        var.dt = compute_dt(param, var);
+    // Refresh dt on the NEW mesh unconditionally. dt is otherwise only recomputed every
+    // slow_updates_interval (10) steps in the main loop, so a remesh that refines the mesh
+    // (smaller minl -> smaller stable dt) would run up to 10 steps on the stale, too-large
+    // dt -- enough for an explicit CFL runaway to invert elements (then the step-10
+    // compute_dt hits negative volumes and dies with "dt <= 0"). compute_mass below
+    // consumes var.dt, so the refresh must come first.
+    var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 

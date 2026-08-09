@@ -117,6 +117,33 @@ void set_2d_quality_str(std::string &quality, double min_angle)
 }
 
 
+void set_steiner_str(std::string &steiner, double max_steiner_factor, int npoints,
+                     double max_area)
+{
+    // Triangle's -S switch caps the number of Steiner points (vertices not in the
+    // input) it may insert. Without it (steinerleft == -1), Triangle's encroached-
+    // subsegment splitting can fail to terminate when two input segments meet at a
+    // very small angle -- each split encroaches the other, forever (see the loop at
+    // triangle.c splitencsegs()). A cap set well above any healthy remesh bounds this
+    // runaway without changing the mesh in the normal case, because steinerleft never
+    // reaches 0.
+    //
+    // The cap is factor*npoints, so it is only meaningful when the output size stays
+    // close to the input size -- i.e. during remeshing (max_area < 0, no area target).
+    // When an area constraint is active (initial meshing), the legitimate point count
+    // is driven by max_area rather than npoints, so the cap must NOT be applied or it
+    // would truncate a perfectly good mesh.
+    steiner.clear();
+    if (max_steiner_factor > 0 && npoints > 0 && max_area < 0) {
+        long cap = (long)(max_steiner_factor * npoints);
+        if (cap < 1) cap = 1;
+        if (cap > 100000000L) cap = 100000000L; // keep within int, far above any real need
+        steiner += 'S';
+        steiner += std::to_string(cap);
+    }
+}
+
+
 void create_quadrilateral_cells(Variables &var, int *&cells) {
 #ifndef THREED
     cells = new int[(var.nx-1)*(var.nz-1)*4];
@@ -245,7 +272,6 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*NODES_PER_ELEM];
 #ifndef THREED
 
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             int idx = i * (var.nz - 1) + j;
@@ -300,7 +326,6 @@ void create_rect_node(const Param& param, const Variables& var, double *&points)
 #endif
 
 #ifndef THREED
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
             points[(j + i * var.nz)*2] = i * dx;
@@ -662,7 +687,7 @@ void new_mesh_regular_equilateral(const Param& param, Variables& var)
 
 void triangulate_polygon
 (double min_angle, double max_area,
- int meshing_verbosity,
+ int meshing_verbosity, double max_steiner_factor,
  int npoints, int nsegments,
  const double *points, const int *segments, const int *segflags,
  const int nregions, const double *regionattributes,
@@ -673,15 +698,16 @@ void triangulate_polygon
     char options[255];
     triangulateio in, out;
 
-    std::string verbosity, vol, quality;
+    std::string verbosity, vol, quality, steiner;
     set_verbosity_str(verbosity, meshing_verbosity);
     set_volume_str(vol, max_area);
     set_2d_quality_str(quality, min_angle);
+    set_steiner_str(steiner, max_steiner_factor, npoints, max_area);
 
     if( nregions > 0 )
-        std::sprintf(options, "%s%spjz%sA", verbosity.c_str(), quality.c_str(), vol.c_str());
+        std::sprintf(options, "%s%spjz%s%sA", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
     else
-        std::sprintf(options, "%s%spjz%s", verbosity.c_str(), quality.c_str(), vol.c_str());
+        std::sprintf(options, "%s%spjz%s%s", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
 
     if( meshing_verbosity >= 0 )
         std::cout << "The meshing option is: " << options << '\n';
@@ -2605,7 +2631,7 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
 #else
 
     triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity,
+                        mesh.meshing_verbosity, mesh.max_steiner_factor,
                         npoints, n_init_segments, points,
                         init_segments, init_segflags,
                         n_regions, regattr,
@@ -2638,7 +2664,7 @@ void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
     /* For triangulation of boundary surfaces in 3D */
 
     triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity,
+                        mesh.meshing_verbosity, mesh.max_steiner_factor,
                         npoints, n_init_segments, points,
                         init_segments, init_segflags,
                         n_regions, regattr,

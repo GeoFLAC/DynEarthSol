@@ -1,12 +1,84 @@
-FROM nvcr.io/nvidia/nvhpc:25.7-devel-cuda12.9-ubuntu24.04
+# Build environment for the nvc++ / OpenACC CI jobs (.github/workflows/nvc-build.yml).
+#
+# The upstream nvhpc devel image unpacks to roughly 20 GB, and GitHub-hosted
+# runners have no image cache between jobs, so every matrix job pays the full
+# pull under "Starting job container". These builds use only the compilers plus
+# the CUDA headers and libraries, so the rest of the SDK is deleted in a builder
+# stage and the survivors are copied onto a clean base. Deleting in a single
+# stage would not shrink the pull at all -- the parent layers would still carry
+# the files.
 
+FROM nvcr.io/nvidia/nvhpc:25.7-devel-cuda12.9-ubuntu24.04 AS sdk
+
+# Keep in sync with the image tag above.
+ENV NVHPC_DIR=/opt/nvidia/hpc_sdk/Linux_x86_64/25.7
+
+# comm_libs   MPI, NCCL, NVSHMEM      -- DynEarthSol is OpenMP/OpenACC only.
+# math_libs   cuBLAS, cuFFT, cuSOLVER -- nothing in the build links them.
+# profilers   Nsight Systems/Compute  -- CI compiles, it never profiles.
+# REDIST      deploy-time copies of the compiler runtimes.
+# The nvtx headers the nprof build needs live under cuda/, which is kept whole.
+RUN set -eux; \
+    du -sh "$NVHPC_DIR"; \
+    cd "$NVHPC_DIR"; \
+    rm -rf comm_libs math_libs profilers examples REDIST; \
+    du -sh "$NVHPC_DIR"
+
+
+# The Ubuntu release here MUST match the -ubuntu24.04 suffix of the image above:
+# nvc++ has no C++ standard library of its own and drives the system GNU
+# toolchain for headers, startup files and ld, using paths baked into
+# compilers/bin/localrc when the upstream image was built.
+FROM ubuntu:24.04
+
+ENV NVARCH=Linux_x86_64
+ENV NVHPC_DIR=/opt/nvidia/hpc_sdk/${NVARCH}/25.7
+# cuda/bin carries nvcc, which is a separate entry from compilers/bin in the
+# upstream image. knn-bvh calls nvcc unqualified and derives CUDA_HOME from
+# `which nvcc`, so dropping it here would both fail the compile and silently
+# point that build at the wrong include tree.
+ENV PATH=${NVHPC_DIR}/compilers/bin:${NVHPC_DIR}/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=${NVHPC_DIR}/compilers/lib:${NVHPC_DIR}/cuda/lib64
+
+COPY --from=sdk /opt/nvidia/hpc_sdk /opt/nvidia/hpc_sdk
+
+# The devel image carried a full distro toolchain that a bare Ubuntu base does
+# not, and the build leans on more of it than just the compiler:
+#   gcc, g++       nvc++ has no standard library of its own (see the FROM note),
+#                  and the mmg build names them explicitly.
+#   git            the Makefile initialises the nanoflann, knn-bvh and mmg
+#                  submodules itself and aborts outright when git is missing;
+#                  the workflow also marks the checkout a safe.directory first.
+#   ca-certificates  so those submodule fetches can reach github.com.
+#   cmake          configures the mmg submodule for the usemmg=1 job.
 RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
+    ca-certificates \
+    cmake \
+    g++ \
+    gcc \
+    git \
     libboost-program-options-dev \
     libhdf5-serial-dev \
     make \
     pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
-ENV NVARCH=Linux_x86_64
-ENV NVHPC_DIR=/opt/nvidia/hpc_sdk/${NVARCH}/25.7
+# Fail here, while the image is still being built, rather than after it has been
+# pushed to the :latest tag that every GPU branch pulls. The flags mirror what
+# the workflow's four make variants actually use, so that a prune which removed
+# something they need cannot reach the tag.
+COPY docker/acc_check.cxx docker/nvcc_check.cu /tmp/
+RUN set -eux; \
+    for tool in cmake g++ gcc git make nvc++ nvcc pkg-config; do \
+        command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }; \
+    done; \
+    nvcc -std=c++14 -arch=sm_80 -dc /tmp/nvcc_check.cu -o /tmp/nvcc_check.o; \
+    nvc++ -acc=gpu -cuda -DACC -gpu=mem:managed -fopenmp -DNPROF \
+          -I"$NVHPC_DIR/cuda/include" -c /tmp/acc_check.cxx -o /tmp/acc_check.o; \
+    nvc++ -acc=gpu -gpu=mem:managed -cuda -fopenmp /tmp/acc_check.o \
+          $(pkg-config --libs hdf5-serial) -lboost_program_options \
+          -o /tmp/acc_check; \
+    rm -f /tmp/acc_check.cxx /tmp/nvcc_check.cu /tmp/acc_check.o \
+          /tmp/nvcc_check.o /tmp/acc_check

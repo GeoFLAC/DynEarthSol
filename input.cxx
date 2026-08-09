@@ -176,6 +176,14 @@ static void declare_parameters(po::options_description &cfg,
         // for 2D only
         ("mesh.min_angle", po::value<double>(&p.mesh.min_angle)->default_value(32.),
          "Min. angle of all triangles (in degrees), for 2D only")
+        ("mesh.max_steiner_factor", po::value<double>(&p.mesh.max_steiner_factor)->default_value(30.),
+         "Cap on the number of Steiner points Triangle may insert while (re)meshing, "
+         "expressed as a multiple of the number of input nodes (2D only). This bounds the "
+         "pathological, non-terminating segment splitting that Triangle can enter when two "
+         "boundary segments meet at a very small angle (e.g. a highly distorted mesh at "
+         "extreme strain), which would otherwise spin forever and exhaust memory. The cap is "
+         "far above any healthy remesh, so normal meshing is unaffected. Set <= 0 to disable "
+         "the cap (Triangle default: unlimited).")
         // for 3D only
         ("mesh.min_tet_angle", po::value<double>(&p.mesh.min_tet_angle)->default_value(22.),
          "Min. dihedral angle of all tetrahedra (in degrees), for 3D only")

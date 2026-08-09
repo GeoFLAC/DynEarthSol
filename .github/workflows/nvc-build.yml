@@ -68,7 +68,7 @@ jobs:
         with:
           filters: |
             docker_changed:
-              - 'docker/Dockerfile.cuda'
+              - 'docker/**'
 
   build-and-push-image:
     needs: detect-changes
@@ -101,11 +101,17 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile.cuda
-          push: true
           tags: ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:latest
 
+          # zstd layers decompress far faster than gzip, which is most of what
+          # "Starting job container" spends its time on. It needs OCI media
+          # types, and the provenance attestation is disabled so the pushed tag
+          # stays a plain image manifest for the runner to pull.
+          outputs: type=image,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          provenance: false
+
           cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max
+          cache-to: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/nvhpc-build-env:buildcache,mode=max,compression=zstd
 
   nvc-build:
     needs: [check-duplicate, detect-changes, build-and-push-image]
@@ -136,23 +142,19 @@ jobs:
     - name: Fix git safe directory
       run: git config --global --add safe.directory '*'
 
-    - name: set path for nvc and hdf5 (${{ matrix.ndims }}D)
+    - name: set path for nvc (${{ matrix.ndims }}D)
+      # No HDF5_*_DIR: the Makefile finds the paths itself.
       run: |
-        HDF5_INC=$(pkg-config --cflags-only-I hdf5-serial | sed 's/-I//g' | tr -d ' ')
-        HDF5_LIB=$(pkg-config --libs-only-L hdf5-serial | sed 's/-L//g' | tr -d ' ')
-        
-        echo "HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
-        echo "HDF5_LIB_DIR=$HDF5_LIB" >> $GITHUB_ENV
-        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR HDF5_LIB_DIR=$HDF5_LIB HDF5_INCLUDE_DIR=$HDF5_INC" >> $GITHUB_ENV
+        echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR" >> $GITHUB_ENV
 
     - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
-      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 SM=80
+      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 SM=80 -j
 
     - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1 usemmg=1
-      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 usemmg=1 SM=80
+      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 usemmg=1 SM=80 -j
 
     - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80 hdf5=1
-      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 nprof=1 SM=80
+      run: make cleanall openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 nprof=1 SM=80 -j
 
     - name: make ndims=${{ matrix.ndims }} nprof=1 opt=0 hdf5=1
-      run: make cleanall && $BASE_MAKE ndims=${{ matrix.ndims }} hdf5=1 nprof=1 opt=0
+      run: make cleanall ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} hdf5=1 nprof=1 opt=0 -j

@@ -183,6 +183,7 @@ struct Mesh {
     double largest_size;
     double sediment_size;
     double min_angle;  // for 2D only
+    double max_steiner_factor; // cap Triangle Steiner points at factor*npoints; <=0 unlimited (2D only)
     double min_tet_angle, max_ratio; // for 3D only
     double min_quality;
     double max_boundary_distortion;

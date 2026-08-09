@@ -326,9 +326,25 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
 
         // height of marker
         double dv_apply = (*var.volume)[e] / nmarkers;
-        edvacc[i] -= dv_apply;
-
         double edh = dv_apply / base;
+
+        // Guard against a DEGENERATE (near-zero-area) surface facet -- e.g. a collapsed "cliff" at a
+        // convergent trench. There dv_apply/base blows up, so the marker (placed edh below the
+        // surface) lands absurdly far down (observed z ~ -2.5e13 m for a 1.5e5 m-deep domain), where
+        // it cannot be located in any element -- the old code then aborted the whole run (exit 168).
+        // A well-formed deposit sits a small fraction of an element below the surface (edh << element
+        // size); only a degenerate facet drives edh past the element's own scale. Skip deposition on
+        // such a facet and KEEP edvacc, so it deposits once the next remesh regularises the surface.
+        double char_size = std::sqrt((*var.volume)[e]);
+#ifdef THREED
+        char_size = std::cbrt((*var.volume)[e]);
+#endif
+        if (!(base > 0.0) || edh > 2.0 * char_size) {
+            (*var.etmp_int)[i] = -1;   // no marker from this facet this step
+            continue;
+        }
+
+        edvacc[i] -= dv_apply;
         mcoord[NDIMS-1] -= edh * marker_dh_applied_ratio;
 
         ConstArrayIndirectAccessor coord1 = var.coord->view_const((*var.connectivity)[e]);
@@ -345,20 +361,15 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
             remap_marker(var, mcoord, e, elem_dest, eta0, inc);
 
             if (!inc) {
-                // msg += "... Success!\n";
-                // printf("%s", msg.c_str());
-            // } else {
-                char buffer[200];
-                sprintf(buffer, "  A generated marker (mat=%d) in element %7d is trying to remap in elements ",
-                        mattype, e);
-                std::string msg(buffer);
-                printf("%s", msg.c_str());
-                printf("... Surface marker generated fail!\n Coordinate: ");
+                // The degenerate-facet guard above prevents the known trench pathology. A deposited
+                // marker that STILL cannot be located in element e's neighbourhood is unexpected, so
+                // fail fast with the offending geometry rather than silently dropping the sediment.
+                printf("  A generated marker (mat=%d) in element %d could not be remapped"
+                       " -- Surface marker generated fail! Coordinate:", mattype, e);
                 for (int j=0; j<NDIMS; j++) printf(" %f", mcoord[j]);
-                printf("\neta: ");
-                for (int j=0; j<NDIMS; j++) printf(" %d %f", j, eta0[j]); 
+                printf("  eta:");
+                for (int j=0; j<NDIMS; j++) printf(" %f", eta0[j]);
                 printf("\n");
-
                 std::exit(168);
             }
         }
@@ -888,9 +899,9 @@ template <class T>
 void MarkerSet::read_chkpt_file(Variables &var, T &bin_save, T &bin_chkpt)
 {
 #ifdef HDF5
-    bin_save.read_scaler(_nmarkers, _name + ".nmarkers");
-    bin_chkpt.read_scaler(_last_id, _name + ".last_id");
-    bin_chkpt.read_scaler(_reserved_space, _name + ".reserved_space");
+    bin_save.read_scalar(_nmarkers, _name + ".nmarkers");
+    bin_chkpt.read_scalar(_last_id, _name + ".last_id");
+    bin_chkpt.read_scalar(_reserved_space, _name + ".reserved_space");
 #else
     int_vec itmp(3);
     bin_chkpt.read_array(itmp, (_name + " size").c_str());
@@ -1800,7 +1811,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     int nunplenished = 0;
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param, var) reduction(+:nunplenished)
+    #pragma omp parallel for default(none) shared(param, var) reduction(+:nunplenished)
 #endif
     #pragma acc parallel loop gang vector reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {

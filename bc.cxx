@@ -337,6 +337,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     };
 #else
     double zmin = 0;
+    #pragma acc enter data copyin(zmin) async
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
 #endif
@@ -366,7 +367,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #ifdef THREED
     #pragma acc parallel loop gang vector async copyin(lateral_faces[0:4])
 #else
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop gang vector async present(zmin)
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -624,6 +625,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             }
         }
     }
+#ifndef THREED
+    #pragma acc exit data copyout(zmin) async
+#endif
+    #pragma acc wait
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -740,8 +745,16 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                     }
                 }
                 else {
-                    // sidewalls
+                    // sidewalls: lithostatic support pressure (Archimedes) from the exterior column.
+                    // Floor at zero: for a wall facet ABOVE the datum (zcenter > 0, wall-edge
+                    // topography) ref_pressure_option 0/4 extrapolate linearly NEGATIVE, which would
+                    // flip the traction into an unphysical OUTWARD suction that actively pulls the
+                    // topographic strip out of the domain. The true exterior there is air/vacuum
+                    // (zero traction), so clamp. Options 1/2/3 already return 0 above the datum, so
+                    // this only changes options 0/4; below the datum (the usual case) p > 0 and the
+                    // clamp is inert -> normal runs are bit-identical.
                     p = ref_pressure(param, zcenter);
+                    if (p < 0.0) p = 0.0;
                 }
 
                 (*var.etmp_int)[e] = n;

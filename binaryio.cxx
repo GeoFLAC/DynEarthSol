@@ -26,15 +26,17 @@ namespace std { using ::snprintf; }
  * 2  The rests are binary data.
  ****************************************************************************/
 
+// Revision number of the binary file format. Bump it whenever the layout
+// of the header or of the data written after it changes.
+#define BINARY_FILE_REVISION 4
+/* Revision notes:
+ * 4: Add write/read scalar for binary io
+ */
+
 namespace {
     const std::size_t headerlen = 4096;
-    const char revision_str[] = "# DynEarthSol ndims="
-#ifdef THREED
-        "3"
-#else
-        "2"
-#endif
-        " revision=3\n";
+    const std::string revision_str = "# DynEarthSol ndims=" + std::to_string(NDIMS)
+                                   + " revision=" + std::to_string(BINARY_FILE_REVISION) + "\n";
 }
 
 
@@ -72,7 +74,7 @@ BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
     }
 
     header = new char[headerlen]();
-    hd_pos = std::strcat(header, revision_str);
+    hd_pos = std::strcat(header, revision_str.c_str());
     eof_pos = headerlen;
 
     std::fseek(f, eof_pos, SEEK_SET);
@@ -118,6 +120,21 @@ void BinaryOutput::write_header(const char *name)
     }
     hd_pos = std::strncat(hd_pos, buffer, len);
 }
+
+template <typename T>
+void BinaryOutput::write_scalar(const T& A, const std::string& name)
+{
+    write_header(name.c_str());
+    std::size_t n = std::fwrite(&A, sizeof(T), 1, f);
+    eof_pos += n * sizeof(T);
+}
+
+
+// explicit instantiation
+template
+void BinaryOutput::write_scalar<int>(const int& A, const std::string& name);
+template
+void BinaryOutput::write_scalar<double>(const double& A, const std::string& name);
 
 // XXX: when A is *var.bcflag, i.e. T is uint, g++ cannot instantiate the template
 template <typename T>
@@ -226,7 +243,7 @@ void BinaryInput::read_header()
 
     // Compare revision string (excluding the trailing new line)
     line = std::strtok(header, "\n");
-    if (strncmp(line, revision_str, strlen(revision_str)-1) != 0) {
+    if (strncmp(line, revision_str.c_str(), revision_str.size()-1) != 0) {
         std::cerr << "Error: mismatching revision string in header\n"
                   << "  Expect: " << revision_str
                   << "  Got: "<< line << '\n';
@@ -266,6 +283,25 @@ void BinaryInput::seek_to_array(const char *name)
     //std::cout << name << ' ' << loc << '\n';
     std::fseek(f, loc, SEEK_SET);
 }
+
+
+template <typename T>
+void BinaryInput::read_scalar(T& A, const std::string& name)
+{
+    seek_to_array(name.c_str());
+    std::size_t n = std::fread(&A, sizeof(T), 1, f);
+    if (n != 1) {
+        std::cerr << "Error: cannot read scalar: " << name << '\n';
+        std::exit(1);
+    }
+}
+
+
+// explicit instantiation
+template
+void BinaryInput::read_scalar<int>(int& A, const std::string& name);
+template
+void BinaryInput::read_scalar<double>(double& A, const std::string& name);
 
 
 template <typename T>
@@ -404,7 +440,7 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
 void HDF5Output::write_header()
 {
     write_attribute(NDIMS, "ndims", file_id);
-    write_attribute(3, "revision", file_id);
+    write_attribute(BINARY_FILE_REVISION, "revision", file_id);
 
     hid_t gid = create_group_with_order("/VTKHDF");
 
@@ -902,6 +938,12 @@ void HDF5Input::read_header()
     H5Tclose(atype);
     H5Aclose(attr);
 
+    if (ndims != NDIMS) {
+        std::cerr << "Error: mismatching ndims in HDF5 file\n"
+                  << "  Expect: " << NDIMS << "  Got: " << ndims << '\n';
+        std::exit(1);
+    }
+
     if (H5Aexists(file_id, "revision") <= 0) {
         std::cerr << "Error: missing attribute revision in HDF5 file\n";
         std::exit(1);
@@ -914,6 +956,12 @@ void HDF5Input::read_header()
     H5Aread(attr, atype, &revision);
     H5Tclose(atype);
     H5Aclose(attr);
+
+    if (revision != BINARY_FILE_REVISION) {
+        std::cerr << "Error: mismatching revision in HDF5 file\n"
+                  << "  Expect: " << BINARY_FILE_REVISION << "  Got: " << revision << '\n';
+        std::exit(1);
+    }
 }
 
 HDF5Input::~HDF5Input()
@@ -931,7 +979,7 @@ bool HDF5Input::has_array(const char *name) const
 }
 
 template <typename T>
-void HDF5Input::read_scaler(T& A, const std::string& name)
+void HDF5Input::read_scalar(T& A, const std::string& name)
 {
     hid_t dset_id = H5Dopen2(file_id, name.c_str(), H5P_DEFAULT);
     if (dset_id < 0) {
@@ -979,9 +1027,9 @@ void HDF5Input::read_scaler(T& A, const std::string& name)
 }
 
 template
-void HDF5Input::read_scaler<int>(int& A, const std::string& name);
+void HDF5Input::read_scalar<int>(int& A, const std::string& name);
 template
-void HDF5Input::read_scaler<double>(double& A, const std::string& name);
+void HDF5Input::read_scalar<double>(double& A, const std::string& name);
 
 template <typename T>
 void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size)

@@ -775,6 +775,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             de[i] = edot[i] * var.dt;
         }
 
+        // delta_plstrain is the plastic-strain increment of THIS step (output as
+        // "plastic strain-rate" after /dt, and read by the earthquake-state check). Only the
+        // plastic branches write it, so clear it here: an evp/evp_rsf element that takes the
+        // viscous branch, or an elastic/viscous/maxwell element, would otherwise keep the value
+        // from the last time it yielded forever. That stale value is then smeared across the
+        // mesh by the nearest-neighbour remap at each remesh, growing a spurious nonzero halo
+        // that diffuses out of the yielding zones. Resetting to 0 makes it a true per-step rate.
+        delta_plstrain[e] = 0.;
+
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
             {
