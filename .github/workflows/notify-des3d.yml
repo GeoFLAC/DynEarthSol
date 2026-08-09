@@ -1,0 +1,53 @@
+name: Notify des3d when a PR merges
+
+# Sends a repository_dispatch to GeoFLAC/des3d (the user-docs site) whenever
+# a PR merges to master/main, so its dynearthsol-pr-notify.yml workflow can
+# triage whether the change needs a doc update. Mirrors notify-inputgen.yml.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to (re-)notify des3d about'
+        required: true
+
+jobs:
+  notify:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: des3d
+
+      - name: Dispatch event to des3d
+        env:
+          APP_TOKEN: ${{ steps.generate_token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "ERROR: APP_TOKEN is empty — token generation failed"
+            exit 1
+          fi
+          payload=$(jq -n --arg number "$PR_NUMBER" \
+            '{"event_type":"dynearthsol-pr-merged","client_payload":{"number":$number}}')
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $APP_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/GeoFLAC/des3d/dispatches" \
+            -d "$payload")
+          echo "Dispatch HTTP status: $http_code"
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "Dispatch created (HTTP $http_code) for PR #$PR_NUMBER"
+          else
+            echo "Dispatch failed (HTTP $http_code)"
+            exit 1
+          fi
