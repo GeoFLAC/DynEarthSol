@@ -792,14 +792,34 @@ double calculate_characteristic_force(const Param& param, Variables& var, elem_c
     // the nominal value), but that is tunable via PT_relative_tolerance; if a
     // truly background-free scale is ever needed, build it from the boundary/
     // imposed-BC tractions (remesh-invariant and stateless), not a snapshot.
+    //
+    // Velocity-Dirichlet DOFs are excluded from this sum, mirroring exactly
+    // how calculate_residual_force()'s numerator zeroes them in update_force()
+    // (their reactions are not out-of-balance forces, so they should not
+    // inflate the scale either -- otherwise the ratio compares a numerator
+    // over free DOFs against a denominator over a different, larger DOF set).
     double l2 = 0.0;
     double num = var.nnode * NDIMS;
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, tmp_result, num) reduction(+:l2)
+    #pragma omp parallel for default(none) shared(param, var, tmp_result, num) reduction(+:l2)
 #endif
     #pragma acc parallel loop gang vector reduction(+:l2) async
     for (int n = 0; n < var.nnode; ++n) {
+        uint flag = (*var.bcflag)[n];
+        bool fix[NDIMS];
+        for (int j = 0; j < NDIMS; ++j) fix[j] = false;
+        if (flag & BOUND_ANY) {
+            if (flag & BOUNDX0) constrained_dofs(param.bc.vbc_x0, 0, fix);
+            if (flag & BOUNDX1) constrained_dofs(param.bc.vbc_x1, 0, fix);
+#ifdef THREED
+            if (flag & BOUNDY0) constrained_dofs(param.bc.vbc_y0, 1, fix);
+            if (flag & BOUNDY1) constrained_dofs(param.bc.vbc_y1, 1, fix);
+#endif
+            if (flag & BOUNDZ0) constrained_dofs(param.bc.vbc_z0, NDIMS-1, fix);
+            if (flag & BOUNDZ1) constrained_dofs(param.bc.vbc_z1, NDIMS-1, fix);
+        }
+
         double g[NDIMS];
         for (int j = 0; j < NDIMS; ++j) g[j] = 0;
         for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
@@ -809,7 +829,7 @@ double calculate_characteristic_force(const Param& param, Variables& var, elem_c
             for (int i = 0; i < NODES_PER_ELEM; i++) {
                 if (n == conn[i]) {
                     for (int j = 0; j < NDIMS; j++)
-                        g[j] += std::fabs(tr[i+NODES_PER_ELEM*j]);
+                        if (!fix[j]) g[j] += std::fabs(tr[i+NODES_PER_ELEM*j]);
                     break;
                 }
             }
