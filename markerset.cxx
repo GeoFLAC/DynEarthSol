@@ -49,7 +49,7 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         break;
     default:
         std::cerr << "Error: unknown init_marker_option: " << param.markers.init_marker_option << ". The only valid option is '1'.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
         break;
     }
 
@@ -61,7 +61,7 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         if (num_markers_in_elem <= 0) {
             std::cerr << "Error: no marker in element #" << e
                       << ". Please increase the number of markers.\n";
-            std::exit(1);
+            die(EXIT_RUNTIME_RESOURCE);
         }
     }
 }
@@ -370,7 +370,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
                 printf("  eta:");
                 for (int j=0; j<NDIMS; j++) printf(" %f", eta0[j]);
                 printf("\n");
-                std::exit(168);
+                die(EXIT_RUNTIME_LOOKUP);
             }
         }
 
@@ -690,7 +690,7 @@ int MarkerSet::initial_mattype( const Param& param, const Variables &var,
             break;
         default:
             std::cerr << "Error: unknown ic.mattype_option: " << param.ic.mattype_option << '\n';
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
     }
     return mt;
@@ -1469,8 +1469,7 @@ namespace {
         }
 
         if (is_no_nn) {
-            std::cerr << "Error: no nearest neighbor found for some new markers.\n";
-            std::exit(168);
+            die(EXIT_RUNTIME_LOOKUP, "no nearest neighbor found for some new markers.");
         }
 
         // Append new markers to the end of the marker set.
@@ -1525,9 +1524,9 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 
     if (_nmarkers != ncount) {
         std::cerr << "Error: markers count mismatch: " << _nmarkers << " vs " << ncount << '\n';
-        std::exit(1);
+        die(EXIT_INTERNAL_ASSERT);
     } else if (is_error > 0) {
-        std::exit(1);
+        die(EXIT_INTERNAL_ASSERT);
     }
 
 #ifdef NPROF
@@ -1725,7 +1724,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             break;
         default:
             std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
 
         // for (int i=0; i<var.ntop_elems; i++) {
@@ -1866,7 +1865,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
 #ifdef NPROF_DETAIL

@@ -628,7 +628,7 @@ void initial_weak_zone(const Param &param, const Variables &var,
     }
     default:
         std::cerr << "Error: unknown weakzone_option: " << param.ic.weakzone_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     #pragma acc parallel loop gang vector
@@ -1015,7 +1015,7 @@ void initial_temperature(const Param &param, const Variables &var,
         break;
     default:
         std::cout << "Error: unknown ic.temperature option: " << param.ic.temperature_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     double max_temp = 0.0;

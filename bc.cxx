@@ -154,7 +154,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 #ifdef THREED
                     std::cerr << bnormals[i][2] << " - " << normal[2] << '\n';
 #endif
-                    std::exit(1);
+                    die(EXIT_MESH_QUALITY);
                 }
             }
         }
@@ -1736,8 +1736,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         break;
     case 102:
 #ifdef THREED
-        std::cout << "3D deposition of sediment processes is not ready yet.";
-        exit(168);
+        die(EXIT_UNSUPPORTED_DIM, "3D deposition of sediment processes is not ready yet.");
 #else
         simple_diffusion(var);
         if (var.steps != 0) {
@@ -1749,7 +1748,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         break;
     default:
         std::cout << "Error: unknown surface process option: " << param.control.surface_process_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
 #ifndef ACC

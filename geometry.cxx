@@ -1633,7 +1633,7 @@ double compute_dt(const Param& param, Variables& var)
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
         var.output->write_exact_error(var);
-        std::exit(11);
+        die(EXIT_RUNTIME_NAN);
     }
     
 #ifdef NPROF
@@ -1773,7 +1773,7 @@ void compute_mass(const Param &param, const Variables &var,
             std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
                       << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
                       << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
-            std::exit(11);
+            die(EXIT_CONFIG_VALUE);
         }
     }
 

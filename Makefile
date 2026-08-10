@@ -693,6 +693,7 @@ SRCS =	\
 	remeshing.cxx \
 	rheology.cxx \
 	runtime_info.cxx \
+	utils.cxx \
 	markerset.cxx \
 	knn.cxx
 

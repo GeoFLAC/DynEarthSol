@@ -224,7 +224,7 @@ void divide_hexahedron_to_tetrahedra_index(ConstRegularAccessor cell, int order,
             conn[3] = cell[7];
             break;
         default:
-            exit(554);
+            die(EXIT_INTERNAL_UNREACHABLE);
             break;
         }
     } else {
@@ -261,7 +261,7 @@ void divide_hexahedron_to_tetrahedra_index(ConstRegularAccessor cell, int order,
             conn[3] = cell[6];
             break;
         default:
-            exit(555);
+            die(EXIT_INTERNAL_UNREACHABLE);
             break;
         }
     }
@@ -925,25 +925,25 @@ static void mmg_refine_init_mesh_3d(
                     MMG5_ARG_end);
 
     if (MMG3D_Set_meshSize(mmgMesh, cn, ce, 0, cs, 0, 0) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Vertices: pcoord is already AoS x0,y0,z0,... as produced by TetGen
     if (MMG3D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Tetrahedra: MMG is 1-indexed
     int_vec conn1(ce * NODES_PER_ELEM);
     for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
         conn1[i] = pconn[i] + 1;
     if (MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Boundary triangles: MMG is 1-indexed
     int_vec seg1(cs * NODES_PER_FACET);
     for (int i = 0; i < cs * NODES_PER_FACET; ++i)
         seg1[i] = pseg[i] + 1;
     if (MMG3D_Set_triangles(mmgMesh, seg1.data(), psegflag) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Compute uniform or per-region metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
@@ -952,9 +952,9 @@ static void mmg_refine_init_mesh_3d(
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
     if (MMG3D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- MMG parameters ---
     MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
@@ -970,8 +970,7 @@ static void mmg_refine_init_mesh_3d(
     // --- Run ---
     const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::cerr << "Error: MMG init mesh refinement failed (strong failure)\n";
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG, "MMG init mesh refinement failed (strong failure)");
     }
 
     // --- Free old coarse arrays ---
@@ -1091,25 +1090,25 @@ static void mmg_refine_init_mesh_2d(
                     MMG5_ARG_end);
 
     if (MMG2D_Set_meshSize(mmgMesh, cn, ce, 0, cs) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Vertices
     if (MMG2D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Triangles
     int_vec conn1(ce * NODES_PER_ELEM);
     for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
         conn1[i] = pconn[i] + 1;
     if (MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Edges
     int_vec seg1(cs * NODES_PER_FACET);
     for (int i = 0; i < cs * NODES_PER_FACET; ++i)
         seg1[i] = pseg[i] + 1;
     if (MMG2D_Set_edges(mmgMesh, seg1.data(), psegflag) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Compute metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
@@ -1118,9 +1117,9 @@ static void mmg_refine_init_mesh_2d(
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
     if (MMG2D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Run ---
     MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
@@ -1135,8 +1134,7 @@ static void mmg_refine_init_mesh_2d(
 
     const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::cerr << "Error: MMG2D init mesh refinement failed (strong failure)\n";
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG, "MMG2D init mesh refinement failed (strong failure)");
     }
 
     // --- Free old coarse arrays ---
@@ -1857,12 +1855,12 @@ void my_fgets(char *buffer, std::size_t size, std::FILE *fp,
         if (! s) {
             std::cerr << "Error: reading line " << lineno
                       << " of '" << filename << "'\n";
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if (std::strlen(buffer) == size-1 && buffer[size-2] != '\n') {
             std::cerr << "Error: reading line " << lineno
                       << " of '" << filename << "', line is too long.\n";
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
 
         // check for blank lines and comments
@@ -1896,7 +1894,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     std::FILE *fp = std::fopen(param.mesh.poly_filename.c_str(), "r");
     if (! fp) {
         std::cerr << "Error: Cannot open poly_filename '" << param.mesh.poly_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     int lineno = 0;
@@ -1913,7 +1911,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 4) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (dim != NDIMS ||
@@ -1921,7 +1919,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             nbdrym != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1940,12 +1938,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NDIMS+1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (k != i) {
             std::cerr << "Error: node number is continuous from 0 at line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1959,13 +1957,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 2) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (has_bdryflag != 1) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1982,13 +1980,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 3) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (npolygons <= 0 ||
             nholes != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (bdryflag == 0) goto flag_ok;
         for (int j=0; j<nbdrytypes; j++) {
@@ -1996,7 +1994,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         }
         std::cerr << "Error: bdry_flag has multiple bits set in line " << lineno
                   << " of '" << param.mesh.poly_filename << "'\n";
-        std::exit(1);
+        die(EXIT_CONFIG_DATA);
     flag_ok:
         init_segflags[i] = bdryflag;
 
@@ -2014,7 +2012,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             if (nvertex < NODES_PER_FACET || nvertex > 9999) {
                 std::cerr << "Error: unsupported number of polygon points in line " << lineno
                           << " of '" << param.mesh.poly_filename << "'\n";
-                std::exit(1);
+                die(EXIT_CONFIG_DATA);
             }
 
             f.polygonlist[j].vertexlist = new int[nvertex];
@@ -2026,7 +2024,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                     std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
                               <<"] in line " << lineno << " of '"
                               << param.mesh.poly_filename << "'\n";
-                    std::exit(1);
+                    die(EXIT_CONFIG_DATA);
                 }
             }
         }
@@ -2043,7 +2041,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NODES_PER_FACET+2) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (bdryflag == 0) goto flag_ok;
         for (int j=0; j<nbdrytypes; j++) {
@@ -2051,7 +2049,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         }
         std::cerr << "Error: bdry_flag has multiple bits set in line " << lineno
                   << " of '" << param.mesh.poly_filename << "'\n";
-        std::exit(1);
+        die(EXIT_CONFIG_DATA);
     flag_ok:
         init_segflags[i] = bdryflag;
     }
@@ -2062,7 +2060,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                 std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
                           <<"] in line " << lineno << " of '"
                           << param.mesh.poly_filename << "'\n";
-                std::exit(1);
+                die(EXIT_CONFIG_DATA);
             }
         }
     }
@@ -2077,13 +2075,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (nholes != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -2096,12 +2094,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (nregions <= 0) {
             std::cerr << "Error: nregions <= 0, at line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -2121,13 +2119,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NDIMS+3) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'. "<<NDIMS+3<<" values should be given but only "<<n<<" found.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if ( x[NDIMS] < 0 || x[NDIMS] >= param.mat.nmat ) {
             std::cerr << "Error: "<<NDIMS+2<<"-th value in line "<<lineno<<" should be >=0 and < "<<param.mat.nmat<<" (=mat.num_materials) but is "<<x[NDIMS]<<"\n";
-            std::cerr << "Note that this parameter is directly used as the index of mat. prop. arrays.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA, "Note that this parameter is directly used as the index of mat. prop. arrays.");
         }
 
         if ( x[NDIMS+1] > 0 ) {
@@ -2258,8 +2255,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 {
 
 #ifndef THREED
-    std::cerr << "Error: Importing an exofile currently works in 3D only.\n";
-    std::exit(2);
+    die(EXIT_UNSUPPORTED_DIM, "Importing an exofile currently works in 3D only.");
 #endif
 
     // Open an .exo file.
@@ -2273,7 +2269,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                          &version); /* ExodusII library version */
     if (exoid < 0) {
         std::cerr << "Error: Cannot open exo_filename '" << param.mesh.exo_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     // Read database parameters.
@@ -2285,7 +2281,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                          &num_elem_blk, &num_node_sets, &num_side_sets);
     if( error != 0 ) {
         std::cerr << "Error: Unable to read database parameters from '" << param.mesh.exo_filename << std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
     var.nnode = num_nodes;
     var.nelem = num_elem;
@@ -2297,7 +2293,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     if( param.mat.nmat != num_elem_blk) {
         std::cerr <<"param.mat.nmat is not equal to # of element blocks in this exo file!"<<std::endl;
         std::cerr <<"Check if your material parameters are properly set!!"<<std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
 
     // Assign node coordinates.
@@ -2308,7 +2304,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_coord (exoid, x, y, z);
     if( error != 0 ) {
         std::cerr << "Error: Unable to read coordinates from '" << param.mesh.exo_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
 
     // assign node coordinates to var.coord.
@@ -2339,7 +2335,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_ids (exoid, EX_ELEM_BLOCK, ids);
     if( error != 0 ) {
         std::cerr << "Error: Unable to get element block ids." << std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
     // - Read element block parameters.
     for (int i=0; i<num_elem_blk; i++) {
@@ -2350,11 +2346,11 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         if( error != 0 ) {
             std::cerr << "Error: Unable to element block " << ids[i] ;
             std::cerr << " out of " << num_elem_blk << " blocks." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if( NODES_PER_ELEM != num_nodes_per_elem[i] ) {
             std::cerr << "Error: Element has " << num_nodes_per_elem[i] << " nodes per element but should have "<<NODES_PER_ELEM<<" because element type should be uniformly tetrahedral."<< std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
     }
 
@@ -2384,7 +2380,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         if( error != 0 ) {
             std::cerr << "Error: Unable to connectivity for element block " << ids[i] ;
             std::cerr << " out of " << num_elem_blk << " blocks." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
     }
 
@@ -2422,7 +2418,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_ids (exoid, EX_SIDE_SET, ids);
     if( error != 0 ) {
             std::cerr << "Error: Unable to get side set ids." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
     }
     var.nseg = 0;
     for(int i=0; i<num_side_sets; i++) {
@@ -2430,7 +2426,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                                        &(num_df_in_set[i]));
         if( error != 0 ) {
             std::cerr << "Error: Unable to read "<<i<<"-th side set parameters." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         var.nseg += num_sides_in_set[i];
     }
@@ -2459,14 +2455,14 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         error = ex_get_set (exoid, EX_SIDE_SET, ids[i], elem_list[i], side_list[i]);
         if( error != 0 ) {
             std::cerr << "Error: Unable to read "<< i <<"-th side set." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if (num_df_in_set != NULL) {
             error = ex_get_set_dist_fact (exoid, EX_SIDE_SET, ids[i], dist_fact[i]);
             if( error != 0 ) {
                 std::cerr << "Error: Unable to read "<< i;
                 std::cerr <<"-th side set's distribution factor list." << std::endl;
-                std::exit(2);
+                die(EXIT_IO_RW);
             }
         }
     }
@@ -2641,7 +2637,7 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
 #else
         std::cerr << "Error: triangulation failed\n";
 #endif
-        std::exit(10);
+        die(EXIT_MESH_TETGEN);
     }
 
 }
@@ -2667,8 +2663,7 @@ void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
                         &psegment, &psegflag, &pregattr);
 
     if (nelem <= 0) {
-        std::cerr << "Error: surface triangulation failed\n";
-        std::exit(10);
+        die(EXIT_MESH_TETGEN, "surface triangulation failed");
     }
 #endif
 }
@@ -3198,7 +3193,7 @@ void create_boundary_facets(Variables& var)
                 #pragma omp critical
                 {
                     std::cerr << "Error: " << i << "-th segment is not on any element\n";
-                    std::exit(12);
+                    die(EXIT_INTERNAL_UNREACHABLE);
                 }
             }
         }
@@ -3446,7 +3441,7 @@ void create_new_mesh(const Param& param, Variables& var)
             new_mesh_regular_equilateral(param, var);
         } else {
             std::cout << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
-            std::exit(10);
+            die(EXIT_CONFIG_VALUE);
         }
         break;
     case 2:
@@ -3461,12 +3456,12 @@ void create_new_mesh(const Param& param, Variables& var)
         new_mesh_from_exofile(param, var);
 #else
         std::cout << "Error: Install Exodus library and rebuild with 'useexo' turned on in Makefile." << std::endl;
-        std::exit(1);
+        die(EXIT_UNSUPPORTED_LIB);
 #endif
         break;
     default:
         std::cout << "Error: unknown meshing option: " << param.mesh.meshing_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     if (param.mesh.is_discarding_internal_segments)

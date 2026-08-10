@@ -572,7 +572,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         break;
     default:
         std::cerr << "Error: unknown damping_option: " << param.control.damping_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();

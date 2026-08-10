@@ -14,6 +14,46 @@
 #include <time.h>
 #endif
 
+// Process exit codes: first digit the category, second the cause, so a bare status
+// says where to look -- 1x the user to fix, 2x the environment, 3x-6x ours. Keep in
+// step with DEVELOPING.md. Nothing above 99; the shell reserves 126+.
+enum ExitCode {
+    EXIT_OK                   =  0,
+
+    EXIT_CONFIG               = 10,  // generic config error
+    EXIT_CONFIG_VALUE         = 11,  // value out of range / unknown option
+    EXIT_CONFIG_DATA          = 12,  // malformed input data file (.poly, .exo)
+
+    EXIT_IO_OPEN              = 20,  // cannot open file
+    EXIT_IO_RW                = 21,  // read/write failed (incl. HDF5)
+    EXIT_IO_RESTART           = 22,  // restart/checkpoint mismatch
+
+    EXIT_UNSUPPORTED_DIM      = 30,  // not implemented for this NDIMS
+    EXIT_UNSUPPORTED_LIB      = 31,  // optional library not compiled in
+
+    EXIT_MESH_TETGEN          = 40,  // Triangle / TetGen
+    EXIT_MESH_MMG             = 41,  // MMG
+    EXIT_MESH_QUALITY         = 42,  // mesh quality / topology
+
+    EXIT_RUNTIME_NAN          = 50,  // NaN or non-finite state
+    EXIT_RUNTIME_LOOKUP       = 51,  // marker/geometry lookup failed
+    EXIT_RUNTIME_RESOURCE     = 52,  // resource exhausted
+
+    EXIT_INTERNAL_ASSERT      = 60,  // assertion / invariant violated
+    EXIT_INTERNAL_UNREACHABLE = 61   // unreachable branch
+};
+
+// Terminate with `code`, naming the category so the number never has to be looked up.
+// One-argument form where the site already printed its diagnostic. [[noreturn]] is what
+// keeps -Wreturn-type and -Wsometimes-uninitialized alive across the call sites.
+//
+// Defined in utils.cxx, not inline: this header also carries binary_search_index() with an
+// `acc routine seq`, and where device code calls that routine nvc++ walks the header's
+// statics and gives die() a device version too, which its std::cerr cannot support
+// (NVC++-W-1053). A declaration alone leaves nothing to promote.
+[[noreturn]] void die(ExitCode code);
+[[noreturn]] void die(ExitCode code, const char* msg);
+
 static void print(std::ostream& os, const double& x)
 {
   os << x;
@@ -346,7 +386,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
         } else {
             std::cerr << "Error: " << is_nan << " NaN values found in the variables." << std::endl;
         }
-        std::exit(1);
+        die(EXIT_RUNTIME_NAN);
     }
 #ifdef NPROF
     nvtxRangePop();
