@@ -15,6 +15,8 @@
 ##       1 = low optimization, 2 = default optimized build, 3 = aggressive
 ##       optimizations (-march=native, -O3, etc.).
 ##  - openacc = 1 : enable OpenACC compilation (NVHPC).
+##  - GPU_CC = 80 : GPU compute capability to target, for openacc=1. Default: the
+##       capability of the GPU in this host, else 80. `make config` prints it.
 ##  - openmp = 1 : enable OpenMP parallelization.
 ##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
@@ -98,8 +100,8 @@ BOOST_ROOT_DIR ?= # /path/to/boost
 HDF5_INCLUDE_DIR ?= # /usr/include/hdf5/serial
 HDF5_LIB_DIR ?= # /usr/lib/x86_64-linux-gnu/hdf5/serial
 
-## NVHPC, for openacc=1 and nprof=1. Also where the CUDA toolkit is found, for
-## the nprof profiling build and the 3x3-C sub-make.
+## NVHPC. Blank takes nvc++ from PATH; naming an SDK uses its compilers/bin/nvc++
+## for openacc=1 and nprof, and its CUDA toolkit for nprof's NVTX headers.
 NVHPC_DIR ?= # /cluster/nvidia/hpc_sdk/Linux_x86_64/21.2
 
 ## Package-manager prefixes the macOS searches start from. Chosen by host
@@ -133,12 +135,15 @@ firstfile = $(firstword $(shell for f in $(wildcard $(addsuffix /$(1),$(2))); do
 under = $(if $(strip $(1)),$(addprefix $(strip $(1)),$(2)))
 
 ## Select C++ compiler and set paths to necessary libraries
+## A named NVHPC_DIR picks the compiler out of that SDK, so a host with several
+## installed builds against the one whose CUDA toolkit nprof is also given.
+NVHPC_CXX = $(if $(strip $(NVHPC_DIR)),$(strip $(NVHPC_DIR))/compilers/bin/nvc++,nvc++)
 ifeq ($(openacc), 1)
-	CXX = nvc++
+	CXX = $(NVHPC_CXX)
 	suffix = .gpu
 else
 	ifneq ($(nprof), 0)
-		CXX = nvc++
+		CXX = $(NVHPC_CXX)
 	else
 		# Select compiler based on platform
 		ifeq ($(OSNAME), Darwin)
@@ -573,15 +578,32 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(openacc), 1)
+		## Name the GPU target; origin read before the := below rewrites it to "file".
+		GPU_CC_NOTE := $(if $(filter command line environment,$(origin GPU_CC)),overridden,detected)
+		GPU_CC := $(strip $(GPU_CC))
+		ifeq ($(GPU_CC),)
+			GPU_CC := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
+			            | head -1 | tr -d '.')
+		endif
+		## $(warning) and $(error) indented with SPACES, not a tab -- see the note
+		## at the hdf5 $(error) above.
+		ifeq ($(GPU_CC),)
+			## 80 = A100, what the CI matrix targets. Nothing is known about
+			## the local host here, so this is a guess that at least links.
+			GPU_CC := 80
+			GPU_CC_NOTE := no GPU found, default
+        $(warning No GPU detected via nvidia-smi -- targeting cc$(GPU_CC). Pass GPU_CC=<cc> to override.)
+		endif
+
 		CXXFLAGS += -acc=gpu -cuda -DACC
-		LDFLAGS += -acc=gpu -gpu=mem:managed -cuda
+		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
 		ifeq ($(nofma), 1)
-			CXXFLAGS += -gpu=mem:managed,nofma
+			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
 		else
-			CXXFLAGS += -gpu=mem:managed
+			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed
 			# CXXFLAGS += -gpu=managed
 		endif
 	endif
@@ -759,6 +781,12 @@ endif
 
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
+## GPU_CC goes to the sub-make as itself: it folds the capability into the one -gpu= it
+## assembles, and its flag stamp covers CFLAGS, so a changed capability deletes the
+## objects it invalidates.
+ifeq ($(openacc), 1)
+	C3X3_SUBMAKE = CC=$(NVHPC_CXX) GPU_CC=$(GPU_CC)
+endif
 
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
@@ -769,7 +797,7 @@ CXXFLAGS += -I$(GOSPL_DIR)
 KNN_BVH_DIR = knn-bvh
 ifeq ($(openacc), 1)
 	CXXFLAGS += -I$(KNN_BVH_DIR)/include
-	KNN_BVH_LIB = $(KNN_BVH_DIR)/lib/libknn_bvh.$(ndims)d.a
+	KNN_BVH_LIB = $(KNN_BVH_DIR)/lib/libknn_bvh.$(ndims)d.sm$(GPU_CC).a
 	LDFLAGS += $(KNN_BVH_LIB)
 endif
 
@@ -956,6 +984,10 @@ endif
 	@echo "useexo             $(strip $(useexo))"
 	@echo "use_gospl          $(strip $(use_gospl))"
 	@echo "openacc            $(strip $(openacc))"
+ifeq ($(openacc), 1)
+	@echo "  gpu target       cc$(GPU_CC)   ($(GPU_CC_NOTE))"
+	@echo "  knn-bvh archive  $(KNN_BVH_LIB)"
+endif
 	@echo
 	@echo "CXXFLAGS           $(CXXFLAGS) $(BOOST_CXXFLAGS)"
 	@echo "LDFLAGS            $(LDFLAGS) $(BOOST_LDFLAGS)"
@@ -1117,8 +1149,8 @@ endif
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
-$(KNN_BVH_LIB):
-	$(MAKE) -C $(KNN_BVH_DIR) NDIM=$(ndims)
+$(KNN_BVH_LIB): FORCE
+	@$(MAKE) --no-print-directory -C $(KNN_BVH_DIR) NDIM=$(ndims) SM=$(GPU_CC)
 
 $(TRI_OBJS): %.$(ndims)d$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
 	@# Triangle cannot be compiled with -O2
@@ -1139,10 +1171,9 @@ tetgen/tetgen.$(ndims)d$(suffix).o: tetgen/tetgen.cxx $(TET_INCS) $(BUILD_STAMP)
 tetgen/tetgen: tetgen/predicates.cxx tetgen/tetgen.cxx
 	$(CXX) $(CXXFLAGS) -O0 -DNDEBUG $(TETGENFLAG) tetgen/predicates.cxx tetgen/tetgen.cxx -o $@
 
-$(C3X3_DIR)/lib$(C3X3_LIBNAME).a:
-	@# CUDA_DIR only when there is an NVHPC_DIR to build it from; otherwise this
-	@# handed the sub-make a literal "/cuda" on every single build.
-	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) \
+$(C3X3_DIR)/lib$(C3X3_LIBNAME).a: FORCE
+	@# CUDA_DIR only with an NVHPC_DIR, else the sub-make got a literal "/cuda".
+	@+$(MAKE) -C $(C3X3_DIR) openacc=$(openacc) nofma=$(nofma) $(C3X3_SUBMAKE) \
 		$(if $(strip $(NVHPC_DIR)),CUDA_DIR=$(NVHPC_DIR)/cuda)
 
 clean-submodules:
