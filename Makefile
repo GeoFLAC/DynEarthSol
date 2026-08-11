@@ -42,6 +42,22 @@ ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
 endif
 
+## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
+## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
+KNOWN_VARS = ndims opt openacc openmp nprof gprof usemmg useexo use_gospl hdf5 \
+             nofma GPU_CC CXX \
+             BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
+             OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
+             BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
+             PYTHON_VERSION PYTHON_INCLUDE_DIR PYTHON_LIB_DIR \
+             EXO_INCLUDE EXO_LIB_DIR MMG_INCLUDE MMG_LIB_DIR \
+             GOSPL_EXT_DIR CONDA_ENV_PATH
+CMDLINE_VARS = $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v)))
+UNKNOWN_VARS = $(filter-out $(KNOWN_VARS),$(CMDLINE_VARS))
+ifneq ($(UNKNOWN_VARS),)
+$(error unknown make variable(s): $(UNKNOWN_VARS). Known: $(KNOWN_VARS))
+endif
+
 OSNAME := $(shell uname -s)
 
 ########################################################################

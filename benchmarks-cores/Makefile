@@ -53,7 +53,6 @@ VTK := 0
 NDIMS := 3
 INDIR := 0
 EXE := ../dynearthsol$(NDIMS)d
-FUNC := compute_mass
 NUM := 0
 DATE := $(shell date +%Y-%m-%d)
 HOST := $(shell hostname -s)
@@ -61,6 +60,16 @@ KERNEL := CPU
 ifeq ($(ACC), 1)
 	KERNEL := GPU
 	EXE := ../dynearthsol$(NDIMS)d.gpu
+endif
+
+# Reject a knob this Makefile does not know: a misspelled CASES= would otherwise
+# benchmark the default case and report a plausible-looking time.
+KNOWN_VARS = CASE FRAME OMP NDIMS ACC DEBUG NSYS VTK INDIR EXE NUM TFLAG \
+             ORIG CURR KERNEL
+CMDLINE_VARS = $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v)))
+UNKNOWN_VARS = $(filter-out $(KNOWN_VARS),$(CMDLINE_VARS))
+ifneq ($(UNKNOWN_VARS),)
+$(error unknown make variable(s): $(UNKNOWN_VARS). Known: $(KNOWN_VARS))
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
