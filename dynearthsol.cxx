@@ -349,20 +349,12 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.dt, "dt");
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
+        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
         var.steps >= var.info_display_next_step)
         var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
-
-    // Restore the last remesh time (sets the Deborah blend weight at the next
-    // remesh). Old checkpoints lack the field: fall back to var.time, which
-    // shortens the first post-restart interval and biases the blend toward the
-    // NN stress -- the conservative direction.
-    if (bin_chkpt.has_array("last_remesh_time"))
-        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
-    else
-        var.last_remesh_time = var.time;
 
     // Initializing field variables
     {
