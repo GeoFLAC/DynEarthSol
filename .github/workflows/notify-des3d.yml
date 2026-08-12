@@ -4,6 +4,9 @@ name: Notify des3d when a PR merges
 # a PR merges to master/main, so its dynearthsol-pr-notify.yml workflow can
 # triage whether the change needs a doc update. Mirrors notify-inputgen.yml.
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     types: [closed]
