@@ -1126,38 +1126,17 @@ double SurfaceTopo::heff_at(ConstArrayAccessor p, double d) const
     return heff_at(c, d);
 }
 
-void spr_elem_to_node(const Param &param, const Variables &var,
-                      tensor_t *stress_n, double_vec *stressyy_n)
+void compute_spr_blend_weight(const Param &param, const Variables &var)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // ----------------------------------------------------------------
-    // Step A: SPR — recover smooth nodal stresses on the OLD mesh.
-    // Must happen before prepare_interpolation (reads old var.stress,
-    // *var.support, old_coord, old_connectivity — all still old here).
-    //
-    // Pressure-centering: subtract ref_pressure from each old element's
-    // diagonal stress components before SPR, so the polynomial fits the
-    // small deviatoric residual rather than the large lithostatic pressure.
-    // Without centering, independent polynomial fits for σxx and σzz on a
-    // one-sided surface-node patch differ by the amount of the actual
-    // deviatoric stress, but the large-pressure background amplifies any
-    // extrapolation error at boundary nodes. Cold surface ice (η≈visc_max)
-    // has a Maxwell relaxation time of ~250 Myr, so even a tiny artifact
-    // persists throughout the simulation.
-    //
-    // The centering reference is the lithostat below the current (old-mesh)
-    // surface; spr_node_to_elem restores with the same rule on the new mesh.
-    // ----------------------------------------------------------------
-    SurfaceTopo topo;
-    topo.build(param, var);   // old mesh: coord/bnodes still pre-remesh here
-
     // Deborah-number blend weight toward the NN-remapped stress: w = 1 keeps NN
     // (high De, elastic stress memory), w = 0 takes the SPR average (low De,
-    // smoothing). Evaluated on the OLD mesh; visc() reads the stress trace, so
-    // this must precede the pressure-centering below. The weight rides through
-    // the remesh with the other element fields and is consumed in spr_node_to_elem.
+    // smoothing). Evaluated on the OLD mesh, and BEFORE center_stress_to_ref:
+    // visc() reads the stress trace, so centering would change its answer. The
+    // weight rides through the remesh with the other element fields and is
+    // consumed in spr_node_to_elem.
     {
         // De is measured against the time the stress evolved since the last remesh.
         const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
@@ -1185,7 +1164,40 @@ void spr_elem_to_node(const Param &param, const Variables &var,
             (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
         }
     }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
 
+
+void center_stress_to_ref(const Param &param, const Variables &var,
+                          const SurfaceTopo &topo)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // ----------------------------------------------------------------
+    // Reference the stress to the lithostat on the OLD mesh: add ref_pressure to
+    // each element's diagonal components, and record what was added.
+    //
+    // This serves the whole remap, not just the SPR fit that follows it:
+    //  - for the SPR fit, the polynomial then fits the small deviatoric residual
+    //    instead of the steep lithostatic background. Independent fits for σxx and
+    //    σzz on a one-sided surface-node patch differ by the deviatoric stress, and
+    //    a large pressure background amplifies any extrapolation error at boundary
+    //    nodes. Cold surface ice (η≈visc_max) has a Maxwell time of ~250 Myr, so
+    //    even a tiny artifact persists for the whole simulation.
+    //  - for the NN remap, which is the entire stress remap when the SPR chain is
+    //    off, it is what makes the copy depth-aware: a CHANGED element takes stress
+    //    from a source at another depth, and restore_stress_from_ref subtracting
+    //    p_ref at the DESTINATION centroid supplies the lithostat difference.
+    //    Without it the copy carries the source's lithostat and lands ~rho*g*dz
+    //    wrong.
+    //
+    // Must run before prepare_interpolation (reads old var.stress, *var.support,
+    // old_coord, old_connectivity — all still old here). Undone by
+    // restore_stress_from_ref on the new mesh.
+    // ----------------------------------------------------------------
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, topo)
 #endif
@@ -1207,9 +1219,28 @@ void spr_elem_to_node(const Param &param, const Variables &var,
             (*var.stressyy)[e] += p_ref_old;
 
         // Record the reference ADDED here so an unchanged element can subtract the
-        // identical value in Step C' (the new-mesh topo table differs globally).
+        // identical value in restore_stress_from_ref (the new-mesh topo table
+        // differs globally).
         (*var.spr_p_ref_old)[e] = p_ref_old;
     }
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void spr_elem_to_node(const Param &param, const Variables &var,
+                      tensor_t *stress_n, double_vec *stressyy_n)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Step A: recover smooth NODAL stresses from the element-centroid stresses of
+    // the OLD mesh, which center_stress_to_ref has already referenced to the
+    // lithostat. Same old-mesh preconditions as that function.
 
     // dynamic registration of all fields involved in SPR
     const double* in_ptrs[MAX_SPR_FIELDS];
@@ -1253,15 +1284,15 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 }
 
 void spr_node_to_elem(const Param &param, const Variables &var,
+                      const SurfaceTopo &topo,
                       tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // Surface-relative reference, mirror of spr_elem_to_node on the NEW-mesh
-    // surface (create_boundary_nodes already ran in the remesh flow).
-    SurfaceTopo topo;
-    topo.build(param, var);
+    // Step B: nodal SPR stresses -> new element stresses, then reconcile with the
+    // NN remap. topo is the NEW-mesh surface, built by the caller and shared with
+    // restore_stress_from_ref (rasterising it twice would cost ~14 ms in 3-D).
 
     // Pin the top-boundary nodal stress before averaging back to elements: the SPR
     // patch fit is one-sided at surface nodes, its least reliable spot, while the
@@ -1379,7 +1410,24 @@ void spr_node_to_elem(const Param &param, const Variables &var,
         }
     }
 
-    // Step C': Restore reference pressure at new element centroids.
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void restore_stress_from_ref(const Param &param, const Variables &var,
+                             const SurfaceTopo &topo,
+                             tensor_t *stress, double_vec *stressyy)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Undo center_stress_to_ref on the NEW mesh, whatever produced the centered
+    // stress that arrives here: the Deborah blend of NN and SPR, or -- when the SPR
+    // chain is off -- the NN remap alone. Runs last either way.
+    //
+    // Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each
     // new element's depth (below the NEW surface) to recover the total stress.
 #ifndef ACC

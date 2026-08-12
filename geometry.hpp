@@ -65,11 +65,33 @@ struct SurfaceTopo {
 #endif
 };
 
+// The remesh stress remap, in call order. center_/restore_ are the reference
+// round trip and always run; the spr_* pair is the recovery and is skipped when
+// the rheology has no viscous component (then the remap is the NN interpolation
+// plus the round trip, which is what an infinite Maxwell time asks for).
+//
+// Two orderings the compiler cannot enforce:
+//  1. compute_spr_blend_weight BEFORE center_stress_to_ref -- visc() reads the
+//     stress trace, so centering changes the weight it would produce.
+//  2. restore_stress_from_ref LAST -- it undoes the centering for whatever
+//     produced the final centered stress (the blend, or the NN remap alone).
+// Each takes the SurfaceTopo of its own mesh, built once by the caller: old mesh
+// for the weight/centering pair, new mesh for the recovery/restore pair.
+void compute_spr_blend_weight(const Param& param, const Variables& var);
+
+void center_stress_to_ref(const Param& param, const Variables& var,
+                          const SurfaceTopo& topo);
+
 void spr_elem_to_node(const Param& param, const Variables& var,
                       tensor_t* stress_n, double_vec* stressyy_n);
 
 void spr_node_to_elem(const Param& param, const Variables& var,
+                      const SurfaceTopo& topo,
                       tensor_t* stress, double_vec* stressyy);
+
+void restore_stress_from_ref(const Param& param, const Variables& var,
+                             const SurfaceTopo& topo,
+                             tensor_t* stress, double_vec* stressyy);
 
 double compute_dt(const Param& param, Variables& var);
 
