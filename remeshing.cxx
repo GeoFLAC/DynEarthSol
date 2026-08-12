@@ -2920,18 +2920,23 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // rheology, clamping the viscous law into [min_viscosity, max_viscosity], so
     // those two knobs would have picked the remap operator for a run that otherwise
     // never touches them.
-    var.stress_n = new tensor_t(var.nnode);
-    if (param.mat.is_plane_strain)
-        var.stressyy_n = new double_vec(var.nnode);
-    var.spr_blend_weight = new double_vec(var.nelem);
+    const bool spr_stress = (var.mat->rheol_type & MatProps::rh_viscous) != 0;
+    if (spr_stress) {
+        var.stress_n = new tensor_t(var.nnode);
+        if (param.mat.is_plane_strain)
+            var.stressyy_n = new double_vec(var.nnode);
+        var.spr_blend_weight = new double_vec(var.nelem);
+    }
     var.spr_p_ref_old = new double_vec(var.nelem);
 
     {
         SurfaceTopo topo_old;
         topo_old.build(param, var);   // old mesh: coord/bnodes still pre-remesh here
-        compute_spr_blend_weight(param, var);   // before centering: visc() reads the trace
+        if (spr_stress)
+            compute_spr_blend_weight(param, var);   // before centering: visc() reads the trace
         center_stress_to_ref(param, var, topo_old);
-        spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
+        if (spr_stress)
+            spr_elem_to_node(param, var, var.stress_n, var.stressyy_n);
     }
 
     {
@@ -3076,13 +3081,15 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     {
         SurfaceTopo topo_new;
         topo_new.build(param, var);   // new mesh: create_boundary_nodes already ran
-        spr_node_to_elem(param, var, topo_new, var.stress, var.stressyy);
+        if (spr_stress)
+            spr_node_to_elem(param, var, topo_new, var.stress, var.stressyy);
         restore_stress_from_ref(param, var, topo_new, var.stress, var.stressyy);
     }
 
     delete var.stress_n;
-    if (param.mat.is_plane_strain)
-        delete var.stressyy_n;
+    var.stress_n = nullptr;
+    delete var.stressyy_n;
+    var.stressyy_n = nullptr;
     delete var.spr_blend_weight;
     var.spr_blend_weight = nullptr;
     delete var.spr_p_ref_old;

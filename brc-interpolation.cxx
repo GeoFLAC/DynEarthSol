@@ -373,8 +373,18 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     array_t *new_coord0 = new array_t(n);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
-    tensor_t *new_stress_n = new tensor_t(n);
-    interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
+    // Null when remesh() switched the SPR chain off: nothing to carry across.
+    tensor_t *new_stress_n = nullptr;
+    if (var.stress_n) {
+        new_stress_n = new tensor_t(n);
+        interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
+    }
+
+    double_vec *new_stressyy_n = nullptr;
+    if (var.stressyy_n) {
+        new_stressyy_n = new double_vec(n);
+        interpolate_field(brc, el, old_connectivity, *var.stressyy_n, *new_stressyy_n, n);
+    }
 
     delete var.temperature;
     var.temperature = new_temperature;
@@ -401,16 +411,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     delete var.stress_n;
     var.stress_n = new_stress_n;
 
-    if (param.mat.is_plane_strain) {
-        double_vec *new_stressyy_n = new double_vec(n);
-        interpolate_field(brc, el, old_connectivity,
-                          *var.stressyy_n, *new_stressyy_n, n);
-
-        #pragma acc wait
-
-        delete var.stressyy_n;
-        var.stressyy_n = new_stressyy_n;
-    }
+    delete var.stressyy_n;
+    var.stressyy_n = new_stressyy_n;
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
