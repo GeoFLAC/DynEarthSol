@@ -244,7 +244,11 @@ static void declare_parameters(po::options_description &cfg,
          "stress is purely the SPR recovery.")
 
         ("mesh.remesh_deborah_max", po::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
-         "De at or above which the remeshed stress is purely the NN-remapped stress.")
+         "De at or above which the remeshed stress is purely the NN-remapped stress. "
+         "The default puts the two limits two decades apart, which keeps them clear of "
+         "the De = 1 crossover while remesh intervals themselves vary by a factor of a "
+         "few between events; widen it to blend more of the domain, narrow it to make "
+         "the switch sharper. The window width is otherwise untuned.")
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
