@@ -663,19 +663,66 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     //     h_eff(x_i, d_j) = sum_m w_m a_m e^{-k_m d_j} cos(k_m (x_i - x0))
     // (w halves the end modes -- the DCT-I inverse convention). Cost ~ mg^2*ndg
     // multiply-adds once per build; queries are O(1) bilinear lookups.
+    //
+    // Grid count M: the DCT-I is evaluated directly (no FFT), so M carries no
+    // radix or power-of-two constraint -- it only trades surface resolution
+    // against the O(M^2 * ND) build cost, and the two bounds below are that
+    // trade, not properties of the transform:
+    //   NG_MIN -- floor for the bilinearly-queried grid. A surface with few nodes
+    //     needs no modes beyond its own Nyquist count, but the floor costs < 1 %
+    //     of the cap and keeps queries off a coarse staircase.
+    //   NG_MAX -- cost bound. At Nyquist a 10^4-node surface would ask for
+    //     M ~ 2*10^4, i.e. O(10^10) flops at every remesh. Truncating the series
+    //     there is benign at depth: a dropped mode m > M-1 carries
+    //     e^{-pi m d / Lg}, so it only survives in a boundary layer of order
+    //     Lg/(pi*M) below the surface, and at or above the surface (d <= 0)
+    //     zeff() bypasses the table for the exact profile, keeping the
+    //     free-surface pin exact. Aliasing is the part that is NOT benign --
+    //     point-sampling relief finer than the grid folds it onto low-k modes,
+    //     which never attenuate, so the h_eff error stops decaying with depth --
+    //     hence the cell average once the cap bites. Against a 4x-Nyquist
+    //     reference on a +-10 km sawtooth at ntop = 193 (M_nyquist 385, capped to
+    //     257) it removes a 0.4 m (13 kPa) floor below 10 km depth, and costs a
+    //     ~3x smoother h_eff for d under one grid spacing -- shallower than the
+    //     first element centroid, and d <= 0 does not use the table at all.
+    //     That floor is in the REFERENCE, not directly in the stress: an element
+    //     the remesh leaves unchanged cancels it either way, because Step C' of
+    //     spr_node_to_elem subtracts the reference it recorded rather than
+    //     re-evaluating it, so only remeshed elements see the difference.
     if (ntop < 3) return;                       // no meaningful profile: stay columnar
     x0g = x.front();
     Lg  = x.back() - x.front();
     if (Lg <= 0.0) return;
-    int M = 2 * (ntop - 1) + 1;                 // >= Nyquist for the node spacing
-    if (M < 65)  M = 65;
-    if (M > 257) M = 257;
+    const int NG_MIN = 65;                      // ~0.3 Mflop with ND below
+    const int NG_MAX = 257;                     // ~4.3 Mflop with ND below
+    // Depth rows, sqrt-spaced so they crowd the surface where the high-k modes
+    // die. Cost is only linear in ND, so this one is untuned -- cheap to raise.
     const int ND = 65;
+    int M = 2 * (ntop - 1) + 1;                 // >= Nyquist for the node spacing
+    const int M_nyquist = M;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
     double_vec s(M);
     double hmax = 0.0;
+    // Cell-average only where the cap made the grid coarser than the nodes:
+    // at or above Nyquist there is nothing to alias, and point sampling keeps
+    // the reference field of every such mesh unchanged. Where it does average,
+    // hmax -- and so dmax, the table's depth extent -- follows the resampled
+    // profile rather than the node maximum.
+    const bool antialias = (M_nyquist > M);
+    const double dxg = Lg / (M - 1);
     for (int i = 0; i < M; ++i) {
-        const double q[NDIMS] = {x0g + Lg * i / (M - 1), 0.0};
-        s[i] = elev(q);
+        const double xi = x0g + Lg * i / (M - 1);
+        if (antialias) {
+            // The DCT-I samples include both endpoints, so the end cells are half
+            // as wide as the interior ones.
+            s[i] = elev_avg(std::max(xi - 0.5 * dxg, x0g),
+                            std::min(xi + 0.5 * dxg, x0g + Lg));
+        }
+        else {
+            const double q[NDIMS] = {xi, 0.0};
+            s[i] = elev(q);
+        }
         hmax = std::max(hmax, std::abs(s[i]));
     }
     // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half end samples)
@@ -733,11 +780,20 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     y0g = ymin; Lyg = ymax - ymin;
     if (Lg <= 0.0 || Lyg <= 0.0) return;
 
-    // Grid count ~ Nyquist for the surface-node spacing (ntop ~ nside^2), capped:
-    // the DCT table cost scales as M^3 * ndg.
+    // Grid count ~ Nyquist for the surface-node spacing (ntop ~ nside^2), capped.
+    // Same trade as in 2-D above -- the separable DCT-I needs no particular M, the
+    // bounds are a cost window -- but here the table costs O(M^3 * ND), so the cap
+    // is much tighter: 97^3 * 65 ~ 6e7 multiply-adds per remesh (2-D: ~4e6). The
+    // caveat at the cap is also the same, minus the cure: a surface finer than the
+    // grid is point-sampled by the rasterization below, so its short-wavelength
+    // relief aliases onto low-k modes. The 2-D cell average has no cheap
+    // triangle-rasterizing analogue, so 3-D keeps point sampling; if this ever
+    // matters, accumulate area-weighted facet means per cell instead.
+    const int NG_MIN = 33;                      // ~2 Mflop with ND below
+    const int NG_MAX = 97;                      // ~6e7 flop with ND below
     int M = 2 * (int)std::ceil(std::sqrt((double)top.size())) + 1;
-    if (M < 33) M = 33;
-    if (M > 97) M = 97;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
     mg = M; mgy = M;
     const double dxg = Lg / (M - 1), dyg = Lyg / (M - 1);
     const double qnan = std::numeric_limits<double>::quiet_NaN();
@@ -833,7 +889,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
             A[(size_t)m * M + n] = 2.0 * s / (M - 1);
         }
     dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
-    const int ND = 65;
+    const int ND = 65;                          // depth rows, as in the 2-D branch
     ndg = ND;
     heff.assign((size_t)M * M * ND, 0.0);
     double_vec B((size_t)M * M), U((size_t)M * M);
@@ -902,6 +958,36 @@ double SurfaceTopo::elev(const double* p) const
          + fx         * ((1.0 - fy) * r1[0] + fy * r1[1]);
 #endif
 }
+
+#ifndef THREED
+double SurfaceTopo::elev_avg(double xa, double xb) const
+{
+    if (!on) return 0.0;
+    const double len = xb - xa;
+    if (len <= 0.0) {
+        const double q[NDIMS] = {xa, 0.0};
+        return elev(q);
+    }
+    // Trapezoid over every profile segment clipped to [xa, xb]: exact, because
+    // elev() is linear between surface nodes and clamped constant outside them.
+    double area = 0.0;
+    if (xa < x.front()) area += z.front() * (std::min(xb, x.front()) - xa);
+    if (xb > x.back())  area += z.back()  * (xb - std::max(xa, x.back()));
+    std::size_t k = std::upper_bound(x.begin(), x.end(), xa) - x.begin();
+    if (k == 0) k = 1;                        // segment (0,1) is the first one
+    for (; k < x.size() && x[k-1] < xb; ++k) {
+        const double xl = x[k-1], xr = x[k];
+        const double dx = xr - xl;
+        if (dx <= 0.0) continue;              // coincident nodes: zero-width segment
+        const double a = std::max(xa, xl), b = std::min(xb, xr);
+        if (b <= a) continue;
+        const double slope = (z[k] - z[k-1]) / dx;
+        area += 0.5 * ((z[k-1] + slope * (a - xl)) + (z[k-1] + slope * (b - xl)))
+                    * (b - a);
+    }
+    return area / len;
+}
+#endif
 
 double SurfaceTopo::heff_at(const double* p, double d) const
 {
@@ -1020,9 +1106,19 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 #endif
         for (int e = 0; e < var.nelem; ++e) {
             const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
+            // t: position within [De_min, De_max], linear in log10(De) because De
+            // spans decades and neither bound is a physical threshold -- only the
+            // decade between them is meaningful.
             double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
             t = std::min(std::max(t, 0.0), 1.0);
-            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);  // smoothstep
+            // smoothstep: the cubic 3t^2 - 2t^3, i.e. the Hermite interpolant of
+            // (0,0) and (1,1) with w'(0) = w'(1) = 0, so an element
+            // drifting across either bound between remeshes sees the weight change
+            // continuously in value AND rate. A linear ramp kinks at the bounds,
+            // switching remap operator abruptly for elements sitting on one; a
+            // steeper S-curve (e.g. quintic) would need a wider De window to keep
+            // the same mid-range sensitivity. Monotone, and w(t=1/2) = 1/2.
+            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
         }
     }
 

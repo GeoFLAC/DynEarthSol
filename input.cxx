@@ -236,7 +236,8 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
          "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
-         "the last remesh, smoothstep in log10(De): high-De (cold, effectively "
+         "the last remesh. The weight is a smoothstep -- the cubic 3t^2 - 2t^3, flat "
+         "at both ends -- in log10(De): high-De (cold, effectively "
          "elastic) elements keep the NN stress, preserving elastic stress memory; "
          "low-De (weak, viscous) elements take the SPR average, which suppresses "
          "element-scale noise. This sets the De at or below which the remeshed "

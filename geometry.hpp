@@ -57,6 +57,12 @@ struct SurfaceTopo {
     double elev(ConstArrayAccessor p) const;
     double zeff(ConstArrayAccessor p) const;
     double heff_at(ConstArrayAccessor p, double d) const;
+#ifndef THREED
+    // Mean z_surf over [xa, xb], exact for the piecewise-linear profile. build()
+    // resamples with this instead of elev() when the DCT grid is coarser than the
+    // surface nodes, so unresolved relief is averaged rather than aliased.
+    double elev_avg(double xa, double xb) const;
+#endif
 };
 
 void spr_elem_to_node(const Param& param, const Variables& var,
