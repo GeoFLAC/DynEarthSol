@@ -711,6 +711,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // profile rather than the node maximum.
     const bool antialias = (M_nyquist > M);
     const double dxg = Lg / (M - 1);
+    #pragma omp parallel for default(none) \
+        shared(s, M, dxg, antialias) reduction(max:hmax)
     for (int i = 0; i < M; ++i) {
         const double xi = x0g + Lg * i / (M - 1);
         if (antialias) {
@@ -725,32 +727,64 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         }
         hmax = std::max(hmax, std::abs(s[i]));
     }
-    // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half end samples)
-    const double pn = M_PI / (M - 1);
-    double_vec a(M);
-    for (int m = 0; m < M; ++m) {
-        double sum = 0.5 * (s[0] + ((m % 2) ? -s[M-1] : s[M-1]));
-        for (int i = 1; i < M - 1; ++i) sum += s[i] * std::cos(pn * m * i);
-        a[m] = 2.0 * sum / (M - 1);
-    }
     dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
     mg = M;
     ndg = ND;
     heff.assign((size_t)M * ND, 0.0);
-    double_vec cmi((size_t)M * M);              // cos(pi m i/(M-1)) reused for every depth
-    for (int m = 0; m < M; ++m)
-        for (int i = 0; i < M; ++i)
-            cmi[(size_t)m * M + i] = std::cos(pn * m * i);
-    for (int j = 0; j < ND; ++j) {
-        const double u = double(j) / (ND - 1);
-        const double d = dmax * u * u;
+    const double pn = M_PI / (M - 1);
+    double_vec a(M);
+    // cos(pi m i/(M-1)) for every (point, mode), stored point-major: the table below
+    // walks the modes of one point, and the cosines are not symmetric to the last
+    // bit ((pn*m)*i vs (pn*i)*m), so the layout has to match the traversal rather
+    // than transposing the indices at the read.
+    double_vec cmiT((size_t)M * M);
+    double_vec am((size_t)M * ND);              // mode amplitude at each depth
+    // Threaded per point: a point owns a contiguous row of the table, and the sum
+    // over modes keeps serial order, so the table is bit-identical to a serial build
+    // at the default opt=2. Only there: opt=3 adds -ffast-math, which lets the
+    // compiler reassociate that sum, and this traversal then lands ~3 ulp from the
+    // serial one. Same reason there is no `#ifndef ACC` as in the 3-D branch.
+    // Only locals are listed: members (heff, dmax, Lg, ...) reach the region through
+    // `this`, which default(none) does not police, so naming them would not check
+    // anything.
+    #pragma omp parallel default(none) \
+        shared(s, a, am, cmiT, M, ND, pn)
+    {
+        // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half ends)
+        #pragma omp for
         for (int m = 0; m < M; ++m) {
-            const double w  = (m == 0 || m == M - 1) ? 0.5 : 1.0;
-            const double am = w * a[m] * std::exp(-(M_PI * m / Lg) * d);
-            if (std::abs(am) < 1e-30) continue;   // mode fully decayed at this depth
-            const double* c = &cmi[(size_t)m * M];
-            for (int i = 0; i < M; ++i)
-                heff[(size_t)i * ND + j] += am * c[i];
+            double sum = 0.5 * (s[0] + ((m % 2) ? -s[M-1] : s[M-1]));
+            for (int i = 1; i < M - 1; ++i)
+                sum += s[i] * std::cos(pn * m * i);
+            a[m] = 2.0 * sum / (M - 1);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            for (int m = 0; m < M; ++m)
+                cmiT[(size_t)i * M + m] = std::cos(pn * m * i);
+        }
+        // e^{-k_m d_j}, folded together with the DCT-I end weights
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            const double w = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+            for (int j = 0; j < ND; ++j) {
+                const double u = double(j) / (ND - 1);
+                const double d = dmax * u * u;
+                am[(size_t)m * ND + j] = w * a[m] * std::exp(-(M_PI * m / Lg) * d);
+            }
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            double* row = &heff[(size_t)i * ND];
+            const double* crow = &cmiT[(size_t)i * M];
+            for (int m = 0; m < M; ++m) {
+                const double c = crow[m];
+                const double* amr = &am[(size_t)m * ND];
+                for (int j = 0; j < ND; ++j) {
+                    if (std::abs(amr[j]) < 1e-30) continue;  // mode decayed at this depth
+                    row[j] += amr[j] * c;
+                }
+            }
         }
     }
     atten = true;
@@ -798,6 +832,9 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     const double dxg = Lg / (M - 1), dyg = Lyg / (M - 1);
     const double qnan = std::numeric_limits<double>::quiet_NaN();
     gh.assign((size_t)M * M, qnan);
+    // Facets sharing an edge can both cover a grid point, since the barycentric test
+    // carries a tolerance, so the value left there is whichever facet wrote it last:
+    // an order-dependent result, and the reason this rasterization stays serial.
     for (int fi = 0; fi < nfacet; ++fi) {
         const int e = facets[fi].first;
         const int f = facets[fi].second;
@@ -817,7 +854,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         i0 = std::max(i0, 0); i1 = std::min(i1, M - 1);
         j0 = std::max(j0, 0); j1 = std::min(j1, M - 1);
         const double inv_det = 1.0 / det;
-        for (int gi = i0; gi <= i1; ++gi)
+        for (int gi = i0; gi <= i1; ++gi) {
             for (int gj = j0; gj <= j1; ++gj) {
                 const double qx = x0g + gi * dxg - px[0];
                 const double qy = y0g + gj * dyg - py[0];
@@ -827,6 +864,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
                 if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
                 gh[(size_t)gi * M + gj] = l0*pz[0] + l1*pz[1] + l2*pz[2];
             }
+        }
     }
     // Fill grid points the rasterization missed (hull-edge roundoff): nearest valid
     // value along each row, then along each column for fully-missed rows.
@@ -864,66 +902,92 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
     // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
     // (sum'' = half-weight end samples; square grid so one cos table serves both axes)
+    // Then, at each tabulated depth, attenuate every mode by e^{-|k| d} and run the
+    // inverse back to (x, y) as two cosine passes: over n into U, then over m into
+    // the table. Cost is O(M^3) for the forward pair, O(M^3 * ND) for the inverse.
+    //
+    // Threaded as one region: each loop splits the axis that owns its output and the
+    // inner sums keep serial order, so the table is bit-identical to a serial build.
+    // No `#ifndef ACC` -- that guard belongs where a paired `acc parallel loop`
+    // takes over on the device, and this is host-only STL called from serial code.
     const double pn = M_PI / (M - 1);
-    double_vec cmi((size_t)M * M);
-    for (int m = 0; m < M; ++m)
-        for (int i = 0; i < M; ++i)
-            cmi[(size_t)m * M + i] = std::cos(pn * m * i);
-    double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
-    for (int i = 0; i < M; ++i)
-        for (int n = 0; n < M; ++n) {
-            double s = 0.0;
-            for (int j = 0; j < M; ++j) {
-                const double w = (j == 0 || j == M - 1) ? 0.5 : 1.0;
-                s += w * gh[(size_t)i * M + j] * cmi[(size_t)n * M + j];
-            }
-            T[(size_t)i * M + n] = 2.0 * s / (M - 1);
-        }
-    for (int m = 0; m < M; ++m)
-        for (int n = 0; n < M; ++n) {
-            double s = 0.0;
-            for (int i = 0; i < M; ++i) {
-                const double w = (i == 0 || i == M - 1) ? 0.5 : 1.0;
-                s += w * T[(size_t)i * M + n] * cmi[(size_t)m * M + i];
-            }
-            A[(size_t)m * M + n] = 2.0 * s / (M - 1);
-        }
     dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
     const int ND = 65;                          // depth rows, as in the 2-D branch
     ndg = ND;
+    double_vec cmi((size_t)M * M);
+    double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
     heff.assign((size_t)M * M * ND, 0.0);
-    double_vec B((size_t)M * M), U((size_t)M * M);
-    for (int l = 0; l < ND; ++l) {
-        const double u = double(l) / (ND - 1);
-        const double d = dmax * u * u;
-        for (int m = 0; m < M; ++m)
+    #pragma omp parallel default(none) \
+        shared(cmi, T, A, M, ND, pn)
+    {
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int i = 0; i < M; ++i)
+                cmi[(size_t)m * M + i] = std::cos(pn * m * i);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
             for (int n = 0; n < M; ++n) {
-                const double km = M_PI * m / Lg, kn = M_PI * n / Lyg;
-                const double wm = (m == 0 || m == M - 1) ? 0.5 : 1.0;
-                const double wn = (n == 0 || n == M - 1) ? 0.5 : 1.0;
-                B[(size_t)m * M + n] = wm * wn * A[(size_t)m * M + n]
-                                     * std::exp(-std::sqrt(km*km + kn*kn) * d);
-            }
-        // inverse, pass over n: U[m][j] = sum_n B[m][n] cos(pn n j)
-        for (int m = 0; m < M; ++m)
-            for (int j = 0; j < M; ++j) {
                 double s = 0.0;
-                for (int n = 0; n < M; ++n) {
-                    const double b = B[(size_t)m * M + n];
-                    if (std::abs(b) < 1e-30) continue;   // mode fully decayed at this depth
-                    s += b * cmi[(size_t)n * M + j];
+                for (int j = 0; j < M; ++j) {
+                    const double w = (j == 0 || j == M - 1) ? 0.5 : 1.0;
+                    s += w * gh[(size_t)i * M + j] * cmi[(size_t)n * M + j];
                 }
-                U[(size_t)m * M + j] = s;
+                T[(size_t)i * M + n] = 2.0 * s / (M - 1);
             }
-        // inverse, pass over m into the table
-        for (int gi = 0; gi < M; ++gi)
-            for (int gj = 0; gj < M; ++gj) {
+        }
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < M; ++n) {
                 double s = 0.0;
-                for (int m = 0; m < M; ++m)
-                    s += U[(size_t)m * M + gj] * cmi[(size_t)m * M + gi];
-                heff[((size_t)gi * M + gj) * ND + l] = s;
+                for (int i = 0; i < M; ++i) {
+                    const double w = (i == 0 || i == M - 1) ? 0.5 : 1.0;
+                    s += w * T[(size_t)i * M + n] * cmi[(size_t)m * M + i];
+                }
+                A[(size_t)m * M + n] = 2.0 * s / (M - 1);
             }
-    }
+        }
+        // The depths share nothing once A is built, so each is done start to finish
+        // by one thread -- hence a B/U scratch pair per thread, declared here and
+        // built once on entry. dynamic: the pass over n skips modes that have already
+        // decayed, so the deeper the tabulated depth the cheaper it is.
+        double_vec B((size_t)M * M), U((size_t)M * M);
+        #pragma omp for schedule(dynamic)
+        for (int l = 0; l < ND; ++l) {
+            const double u = double(l) / (ND - 1);
+            const double d = dmax * u * u;
+            for (int m = 0; m < M; ++m) {
+                for (int n = 0; n < M; ++n) {
+                    const double km = M_PI * m / Lg, kn = M_PI * n / Lyg;
+                    const double wm = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+                    const double wn = (n == 0 || n == M - 1) ? 0.5 : 1.0;
+                    B[(size_t)m * M + n] = wm * wn * A[(size_t)m * M + n]
+                                         * std::exp(-std::sqrt(km*km + kn*kn) * d);
+                }
+            }
+            // inverse, pass over n: U[m][j] = sum_n B[m][n] cos(pn n j)
+            for (int m = 0; m < M; ++m) {
+                for (int j = 0; j < M; ++j) {
+                    double s = 0.0;
+                    for (int n = 0; n < M; ++n) {
+                        const double b = B[(size_t)m * M + n];
+                        if (std::abs(b) < 1e-30) continue;   // mode fully decayed at this depth
+                        s += b * cmi[(size_t)n * M + j];
+                    }
+                    U[(size_t)m * M + j] = s;
+                }
+            }
+            // inverse, pass over m into the table
+            for (int gi = 0; gi < M; ++gi) {
+                for (int gj = 0; gj < M; ++gj) {
+                    double s = 0.0;
+                    for (int m = 0; m < M; ++m)
+                        s += U[(size_t)m * M + gj] * cmi[(size_t)m * M + gi];
+                    heff[((size_t)gi * M + gj) * ND + l] = s;
+                }
+            }
+        }
+    }   // end of the single parallel region
     atten = true;
 #endif
 }
