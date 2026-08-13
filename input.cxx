@@ -233,6 +233,23 @@ static void declare_parameters(po::options_description &cfg,
          "12: flatten x0 when using fixed bottom boundary.\n"
          "13: move all bottom, left, and right nodes to initial dimensions.\n")
 
+        ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
+         "During remeshing the element stress is a Deborah-number-weighted blend of "
+         "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
+         "the last remesh. The weight is a smoothstep -- the cubic 3t^2 - 2t^3, flat "
+         "at both ends -- in log10(De): high-De (cold, effectively "
+         "elastic) elements keep the NN stress, preserving elastic stress memory; "
+         "low-De (weak, viscous) elements take the SPR average, which suppresses "
+         "element-scale noise. This sets the De at or below which the remeshed "
+         "stress is purely the SPR recovery.")
+
+        ("mesh.remesh_deborah_max", po::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
+         "De at or above which the remeshed stress is purely the NN-remapped stress. "
+         "The default puts the two limits two decades apart, which keeps them clear of "
+         "the De = 1 crossover while remesh intervals themselves vary by a factor of a "
+         "few between events; widen it to blend more of the domain, narrow it to make "
+         "the switch sharper. The window width is otherwise untuned.")
+
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
          "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
@@ -420,6 +437,10 @@ static void declare_parameters(po::options_description &cfg,
 
         ("bc.has_water_loading", po::value<bool>(&p.bc.has_water_loading)->default_value(true),
          "Applying water loading for top boundary that is below sea level?")
+
+        ("bc.sea_water_density", po::value<double>(&p.bc.sea_water_density)->default_value(1030),
+         "Density of the loading water (in kg/m^3). Used for the top-boundary "
+         "water load and for the free-surface stress pin that must match it.")
 
          // pore pressure boundary condition
         ("bc.hbc_x0", po::value<int>(&p.bc.hbc_x0)->default_value(0),
@@ -1113,6 +1134,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         std::cerr << "Error: mesh.smallest_size is greater than mesh.largest_size.\n";
+        std::exit(1);
+    }
+
+    if (p.mesh.remesh_deborah_min <= 0 ||
+        p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
+        std::cerr << "Error: mesh.remesh_deborah_min must be positive and less than mesh.remesh_deborah_max.\n";
         std::exit(1);
     }
 

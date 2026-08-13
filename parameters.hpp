@@ -195,6 +195,10 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
+    double remesh_deborah_min;
+    double remesh_deborah_max;
+
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
@@ -270,6 +274,7 @@ struct BC {
     bool has_elastic_foundation;
 
     bool has_water_loading;
+    double sea_water_density;
 
     int vbc_x0;
     int vbc_x1;
@@ -646,6 +651,7 @@ class MatProps;
 class MarkerSet;
 struct Variables {
     double time;
+    double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
     // double dt_PT;
     double l2_residual;
@@ -760,9 +766,20 @@ struct Variables {
     double_vec *etmp;
     int_vec *etmp_int;
 
-    // For remeshing
+    // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise.
+    // stress_n and spr_blend_weight double as the switch for the SPR recovery:
+    // remesh() leaves them null when the rheology has no viscous component, and each
+    // consumer skips its part of the chain on that.
+    // - stress_n, stressyy_n: SPR-recovered nodal stress
+    // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
+    // - spr_p_ref_old: reference pressure added at pressure-centering, per element
+    // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
+    //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
     tensor_t *stress_n;
     double_vec *stressyy_n;
+    double_vec *spr_blend_weight;
+    double_vec *spr_p_ref_old;
+    int_vec *remesh_is_changed;
 
     // tensor_t *stress_old;
 
@@ -776,6 +793,11 @@ struct Variables {
 
     Variables()
     {
+        stress_n = nullptr;
+        stressyy_n = nullptr;
+        spr_blend_weight = nullptr;
+        spr_p_ref_old = nullptr;
+        remesh_is_changed = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

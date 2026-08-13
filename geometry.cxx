@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <iostream>
@@ -626,46 +627,620 @@ static void spr_fused_fields(const Variables &var,
 #endif
 }
 
-void spr_elem_to_node(const Param &param, const Variables &var,
-                      tensor_t *stress_n, double_vec *stressyy_n)
+void SurfaceTopo::build(const Param& param, const Variables& var)
+{
+    on = false;
+    atten = false;
+    x.clear();
+    z.clear();
+    heff.clear();
+    mg = ndg = 0;
+#ifdef THREED
+    mgy = 0;
+    gh.clear();
+#endif
+#ifndef THREED
+    // Source the top nodes from var.bnodes[iboundz1] (valid in the init, restart
+    // AND remesh flows -- surfinfo.top_nodes' x-sort is only refreshed at remesh).
+    // Sort a local copy by x: nodes move with the Lagrangian mesh between remeshes.
+    const int_vec& top = *var.bnodes[iboundz1];
+    const int ntop = top.size();
+    if (ntop < 2) return;
+    int_vec order(top);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return (*var.coord)[a][0] < (*var.coord)[b][0];
+    });
+    x.resize(ntop);
+    z.resize(ntop);
+    for (int i = 0; i < ntop; ++i) {
+        x[i] = (*var.coord)[order[i]][0];
+        z[i] = (*var.coord)[order[i]][NDIMS-1];
+    }
+    on = true;
+
+    // Attenuation table: resample z_surf onto a uniform grid (Nyquist for the
+    // surface nodes, capped), take its DCT-I cosine series, and tabulate
+    //     h_eff(x_i, d_j) = sum_m w_m a_m e^{-k_m d_j} cos(k_m (x_i - x0))
+    // (w halves the end modes -- the DCT-I inverse convention). Cost ~ mg^2*ndg
+    // multiply-adds once per build; queries are O(1) bilinear lookups.
+    //
+    // Grid count M: the DCT-I is evaluated directly (no FFT), so M carries no
+    // radix or power-of-two constraint -- it only trades surface resolution
+    // against the O(M^2 * ND) build cost, and the two bounds below are that
+    // trade, not properties of the transform:
+    //   NG_MIN -- floor for the bilinearly-queried grid. A surface with few nodes
+    //     needs no modes beyond its own Nyquist count, but the floor costs < 1 %
+    //     of the cap and keeps queries off a coarse staircase.
+    //   NG_MAX -- cost bound. At Nyquist a 10^4-node surface would ask for
+    //     M ~ 2*10^4, i.e. O(10^10) flops at every remesh. Truncating the series
+    //     there is benign at depth: a dropped mode m > M-1 carries
+    //     e^{-pi m d / Lg}, so it only survives in a boundary layer of order
+    //     Lg/(pi*M) below the surface, and at or above the surface (d <= 0)
+    //     zeff() bypasses the table for the exact profile, keeping the
+    //     free-surface pin exact. Aliasing is the part that is NOT benign --
+    //     point-sampling relief finer than the grid folds it onto low-k modes,
+    //     which never attenuate, so the h_eff error stops decaying with depth --
+    //     hence the cell average once the cap bites. Against a 4x-Nyquist
+    //     reference on a +-10 km sawtooth at ntop = 193 (M_nyquist 385, capped to
+    //     257) it removes a 0.4 m (13 kPa) floor below 10 km depth, and costs a
+    //     ~3x smoother h_eff for d under one grid spacing -- shallower than the
+    //     first element centroid, and d <= 0 does not use the table at all.
+    //     That floor is in the REFERENCE, not directly in the stress: an element
+    //     the remesh leaves unchanged cancels it either way, because Step C' of
+    //     spr_node_to_elem subtracts the reference it recorded rather than
+    //     re-evaluating it, so only remeshed elements see the difference.
+    if (ntop < 3) return;                       // no meaningful profile: stay columnar
+    x0g = x.front();
+    Lg  = x.back() - x.front();
+    if (Lg <= 0.0) return;
+    const int NG_MIN = 65;                      // ~0.3 Mflop with ND below
+    const int NG_MAX = 257;                     // ~4.3 Mflop with ND below
+    // Depth rows, sqrt-spaced so they crowd the surface where the high-k modes
+    // die. Cost is only linear in ND, so this one is untuned -- cheap to raise.
+    const int ND = 65;
+    int M = 2 * (ntop - 1) + 1;                 // >= Nyquist for the node spacing
+    const int M_nyquist = M;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
+    double_vec s(M);
+    double hmax = 0.0;
+    // Cell-average only where the cap made the grid coarser than the nodes:
+    // at or above Nyquist there is nothing to alias, and point sampling keeps
+    // the reference field of every such mesh unchanged. Where it does average,
+    // hmax -- and so dmax, the table's depth extent -- follows the resampled
+    // profile rather than the node maximum.
+    const bool antialias = (M_nyquist > M);
+    const double dxg = Lg / (M - 1);
+    #pragma omp parallel for default(none) \
+        shared(s, M, dxg, antialias) reduction(max:hmax)
+    for (int i = 0; i < M; ++i) {
+        const double xi = x0g + Lg * i / (M - 1);
+        if (antialias) {
+            // The DCT-I samples include both endpoints, so the end cells are half
+            // as wide as the interior ones.
+            s[i] = elev_avg(std::max(xi - 0.5 * dxg, x0g),
+                            std::min(xi + 0.5 * dxg, x0g + Lg));
+        }
+        else {
+            const double q[NDIMS] = {xi, 0.0};
+            s[i] = elev(q);
+        }
+        hmax = std::max(hmax, std::abs(s[i]));
+    }
+    dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
+    mg = M;
+    ndg = ND;
+    heff.assign((size_t)M * ND, 0.0);
+    const double pn = M_PI / (M - 1);
+    double_vec a(M);
+    // cos(pi m i/(M-1)) for every (point, mode), stored point-major: the table below
+    // walks the modes of one point, and the cosines are not symmetric to the last
+    // bit ((pn*m)*i vs (pn*i)*m), so the layout has to match the traversal rather
+    // than transposing the indices at the read.
+    double_vec cmiT((size_t)M * M);
+    double_vec am((size_t)M * ND);              // mode amplitude at each depth
+    // Threaded per point: a point owns a contiguous row of the table, and the sum
+    // over modes keeps serial order, so the table is bit-identical to a serial build
+    // at the default opt=2. Only there: opt=3 adds -ffast-math, which lets the
+    // compiler reassociate that sum, and this traversal then lands ~3 ulp from the
+    // serial one. Same reason there is no `#ifndef ACC` as in the 3-D branch.
+    // Only locals are listed: members (heff, dmax, Lg, ...) reach the region through
+    // `this`, which default(none) does not police, so naming them would not check
+    // anything.
+    #pragma omp parallel default(none) \
+        shared(s, a, am, cmiT, M, ND, pn)
+    {
+        // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half ends)
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            double sum = 0.5 * (s[0] + ((m % 2) ? -s[M-1] : s[M-1]));
+            for (int i = 1; i < M - 1; ++i)
+                sum += s[i] * std::cos(pn * m * i);
+            a[m] = 2.0 * sum / (M - 1);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            for (int m = 0; m < M; ++m)
+                cmiT[(size_t)i * M + m] = std::cos(pn * m * i);
+        }
+        // e^{-k_m d_j}, folded together with the DCT-I end weights
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            const double w = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+            for (int j = 0; j < ND; ++j) {
+                const double u = double(j) / (ND - 1);
+                const double d = dmax * u * u;
+                am[(size_t)m * ND + j] = w * a[m] * std::exp(-(M_PI * m / Lg) * d);
+            }
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            double* row = &heff[(size_t)i * ND];
+            const double* crow = &cmiT[(size_t)i * M];
+            for (int m = 0; m < M; ++m) {
+                const double c = crow[m];
+                const double* amr = &am[(size_t)m * ND];
+                for (int j = 0; j < ND; ++j) {
+                    if (std::abs(amr[j]) < 1e-30) continue;  // mode decayed at this depth
+                    row[j] += amr[j] * c;
+                }
+            }
+        }
+    }
+    atten = true;
+#else  // THREED
+    // ----------------------------------------------------------------
+    // 3-D: rasterize the triangulated top boundary onto a uniform (x,y)
+    // grid, then tabulate the attenuated load via a separable 2-D DCT-I
+    // with kernel e^{-|k| d}, |k| = pi*sqrt((m/Lx)^2 + (n/Ly)^2). Same
+    // lifecycle as 2-D: derived data, rebuilt from the current mesh on
+    // every build.
+    // ----------------------------------------------------------------
+    const int_vec& top = *var.bnodes[iboundz1];
+    if (top.size() < 3) return;
+    const std::vector< std::pair<int,int> >& facets = *var.bfacets[iboundz1];
+    const int nfacet = facets.size();
+    if (nfacet < 1) return;
+
+    double xmin = std::numeric_limits<double>::max(), xmax = -xmin;
+    double ymin = xmin, ymax = -xmin;
+    for (std::size_t i = 0; i < top.size(); ++i) {
+        const double xi = (*var.coord)[top[i]][0];
+        const double yi = (*var.coord)[top[i]][1];
+        xmin = std::min(xmin, xi); xmax = std::max(xmax, xi);
+        ymin = std::min(ymin, yi); ymax = std::max(ymax, yi);
+    }
+    x0g = xmin; Lg  = xmax - xmin;
+    y0g = ymin; Lyg = ymax - ymin;
+    if (Lg <= 0.0 || Lyg <= 0.0) return;
+
+    // Grid count ~ Nyquist for the surface-node spacing (ntop ~ nside^2), capped.
+    // Same trade as in 2-D above -- the separable DCT-I needs no particular M, the
+    // bounds are a cost window -- but here the table costs O(M^3 * ND), so the cap
+    // is much tighter: 97^3 * 65 ~ 6e7 multiply-adds per remesh (2-D: ~4e6). The
+    // caveat at the cap is also the same, minus the cure: a surface finer than the
+    // grid is point-sampled by the rasterization below, so its short-wavelength
+    // relief aliases onto low-k modes. The 2-D cell average has no cheap
+    // triangle-rasterizing analogue, so 3-D keeps point sampling; if this ever
+    // matters, accumulate area-weighted facet means per cell instead.
+    const int NG_MIN = 33;                      // ~2 Mflop with ND below
+    const int NG_MAX = 97;                      // ~6e7 flop with ND below
+    int M = 2 * (int)std::ceil(std::sqrt((double)top.size())) + 1;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
+    mg = M; mgy = M;
+    const double dxg = Lg / (M - 1), dyg = Lyg / (M - 1);
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+    gh.assign((size_t)M * M, qnan);
+    // Facets sharing an edge can both cover a grid point, since the barycentric test
+    // carries a tolerance, so the value left there is whichever facet wrote it last:
+    // an order-dependent result, and the reason this rasterization stays serial.
+    for (int fi = 0; fi < nfacet; ++fi) {
+        const int e = facets[fi].first;
+        const int f = facets[fi].second;
+        double px[NODES_PER_FACET], py[NODES_PER_FACET], pz[NODES_PER_FACET];
+        for (int k = 0; k < NODES_PER_FACET; ++k) {
+            const int n = (*var.connectivity)[e][NODE_OF_FACET[f][k]];
+            px[k] = (*var.coord)[n][0];
+            py[k] = (*var.coord)[n][1];
+            pz[k] = (*var.coord)[n][2];
+        }
+        const double det = (px[1]-px[0])*(py[2]-py[0]) - (px[2]-px[0])*(py[1]-py[0]);
+        if (std::abs(det) < 1e-12 * dxg * dyg) continue;    // degenerate in xy projection
+        int i0 = (int)std::ceil ((std::min(px[0], std::min(px[1], px[2])) - x0g) / dxg - 1e-9);
+        int i1 = (int)std::floor((std::max(px[0], std::max(px[1], px[2])) - x0g) / dxg + 1e-9);
+        int j0 = (int)std::ceil ((std::min(py[0], std::min(py[1], py[2])) - y0g) / dyg - 1e-9);
+        int j1 = (int)std::floor((std::max(py[0], std::max(py[1], py[2])) - y0g) / dyg + 1e-9);
+        i0 = std::max(i0, 0); i1 = std::min(i1, M - 1);
+        j0 = std::max(j0, 0); j1 = std::min(j1, M - 1);
+        const double inv_det = 1.0 / det;
+        for (int gi = i0; gi <= i1; ++gi) {
+            for (int gj = j0; gj <= j1; ++gj) {
+                const double qx = x0g + gi * dxg - px[0];
+                const double qy = y0g + gj * dyg - py[0];
+                const double l1 = (qx*(py[2]-py[0]) - qy*(px[2]-px[0])) * inv_det;
+                const double l2 = (qy*(px[1]-px[0]) - qx*(py[1]-py[0])) * inv_det;
+                const double l0 = 1.0 - l1 - l2;
+                if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
+                gh[(size_t)gi * M + gj] = l0*pz[0] + l1*pz[1] + l2*pz[2];
+            }
+        }
+    }
+    // Fill grid points the rasterization missed (hull-edge roundoff): nearest valid
+    // value along each row, then along each column for fully-missed rows.
+    for (int gi = 0; gi < M; ++gi) {
+        double last = qnan;
+        for (int gj = 0; gj < M; ++gj) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+        last = qnan;
+        for (int gj = M - 1; gj >= 0; --gj) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+    }
+    for (int gj = 0; gj < M; ++gj) {
+        double last = qnan;
+        for (int gi = 0; gi < M; ++gi) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+        last = qnan;
+        for (int gi = M - 1; gi >= 0; --gi) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+    }
+    double hmax = 0.0;
+    for (std::size_t i = 0; i < gh.size(); ++i) {
+        if (gh[i] != gh[i]) { gh.clear(); return; }   // no surface data at all: stay off
+        hmax = std::max(hmax, std::abs(gh[i]));
+    }
+    on = true;
+
+    // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
+    // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
+    // (sum'' = half-weight end samples; square grid so one cos table serves both axes)
+    // Then, at each tabulated depth, attenuate every mode by e^{-|k| d} and run the
+    // inverse back to (x, y) as two cosine passes: over n into U, then over m into
+    // the table. Cost is O(M^3) for the forward pair, O(M^3 * ND) for the inverse.
+    //
+    // Threaded as one region: each loop splits the axis that owns its output and the
+    // inner sums keep serial order, so the table is bit-identical to a serial build.
+    // No `#ifndef ACC` -- that guard belongs where a paired `acc parallel loop`
+    // takes over on the device, and this is host-only STL called from serial code.
+    const double pn = M_PI / (M - 1);
+    dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
+    const int ND = 65;                          // depth rows, as in the 2-D branch
+    ndg = ND;
+    double_vec cmi((size_t)M * M);
+    double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
+    heff.assign((size_t)M * M * ND, 0.0);
+    #pragma omp parallel default(none) \
+        shared(cmi, T, A, M, ND, pn)
+    {
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int i = 0; i < M; ++i)
+                cmi[(size_t)m * M + i] = std::cos(pn * m * i);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            for (int n = 0; n < M; ++n) {
+                double s = 0.0;
+                for (int j = 0; j < M; ++j) {
+                    const double w = (j == 0 || j == M - 1) ? 0.5 : 1.0;
+                    s += w * gh[(size_t)i * M + j] * cmi[(size_t)n * M + j];
+                }
+                T[(size_t)i * M + n] = 2.0 * s / (M - 1);
+            }
+        }
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < M; ++n) {
+                double s = 0.0;
+                for (int i = 0; i < M; ++i) {
+                    const double w = (i == 0 || i == M - 1) ? 0.5 : 1.0;
+                    s += w * T[(size_t)i * M + n] * cmi[(size_t)m * M + i];
+                }
+                A[(size_t)m * M + n] = 2.0 * s / (M - 1);
+            }
+        }
+        // The depths share nothing once A is built, so each is done start to finish
+        // by one thread -- hence a B/U scratch pair per thread, declared here and
+        // built once on entry. dynamic: the pass over n skips modes that have already
+        // decayed, so the deeper the tabulated depth the cheaper it is.
+        double_vec B((size_t)M * M), U((size_t)M * M);
+        #pragma omp for schedule(dynamic)
+        for (int l = 0; l < ND; ++l) {
+            const double u = double(l) / (ND - 1);
+            const double d = dmax * u * u;
+            for (int m = 0; m < M; ++m) {
+                for (int n = 0; n < M; ++n) {
+                    const double km = M_PI * m / Lg, kn = M_PI * n / Lyg;
+                    const double wm = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+                    const double wn = (n == 0 || n == M - 1) ? 0.5 : 1.0;
+                    B[(size_t)m * M + n] = wm * wn * A[(size_t)m * M + n]
+                                         * std::exp(-std::sqrt(km*km + kn*kn) * d);
+                }
+            }
+            // inverse, pass over n: U[m][j] = sum_n B[m][n] cos(pn n j)
+            for (int m = 0; m < M; ++m) {
+                for (int j = 0; j < M; ++j) {
+                    double s = 0.0;
+                    for (int n = 0; n < M; ++n) {
+                        const double b = B[(size_t)m * M + n];
+                        if (std::abs(b) < 1e-30) continue;   // mode fully decayed at this depth
+                        s += b * cmi[(size_t)n * M + j];
+                    }
+                    U[(size_t)m * M + j] = s;
+                }
+            }
+            // inverse, pass over m into the table
+            for (int gi = 0; gi < M; ++gi) {
+                for (int gj = 0; gj < M; ++gj) {
+                    double s = 0.0;
+                    for (int m = 0; m < M; ++m)
+                        s += U[(size_t)m * M + gj] * cmi[(size_t)m * M + gi];
+                    heff[((size_t)gi * M + gj) * ND + l] = s;
+                }
+            }
+        }
+    }   // end of the single parallel region
+    atten = true;
+#endif
+}
+
+double SurfaceTopo::elev(const double* p) const
+{
+    if (!on) return 0.0;
+#ifndef THREED
+    const double xq = p[0];
+    if (xq <= x.front()) return z.front();
+    if (xq >= x.back())  return z.back();
+    const std::size_t i = std::upper_bound(x.begin(), x.end(), xq) - x.begin();
+    const double dx = x[i] - x[i-1];
+    if (dx <= 0.0) return z[i];   // coincident nodes (degenerate surface): no interpolation
+    return z[i-1] + (z[i] - z[i-1]) * (xq - x[i-1]) / dx;
+#else
+    double tx = (p[0] - x0g) / Lg * (mg - 1);
+    if (tx < 0.0) tx = 0.0;
+    if (tx > mg - 1) tx = mg - 1;
+    int i = (int)tx;
+    if (i > mg - 2) i = mg - 2;
+    const double fx = tx - i;
+    double ty = (p[1] - y0g) / Lyg * (mgy - 1);
+    if (ty < 0.0) ty = 0.0;
+    if (ty > mgy - 1) ty = mgy - 1;
+    int j = (int)ty;
+    if (j > mgy - 2) j = mgy - 2;
+    const double fy = ty - j;
+    const double* r0 = &gh[(size_t)i * mgy + j];
+    const double* r1 = r0 + mgy;
+    return (1.0 - fx) * ((1.0 - fy) * r0[0] + fy * r0[1])
+         + fx         * ((1.0 - fy) * r1[0] + fy * r1[1]);
+#endif
+}
+
+#ifndef THREED
+double SurfaceTopo::elev_avg(double xa, double xb) const
+{
+    if (!on) return 0.0;
+    const double len = xb - xa;
+    if (len <= 0.0) {
+        const double q[NDIMS] = {xa, 0.0};
+        return elev(q);
+    }
+    // Trapezoid over every profile segment clipped to [xa, xb]: exact, because
+    // elev() is linear between surface nodes and clamped constant outside them.
+    double area = 0.0;
+    if (xa < x.front()) area += z.front() * (std::min(xb, x.front()) - xa);
+    if (xb > x.back())  area += z.back()  * (xb - std::max(xa, x.back()));
+    std::size_t k = std::upper_bound(x.begin(), x.end(), xa) - x.begin();
+    if (k == 0) k = 1;                        // segment (0,1) is the first one
+    for (; k < x.size() && x[k-1] < xb; ++k) {
+        const double xl = x[k-1], xr = x[k];
+        const double dx = xr - xl;
+        if (dx <= 0.0) continue;              // coincident nodes: zero-width segment
+        const double a = std::max(xa, xl), b = std::min(xb, xr);
+        if (b <= a) continue;
+        const double slope = (z[k] - z[k-1]) / dx;
+        area += 0.5 * ((z[k-1] + slope * (a - xl)) + (z[k-1] + slope * (b - xl)))
+                    * (b - a);
+    }
+    return area / len;
+}
+#endif
+
+double SurfaceTopo::heff_at(const double* p, double d) const
+{
+    // 2-D: bilinear on (x, depth); 3-D: trilinear on (x, y, depth). Depth is sqrt-spaced.
+    double tx = (p[0] - x0g) / Lg * (mg - 1);
+    if (tx < 0.0) tx = 0.0;
+    if (tx > mg - 1) tx = mg - 1;
+    int i = (int)tx;
+    if (i > mg - 2) i = mg - 2;
+    const double fx = tx - i;
+    if (d < 0.0) d = 0.0;
+    if (d > dmax) d = dmax;
+    double tu = std::sqrt(d / dmax) * (ndg - 1);
+    int l = (int)tu;
+    if (l > ndg - 2) l = ndg - 2;
+    const double fu = tu - l;
+#ifndef THREED
+    const double* r0 = &heff[(size_t)i * ndg + l];
+    const double* r1 = r0 + ndg;
+    return (1.0 - fx) * ((1.0 - fu) * r0[0] + fu * r0[1])
+         + fx         * ((1.0 - fu) * r1[0] + fu * r1[1]);
+#else
+    double ty = (p[1] - y0g) / Lyg * (mgy - 1);
+    if (ty < 0.0) ty = 0.0;
+    if (ty > mgy - 1) ty = mgy - 1;
+    int j = (int)ty;
+    if (j > mgy - 2) j = mgy - 2;
+    const double fy = ty - j;
+    const double* r00 = &heff[((size_t)i * mgy + j) * ndg + l];
+    const double* r01 = r00 + ndg;
+    const double* r10 = r00 + (size_t)mgy * ndg;
+    const double* r11 = r10 + ndg;
+    const double v00 = (1.0 - fu) * r00[0] + fu * r00[1];
+    const double v01 = (1.0 - fu) * r01[0] + fu * r01[1];
+    const double v10 = (1.0 - fu) * r10[0] + fu * r10[1];
+    const double v11 = (1.0 - fu) * r11[0] + fu * r11[1];
+    return (1.0 - fx) * ((1.0 - fy) * v00 + fy * v01)
+         + fx         * ((1.0 - fy) * v10 + fy * v11);
+#endif
+}
+
+double SurfaceTopo::zeff(const double* p) const
+{
+    const double zq = p[NDIMS-1];
+    if (!on) return zq;                 // fixed-datum behavior, bit-exact
+    const double h = elev(p);
+    if (!atten) return zq - h;          // columnar (rigid-support end-member)
+    const double d = h - zq;            // depth below the LOCAL surface
+    if (d <= 0.0) return zq - h;        // at/above the surface: full load (kernel -> 1)
+    return zq - heff_at(p, d);
+}
+
+// Strided array_t rows are not contiguous doubles: copy to a local coordinate first.
+double SurfaceTopo::elev(ConstArrayAccessor p) const
+{
+    double c[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) c[d] = p[d];
+    return elev(c);
+}
+
+double SurfaceTopo::zeff(ConstArrayAccessor p) const
+{
+    double c[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) c[d] = p[d];
+    return zeff(c);
+}
+
+double SurfaceTopo::heff_at(ConstArrayAccessor p, double d) const
+{
+    double c[NDIMS];
+    for (int dd = 0; dd < NDIMS; ++dd) c[dd] = p[dd];
+    return heff_at(c, d);
+}
+
+void compute_spr_blend_weight(const Param &param, const Variables &var)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Deborah-number blend weight toward the NN-remapped stress: w = 1 keeps NN
+    // (high De, elastic stress memory), w = 0 takes the SPR average (low De,
+    // smoothing). Evaluated on the OLD mesh, and BEFORE center_stress_to_ref:
+    // visc() reads the stress trace, so centering would change its answer. The
+    // weight rides through the remesh with the other element fields and is
+    // consumed in spr_node_to_elem.
+    {
+        // De is measured against the time the stress evolved since the last remesh.
+        const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
+        const double lde0 = std::log10(param.mesh.remesh_deborah_min);
+        const double lde1 = std::log10(param.mesh.remesh_deborah_max);
+        // Host loop: visc()/shearm() read the host-side MatProps.
+        #pragma acc wait
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, var, dt_remesh, lde0, lde1)
+#endif
+        for (int e = 0; e < var.nelem; ++e) {
+            const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
+            // t: position within [De_min, De_max], linear in log10(De) because De
+            // spans decades and neither bound is a physical threshold -- only the
+            // decade between them is meaningful.
+            double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
+            t = std::min(std::max(t, 0.0), 1.0);
+            // smoothstep: the cubic 3t^2 - 2t^3, i.e. the Hermite interpolant of
+            // (0,0) and (1,1) with w'(0) = w'(1) = 0, so an element
+            // drifting across either bound between remeshes sees the weight change
+            // continuously in value AND rate. A linear ramp kinks at the bounds,
+            // switching remap operator abruptly for elements sitting on one; a
+            // steeper S-curve (e.g. quintic) would need a wider De window to keep
+            // the same mid-range sensitivity. Monotone, and w(t=1/2) = 1/2.
+            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
+        }
+    }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void center_stress_to_ref(const Param &param, const Variables &var,
+                          const SurfaceTopo &topo)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
     // ----------------------------------------------------------------
-    // Step A: SPR — recover smooth nodal stresses on the OLD mesh.
-    // Must happen before prepare_interpolation (reads old var.stress,
-    // *var.support, old_coord, old_connectivity — all still old here).
+    // Reference the stress to the lithostat on the OLD mesh: add ref_pressure to
+    // each element's diagonal components, and record what was added.
     //
-    // Pressure-centering: subtract ref_pressure from each old element's
-    // diagonal stress components before SPR, so the polynomial fits the
-    // small deviatoric residual rather than the large lithostatic pressure.
-    // Without centering, independent polynomial fits for σxx and σzz on a
-    // one-sided surface-node patch differ by the amount of the actual
-    // deviatoric stress, but the large-pressure background amplifies any
-    // extrapolation error at boundary nodes. Cold surface ice (η≈visc_max)
-    // has a Maxwell relaxation time of ~250 Myr, so even a tiny artifact
-    // persists throughout the simulation.
+    // This serves the whole remap, not just the SPR fit that follows it:
+    //  - for the SPR fit, the polynomial then fits the small deviatoric residual
+    //    instead of the steep lithostatic background. Independent fits for σxx and
+    //    σzz on a one-sided surface-node patch differ by the deviatoric stress, and
+    //    a large pressure background amplifies any extrapolation error at boundary
+    //    nodes. Cold surface ice (η≈visc_max) has a Maxwell time of ~250 Myr, so
+    //    even a tiny artifact persists for the whole simulation.
+    //  - for the NN remap, which is the entire stress remap when the SPR chain is
+    //    off, it is what makes the copy depth-aware: a CHANGED element takes stress
+    //    from a source at another depth, and restore_stress_from_ref subtracting
+    //    p_ref at the DESTINATION centroid supplies the lithostat difference.
+    //    Without it the copy carries the source's lithostat and lands ~rho*g*dz
+    //    wrong.
+    //
+    // Must run before prepare_interpolation (reads old var.stress, *var.support,
+    // old_coord, old_connectivity — all still old here). Undone by
+    // restore_stress_from_ref on the new mesh.
     // ----------------------------------------------------------------
-
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var)
+    #pragma omp parallel for default(none) shared(param, var, topo)
 #endif
-    #pragma acc parallel loop gang vector async    
+    #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
-        double z = 0;
+        double c[NDIMS] = {0.0};
         for (int k = 0; k < NODES_PER_ELEM; ++k)
-            z += (*var.coord)[conn[k]][NDIMS-1];
-        z /= NODES_PER_ELEM;
-        double p_ref_old = ref_pressure(param, z);
+            for (int d = 0; d < NDIMS; ++d)
+                c[d] += (*var.coord)[conn[k]][d];
+        for (int d = 0; d < NDIMS; ++d)
+            c[d] /= NODES_PER_ELEM;
+        double p_ref_old = ref_pressure(param, topo.zeff(c));
         TensorAccessor s = (*var.stress)[e];
         // Shift diagonal components: add p_ref so stress becomes small deviatoric
         for (int d = 0; d < NDIMS; ++d) s[d] += p_ref_old;
 
         if (param.mat.is_plane_strain)
             (*var.stressyy)[e] += p_ref_old;
+
+        // Record the reference ADDED here so an unchanged element can subtract the
+        // identical value in restore_stress_from_ref (the new-mesh topo table
+        // differs globally).
+        (*var.spr_p_ref_old)[e] = p_ref_old;
     }
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void spr_elem_to_node(const Param &param, const Variables &var,
+                      tensor_t *stress_n, double_vec *stressyy_n)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Step A: recover smooth NODAL stresses from the element-centroid stresses of
+    // the OLD mesh, which center_stress_to_ref has already referenced to the
+    // lithostat. Same old-mesh preconditions as that function.
 
     // dynamic registration of all fields involved in SPR
     const double* in_ptrs[MAX_SPR_FIELDS];
@@ -708,14 +1283,68 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 #endif
 }
 
-void spr_node_to_elem(const Param &param, const Variables &var, 
+void spr_node_to_elem(const Param &param, const Variables &var,
+                      const SurfaceTopo &topo,
                       tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
+    // Step B: nodal SPR stresses -> new element stresses, then reconcile with the
+    // NN remap. topo is the NEW-mesh surface, built by the caller and shared with
+    // restore_stress_from_ref (rasterising it twice would cost ~14 ms in 3-D).
+
+    // Pin the top-boundary nodal stress before averaging back to elements: the SPR
+    // patch fit is one-sided at surface nodes, its least reliable spot, while the
+    // traction there is known exactly -- sigma.n = -p_water n, mirroring the load
+    // apply_stress_bcs puts on this boundary. Centered that is p_ref - p_water,
+    // with p_ref exact because z_eff = 0 at a top node.
+    const double sea_level = param.control.surf_base_level;
+    const double rho_w_g = param.bc.has_water_loading
+                         ? param.bc.sea_water_density * param.control.gravity : 0.0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, topo, sea_level, rho_w_g)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < var.surfinfo.ntop; ++i) {
+        int n = (*var.surfinfo.top_nodes)[i];
+        double z = (*var.coord)[n][NDIMS-1];
+        double p_water = (z < sea_level) ? rho_w_g * (sea_level - z) : 0.0;
+
+        double p_ref_node = ref_pressure(param, topo.zeff((*var.coord)[n]));
+
+        (*var.stress_n)[n][NDIMS-1] = p_ref_node - p_water;
+        (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
+#ifdef THREED
+        (*var.stress_n)[n][5] = 0.0;
+#endif
+    }
+
+    // Snapshot the NN-remapped stress before the SPR average overwrites it. On
+    // entry *stress holds the NN-remapped copy (nn_interpolate_elem_fields),
+    // already pressure-centered on the old mesh, so the snapshot, the SPR average
+    // and the p_ref restore (Step C') all live in the same centered variable.
+    // Consumers: the surface fallback, the Deborah blend and the untouched-element
+    // carry-through below.
+    tensor_t stress_nn(var.nelem);
+    double_vec stressyy_nn(param.mat.is_plane_strain ? var.nelem : 0);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstTensorAccessor s = (*stress)[e];
+        TensorAccessor s_nn = stress_nn[e];
+        for (int d = 0; d < NSTR; ++d)
+            s_nn[d] = s[d];
+        if (param.mat.is_plane_strain)
+            stressyy_nn[e] = (*stressyy)[e];
+    }
+
     // ----------------------------------------------------------------
     // Step C: Average SPR nodal stresses -> new element stresses.
+    // In plane strain the out-of-plane sigma_yy is part of the mean stress and
+    // enters the compressiveness test below, so it is averaged here too.
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
         average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
@@ -723,22 +1352,104 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
     if (param.mat.is_plane_strain)
         average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
-                                var.nelem, stressyy->data());
+                              var.nelem, stressyy->data());
 
-    // Step C': Restore reference pressure at new element centroids.
-    // The SPR operated on pressure-centered stress; add back p_ref at each
-    // new element's depth to recover the correct total stress.
+    // Fallback: where the SPR average left a surface element LESS compressive
+    // (spurious tension) than before the remesh, restore the pre-remesh stress.
+    // The measure is the mean stress (trace); sigma_yy is reverted atomically
+    // with the in-plane tensor so the element is never left in a mixed state.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, stress, stressyy)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < var.ntop_elems; ++i) {
+        int e = (*var.top_elems)[i];
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        double p = 0.0, p_spr = 0.0;
+        for (int d = 0; d < NDIMS; ++d) {
+            p_spr += s[d];
+            p += s_nn[d];
+        }
+        if (param.mat.is_plane_strain) {
+            p_spr += (*stressyy)[e];
+            p += stressyy_nn[e];
+        }
+        if (p < p_spr) {
+            for (int d = 0; d < NSTR; ++d) s[d] = s_nn[d];
+            if (param.mat.is_plane_strain) (*stressyy)[e] = stressyy_nn[e];
+        }
+    }
+
+    // Untouched elements (STRICTLY is_changed == 0: -1 = ACM-failed nearest-copy
+    // is NOT an identity map) keep the pre-remesh stress verbatim (bit-exact), the
+    // same treatment every other element field gets from inject_field; the remaining
+    // elements take the Deborah blend of NN (w: elastic stress memory) vs the SPR
+    // average (1 - w: smooths element-scale noise in low-viscosity regions).
+    // Runs after the surface fallback: where the fallback restored the NN stress
+    // the blend is a no-op, never making a surface element less compressive again.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        double z = 0;
-        for (int k = 0; k < NODES_PER_ELEM; ++k)
-            z += (*var.coord)[conn[k]][NDIMS-1];
-        z /= NODES_PER_ELEM;
-        double p_ref = ref_pressure(param, z);
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        if ((*var.remesh_is_changed)[e] == 0) {
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = s_nn[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = stressyy_nn[e];
+        }
+        else {
+            const double w = (*var.spr_blend_weight)[e];
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = w * s_nn[d] + (1.0 - w) * s[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
+        }
+    }
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void restore_stress_from_ref(const Param &param, const Variables &var,
+                             const SurfaceTopo &topo,
+                             tensor_t *stress, double_vec *stressyy)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Undo center_stress_to_ref on the NEW mesh, whatever produced the centered
+    // stress that arrives here: the Deborah blend of NN and SPR, or -- when the SPR
+    // chain is off -- the NN remap alone. Runs last either way.
+    //
+    // Restore reference pressure at new element centroids.
+    // The SPR operated on pressure-centered stress; add back p_ref at each
+    // new element's depth (below the NEW surface) to recover the total stress.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        double p_ref;
+        if ((*var.remesh_is_changed)[e] == 0) {
+            // Untouched element: subtract exactly what spr_elem_to_node added, so
+            // the round trip is a bit-exact no-op (the new topo table differs).
+            p_ref = (*var.spr_p_ref_old)[e];
+        } else {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            double c[NDIMS] = {0.0};
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int d = 0; d < NDIMS; ++d)
+                    c[d] += (*var.coord)[conn[k]][d];
+            for (int d = 0; d < NDIMS; ++d)
+                c[d] /= NODES_PER_ELEM;
+            p_ref = ref_pressure(param, topo.zeff(c));
+        }
         TensorAccessor s = (*stress)[e];
         for (int d = 0; d < NDIMS; ++d) s[d] -= p_ref;
 

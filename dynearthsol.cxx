@@ -36,6 +36,7 @@ namespace std { using ::snprintf; }
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
+    var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -348,6 +349,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.dt, "dt");
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
+        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&

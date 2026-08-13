@@ -377,6 +377,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
+    bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
     // Note: regattr is not needed for restarting
