@@ -3,12 +3,19 @@ name: Notify des3d when a PR merges
 # Sends a repository_dispatch to GeoFLAC/des3d (the user-docs site) whenever
 # a PR merges to master/main, so its dynearthsol-pr-notify.yml workflow can
 # triage whether the change needs a doc update. Mirrors notify-inputgen.yml.
+#
+# Uses pull_request_target (not pull_request) so this still fires with
+# secrets available when the merged PR came from a fork — pull_request
+# strips secrets/token permissions for fork-origin PRs, which would silently
+# break notifications for external contributions. Safe here because this
+# workflow never checks out or executes any code from the PR itself; it only
+# reads the PR number and reports to another repo.
 
 permissions:
   contents: read
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
     branches: [master, main]
   workflow_dispatch:
