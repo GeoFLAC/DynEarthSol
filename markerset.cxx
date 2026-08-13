@@ -1662,6 +1662,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                             markers_in_elem_info[i].nmarker++;
                         }
                     }
+                    #pragma omp atomic update
                     --elemmarkers[e][mat];
                 }
                 int n = markers_in_elem_info[i].nmarker;
