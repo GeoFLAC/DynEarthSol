@@ -1635,8 +1635,8 @@ void surface_plstrain_diffusion(const Param &param, \
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
-    // #pragma omp parallel for default(none)      \
-    //     shared(param, var, plstrain, lambha)
+    // Not parallelized: the loop is over top elements only and runs once per step.
+    // #pragma omp parallel for default(none) shared(param, var, plstrain, lambha)
     for (auto e=(*var.top_elems).begin();e<(*var.top_elems).end();e++) {
         // Find the most abundant marker mattype in this element
         int_vec &a = (*var.elemmarkers)[*e];

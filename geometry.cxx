@@ -1660,8 +1660,7 @@ double compute_dt(const Param& param, Variables& var)
 //     double dt_hydro_diffusion = std::numeric_limits<double>::max();
 //     double minl = std::numeric_limits<double>::max();
 
-//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-//         default(none) shared(param,var)
+//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) default(none) shared(param,var)
 //     // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
 //     for (int e=0; e<var.nelem; ++e) {
 //         int n0 = (*var.connectivity)[e][0];
