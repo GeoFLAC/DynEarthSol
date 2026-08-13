@@ -984,7 +984,7 @@ prepare: check-deps $(FLAG_STAMPS)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
-			git submodule update --init --recursive $(ANN_DIR); \
+			git submodule update --init --recursive --progress --depth 1 $(ANN_DIR); \
 		fi; \
 	elif [ -f "$(ANN_DIR)/include/nanoflann.hpp" ]; then \
 		:; \
@@ -997,7 +997,7 @@ ifeq ($(openacc), 1)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
-			git submodule update --init --recursive $(KNN_BVH_DIR); \
+			git submodule update --init --recursive --progress --depth 1 $(KNN_BVH_DIR); \
 		fi; \
 	elif [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
 		:; \
@@ -1011,7 +1011,7 @@ ifeq ($(usemmg), 1)
 	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		if git submodule status mmg | grep -q '^[-+]'; then \
 			echo "   Status mismatch. Updating submodule mmg..."; \
-			git submodule update --init --recursive mmg; \
+			git submodule update --init --recursive --progress --depth 1 mmg; \
 		fi; \
 	elif [ -f "mmg/CMakeLists.txt" ]; then \
 		:; \
