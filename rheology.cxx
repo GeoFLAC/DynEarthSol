@@ -684,34 +684,53 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     nvtxRangePush(__FUNCTION__);
 #endif
 
+    // Loop-invariant, so the per-element gathers they gate are decided once.
+    const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    // Only the two rate-and-state branches call compute_slip_rate*, which is the
+    // sole consumer of the centroid velocity.
+    const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
+                              || (param.mat.rheol_type == MatProps::rh_evp_rsf);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
+    #pragma omp parallel for default(none) shared(param, var, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
-        strain_rate, dyn_fric_coeff, state_variable)
+        strain_rate, dyn_fric_coeff, state_variable) \
+        firstprivate(has_hydraulic_diffusion, needs_slip_rate)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
-        double pp_element = 0.0;
-        double dpp_element = 0.0;
 
-        const array_t& vel = *var.vel;
-        double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
+        // Centroid interpolations, each gated on the branch that reads it: ungated they cost
+        // 2 + NDIMS nodal gathers per element per step in every run. The `ppressure` LEVEL
+        // is not interpolated at all; restore it here if a rheology comes to need it.
+        double dpp = 0.0;
+        if (has_hydraulic_diffusion) {
+            #pragma acc loop seq
+            for (int j = 0; j < NODES_PER_ELEM; ++j)
+                dpp += dppressure[conn[j]] / double(NODES_PER_ELEM);
+            // Biot-weighted pore-pressure INCREMENT, not a rate: update_pore_pressure()
+            // folded dt in, and stores dppressure with the sign OPPOSITE to its change
+            // to ppressure. elastic_effective() adds this to the diagonal components.
+            dpp *= var.mat->alpha_biot(e);
+        }
 
-        #pragma acc loop seq
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        // No vz in 2D: compute_slip_rate2 takes the vertical component as its second
+        // argument, so vy carries it and a vz here would only ever be written.
+        double vx = 0.0, vy = 0.0;
 #ifdef THREED
-            pp_element += ppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-            dpp_element += dppressure[conn[j]] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-            vx_element += vel[conn[j]][0] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-            vy_element += vel[conn[j]][1] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-            vz_element += vel[conn[j]][2] / 4.0; // the centroid shape functions are 1/4 for each node in 3D
-#else
-            pp_element += ppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-            dpp_element += dppressure[conn[j]] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-            vx_element += vel[conn[j]][0] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
-            vy_element += vel[conn[j]][1] / 3.0; // the centroid shape functions are 1/3 for each node in 2D
+        double vz = 0.0;
 #endif
+        if (needs_slip_rate) {
+            const array_t& vel = *var.vel;
+            #pragma acc loop seq
+            for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                vx += vel[conn[j]][0] / double(NODES_PER_ELEM);
+                vy += vel[conn[j]][1] / double(NODES_PER_ELEM);
+#ifdef THREED
+                vz += vel[conn[j]][2] / double(NODES_PER_ELEM);
+#endif
+            }
         }
 
         // stress, strain and strain_rate of this element
@@ -720,17 +739,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         TensorAccessor es = strain[e];
         TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
-
-        // Calculate effective pore pressure using Biot's coefficient
-        double alpha_b = var.mat->alpha_biot(e); // Biot coefficient
-        double pp = pp_element;        // Use element-level interpolated pore pressure
-        double dpp = dpp_element;        // Use element-level interpolated pore pressure rate
-
-        double vx = vx_element;        // Use element-level interpolated velocity in x direction
-        double vy = vy_element;        // Use element-level interpolated velocity in y direction
-#ifdef THREED
-        double vz = vz_element;        // Use element-level interpolated velocity in z direction
-#endif
 
         // // Calculate the center of the element
         // const int *conn = (*var.connectivity)[e];
@@ -747,11 +755,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // int_vec &a = (*var.elemmarkers)[e];
         // int material = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
         
-        if (param.control.has_hydraulic_diffusion) {
-            pp = alpha_b * pp; // Apply Biot coefficient to pore pressure
-            dpp = alpha_b * dpp; // Apply Biot coefficient to pore pressure rate
-        }
-
         // anti-mesh locking correction on strain rate
         if(1){
             double div = trace(edot);
@@ -789,7 +792,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             {
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                if (param.control.has_hydraulic_diffusion)
+                if (has_hydraulic_diffusion)
                 {
                     elastic_effective(bulkm, shearm, de, s, dpp);
                 }
@@ -828,12 +831,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     param.control.has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   param.control.has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -865,12 +868,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     param.control.has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   param.control.has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp);
                 }
                 double spII = second_invariant2(sp);
 
@@ -912,12 +915,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     param.control.has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   param.control.has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -960,12 +963,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     param.control.has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   param.control.has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp);
                 }
                 double spII = second_invariant2(sp);
 
