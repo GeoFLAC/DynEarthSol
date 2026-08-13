@@ -1031,6 +1031,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
     }
 
+    // Both are modulo divisors, the first one just below, so a zero is a SIGFPE.
+    if (p.mesh.quality_check_step_interval < 1) {
+        die(EXIT_CONFIG_VALUE, "mesh.quality_check_step_interval must be positive.");
+    }
+    if (p.sim.checkpoint_frame_interval < 1) {
+        die(EXIT_CONFIG_VALUE, "sim.checkpoint_frame_interval must be positive.");
+    }
+
     if (p.sim.is_outputting_averaged_fields == true)
         if (vm.count("sim.output_step_interval") &&
             p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
