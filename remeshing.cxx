@@ -1955,7 +1955,11 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                             break;
                         }
 
-                        int ind_x0=-1, ind_x1, ind_x2, ind_y0=-1, ind_y1, ind_y2;
+                        // Grid indices of the 3-point stencil bracketing p0 and p1. All -1
+                        // until a search below finds the first grid coordinate above its
+                        // target; a target at or above the top of the grid never matches,
+                        // and the stencil is then the last three points.
+                        int ind_x0=-1, ind_x1=-1, ind_x2=-1, ind_y0=-1, ind_y1=-1, ind_y2=-1;
                         double p0 = (*var.coord)[ind][n0];
                         double p1 = (*var.coord)[ind][n1];
 
@@ -1968,7 +1972,9 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                                 break;
                             }
                         }
-                        if (ind_x2 > nxyz[n0] - 1) {
+                        // ind_x2 < 0 is the no-match case; it takes the same last-three
+                        // stencil as a match whose upper point ran off the end.
+                        if (ind_x2 < 0 || ind_x2 > nxyz[n0] - 1) {
                             ind_x2 = nxyz[n0] - 1;
                             ind_x1 = nxyz[n0] - 2;
                             ind_x0 = nxyz[n0] - 3;
@@ -1992,7 +1998,7 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                                 break;
                             }
                         }
-                        if (ind_y2 > nxyz[n1] - 1) {
+                        if (ind_y2 < 0 || ind_y2 > nxyz[n1] - 1) {
                             ind_y2 = nxyz[n1] - 1;
                             ind_y1 = nxyz[n1] - 2;
                             ind_y0 = nxyz[n1] - 3;
