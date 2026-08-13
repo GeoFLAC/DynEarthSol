@@ -180,7 +180,7 @@ public:
         if (a_ == nullptr) {
             a_ = new T[N * count];
             n_ = count;
-        } else if (count > n_ || should_strip) {
+        } else if (count > std::size_t(n_) || should_strip) {
             this->resize(count, false);
             n_ = count;
         }
@@ -209,7 +209,7 @@ public:
 //     }
 
     void pack_to(std::vector<T>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
         std::size_t total_elements = count * N;
 
         buffer.resize(total_elements);
@@ -228,7 +228,7 @@ public:
 
 #ifdef ACC
     void pack_to_xyz_float(std::vector<float3>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
 
         if (buffer.size() < count)
             buffer.resize(count);

@@ -316,7 +316,7 @@ void BinaryInput::read_array(std::vector<T>& A, const char *name, std::size_t si
     }
 
     seek_to_array(name);
-    int n = std::fread(A.data(), sizeof(T), size, f);
+    const std::size_t n = std::fread(A.data(), sizeof(T), size, f);
 
     if (n != size) {
         std::cerr << "Error: cannot read array: " << name << '\n';
@@ -343,7 +343,7 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     if (buffer.size() < total_elements)
         buffer.resize(total_elements);
 
-    int n = std::fread(buffer.data(), sizeof(T), size * N, f);
+    const std::size_t n = std::fread(buffer.data(), sizeof(T), size * N, f);
     if (n != N * size) {
         std::cerr << "Error: cannot read array (buffered path): " << name << '\n';
         die(EXIT_IO_RW);

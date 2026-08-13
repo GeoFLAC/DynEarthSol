@@ -2919,7 +2919,7 @@ void create_top_elems(Variables& var)
     var.ntop_elems = telems.size();
 
     var.top_elems = new int_vec(var.ntop_elems);
-    for (std::size_t i=0; i<var.ntop_elems; i++)
+    for (int i=0; i<var.ntop_elems; i++)
         (*var.top_elems)[i] = telems[i];
 
 #ifdef NPROF_DETAIL

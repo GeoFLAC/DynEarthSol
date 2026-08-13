@@ -765,7 +765,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         #pragma omp single
         #pragma acc parallel loop gang vector async
 #endif
-        for (int i = 0; i < a_out.size(); i++) {
+        for (int i = 0; i < int(a_out.size()); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
             auto it = std::find(emarkers.begin(), emarkers.end(), b_out[i]);
             emarkers[it - emarkers.begin()] = a_out[i];
@@ -1140,7 +1140,7 @@ namespace {
         #pragma acc parallel loop gang vector async
         for (int e = 0; e < var.nelem; e++) {
             int_vec &markers = markers_in_elem[e];
-            for (int i = 0; i < markers.size(); i++) {
+            for (int i = 0; i < int(markers.size()); i++) {
                 int m = markers[i];
                 if (ms.get_elem(m) >= 0) {
                     // This marker is not removed, so we need to update the element markers.

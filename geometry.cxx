@@ -145,7 +145,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
         shared(coord, connectivity, volume)
 #endif
     #pragma acc parallel loop gang vector async
-    for (int e=0; e<volume.size(); ++e) {
+    for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
