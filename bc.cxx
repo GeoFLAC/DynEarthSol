@@ -199,6 +199,28 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 #endif
         }
     }
+
+    // apply_vbcs projects the velocity onto this edge for any node flagged on both
+    // boundaries of a pair, from inside a device kernel that can neither report nor
+    // abort. A pair can be flagged on a node while the loop above skipped it -- either
+    // boundary having no facets is enough -- and the constraint is then dropped in
+    // silence. Report it here, the last place with somewhere to say it, for the pairs
+    // the kernel can actually ask about.
+    for (int ib=iboundn0; ib<=iboundn3; ib++) {
+        if (var.vbc_types[ib] != 1 && var.vbc_types[ib] != 11) continue;
+        for (int ic=iboundx0; ic<ib; ic++) {
+            if (var.vbc_types[ic] != 1) continue;
+            if (edge_slot[ic*nbdrytypes + ib] >= 0) continue;
+            for (int n=0; n<var.nnode; ++n) {
+                uint flag = (*var.bcflag)[n];
+                if (!(flag & (1U << ib)) || !(flag & (1U << ic))) continue;
+                std::cerr << "Warning: boundaries " << ic << " and " << ib << " meet at node "
+                          << n << " but share no edge; apply_vbcs leaves the edge-parallel "
+                          << "velocity constraint unapplied there\n";
+                break;
+            }
+        }
+    }
 }
 
 
