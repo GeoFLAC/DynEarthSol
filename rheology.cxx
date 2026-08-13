@@ -1,6 +1,7 @@
 #include <cmath>
 #include <iostream>
 
+#include "3x3-C/dsyevc3.h"
 #include "3x3-C/dsyevh3.h"
 
 #include "constants.hpp"
@@ -9,64 +10,77 @@
 #include "rheology.hpp"
 #include "utils.hpp"
 
+#ifdef THREED
+// Half-width of the undecided band around the yield surface, relative to
+// (|p0| + anphi*|p2| + |amc|). Covers dsyevc3's 6.6e-4 error relative to max|lambda|:
+// anphi >= 1, so band >= 1e-2*max|lambda|; worst measured error/band 4e-2 over 2.6e7 tensors.
+// Only the 3D yield test pre-filters, so 2D has no use for it.
+const double YIELD_PREFILTER_MARGIN = 1e-2;
+#endif
+
+// Order p ascending, applying the same permutation to the columns of v when given.
+// One ordering rule for both entry points; v == nullptr is the values-only case.
+#pragma acc routine seq
+static void sort_principal3(double p[3], double v[3][3])
+{
+    // Three compare-swaps: the (0,1),(1,2),(0,1) network sorts three elements.
+    const int pairs[3][2] = {{0,1},{1,2},{0,1}};
+    #pragma acc loop seq
+    for (int k=0; k<3; ++k) {
+        const int i = pairs[k][0], j = pairs[k][1];
+        if (p[i] > p[j]) {
+            const double tmp = p[i];
+            p[i] = p[j];
+            p[j] = tmp;
+            if (v) {
+                #pragma acc loop seq
+                for (int r=0; r<3; ++r) {
+                    const double b = v[r][i];
+                    v[r][i] = v[r][j];
+                    v[r][j] = b;
+                }
+            }
+        }
+    }
+}
+
+// Unflatten {XX, YY, ZZ, XY, XZ, YZ} into the upper triangle of a 3x3.
 #pragma acc routine seq
 template <typename T>
-static void principal_stresses3(T s, double p[3], double v[3][3])
+static void unflatten_stress3(T s, double a[3][3])
 {
-    /* s is a flattened stress vector, with the components {XX, YY, ZZ, XY, XZ, YZ}.
-     * Returns the eigenvalues p and eignvectors v.
-     * The eigenvalues are ordered such that p[0] <= p[1] <= p[2].
-     *  - Maximum shear stress direction 'shear_dir'.
-     */
-
-    // unflatten s to a 3x3 tensor, only the upper part is needed.
-    double a[3][3];
     a[0][0] = s[0];
     a[1][1] = s[1];
     a[2][2] = s[2];
     a[0][1] = s[3];
     a[0][2] = s[4];
     a[1][2] = s[5];
+}
 
+/* Eigenvalues ONLY, ascending, for the yield test in elasto_plastic(). dsyevc3 (Cardano)
+ * is 4.8x cheaper (25.1 vs 121.1 ns/call) but inaccurate near degeneracy, so a decision
+ * near the surface is undecided -- see YIELD_PREFILTER_MARGIN. */
+#pragma acc routine seq
+template <typename T>
+static void principal_values3(T s, double p[3])
+{
+    double a[3][3];
+    unflatten_stress3(s, a);
+    dsyevc3(a, p);
+    sort_principal3(p, nullptr);
+}
+
+/* Eigenvalues AND eigenvectors, p ascending, v holding eigenvectors as columns.
+ * Vendored dsyevh3, reached only on the branch that needs vectors.
+ */
+#pragma acc routine seq
+template <typename T>
+static void principal_stresses3(T s, double p[3], double v[3][3])
+{
+    double a[3][3];
+    unflatten_stress3(s, a);
     dsyevh3(a, v, p);
-
-    // reorder p and v
-    if (p[0] > p[1]) {
-        double tmp, b[3];
-        tmp = p[0];
-        p[0] = p[1];
-        p[1] = tmp;
-        for (int i=0; i<3; ++i)
-            b[i] = v[i][0];
-        for (int i=0; i<3; ++i)
-            v[i][0] = v[i][1];
-        for (int i=0; i<3; ++i)
-            v[i][1] = b[i];
-    }
-    if (p[1] > p[2]) {
-        double tmp, b[3];
-        tmp = p[1];
-        p[1] = p[2];
-        p[2] = tmp;
-        for (int i=0; i<3; ++i)
-            b[i] = v[i][1];
-        for (int i=0; i<3; ++i)
-            v[i][1] = v[i][2];
-        for (int i=0; i<3; ++i)
-            v[i][2] = b[i];
-    }
-    if (p[0] > p[1]) {
-        double tmp, b[3];
-        tmp = p[0];
-        p[0] = p[1];
-        p[1] = tmp;
-        for (int i=0; i<3; ++i)
-            b[i] = v[i][0];
-        for (int i=0; i<3; ++i)
-            v[i][0] = v[i][1];
-        for (int i=0; i<3; ++i)
-            v[i][1] = b[i];
-    }
+    sort_principal3(p, v);
 }
 
 #pragma acc routine seq
@@ -333,6 +347,19 @@ static void elasto_plastic(double bulkm, double shearm,
 #ifdef THREED
     // eigenvectors
     double v[3][3];
+
+    // Eigenvalue-only PRE-FILTER: v is needed only to rotate a CORRECTED stress back, and
+    // only 0.170% of elements yield, so the eigenvectors are almost never needed.
+    // One-sided -- anything within the band falls through to the accurate solver.
+    {
+        double pf[3];
+        principal_values3(s, pf);
+        const double band = YIELD_PREFILTER_MARGIN
+            * (std::fabs(pf[0]) + anphi * std::fabs(pf[2]) + std::fabs(amc));
+        if (pf[0] - pf[2] * anphi + amc > band && pf[2] - ten_max < -band)
+            return;   // no failure, and not close enough to it to need checking
+    }
+
     principal_stresses3(s, p, v);
 #else
     // In 2D, we only construct the eigenvectors from
