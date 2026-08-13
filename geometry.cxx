@@ -711,19 +711,26 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // profile rather than the node maximum.
     const bool antialias = (M_nyquist > M);
     const double dxg = Lg / (M - 1);
+    // The members and member calls this loop needs, reached through locals instead of the
+    // implicit this. nvc++ answers a class member inside default(none) by ignoring the
+    // clause outright ("ignoring default(none): class member has been declared SHARED"),
+    // which silently stops it checking the whole region; g++ accepts it and says nothing.
+    // Naming everything keeps the clause doing its job on both.
+    const double x0 = x0g, L = Lg;
+    const SurfaceTopo& topo = *this;
     #pragma omp parallel for default(none) \
-        shared(s, M, dxg, antialias) reduction(max:hmax)
+        shared(s, M, dxg, antialias, x0, L, topo) reduction(max:hmax)
     for (int i = 0; i < M; ++i) {
-        const double xi = x0g + Lg * i / (M - 1);
+        const double xi = x0 + L * i / (M - 1);
         if (antialias) {
             // The DCT-I samples include both endpoints, so the end cells are half
             // as wide as the interior ones.
-            s[i] = elev_avg(std::max(xi - 0.5 * dxg, x0g),
-                            std::min(xi + 0.5 * dxg, x0g + Lg));
+            s[i] = topo.elev_avg(std::max(xi - 0.5 * dxg, x0),
+                                 std::min(xi + 0.5 * dxg, x0 + L));
         }
         else {
             const double q[NDIMS] = {xi, 0.0};
-            s[i] = elev(q);
+            s[i] = topo.elev(q);
         }
         hmax = std::max(hmax, std::abs(s[i]));
     }
