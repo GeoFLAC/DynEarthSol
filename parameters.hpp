@@ -706,9 +706,13 @@ struct Variables {
     double stress_bc_values[nbdrytypes];
     double vbc_val_z1_loading_period;
 
-    std::map<std::pair<int,int>, double_vec> edge_vectors;
+    // Unit vector along the edge where two boundaries meet, NDIMS doubles per pair in
+    // edge_vec. edge_slot[i*nbdrytypes + j] with i < j indexes it, and is -1 when that
+    // pair shares no edge -- the state apply_vbcs has to test before dereferencing.
+    // A dense nbdrytypes^2 table rather than a searchable list: 100 ints is smaller than
+    // any index it could carry, so the device lookup is one load and needs no pointer.
     double_vec edge_vec;
-    int_vec edge_vec_idx;
+    int edge_slot[nbdrytypes * nbdrytypes];
     double_vec vbc_vertical_div_x0;
     double_vec vbc_vertical_div_x1;
     double_vec vbc_vertical_ratio_x0;

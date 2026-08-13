@@ -186,6 +186,9 @@ void init(const Param& param, Variables& var)
     #pragma acc wait
 
     *var.volume_old = *var.volume;
+    // Must precede apply_vbcs: it is the only writer of edge_vec/edge_slot, which
+    // apply_vbcs reads for any node on two boundaries at once.
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
     var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
@@ -195,8 +198,6 @@ void init(const Param& param, Variables& var)
 #endif
 
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
-    // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
 
     // temperature should be init'd before stress and strain
@@ -393,7 +394,7 @@ void restart(const Param& param, Variables& var)
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
     apply_vbcs(param, var, *var.vel);
 
