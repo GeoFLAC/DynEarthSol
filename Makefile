@@ -406,9 +406,27 @@ ifeq ($(use_gospl), 1)
 endif
 
 
+## Warnings belong in every build, not only the debug one. gcc's uninitialized and
+## array-bounds analyses run inside the optimizer, so -O0 -- the only level that used to
+## ask for warnings -- is where they see the least: -O2 -Wall finds real defects that
+## -O0 -Wall cannot. The two suppressions cover what this codebase does deliberately,
+## namely file-static helpers in headers that not every translation unit calls.
+## Two flags are added per compiler below instead of here: -Wno-unknown-pragmas, because
+## the clang debug build wants to hear about acc pragmas while every other build would
+## drown in them, and -Wno-unused-private-field, which only clang has.
+WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
+
 ifneq (, $(findstring clang++, $(CXX)))
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -std=c++0x -DGPP1X
+	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
+	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
+	## THREED-only axis, the ACC-only knn state, the hdf5-only compression level -- which
+	## is the same deliberate pattern, not a finding.
+	CXXFLAGS = -g -std=c++0x -DGPP1X $(WARNFLAGS) -Wno-unused-private-field
+	## Everything but opt=0 and opt=-1; those two are the builds that report acc pragmas.
+	ifeq (,$(filter 0 -1,$(opt)))
+		CXXFLAGS += -Wno-unknown-pragmas
+	endif
 	LDFLAGS = -lm
 	TETGENFLAG = 
 	
@@ -424,7 +442,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	else ifeq ($(opt), 3)
 		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
 	else # debugging
-		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function
+		CXXFLAGS += -O0
 		ifeq ($(opt), -1)
 			CXXFLAGS += -fsanitize=address
 			LDFLAGS += -fsanitize=address
@@ -507,7 +525,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -std=c++0x
+	CXXFLAGS = -g -std=c++0x $(WARNFLAGS) -Wno-unknown-pragmas
 	LDFLAGS = -lm
 	TETGENFLAG = -Wno-unused-but-set-variable -Wno-int-to-pointer-cast
 
@@ -518,7 +536,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	else ifeq ($(opt), 3) # experimental, use at your own risk :)
 		CXXFLAGS += -march=native -O3 -ffast-math -funroll-loops
 	else # debugging flags
-		CXXFLAGS += -O0 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unknown-pragmas -fbounds-check -ftrapv
+		CXXFLAGS += -O0 -fbounds-check -ftrapv
 		ifeq ($(opt), -1)
 			CXXFLAGS += -fsanitize=address
 			LDFLAGS += -fsanitize=address
@@ -563,7 +581,14 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 
 else ifneq (, $(findstring nvc++, $(CXX)))
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -Minfo=mp,accel
+	## No WARNFLAGS here: nvc++ rejects -Wno-unknown-pragmas outright ("Unknown switch"),
+	## and bare -Wall only adds a macro redefinition inside boost's own pgi.hpp.
+	## It does report unreferenced file statics by default, which is the class g++'s
+	## WARNFLAGS suppresses on purpose -- headers here carry helpers not every translation
+	## unit calls, and each dimension compiles the other's. --diag_suppress is nvc++'s
+	## spelling of that -Wno-unused-{variable,function}. Its set_but_not_used stays on, so
+	## that a value written and never read is still reported, as it is under g++.
+	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress declared_but_not_referenced
 	LDFLAGS =
 	TETGENFLAGS = 
 
