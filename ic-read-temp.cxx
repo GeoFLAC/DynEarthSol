@@ -21,7 +21,6 @@ void read_external_temperature_from_comsol(const Param &param,
     {
         std::ifstream inputFile(param.ic.Temp_filename.c_str());
         std::string line;
-        int i = 0;
 
         while(std::getline(inputFile, line)) {
             if (!line.length() || line[0] == '%')
@@ -38,8 +37,6 @@ void read_external_temperature_from_comsol(const Param &param,
             ys.push_back(y);
             zs.push_back(z);
             Ts.push_back(T);
-
-            ++i;
         }
     }
 
