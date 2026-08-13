@@ -330,8 +330,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     if (param.control.PT_jump) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
+#ifdef THREED
+        // Only 3D has y boundaries to hold at rest; in 2D y is not a boundary direction.
         bc_vy0 = 0.0;
         bc_vy1 = 0.0;
+#endif
         bc_vz0 = 0.0;
         bc_vz1 = 0.0;
 #ifndef THREED

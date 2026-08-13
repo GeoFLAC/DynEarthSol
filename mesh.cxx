@@ -2716,19 +2716,24 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.zlength};
     size_t_vec idx(NDIMS);
     sortindex(lengths, idx);
-    int dmin, dmid, dmax;
+    int dmin, dmax;
+#ifdef THREED
+    int dmid;   // the middle axis only enters the 3D sort weight below
+#endif
 
     if (param.mesh.meshing_elem_shape == 0) {
         dmin = idx[0];
+#ifdef THREED
         dmid = idx[1];
+#endif
         dmax = idx[NDIMS-1];
     } else {
 #ifdef THREED
         dmax = 0;
+        dmid = NDIMS-2;
 #else
         dmax = NDIMS-2;
 #endif
-        dmid = NDIMS-2;
         dmin = NDIMS-1;
     }
     //
