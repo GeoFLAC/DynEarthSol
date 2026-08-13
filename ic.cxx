@@ -370,13 +370,10 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
         return;
     }
 
-    // lithostatic condition for stress and strain
-    double rho = var.mat->rho(0);
-    if (param.control.has_hydraulic_diffusion) {
-        // Modified density considering porosity for hydraulic diffusion
-        rho = var.mat->rho(0) * (1 - var.mat->phi(0)) + 1000.0 * var.mat->phi(0);
-    }
-
+    // Lithostatic stress and strain. loading_zz below -- the 1D surface load this variant
+    // exists to add -- is still held at zero, so what this writes is the plain lithostatic
+    // state, the same as initial_stress_state(). The load term's density would be
+    // var.mat->rho(0), porosity-weighted with water under has_hydraulic_diffusion.
     double ks = var.mat->bulkm(0);
     double mu = var.mat->shearm(0);
     double lame = ks - (2.0 / 3.0) * mu;
