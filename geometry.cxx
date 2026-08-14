@@ -929,7 +929,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
     heff.assign((size_t)M * M * ND, 0.0);
     #pragma omp parallel default(none) \
-        shared(cmi, T, A, M, ND, pn)
+        shared(cmi, T, A, M) firstprivate(ND, pn)
     {
         #pragma omp for
         for (int m = 0; m < M; ++m) {
