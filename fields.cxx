@@ -299,9 +299,11 @@ void update_pore_pressure(const Param &param, const Variables &var,
     // Initialize diff_max_local for reduction
     double diff_max_local = 1.0e-38;
 
+#ifndef ACC
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
         reduction(max:diff_max_local)
-    // #pragma acc parallel loop reduction(max:diff_max_local)
+#endif
+        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
@@ -362,11 +364,10 @@ void update_pore_pressure(const Param &param, const Variables &var,
         }
     }
 
-    // Update global hydro_diff_max after the loop
-    var.mat->hydro_diff_max = diff_max_local;
-
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
         {
@@ -393,6 +394,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
             
     }
 
+    #pragma acc wait
+    // Update global hydro_diff_max after the loop
+    var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();
 #endif
