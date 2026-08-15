@@ -617,8 +617,10 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
-    report_cpu_runtime_status();
-    report_openacc_runtime_status();
+    // Selects the offload device, so it must precede any compute.
+    init_offload_device();
+    report_host_runtime_status();
+    report_device_runtime_status();
 
     //
     // run simulation
