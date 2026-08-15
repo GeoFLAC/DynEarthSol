@@ -14,6 +14,10 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
 
 namespace {
 
@@ -54,6 +58,18 @@ bool env_forces_device(const char* env, acc_device_t& device)
 
 std::string read_cpu_model()
 {
+#ifdef __APPLE__
+    // No /proc on macOS; the brand string lives in sysctl.
+    std::size_t len = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0) != 0 || len == 0)
+        return "unknown";
+    std::string model(len, '\0');
+    if (sysctlbyname("machdep.cpu.brand_string", &model[0], &len, NULL, 0) != 0)
+        return "unknown";
+    // len counts the trailing NUL, which does not belong in a std::string.
+    model.resize(len > 0 ? len - 1 : 0);
+    return model.empty() ? "unknown" : model;
+#else
     std::ifstream cpuinfo("/proc/cpuinfo");
     if (!cpuinfo) return "unknown";
 
@@ -69,6 +85,7 @@ std::string read_cpu_model()
         if (!model.empty()) return model;
     }
     return "unknown";
+#endif
 }
 
 } // namespace
