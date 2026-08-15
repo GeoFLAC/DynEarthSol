@@ -835,7 +835,7 @@ CXXFLAGS += -DSOA
 .PHONY: all clean take-snapshot prepare build check-deps config FORCE
 
 all: prepare
-	$(MAKE) build
+	@$(MAKE) build
 
 ## Rebuild when the FLAGS change, not just when a source file does.
 ##

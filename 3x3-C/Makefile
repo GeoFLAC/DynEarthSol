@@ -62,7 +62,7 @@ STAMP = .build-flags-3x3$(suffix)
 
 .PHONY: all clean FORCE
 all: $(STAMP)
-	@$(MAKE) --no-print-directory $(BIN)
+	@$(MAKE) -q --no-print-directory $(BIN) || $(MAKE) --no-print-directory $(BIN)
 
 $(STAMP): FORCE
 	@echo '$(CC)|$(CFLAGS)|$(INCFLAGS)' > $@.tmp
