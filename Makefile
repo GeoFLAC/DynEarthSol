@@ -555,7 +555,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 
 	GCCVERSION = $(shell $(CXX) --version | grep g++ | sed 's/^.* //g' | cut -d. -f1)
 
-	ifeq ($(shell expr $(GCCVERSION) \> 10), 1)
+	ifeq ($(shell expr $(GCCVERSION) \> 8), 1)
 		CXXFLAGS += -DGPP1X
 	endif
 
