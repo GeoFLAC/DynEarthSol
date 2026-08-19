@@ -1,0 +1,102 @@
+name: OMP g++ matrix
+
+# Two gates for OpenMP pragma correctness:
+#   1. compile-matrix: g++ 8-15 hard-error on default(none) data-sharing
+#      violations, whose rules changed across versions (gcc 8 vs 9+).
+#   2. thread-count-check: 1-thread vs 4-thread runs compared with
+#      compare.py, which tolerates reduction round-off (<1e-8) but fails
+#      on race-sized divergence or NaN.
+
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - '**.cxx'
+      - '**.hpp'
+      - '**.cpp'
+      - 'Makefile'
+      - '.github/workflows/omp-gcc-matrix.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        gcc: [8, 9, 10, 11, 12, 13, 14, 15]
+    runs-on: ubuntu-latest
+    container: gcc:${{ matrix.gcc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # As in nvc-build; `|| true` tolerates act runs from a git worktree.
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory '*' || true
+
+      - name: install boost (archive fallback for EOL Debian bases)
+        run: |
+          apt-get update || { \
+            sed -i -e 's|deb.debian.org/debian|archive.debian.org/debian|g' \
+                   -e 's|security.debian.org|archive.debian.org|g' \
+                   -e '/-updates/d' /etc/apt/sources.list; \
+            apt-get -o Acquire::Check-Valid-Until=false update; }
+          apt-get install -y --no-install-recommends libboost-program-options-dev
+
+      - name: g++ version
+        run: g++ --version
+
+      - name: make 2d openmp
+        run: make clean ndims=2; make -j4 ndims=2 opt=2 openmp=1 hdf5=0
+
+      - name: make 3d openmp
+        run: make clean ndims=3; make -j4 ndims=3 opt=2 openmp=1 hdf5=0
+
+  thread-count-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip numpy h5py
+
+      - name: get boost and hdf5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+
+      - name: make 2d openmp hdf5
+        run: make -j4 ndims=2 opt=2 openmp=1 hdf5=1
+
+      - name: reference run, 1 thread
+        working-directory: ./tests/functional
+        run: |
+          OMP_NUM_THREADS=1 ../../dynearthsol2d 2d-ep-irregular.cfg
+          mkdir ref-omp1 && mv functional-test.* ref-omp1/
+
+      - name: run A, 4 threads, compare
+        working-directory: ./tests/functional
+        run: |
+          OMP_NUM_THREADS=4 ../../dynearthsol2d 2d-ep-irregular.cfg
+          cd ../../benchmarks-cores
+          python compare.py ../tests/functional/ref-omp1/functional-test \
+                            ../tests/functional/functional-test 4
+
+      # Second multithreaded run: races are schedule-dependent and one
+      # clean pass is weak evidence.
+      - name: run B, 4 threads, compare
+        working-directory: ./tests/functional
+        run: |
+          rm -f functional-test.*
+          OMP_NUM_THREADS=4 ../../dynearthsol2d 2d-ep-irregular.cfg
+          cd ../../benchmarks-cores
+          python compare.py ../tests/functional/ref-omp1/functional-test \
+                            ../tests/functional/functional-test 4
