@@ -32,8 +32,6 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff2d(a, b, c, volume[e], coeff_[e]);
 #endif
     }
-
-    #pragma acc wait
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -72,8 +70,6 @@ Barycentric_transformation::Barycentric_transformation(const int_vec &elem,
         compute_coeff2d(a, b, c, volume[e], coeff_[i]);
 #endif
     }
-
-    #pragma acc wait
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -110,8 +106,6 @@ Barycentric_transformation::Barycentric_transformation(const array_t &coord,
         compute_coeff1d(a, b, area[e], coeff_[e]);
 #endif
     }
-
-    #pragma acc wait
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif

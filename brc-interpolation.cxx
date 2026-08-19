@@ -157,6 +157,9 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
     array_t block_queries;
 
+    // bary's coeff_ is filled by an async ACC kernel; it is read on the host below
+    #pragma acc wait
+
     for (int b = 0; b < nblocks; b++) {
         int start = b * nodes_per_block;
         int end = std::min((b + 1) * nodes_per_block, var.nnode);
