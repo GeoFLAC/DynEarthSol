@@ -723,7 +723,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     const double x0 = x0g, L = Lg;
     const SurfaceTopo& topo = *this;
     #pragma omp parallel for default(none) \
-        shared(s, M, dxg, antialias, x0, L, topo) reduction(max:hmax)
+        shared(s, M, topo) firstprivate(dxg, antialias, x0, L) reduction(max:hmax)
     for (int i = 0; i < M; ++i) {
         const double xi = x0 + L * i / (M - 1);
         if (antialias) {
@@ -759,7 +759,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // `this`, which default(none) does not police, so naming them would not check
     // anything.
     #pragma omp parallel default(none) \
-        shared(s, a, am, cmiT, M, ND, pn)
+        shared(s, a, am, cmiT, M) firstprivate(ND, pn)
     {
         // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half ends)
         #pragma omp for
