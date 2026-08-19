@@ -1,5 +1,8 @@
 name: Notify des-inputgen when input.cxx changes
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [master, main]

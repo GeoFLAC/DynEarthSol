@@ -1,5 +1,8 @@
 name: OMP g++ matrix
 
+permissions:
+  contents: read
+
 # Two gates for OpenMP pragma correctness:
 #   1. compile-matrix: g++ 8-15 hard-error on default(none) data-sharing
 #      violations, whose rules changed across versions (gcc 8 vs 9+).

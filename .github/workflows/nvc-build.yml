@@ -1,5 +1,10 @@
 name: nvc build
 
+permissions:
+  contents: read
+  pull-requests: read
+  packages: read
+
 on:
   push:
     branches:
