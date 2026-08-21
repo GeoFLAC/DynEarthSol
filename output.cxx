@@ -78,14 +78,14 @@ void Output::write_info(const Variables& var, double dt)
 
     if (f == NULL) {
         std::cerr << "Error: cannot open file '" << filename << "' for writing\n";
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     if (std::fputs(buffer, f) == EOF) {
         std::cerr << "Error: failed writing to file '" << filename << "'\n";
         std::cerr << "\tbuffer written:\n";
         std::cerr << buffer << '\n';
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
 
     std::fclose(f);

@@ -27,12 +27,19 @@ Low priority:
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
 * Avoid creating/destroying objects in inner for-loops.
 * Avoid static variables and global variables.
-* Meaning of error codes:
-   1: User input error
-   2: IO error
-  10: Triangulation/tetrahedralization error
-  11: Runtime error
-  12: Assertion error (due to programming)
+* Meaning of error codes. First digit is the category, second the specific
+  cause; 1x is the user's to fix, 2x the environment, 3x-6x ours. Exit via
+  `die(EXIT_...)` in `utils.hpp`, which prints the code and its category, so
+  never `exit()` a bare number.
+   0: Normal exit
+  10: Config error          11: bad value/unknown option  12: malformed .poly/.exo
+  20: Cannot open file      21: read/write failed (HDF5)  22: restart mismatch
+  30: Unsupported in this NDIMS                           31: library not built in
+  40: Triangle/TetGen       41: MMG                       42: mesh quality/topology
+  50: NaN/non-finite        51: marker/geometry lookup    52: resource exhausted
+  60: Assertion violated    61: unreachable branch
+  These are renumbered: earlier builds used 1 input, 2 IO, 10 triangulation,
+  11 runtime, 12 assertion, so 10-12 mean something different in older logs.
 
 ## Benchmarks and regression testing
 

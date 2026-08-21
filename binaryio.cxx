@@ -5,6 +5,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "binaryio.hpp"
+#include "utils.hpp"
 #include "markerset.hpp"
 
 #ifdef WIN32
@@ -70,7 +71,7 @@ BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
     f = std::fopen(filename, "wb");
     if (f == NULL) {
         std::cerr << "Error: cannot open file: " << filename << '\n';
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     header = new char[headerlen]();
@@ -111,12 +112,12 @@ void BinaryOutput::write_header(const char *name)
     if (len >= bsize) {
         std::cerr << "Error: exceeding buffer length at Output::write_array, name=" << name
                   << " eof_position=" << eof_pos << '\n';
-        std::exit(12);
+        die(EXIT_INTERNAL_ASSERT);
     }
     if (len >= headerlen - (hd_pos - header)*sizeof(char)) {
         std::cerr << "Error: exceeding header length at Output::write_array, name=" << name
                   << " eof_position=" << eof_pos << '\n';
-        std::exit(12);
+        die(EXIT_INTERNAL_ASSERT);
     }
     hd_pos = std::strncat(hd_pos, buffer, len);
 }
@@ -209,7 +210,7 @@ BinaryInput::BinaryInput(const char *filename)
     f = std::fopen(filename, "r");
     if (f == NULL) {
         std::cerr << "Error: cannot open file: " << filename << '\n';
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
     read_header();
 }
@@ -234,8 +235,7 @@ void BinaryInput::read_header()
     char *header = new char[headerlen]();
     std::size_t n = std::fread(header, sizeof(char), headerlen, f);
     if (n != headerlen) {
-        std::cerr << "Error: error reading file header\n";
-        std::exit(2);
+        die(EXIT_IO_RW, "error reading file header");
     }
 
     /* Parse the content of header buffer */
@@ -247,7 +247,7 @@ void BinaryInput::read_header()
         std::cerr << "Error: mismatching revision string in header\n"
                   << "  Expect: " << revision_str
                   << "  Got: "<< line << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 
     line = std::strtok(NULL, "\n");
@@ -257,7 +257,7 @@ void BinaryInput::read_header()
         if (tab == NULL) {
             std::cerr << "Error: error parsing file header\n"
                       << " Line is:" << line << '\n';
-            std::exit(1);
+            die(EXIT_IO_RW);
         }
         std::string name(line, tab-line);
         std::size_t loc;
@@ -277,7 +277,7 @@ void BinaryInput::seek_to_array(const char *name)
     auto it = offset.find(name);
     if (it == offset.end()) {
         std::cerr << "Error: no array with a name: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     std::size_t loc = it->second;
     //std::cout << name << ' ' << loc << '\n';
@@ -292,7 +292,7 @@ void BinaryInput::read_scalar(T& A, const std::string& name)
     std::size_t n = std::fread(&A, sizeof(T), 1, f);
     if (n != 1) {
         std::cerr << "Error: cannot read scalar: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 }
 
@@ -312,15 +312,15 @@ void BinaryInput::read_array(std::vector<T>& A, const char *name, std::size_t si
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     seek_to_array(name);
-    int n = std::fread(A.data(), sizeof(T), size, f);
+    const std::size_t n = std::fread(A.data(), sizeof(T), size, f);
 
     if (n != size) {
         std::cerr << "Error: cannot read array: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 }
 
@@ -333,7 +333,7 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     seek_to_array(name);
@@ -343,10 +343,10 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     if (buffer.size() < total_elements)
         buffer.resize(total_elements);
 
-    int n = std::fread(buffer.data(), sizeof(T), size * N, f);
+    const std::size_t n = std::fread(buffer.data(), sizeof(T), size * N, f);
     if (n != N * size) {
         std::cerr << "Error: cannot read array (buffered path): " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     A.load_from_buffer(buffer.data(), size, false);
@@ -695,7 +695,7 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
         } else if (len == nseg || len == etop) {
         } else {
             printf("name = %s\n", name);
-            std::exit(13);
+            die(EXIT_INTERNAL_ASSERT);
         }
     }
     std::string full_name = "/VTKHDF/" + block_base + "/" + mid + name;
@@ -743,7 +743,7 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
         } else if (len == nseg || len == etop) {
         } else {
             printf("name = %s\n", name);
-            std::exit(13);
+            die(EXIT_INTERNAL_ASSERT);
         }
     }
 
@@ -917,7 +917,7 @@ HDF5Input::HDF5Input(const char *filename)
     file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
     if (file_id < 0) {
         std::cerr << "Error: cannot open HDF5 file for reading: " << filename << "\n";
-        std::exit(1);
+        die(EXIT_IO_OPEN);
     }
 
     read_header();
@@ -926,8 +926,7 @@ HDF5Input::HDF5Input(const char *filename)
 void HDF5Input::read_header()
 {
     if (H5Aexists(file_id, "ndims") <= 0) {
-        std::cerr << "Error: missing attribute ndims in HDF5 file\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART, "missing attribute ndims in HDF5 file");
     }
 
     hid_t attr = H5Aopen(file_id, "ndims", H5P_DEFAULT);
@@ -941,12 +940,11 @@ void HDF5Input::read_header()
     if (ndims != NDIMS) {
         std::cerr << "Error: mismatching ndims in HDF5 file\n"
                   << "  Expect: " << NDIMS << "  Got: " << ndims << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 
     if (H5Aexists(file_id, "revision") <= 0) {
-        std::cerr << "Error: missing attribute revision in HDF5 file\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART, "missing attribute revision in HDF5 file");
     }
 
     attr = H5Aopen(file_id, "revision", H5P_DEFAULT);
@@ -960,7 +958,7 @@ void HDF5Input::read_header()
     if (revision != BINARY_FILE_REVISION) {
         std::cerr << "Error: mismatching revision in HDF5 file\n"
                   << "  Expect: " << BINARY_FILE_REVISION << "  Got: " << revision << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 }
 
@@ -984,25 +982,25 @@ void HDF5Input::read_scalar(T& A, const std::string& name)
     hid_t dset_id = H5Dopen2(file_id, name.c_str(), H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank < 0) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: cannot get rank for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     if (rank == 0 || rank > 1) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
                   << ", expected rank 1, got " << rank << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t mspace_id =  H5Screate(H5S_SCALAR);
@@ -1010,7 +1008,7 @@ void HDF5Input::read_scalar(T& A, const std::string& name)
     if (mspace_id < 0) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: cannot create memspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dtype_id = H5Native<T>::id();
@@ -1018,7 +1016,7 @@ void HDF5Input::read_scalar(T& A, const std::string& name)
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, &A) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     H5Sclose(mspace_id);
@@ -1037,33 +1035,33 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size
     size = size > 0 ? size : A.size();
     if (size == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 1) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
                   << ", expected rank 0 or 1, got " << rank << "\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     hsize_t dims[1];
     H5Sget_simple_extent_dims(space_id, dims, nullptr);
     if (dims[0] != size) {
         std::cerr << "Error: array size is not matched: " << name
                   << " (file dim = " << dims[0] << ", expected = " << size << ")\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t mspace_id = H5Screate_simple(1, dims, nullptr);
@@ -1072,7 +1070,7 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, A.data()) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     H5Sclose(mspace_id);
@@ -1089,25 +1087,25 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 2) {
         std::cerr << "Error: dataset rank mismatch for " << name 
                   << ", expected 2 dims, got " << rank << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 
     hsize_t dims[2];
@@ -1116,7 +1114,7 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
         std::cerr << "Error: dataset dimensions mismatch for " << name
                   << ": file dims = (" << dims[0] << ", " << dims[1]
                   << "), expected (" << size << ", " << N << ")\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t mspace_id = H5Screate_simple(2, dims, nullptr);
     hid_t dtype_id = H5Native<T>::id();
@@ -1129,7 +1127,7 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, buffer.data()) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     A.load_from_buffer(buffer.data(), size, false);

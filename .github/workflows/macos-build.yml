@@ -1,5 +1,8 @@
 name: macOS build
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "master", "*macOS*" ]

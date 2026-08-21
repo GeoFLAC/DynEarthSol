@@ -185,6 +185,9 @@ void reallocate_variables(const Param& param, Variables& var)
         var.old_mean_stress = new double_vec(var.nelem);
     }
 
+    // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
+    // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
+    // Called earlier the cache is built from empty counts -- wrong means, not a crash.
     delete var.mat;
     var.mat = new MatProps(param, var);
 
@@ -245,17 +248,12 @@ void update_temperature(const Param &param, const Variables &var,
             else {
                 double tdot = 0;
 
-                for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                    ConstConnAccessor conn = (*var.connectivity)[*e];
-                    ConstElemCacheAccessor tr = tmp_result[*e];
-                    bool found = false;
-                    for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
-                        if (n == conn[i]) {
-                            tdot += tr[i];
-                            found= true;
-                        }
-                    }
-                }
+                // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                const int* lpatch = var.support.local(n);
+                for (int k=0; k<npatch; ++k)
+                    tdot += tmp_result[patch[k]][lpatch[k]];
                 // Combining temperature update and bc in the same loop for efficiency,
                 // since only the top boundary has Dirichlet bc, and all the other boundaries
                 // have no heat flux bc.
@@ -301,8 +299,11 @@ void update_pore_pressure(const Param &param, const Variables &var,
     // Initialize diff_max_local for reduction
     double diff_max_local = 1.0e-38;
 
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param, diff_max_local)
-    // #pragma acc parallel loop
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
+        reduction(max:diff_max_local)
+#endif
+        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
@@ -363,22 +364,18 @@ void update_pore_pressure(const Param &param, const Variables &var,
         }
     }
 
-    // Update global hydro_diff_max after the loop
-    var.mat->hydro_diff_max = diff_max_local;
-
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
-        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[*e];
-            ConstElemCacheAccessor tr = tmp_result[*e];
-            for (int i = 0; i < NODES_PER_ELEM; i++) {
-                if (n == conn[i]) {
-                    tdot[n] += tr[i];
-                    break;
-                }
-            }
+        {
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k = 0; k < npatch; ++k)
+                tdot[n] += tmp_result[patch[k]][lpatch[k]];
         }
 
         // Update pore pressure for non-boundary nodes
@@ -397,6 +394,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
             
     }
 
+    #pragma acc wait
+    // Update global hydro_diff_max after the loop
+    var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -571,7 +571,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         break;
     default:
         std::cerr << "Error: unknown damping_option: " << param.control.damping_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -661,18 +661,16 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             f = 0;
             ArrayAccessor f_residual = force_residual[n];
             f_residual = 0;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[*e];
-                ConstElemCacheAccessor tr = tmp_result[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        for (int j=0;j<NDIMS;j++)
-                        {
-                            f[j] -= tr[i+NODES_PER_ELEM*j];
-                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
-                        }
-                        break;
-                    }
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k=0;k<npatch;++k) {
+                ConstElemCacheAccessor tr = tmp_result[patch[k]];
+                const int i = lpatch[k];
+                for (int j=0;j<NDIMS;j++)
+                {
+                    f[j] -= tr[i+NODES_PER_ELEM*j];
+                    f_residual[j] = tr[i+NODES_PER_ELEM*j];
                 }
             }
         }

@@ -145,7 +145,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
         shared(coord, connectivity, volume)
 #endif
     #pragma acc parallel loop gang vector async
-    for (int e=0; e<volume.size(); ++e) {
+    for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
@@ -229,10 +229,12 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dvoldt[n] = 0.;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-	        dvoldt[n] += etmp[*e];
-        dvoldt[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0.;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dvoldt[n] = acc / (*var.volume_n)[n];
     }
 
     // std::cout << "dvoldt:\n";
@@ -298,10 +300,12 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dp_nd[n] = 0;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            dp_nd[n] += etmp[*e];
-        dp_nd[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dp_nd[n] = acc / (*var.volume_n)[n];
     }
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
@@ -482,10 +486,10 @@ static void spr_fused_fields(const Variables &var,
     #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
     for (int i = 0; i < var.nnode; ++i) {
-        const int npatch = var.sup.size(i);
+        const int npatch = var.support.size(i);
 
         double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
-        const int* patch = var.sup.patch(i);
+        const int* patch = var.support.patch(i);
         const int e0 = patch[0];
         
         #pragma acc loop seq
@@ -616,7 +620,7 @@ static void spr_fused_fields(const Variables &var,
                 // if the matrix is degenerate, the polynomial fit is unreliable. 
                 // Fall back to volume-weighted average, which is stable but less accurate. 
                 // The clamping range is still valid since it's based on the patch values.
-                spr_volume_weighted_avg_strided(var.sup.size(i), var.sup.patch(i),
+                spr_volume_weighted_avg_strided(var.support.size(i), var.support.patch(i),
                                                 *var.volume, in_ptrs[f], in_strides[f]);
 
             out_ptrs[f][i * out_strides[f]] = temp_val;
@@ -711,19 +715,26 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // profile rather than the node maximum.
     const bool antialias = (M_nyquist > M);
     const double dxg = Lg / (M - 1);
+    // The members and member calls this loop needs, reached through locals instead of the
+    // implicit this. nvc++ answers a class member inside default(none) by ignoring the
+    // clause outright ("ignoring default(none): class member has been declared SHARED"),
+    // which silently stops it checking the whole region; g++ accepts it and says nothing.
+    // Naming everything keeps the clause doing its job on both.
+    const double x0 = x0g, L = Lg;
+    const SurfaceTopo& topo = *this;
     #pragma omp parallel for default(none) \
-        shared(s, M, dxg, antialias) reduction(max:hmax)
+        shared(s, M, topo) firstprivate(dxg, antialias, x0, L) reduction(max:hmax)
     for (int i = 0; i < M; ++i) {
-        const double xi = x0g + Lg * i / (M - 1);
+        const double xi = x0 + L * i / (M - 1);
         if (antialias) {
             // The DCT-I samples include both endpoints, so the end cells are half
             // as wide as the interior ones.
-            s[i] = elev_avg(std::max(xi - 0.5 * dxg, x0g),
-                            std::min(xi + 0.5 * dxg, x0g + Lg));
+            s[i] = topo.elev_avg(std::max(xi - 0.5 * dxg, x0),
+                                 std::min(xi + 0.5 * dxg, x0 + L));
         }
         else {
             const double q[NDIMS] = {xi, 0.0};
-            s[i] = elev(q);
+            s[i] = topo.elev(q);
         }
         hmax = std::max(hmax, std::abs(s[i]));
     }
@@ -748,7 +759,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     // `this`, which default(none) does not police, so naming them would not check
     // anything.
     #pragma omp parallel default(none) \
-        shared(s, a, am, cmiT, M, ND, pn)
+        shared(s, a, am, cmiT, M) firstprivate(ND, pn)
     {
         // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half ends)
         #pragma omp for
@@ -918,7 +929,7 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
     heff.assign((size_t)M * M * ND, 0.0);
     #pragma omp parallel default(none) \
-        shared(cmi, T, A, M, ND, pn)
+        shared(cmi, T, A, M) firstprivate(ND, pn)
     {
         #pragma omp for
         for (int m = 0; m < M; ++m) {
@@ -1145,7 +1156,8 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
         // Host loop: visc()/shearm() read the host-side MatProps.
         #pragma acc wait
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(param, var, dt_remesh, lde0, lde1)
+        #pragma omp parallel for default(none) shared(param, var) \
+                firstprivate(dt_remesh, lde0, lde1)
 #endif
         for (int e = 0; e < var.nelem; ++e) {
             const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
@@ -1194,7 +1206,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
     //    Without it the copy carries the source's lithostat and lands ~rho*g*dz
     //    wrong.
     //
-    // Must run before prepare_interpolation (reads old var.stress, *var.support,
+    // Must run before prepare_interpolation (reads old var.stress, var.support,
     // old_coord, old_connectivity — all still old here). Undone by
     // restore_stress_from_ref on the new mesh.
     // ----------------------------------------------------------------
@@ -1303,7 +1315,8 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     const double rho_w_g = param.bc.has_water_loading
                          ? param.bc.sea_water_density * param.control.gravity : 0.0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo, sea_level, rho_w_g)
+    #pragma omp parallel for default(none) shared(param, var, topo) \
+            firstprivate(sea_level, rho_w_g)
 #endif
     #pragma acc parallel loop gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
@@ -1492,8 +1505,8 @@ double compute_dt(const Param& param, Variables& var)
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
-        default(none) shared(param, var) //, velocity_x_element, velocity_y_element, velocity_z_element) \
-        private(vx_element, vy_element, vz_element)
+        default(none) shared(param, var)
+    // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
     #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) async
@@ -1624,7 +1637,7 @@ double compute_dt(const Param& param, Variables& var)
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
         var.output->write_exact_error(var);
-        std::exit(11);
+        die(EXIT_RUNTIME_NAN);
     }
     
 #ifdef NPROF
@@ -1647,8 +1660,7 @@ double compute_dt(const Param& param, Variables& var)
 //     double dt_hydro_diffusion = std::numeric_limits<double>::max();
 //     double minl = std::numeric_limits<double>::max();
 
-//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-//         default(none) shared(param,var)
+//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) default(none) shared(param,var)
 //     // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
 //     for (int e=0; e<var.nelem; ++e) {
 //         int n0 = (*var.connectivity)[e][0];
@@ -1744,37 +1756,28 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    double diff_e;
+    if (param.control.has_hydraulic_diffusion) {
+        // Index the per-material arrays: the MatProps accessors take an ELEMENT index.
+        // LIMITATION: compares m/s against m^2/s (wants a length, diff/minl) and covers
+        // only mattype_ref, not the domain-wide max that dt_hydro_diffusion uses.
+        const int mt = param.mat.mattype_ref;
+        const double perm_m = param.mat.hydraulic_perm[mt];               // Intrinsic permeability
+        const double mu_m = param.mat.fluid_visc[mt];                     // Fluid dynamic viscosity
+        const double alpha_b = param.mat.biot_coeff[mt];                  // Biot coefficient
+        const double phi_m = param.mat.porosity[mt];                      // Porosity
+        const double comp_fluid = 1.0 / param.mat.fluid_bulk_modulus[mt]; // Fluid compressibility
+        const double matrix_comp = 1.0 / (param.mat.bulk_modulus[mt] + 4.0*param.mat.shear_modulus[mt]/3.0);
 
-    #pragma acc serial async
-    {
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(param.mat.mattype_ref);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(param.mat.mattype_ref);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(param.mat.mattype_ref);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(param.mat.mattype_ref);            // Fluid density
-        double phi_e = var.mat->phi(param.mat.mattype_ref);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(param.mat.mattype_ref);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(param.mat.mattype_ref);
-        double shearm = var.mat->shearm(param.mat.mattype_ref);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+        // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
+        // weight cancels between conductivity and storage, so it is not carried.
+        const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
 
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        
-        // Compute element diffusivity and update max using reduction
-        diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
-    }
-
-    #pragma acc wait
-
-    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
-    {
-        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
-        std::exit(11);
+        if (pseudo_speed < diff_ref) {
+            std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
+                      << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
+                      << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
+            die(EXIT_CONFIG_VALUE);
+        }
     }
 
 #ifndef ACC
@@ -1847,8 +1850,10 @@ void compute_mass(const Param &param, const Variables &var,
             hmass[n]=0;
             ymass[n]=0;
         
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstElemCacheAccessor tr = tmp_result[*e];
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            for (int i=0; i<npatch; ++i) {
+                ConstElemCacheAccessor tr = tmp_result[patch[i]];
                 volume_n[n] += tr[0];
                 mass[n] += tr[1];
                 if (param.control.has_thermal_diffusion)

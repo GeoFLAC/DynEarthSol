@@ -92,7 +92,7 @@ double find_max_vbc(const BC &bc)
 
 
 void create_boundary_normals(const Variables &var, array_t &bnormals,
-                             std::map<std::pair<int,int>, double_vec>  &edge_vectors, double_vec& edge_vec, int_vec &edge_vec_idx)
+                             double_vec& edge_vec, int* edge_slot)
 {
     /* This subroutine finds the outward normal unit vectors of boundaries.
      * There are two types of boundaries: ibound{x,y,z}? and iboundn?.
@@ -154,11 +154,16 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 #ifdef THREED
                     std::cerr << bnormals[i][2] << " - " << normal[2] << '\n';
 #endif
-                    std::exit(1);
+                    die(EXIT_MESH_QUALITY);
                 }
             }
         }
     }
+
+    // -1 = this pair of boundaries shares no edge. Only pairs with facets on both sides
+    // get an entry, so the table is sparse and the absent case has to be representable.
+    std::fill_n(edge_slot, nbdrytypes * nbdrytypes, -1);
+    edge_vec.clear();
 
     for (int i=0; i<nbdrytypes; i++) {
         if (var.bfacets[i]->size() == 0) continue;
@@ -186,13 +191,34 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
             s[0] = 0;
             s[1] = 1;
 #endif
-            edge_vectors[std::make_pair(i, j)] = s;
-            edge_vec_idx.push_back(i*nbdrytypes + j);
+            edge_slot[i*nbdrytypes + j] = edge_vec.size() / NDIMS;
             edge_vec.push_back(s[0]);
             edge_vec.push_back(s[1]);
 #ifdef THREED
             edge_vec.push_back(s[2]);
 #endif
+        }
+    }
+
+    // apply_vbcs projects the velocity onto this edge for any node flagged on both
+    // boundaries of a pair, from inside a device kernel that can neither report nor
+    // abort. A pair can be flagged on a node while the loop above skipped it -- either
+    // boundary having no facets is enough -- and the constraint is then dropped in
+    // silence. Report it here, the last place with somewhere to say it, for the pairs
+    // the kernel can actually ask about.
+    for (int ib=iboundn0; ib<=iboundn3; ib++) {
+        if (var.vbc_types[ib] != 1 && var.vbc_types[ib] != 11) continue;
+        for (int ic=iboundx0; ic<ib; ic++) {
+            if (var.vbc_types[ic] != 1) continue;
+            if (edge_slot[ic*nbdrytypes + ib] >= 0) continue;
+            for (int n=0; n<var.nnode; ++n) {
+                uint flag = (*var.bcflag)[n];
+                if (!(flag & (1U << ib)) || !(flag & (1U << ic))) continue;
+                std::cerr << "Warning: boundaries " << ic << " and " << ib << " meet at node "
+                          << n << " but share no edge; apply_vbcs leaves the edge-parallel "
+                          << "velocity constraint unapplied there\n";
+                break;
+            }
         }
     }
 }
@@ -280,7 +306,6 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #endif
 
     // diverging x-boundary
-    // const std::map<std::pair<int,int>, double*>  *edgevec = &(var.edge_vectors);
 
 
     int bc_x0 = bc.vbc_x0;
@@ -305,8 +330,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     if (param.control.PT_jump) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
+#ifdef THREED
+        // Only 3D has y boundaries to hold at rest; in 2D y is not a boundary direction.
         bc_vy0 = 0.0;
         bc_vy1 = 0.0;
+#endif
         bc_vz0 = 0.0;
         bc_vz1 = 0.0;
 #ifndef THREED
@@ -488,13 +516,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    const double *edge;
-                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
-                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
-                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
-                                        if (ei == ic && ej == ib)
-                                            edge = &var.edge_vec[j*NDIMS];
-                                    }
+                                    // ic < ib, matching how create_boundary_normals keys the table.
+                                    const int slot = var.edge_slot[ic*nbdrytypes + ib];
+                                    if (slot < 0) continue;  // no shared edge, so no direction to project onto
+                                    const double *edge = &var.edge_vec[slot*NDIMS];
+
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -532,13 +558,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    const double *edge;
-                                    for (int j=0; j<var.edge_vec_idx.size();j++) {
-                                        int ei = var.edge_vec_idx[j]/nbdrytypes;
-                                        int ej = var.edge_vec_idx[j]%nbdrytypes;
-                                        if (ei == ic && ej == ib)
-                                            edge = &var.edge_vec[j*NDIMS];
-                                    }
+                                    // ic < ib, matching how create_boundary_normals keys the table.
+                                    const int slot = var.edge_slot[ic*nbdrytypes + ib];
+                                    if (slot < 0) continue;  // no shared edge, so no direction to project onto
+                                    const double *edge = &var.edge_vec[slot*NDIMS];
+
                                     double ve = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         ve += v[d] * edge[d];
@@ -646,7 +670,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
     //
 
 #ifndef ACC
-    #pragma omp parallel for
+    #pragma omp parallel for default(none) shared(var)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e)
@@ -758,9 +782,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
             #pragma acc parallel loop gang vector async
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = (*var.bnodes[i])[j];
-                const int_vec& sup = (*var.support)[n];
-                for (int k=0; k<sup.size(); ++k) {
-                    int e = sup[k];
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                for (int k=0; k<npatch; ++k) {
+                    int e = patch[k];
                     int ibound = (*var.etmp_int)[e];
                     if (ibound < 0) continue;  // not a boundary element
 
@@ -807,7 +832,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    #pragma wait // here is not ACC parallelized
+    #pragma acc wait
 
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
@@ -1020,9 +1045,10 @@ namespace {
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
-                int_vec &surf_sup = (*var.surfinfo.node_and_elems)[i];
+                const int nsurf_sup = var.surfinfo.support_surf.size(i);
+                const int* surf_sup = var.surfinfo.support_surf.patch(i);
 
-                for (int j=0; j<surf_sup.size(); ++j) {
+                for (int j=0; j<nsurf_sup; ++j) {
                     int k = surf_sup[j];
                     total_dx[n] += (*var.etmp)[k];
 
@@ -1449,6 +1475,8 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush(__FUNCTION__);
 #endif
+        #pragma acc wait
+
         const array_t& coord = *var.coord;
         const SurfaceInfo& surfinfo = var.surfinfo;
         const int_vec& top_nodes = *surfinfo.top_nodes;
@@ -1610,8 +1638,8 @@ void surface_plstrain_diffusion(const Param &param, \
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
-    // #pragma omp parallel for default(none)      \
-    //     shared(param, var, plstrain, lambha)
+    // Not parallelized: the loop is over top elements only and runs once per step.
+    // #pragma omp parallel for default(none) shared(param, var, plstrain, lambha)
     for (auto e=(*var.top_elems).begin();e<(*var.top_elems).end();e++) {
         // Find the most abundant marker mattype in this element
         int_vec &a = (*var.elemmarkers)[*e];
@@ -1664,10 +1692,12 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
         #pragma acc parallel loop gang vector async
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
-            int_vec &sup = (*var.support)[nt];
-            volume_n[nt] = 0.;
-            for (size_t i=0;i<sup.size();i++)
-                volume_n[nt] += volume[sup[i]];
+            const int npatch = var.support.size(nt);
+            const int* patch = var.support.patch(nt);
+            double acc = 0.;
+            for (int i=0;i<npatch;i++)
+                acc += volume[patch[i]];
+            volume_n[nt] = acc;
         }
     }
 
@@ -1713,8 +1743,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         break;
     case 102:
 #ifdef THREED
-        std::cout << "3D deposition of sediment processes is not ready yet.";
-        exit(168);
+        die(EXIT_UNSUPPORTED_DIM, "3D deposition of sediment processes is not ready yet.");
 #else
         simple_diffusion(var);
         if (var.steps != 0) {
@@ -1726,7 +1755,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         break;
     default:
         std::cout << "Error: unknown surface process option: " << param.control.surface_process_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
 #ifndef ACC

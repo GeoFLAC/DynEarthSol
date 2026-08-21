@@ -49,7 +49,7 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         break;
     default:
         std::cerr << "Error: unknown init_marker_option: " << param.markers.init_marker_option << ". The only valid option is '1'.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
         break;
     }
 
@@ -61,7 +61,7 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         if (num_markers_in_elem <= 0) {
             std::cerr << "Error: no marker in element #" << e
                       << ". Please increase the number of markers.\n";
-            std::exit(1);
+            die(EXIT_RUNTIME_RESOURCE);
         }
     }
 }
@@ -370,7 +370,7 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
                 printf("  eta:");
                 for (int j=0; j<NDIMS; j++) printf(" %f", eta0[j]);
                 printf("\n");
-                std::exit(168);
+                die(EXIT_RUNTIME_LOOKUP);
             }
         }
 
@@ -481,11 +481,14 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
 //    std::cout << "Try to remap in ";
     for (int i = 0; i < NODES_PER_ELEM; i++) {
         int n = conn[i];        
-        for(auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
-            if (searched[*ee]) continue;
-            searched[*ee]=1;
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int pi = 0; pi < npatch; ++pi) {
+            const int ee_v = patch[pi];
+            if (searched[ee_v]) continue;
+            searched[ee_v]=1;
 
-            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[*ee]);
+            ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[ee_v]);
 
             double volume = compute_volume(coord);
             Barycentric_transformation bary(coord, volume);
@@ -495,7 +498,7 @@ void MarkerSet::remap_marker(const Variables &var, const double *m_coord, \
                 for (int j=0; j<NDIMS; j++)
                     new_eta[j] = eta[j];
 
-                new_elem = *ee;
+                new_elem = ee_v;
                 inc = 1;
                 return;
             }
@@ -690,7 +693,7 @@ int MarkerSet::initial_mattype( const Param& param, const Variables &var,
             break;
         default:
             std::cerr << "Error: unknown ic.mattype_option: " << param.ic.mattype_option << '\n';
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
     }
     return mt;
@@ -762,7 +765,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         #pragma omp single
         #pragma acc parallel loop gang vector async
 #endif
-        for (int i = 0; i < a_out.size(); i++) {
+        for (int i = 0; i < int(a_out.size()); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
             auto it = std::find(emarkers.begin(), emarkers.end(), b_out[i]);
             emarkers[it - emarkers.begin()] = a_out[i];
@@ -1137,7 +1140,7 @@ namespace {
         #pragma acc parallel loop gang vector async
         for (int e = 0; e < var.nelem; e++) {
             int_vec &markers = markers_in_elem[e];
-            for (int i = 0; i < markers.size(); i++) {
+            for (int i = 0; i < int(markers.size()); i++) {
                 int m = markers[i];
                 if (ms.get_elem(m) >= 0) {
                     // This marker is not removed, so we need to update the element markers.
@@ -1211,15 +1214,18 @@ namespace {
                 // Looping over all neighboring elements (excluding self)
                 for( int kk = 0; kk < NODES_PER_ELEM; kk++) {
                     int n = (*var.connectivity)[e][kk]; // node of this element
-                    for( auto ee = (*var.support)[n].begin(); ee < (*var.support)[n].end(); ++ee) {
-                        if (*ee == e) continue;
+                    const int npatch = var.support.size(n);
+                    const int* patch = var.support.patch(n);
+                    for( int pi = 0; pi < npatch; ++pi) {
+                        const int ee_v = patch[pi];
+                        if (ee_v == e) continue;
                         // Note: some (NODES_PER_ELEM) elements will be iterated
                         // more than once (NDIMS times). These elements are direct neighbors,
                         // i.e. they share facets (3D) or edges (2D) with element e.
                         // So they are counted multiple times to reprensent a greater weight.
                         for( int i = 0; i < param.mat.nmat; i++ ) {
-                            cpdf[i] += (*(var.elemmarkers))[*ee][i];
-                            num_markers_in_nbr_elems += (*(var.elemmarkers))[*ee][i];
+                            cpdf[i] += (*(var.elemmarkers))[ee_v][i];
+                            num_markers_in_nbr_elems += (*(var.elemmarkers))[ee_v][i];
                         }
                     }
                 }
@@ -1469,8 +1475,7 @@ namespace {
         }
 
         if (is_no_nn) {
-            std::cerr << "Error: no nearest neighbor found for some new markers.\n";
-            std::exit(168);
+            die(EXIT_RUNTIME_LOOKUP, "no nearest neighbor found for some new markers.");
         }
 
         // Append new markers to the end of the marker set.
@@ -1525,9 +1530,9 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 
     if (_nmarkers != ncount) {
         std::cerr << "Error: markers count mismatch: " << _nmarkers << " vs " << ncount << '\n';
-        std::exit(1);
+        die(EXIT_INTERNAL_ASSERT);
     } else if (is_error > 0) {
-        std::exit(1);
+        die(EXIT_INTERNAL_ASSERT);
     }
 
 #ifdef NPROF
@@ -1662,6 +1667,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                             markers_in_elem_info[i].nmarker++;
                         }
                     }
+                    #pragma omp atomic update
                     --elemmarkers[e][mat];
                 }
                 int n = markers_in_elem_info[i].nmarker;
@@ -1724,7 +1730,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
             break;
         default:
             std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
 
         // for (int i=0; i<var.ntop_elems; i++) {
@@ -1865,7 +1871,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
 #ifdef NPROF_DETAIL
@@ -1931,8 +1937,9 @@ void advect_hydrous_markers(const Param& param, const Variables& var, double dt_
         else {
             // Marker has moved out of el. Find the new containing element.
             for(int j=0; j<NODES_PER_ELEM; j++) {
-                const int_vec& supp = (*var.support)[ conn[j] ];
-                for (std::size_t k=0; k<supp.size(); k++) {
+                const int npatch = var.support.size(conn[j]);
+                const int* supp = var.support.patch(conn[j]);
+                for (int k=0; k<npatch; k++) {
                     int ee = supp[k];
                     ConstConnAccessor conn2 = (*var.connectivity)[ee];
                     bary = get_bary_from_cache(cache, ee, *var.coord, conn2, *var.volume);

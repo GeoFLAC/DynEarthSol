@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -13,6 +14,10 @@
 #endif
 #ifdef _OPENMP
 #include <omp.h>
+#endif
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#include <sys/types.h>
 #endif
 
 namespace {
@@ -50,10 +55,34 @@ bool env_forces_device(const char* env, acc_device_t& device)
     device = parse_openacc_device_env(env);
     return (device != acc_device_default);
 }
+
+bool using_offload_device()
+{
+    return (acc_get_device_type() == acc_device_nvidia &&
+            acc_get_num_devices(acc_device_nvidia) > 0);
+}
+
+const char* env_or_unset(const char* name)
+{
+    const char* v = std::getenv(name);
+    return v ? v : "(unset)";
+}
 #endif
 
 std::string read_cpu_model()
 {
+#ifdef __APPLE__
+    // No /proc on macOS; the brand string lives in sysctl.
+    std::size_t len = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0) != 0 || len == 0)
+        return "unknown";
+    std::string model(len, '\0');
+    if (sysctlbyname("machdep.cpu.brand_string", &model[0], &len, NULL, 0) != 0)
+        return "unknown";
+    // len counts the trailing NUL, which does not belong in a std::string.
+    model.resize(len > 0 ? len - 1 : 0);
+    return model.empty() ? "unknown" : model;
+#else
     std::ifstream cpuinfo("/proc/cpuinfo");
     if (!cpuinfo) return "unknown";
 
@@ -69,15 +98,16 @@ std::string read_cpu_model()
         if (!model.empty()) return model;
     }
     return "unknown";
+#endif
 }
 
 } // namespace
 
-void report_cpu_runtime_status()
+void report_host_runtime_status()
 {
     const std::string cpu_model = read_cpu_model();
     const unsigned int hw_threads = std::thread::hardware_concurrency();
-    std::cout << "[Runtime][CPU] model=" << cpu_model
+    std::cout << "[Runtime][Host] name=" << cpu_model
               << ", hw_threads="
               << (hw_threads ? std::to_string(hw_threads) : "unknown");
 #ifdef _OPENMP
@@ -90,23 +120,19 @@ void report_cpu_runtime_status()
     std::cout << '\n';
 }
 
-void report_openacc_runtime_status()
+void init_offload_device()
 {
 #ifdef ACC
-    const char* env_acc_device_type = std::getenv("ACC_DEVICE_TYPE");
-    const char* env_nv_acc_device_type = std::getenv("NVCOMPILER_ACC_DEVICE_TYPE");
-    const int n_nvidia = acc_get_num_devices(acc_device_nvidia);
-    const int n_host = acc_get_num_devices(acc_device_host);
-
     acc_device_t forced = acc_device_default;
-    const bool forced_by_env = env_forces_device(env_acc_device_type, forced) ||
-                               env_forces_device(env_nv_acc_device_type, forced);
+    const bool forced_by_env =
+        env_forces_device(std::getenv("ACC_DEVICE_TYPE"), forced) ||
+        env_forces_device(std::getenv("NVCOMPILER_ACC_DEVICE_TYPE"), forced);
 
     if (forced_by_env) {
         acc_set_device_type(forced);
         acc_init(forced);
     }
-    else if (n_nvidia > 0) {
+    else if (acc_get_num_devices(acc_device_nvidia) > 0) {
         acc_set_device_type(acc_device_nvidia);
         acc_init(acc_device_nvidia);
     }
@@ -114,55 +140,63 @@ void report_openacc_runtime_status()
         acc_set_device_type(acc_device_host);
         acc_init(acc_device_host);
     }
+#endif
+}
 
+void report_device_runtime_status()
+{
+#ifndef ACC
+    std::cout << "[Runtime][Device] build=non-ACC, kernel=CPU\n";
+#else
     const acc_device_t active_type = acc_get_device_type();
     const int active_dev = acc_get_device_num(active_type);
-    const bool using_gpu = (active_type == acc_device_nvidia && n_nvidia > 0);
+    const bool using_device = using_offload_device();
 
-    std::cout << "[Runtime][OpenACC] build=ACC"
-              << ", env.ACC_DEVICE_TYPE="
-              << (env_acc_device_type ? env_acc_device_type : "(unset)")
+    // The selection picture: the steering environment (these two can force the
+    // device type), what was visible, and what was chosen.
+    std::cout << "[Runtime][Device] build=ACC"
+              << ", env.ACC_DEVICE_TYPE=" << env_or_unset("ACC_DEVICE_TYPE")
               << ", env.NVCOMPILER_ACC_DEVICE_TYPE="
-              << (env_nv_acc_device_type ? env_nv_acc_device_type : "(unset)")
-              << ", num_nvidia=" << n_nvidia
-              << ", num_host=" << n_host
+              << env_or_unset("NVCOMPILER_ACC_DEVICE_TYPE");
+    // When set it renumbers devices from 0, so num_nvidia and active_dev below
+    // count within the remapped set, not the physical machine.
+    const char* visible = std::getenv("CUDA_VISIBLE_DEVICES");
+    if (visible)
+        std::cout << ", env.CUDA_VISIBLE_DEVICES=" << visible;
+    std::cout << ", num_nvidia=" << acc_get_num_devices(acc_device_nvidia)
+              << ", num_host=" << acc_get_num_devices(acc_device_host)
               << ", active_type=" << openacc_device_name(active_type)
               << ", active_dev=" << active_dev
               << '\n';
 
-    const char* dev_name =
-        acc_get_property_string(active_dev, active_type, acc_property_name);
-    const char* dev_vendor =
-        acc_get_property_string(active_dev, active_type, acc_property_vendor);
-    const char* dev_driver =
-        acc_get_property_string(active_dev, active_type, acc_property_driver);
-    const size_t mem_total =
-        acc_get_property(active_dev, active_type, acc_property_memory);
-    const size_t mem_free =
-        acc_get_property(active_dev, active_type, acc_property_free_memory);
+    const char* name = acc_get_property_string(active_dev, active_type, acc_property_name);
+    const char* vendor = acc_get_property_string(active_dev, active_type, acc_property_vendor);
+    const char* driver = acc_get_property_string(active_dev, active_type, acc_property_driver);
+    const size_t mem_total = acc_get_property(active_dev, active_type, acc_property_memory);
+    // A snapshot, not a device property: whatever other processes hold on the device
+    // right now, before DES allocates anything. Not comparable across runs.
+    const size_t mem_free = acc_get_property(active_dev, active_type, acc_property_free_memory);
 
-    if (dev_name || dev_vendor || dev_driver || mem_total || mem_free) {
-        std::cout << "[Runtime][OpenACC] device"
-                  << " name=" << (dev_name ? dev_name : "(unknown)")
-                  << ", vendor=" << (dev_vendor ? dev_vendor : "(unknown)")
-                  << ", driver=" << (dev_driver ? dev_driver : "(unknown)");
+    if (name || vendor || driver || mem_total || mem_free) {
+        std::cout << "[Runtime][Device] name=" << (name ? name : "(unknown)")
+                  << ", vendor=" << (vendor ? vendor : "(unknown)")
+                  << ", driver=" << (driver ? driver : "(unknown)");
+        char mem[32];
         if (mem_total) {
-            const double gb = static_cast<double>(mem_total) /
-                              (1024.0 * 1024.0 * 1024.0);
-            std::cout << ", mem_total_gb=" << gb;
+            std::snprintf(mem, sizeof(mem), "%.1f",
+                          static_cast<double>(mem_total) / (1024.0 * 1024.0 * 1024.0));
+            std::cout << ", mem_total_gb=" << mem;
         }
         if (mem_free) {
-            const double gb = static_cast<double>(mem_free) /
-                              (1024.0 * 1024.0 * 1024.0);
-            std::cout << ", mem_free_gb=" << gb;
+            std::snprintf(mem, sizeof(mem), "%.1f",
+                          static_cast<double>(mem_free) / (1024.0 * 1024.0 * 1024.0));
+            std::cout << ", mem_free_at_start_gb=" << mem;
         }
         std::cout << '\n';
     }
 
-    std::cout << "[Runtime][OpenACC] status="
-              << (using_gpu ? "gpu-offload" : "cpu-fallback") << '\n';
-#else
-    std::cout << "[Runtime][OpenACC] build=non-ACC\n";
+    std::cout << "[Runtime][Device] kernel=" << (using_device ? "GPU" : "CPU")
+              << ", status=" << (using_device ? "gpu-offload" : "cpu-fallback") << '\n';
 #endif
 }
 

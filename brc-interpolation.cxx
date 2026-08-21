@@ -103,7 +103,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
                            const Barycentric_transformation &bary,
                            const array_t &old_coord,
                            const conn_t &old_connectivity,
-                           const int_vec2D &old_support,
+                           const Support &old_support,
                            brc_t &brc, int_vec &el)
 {
 #ifdef NPROF_DETAIL
@@ -157,6 +157,9 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
     array_t block_queries;
 
+    // bary's coeff_ is filled by an async ACC kernel; it is read on the host below
+    #pragma acc wait
+
     for (int b = 0; b < nblocks; b++) {
         int start = b * nodes_per_block;
         int end = std::min((b + 1) * nodes_per_block, var.nnode);
@@ -188,7 +191,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
             double dd = neighbors[local_i].dist2;
 
             // elements surrounding nn
-            const int_vec &nn_elem = old_support[nn];
+            const int nn_nelem = old_support.size(nn);
+            const int* nn_elem = old_support.patch(nn);
 
         // std::cout << i << " ";
         // print(std::cout, q, NDIMS);
@@ -211,7 +215,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
             // loop over (old) elements surrounding nn to find
             // the element that is enclosing q
-            for (std::size_t j=0; j<nn_elem.size(); j++) {
+            for (int j=0; j<nn_nelem; j++) {
                 e = nn_elem[j];
                 bary.transform(q, e, r);
                 if (bary.is_inside(r)) {
@@ -243,11 +247,11 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 * the capped search does not find q, it may be outside the old domain and
                 * will fall through to the nearest-node fallback below.
                 */
-                std::unordered_set<int> visited(nn_elem.begin(), nn_elem.end());
-                int_vec frontier(nn_elem.begin(), nn_elem.end());
+                std::unordered_set<int> visited(nn_elem, nn_elem + nn_nelem);
+                int_vec frontier(nn_elem, nn_elem + nn_nelem);
                 // Track the element where q is least outside (highest min bary coord).
                 // Used post-BFS to distinguish boundary-face vs. clearly-outside vs. bug.
-                int    best_e_bfs    = nn_elem.empty() ? 0 : nn_elem[0];
+                int    best_e_bfs    = (nn_nelem == 0) ? 0 : nn_elem[0];
                 double best_min_bary = -1e30;
 
                 const int MAX_LAYERS = 3;
@@ -258,8 +262,9 @@ void prepare_interpolation(const Param& param, const Variables &var,
                         for (int m=0; m<NODES_PER_ELEM; m++) {
                             // np is a node close to q
                             int np = conn[m];
-                            const int_vec &np_elem = old_support[np];
-                            for (std::size_t jj=0; jj<np_elem.size(); jj++) {
+                            const int np_nelem = old_support.size(np);
+                            const int* np_elem = old_support.patch(np);
+                            for (int jj=0; jj<np_nelem; jj++) {
                                 int candidate = np_elem[jj];
                                 if (!visited.insert(candidate).second) continue;
                                 bary.transform(q, candidate, r);
@@ -349,7 +354,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     int_vec el(n);
     brc_t brc(n);
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, *var.support, brc, el);
+    prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el);
 
     double_vec *new_temperature = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
@@ -424,7 +429,7 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
                                          const Barycentric_transformation &bary,
                                          const array_t &input_coord,
                                          const conn_t &input_connectivity,
-                                         const int_vec2D &input_support,
+                                         const Support &input_support,
 					 const double_vec &inputtemperature,
 					 double_vec &outputtemperature)
 {
@@ -433,4 +438,6 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
     prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
+
+    #pragma acc wait
 }

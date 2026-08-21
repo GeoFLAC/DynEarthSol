@@ -121,6 +121,8 @@ namespace {
         int m = 0;
         #pragma acc loop seq
         for (std::size_t i=0; i<s.size(); i++) {
+            // Absent materials add 0*s[i] == 0 and 0 to m, so skipping is exact.
+            if (n[i] == 0) continue;
             result += n[i] * s[i];
             m += n[i];
         }
@@ -137,6 +139,9 @@ namespace {
         int m = 0;
         #pragma acc loop seq
         for (std::size_t i=0; i<s.size(); i++) {
+            // Absent materials add 0/s[i] == 0 and 0 to m, so skipping is exact --
+            // and it avoids the 0/0 = NaN an absent material with s[i] == 0 gave.
+            if (n[i] == 0) continue;
             result += n[i] / s[i];
             m += n[i];
         }
@@ -149,9 +154,9 @@ double ref_pressure(const Param& param, double z)
 {
     // Get pressure at this depth
     double depth = -z;
-    double p;
+    double p = 0;
 
-    if (param.control.ref_pressure_option == 0)
+    if (param.control.ref_pressure_option == 0) {
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
             p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
@@ -160,7 +165,7 @@ double ref_pressure(const Param& param, double z)
             // Standard reference pressure without hydraulic diffusion
             p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
         }
-
+    }
     else if (param.control.ref_pressure_option == 1)
         p = get_prem_pressure(depth);
     else if (param.control.ref_pressure_option == 2)
@@ -225,6 +230,76 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     characteristic_velocity = p.mat.characteristic_velocity;
     characteristic_distance = p.mat.characteristic_distance;
     // static_friction_coefficient = p.mat.static_friction_coefficient;
+
+    // Material-only terms of the creep law, in the association visc() evaluates them in
+    // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
+    // under -ffast-math and on openacc=1 (device -> host libm).
+    {
+        // J mol^-1 K^-1, as the Chen & Morgan creep law uses it.
+        const double gas_constant = 8.3144;
+        const int nm = nmat;   // == visc_exponent.size(); nmat is the bound visc() loops to
+        visc_pow_edot.resize(nm);
+        visc_coef_term.resize(nm);
+        visc_nR.resize(nm);
+        for (int m = 0; m < nm; ++m) {
+            visc_pow_edot[m] = 1 / visc_exponent[m] - 1;
+            const double pow1 = -1 / visc_exponent[m];
+            visc_coef_term[m] = pow_safe(log_table, 0.75 * visc_coefficient[m], pow1);
+            visc_nR[m] = visc_exponent[m] * gas_constant;
+        }
+    }
+
+    refresh_elem_cache();
+}
+
+
+/* Rebuild the per-element property means only if elemmarkers moved; they are a pure
+ * function of it. Every call site sits right after something that moves elemmarkers;
+ * a missed one is silent staleness. */
+void MatProps::refresh_elem_cache()
+{
+    const int nelem = elemmarkers.size();
+
+    // A size change means a new mesh: nothing about the old contents survives it.
+    const bool resized = int(cache_props.size()) != nelem * MP_STRIDE;
+    if (resized) {
+        cache_props.resize(std::size_t(nelem) * MP_STRIDE);
+        cache_markers.assign(std::size_t(nelem) * nmat, -1);
+    }
+
+    // Compare while copying. `changed` tracks whether the CONTENT moved: on most steps
+    // no marker moves and the whole rebuild below is skipped.
+    int changed = resized ? 1 : 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) firstprivate(nelem) reduction(|:changed)
+#endif
+    // NO `async`: the host reads `changed` immediately below, and appending async would
+    // read the reduction before it lands and silently freeze the means.
+    #pragma acc parallel loop gang vector reduction(|:changed)
+    for (int e = 0; e < nelem; ++e) {
+        for (int m = 0; m < nmat; ++m) {
+            const std::size_t i = std::size_t(e) * nmat + m;
+            const int v = elemmarkers[e][m];
+            if (cache_markers[i] != v) { cache_markers[i] = v; changed = 1; }
+        }
+    }
+    if (!changed) return;
+
+#ifndef ACC
+    #pragma omp parallel for default(none) firstprivate(nelem)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e = 0; e < nelem; ++e) {
+        double* c = &cache_props[std::size_t(e) * MP_STRIDE];
+        c[MPC_BULKM]      = harmonic_mean(bulk_modulus, elemmarkers[e]);
+        c[MPC_SHEARM]     = harmonic_mean(shear_modulus, elemmarkers[e]);
+        c[MPC_PHI]        = arithmetic_mean(porosity, elemmarkers[e]);
+        c[MPC_ALPHA_BIOT] = arithmetic_mean(biot_coeff, elemmarkers[e]);
+        c[MPC_CP]         = arithmetic_mean(heat_capacity, elemmarkers[e]);
+        c[MPC_K]          = arithmetic_mean(therm_cond, elemmarkers[e]);
+        // Stored as the compressibility, so beta_fluid() is a plain load like the others.
+        c[MPC_BETA_FLUID] = 1.0 / harmonic_mean(fluid_bulk_modulus, elemmarkers[e]);
+    }
 }
 
 
@@ -245,19 +320,18 @@ MatProps::~MatProps()
 
 double MatProps::bulkm(int e) const
 {
-    return harmonic_mean(bulk_modulus, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_BULKM];
 }
 
 
 double MatProps::shearm(int e) const
 {
-    return harmonic_mean(shear_modulus, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_SHEARM];
 }
 
 
 double MatProps::visc(int e) const
 {
-    const double gas_constant = 8.3144;
     const double min_strain_rate = 1e-30;
 
     // average temperature of this element
@@ -282,13 +356,16 @@ double MatProps::visc(int e) const
     int n = 0;
 
     for (int m=0; m<nmat; m++) {
-        double pow = 1 / visc_exponent[m] - 1;
-        double pow1 = -1 / visc_exponent[m];
-        double visc0 = 0.25 * pow_safe(log_table,edot, pow) * pow_safe(log_table, 0.75 * visc_coefficient[m], pow1)
+        // Absent materials add 0/visc0 == 0, so the skip is exact, and it keeps
+        // visc0 == 0 from contributing a NaN.
+        const int marker_count = elemmarkers[e][m];
+        if (marker_count == 0) continue;
+
+        double visc0 = 0.25 * pow_safe(log_table,edot, visc_pow_edot[m]) * visc_coef_term[m]
             * std::exp((visc_activation_energy[m] + visc_activation_volume[m] * s0)
-            / (visc_exponent[m] * gas_constant * T)) * 1e6;
-        result += elemmarkers[e][m] / visc0;
-        n += elemmarkers[e][m];
+            / (visc_nR[m] * T)) * 1e6;
+        result += marker_count / visc0;
+        n += marker_count;
     }
 
     double visc = n / result;
@@ -589,19 +666,19 @@ double MatProps::rho(int e) const
 
 double MatProps::cp(int e) const
 {
-    return arithmetic_mean(heat_capacity, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_CP];
 }
 
 
 double MatProps::k(int e) const
 {
-    return arithmetic_mean(therm_cond, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_K];
 }
 
 // hydraulic parameters
 double MatProps::phi(int e) const
 {
-    return arithmetic_mean(porosity, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_PHI];
 }
 
 double MatProps::perm(int e) const
@@ -616,8 +693,8 @@ double MatProps::alpha_fluid(int e) const
 
 double MatProps::beta_fluid(int e) const
 {
-    // Return the inverse of harmonic mean (compressibility)
-    return 1.0 / harmonic_mean(fluid_bulk_modulus, elemmarkers[e]);
+    // Already stored as the compressibility; see refresh_elem_cache().
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_BETA_FLUID];
 }
 
 double MatProps::rho_fluid(int e) const
@@ -667,7 +744,7 @@ double MatProps::mu_fluid(int e) const
 
 double MatProps::alpha_biot(int e) const
 {
-    return arithmetic_mean(biot_coeff, elemmarkers[e]);
+    return cache_props[std::size_t(e) * MP_STRIDE + MPC_ALPHA_BIOT];
 }
 
 double MatProps::beta_mineral(int e) const
