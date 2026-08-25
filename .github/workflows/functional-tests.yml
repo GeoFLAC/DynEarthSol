@@ -57,6 +57,12 @@ jobs:
         python3 timestep_diagnostics/run_fastest_element.py
         --exe ../../dynearthsol3d --threads 1 4
 
+    - name: test 3d monitor query-coordinate binding
+      run: >-
+        OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1
+        python3 monitor_coordinates/run_monitor_coordinates.py
+        --exe ../../dynearthsol3d
+
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 

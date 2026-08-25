@@ -402,9 +402,11 @@ void monitor_initialize(const Param& param, Variables& var)
         MonitorPointState& p = g_monitor.points[i];
         p.id = i;
         p.query_coord_initial[0] = param.monitor.points_x[i];
-        p.query_coord_initial[1] = param.monitor.points_z[i];
 #ifdef THREED
+        p.query_coord_initial[1] = param.monitor.points_y[i];
         p.query_coord_initial[2] = param.monitor.points_z[i];
+#else
+        p.query_coord_initial[1] = param.monitor.points_z[i];
 #endif
         for (int d = 0; d < NDIMS; ++d) {
             p.query_coord_rebind[d] = p.query_coord_initial[d];
