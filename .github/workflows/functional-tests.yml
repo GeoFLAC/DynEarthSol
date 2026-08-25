@@ -62,6 +62,12 @@ jobs:
       working-directory: .
       run: make -j ndims=2 opt=2 openmp=1 hdf5=1
 
+    - name: test elastic plane-strain stress update
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 plane_strain_elastic/run_plane_strain_elastic.py
+        --exe ../../dynearthsol2d --threads 1 4
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
