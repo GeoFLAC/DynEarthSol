@@ -107,6 +107,40 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --threads 1 4
 
+    - name: test fluid point-source validation
+      run: |
+        OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+          python3 point_source_validation/run_point_source_validation.py \
+          --clean --run-dir point_source_validation/runs_omp1 \
+          --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        OMP_NUM_THREADS=4 PYTHONDONTWRITEBYTECODE=1 \
+          python3 point_source_validation/run_point_source_validation.py \
+          --clean --run-dir point_source_validation/runs_omp4 \
+          --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+
+    - name: test fluid point-injection schedules
+      run: |
+        OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+          python3 point_injection/run_point_injection.py --clean \
+          --run-dir point_injection/runs_omp1 --exe ../../dynearthsol2d
+        OMP_NUM_THREADS=4 PYTHONDONTWRITEBYTECODE=1 \
+          python3 point_injection/run_point_injection.py --clean \
+          --run-dir point_injection/runs_omp4 --exe ../../dynearthsol2d
+        PYTHONDONTWRITEBYTECODE=1 python3 point_injection/check_point_injection.py \
+          point_injection/runs_omp1/constant_rate \
+          point_injection/runs_omp4/constant_rate \
+          point_injection/runs_omp1/source_disabled
+        PYTHONDONTWRITEBYTECODE=1 python3 point_injection/check_point_injection.py \
+          point_injection/runs_omp1/total_amount \
+          point_injection/runs_omp4/total_amount \
+          point_injection/runs_omp1/source_disabled
+        cmp point_injection/runs_omp1/source_disabled/monitor_point_0.csv \
+          point_injection/runs_omp4/source_disabled/monitor_point_0.csv
+        cmp point_injection/runs_omp1/source_disabled/monitor_point_1.csv \
+          point_injection/runs_omp4/source_disabled/monitor_point_1.csv
+        cmp point_injection/runs_omp1/source_disabled/monitor_point_2.csv \
+          point_injection/runs_omp4/source_disabled/monitor_point_2.csv
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 

@@ -1,0 +1,13 @@
+# A triangular domain inside the nominal [0,1] x [-1,0] box. Point
+# (0.9,-0.9) passes a box check but is outside this actual mesh.
+3 2 0 0
+0 0.0  0.0
+1 0.0 -1.0
+2 1.0  0.0
+3 1
+0 0 1 1
+1 1 2 16
+2 2 0 32
+0
+1
+0 0.1 -0.1 0 0.02
