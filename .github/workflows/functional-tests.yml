@@ -100,6 +100,13 @@ jobs:
         PYTHONDONTWRITEBYTECODE=1 python3 monitor_restart/run_monitor_restart.py \
           --exe ../../dynearthsol2d --threads 4
 
+    - name: test velocity-boundary safety guards
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 boundary_safety/run_boundary_safety.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --threads 1 4
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 

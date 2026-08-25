@@ -21,12 +21,14 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 DEFAULT_CFG = HERE / "boundary_safety_base.cfg"
 BOUNDN0 = 64
+BOUNDN1 = 128
 POINT_DATA = "/VTKHDF/grid/PointData"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe-2d", type=Path, default=REPO_ROOT / "dynearthsol2d")
+    parser.add_argument("--exe-3d", type=Path, default=REPO_ROOT / "dynearthsol3d")
     parser.add_argument("--cfg", type=Path, default=DEFAULT_CFG)
     parser.add_argument(
         "--run-dir",
@@ -49,6 +51,7 @@ def render_config(
     model: str,
     poly_name: str,
     vbc_n0: int,
+    vbc_n1: int = 1,
     vbc_val_n0: float = 0.0,
     vbc_z1: int = 0,
     initial_checkpoint: bool = False,
@@ -62,6 +65,7 @@ def render_config(
         "__IS_RESTARTING__": "yes" if restarting else "no",
         "__RESTART_MODEL__": restart_model,
         "__VBC_N0__": str(vbc_n0),
+        "__VBC_N1__": str(vbc_n1),
         "__VBC_VAL_N0__": f"{vbc_val_n0:.17e}",
         "__VBC_Z1__": str(vbc_z1),
     }
@@ -121,14 +125,19 @@ def copy_poly(case_dir: Path, source_name: str) -> str:
     return target.name
 
 
-def set_checkpoint_velocity(save_path: Path) -> None:
+def set_checkpoint_velocity(save_path: Path, values: tuple[float, ...]) -> None:
     storage = f"{POINT_DATA}/velocity"
     with h5py.File(save_path, "r+") as output:
         if storage not in output:
             raise AssertionError(f"{save_path}: missing storage {storage!r}")
         velocity = output[storage][...]
-        velocity[:, 0] = 3.0
-        velocity[:, 1] = -4.0
+        if velocity.ndim != 2 or velocity.shape[1] < len(values):
+            raise AssertionError(
+                f"{save_path}: velocity shape {velocity.shape} does not provide "
+                f"{len(values)} components"
+            )
+        for component, value in enumerate(values):
+            velocity[:, component] = value
         output[storage][...] = velocity
 
 
@@ -158,7 +167,7 @@ def check_type11_horizontal_projection(
     )
     run_des(exe, source, case_dir, "source", threads)
     source_save = case_dir / f"{source_model}.save.000000.vtkhdf"
-    set_checkpoint_velocity(source_save)
+    set_checkpoint_velocity(source_save, (3.0, -4.0))
 
     restart_model = f"boundary_type11_omp{threads}"
     restart = render_config(
@@ -254,21 +263,114 @@ def run_2d(exe: Path, template: str, run_root: Path, threads: list[int]) -> None
         print(f"boundary safety 2D OMP={thread_count}: PASS", flush=True)
 
 
+def check_nonorthogonal_edge_normalized(
+    exe: Path, template: str, run_root: Path, threads: int
+) -> None:
+    case_dir = run_root / f"nonorthogonal_edge_3d_omp{threads}"
+    case_dir.mkdir(parents=True, exist_ok=False)
+    poly_name = copy_poly(case_dir, "nonorthogonal_edge_3d.poly")
+
+    source_model = f"edge_source_3d_omp{threads}"
+    source = render_config(
+        template,
+        model=source_model,
+        poly_name=poly_name,
+        vbc_n0=1,
+        vbc_n1=1,
+        initial_checkpoint=True,
+    )
+    run_des(exe, source, case_dir, "source", threads)
+    source_save = case_dir / f"{source_model}.save.000000.vtkhdf"
+    set_checkpoint_velocity(source_save, (2.0, 3.0, 4.0))
+
+    restart_model = f"edge_projection_3d_omp{threads}"
+    restart = render_config(
+        template,
+        model=restart_model,
+        poly_name=poly_name,
+        vbc_n0=1,
+        vbc_n1=1,
+        restarting=True,
+        restart_model=source_model,
+    )
+    run_des(exe, restart, case_dir, "restart", threads)
+    restart_save = case_dir / f"{restart_model}.save.000000.vtkhdf"
+    flags = read_root(restart_save, "bcflag")
+    velocity = read_root(restart_save, "velocity")
+    intersection_flag = BOUNDN0 | BOUNDN1
+    isolated = [
+        i for i, flag in enumerate(flags) if int(flag) == intersection_flag
+    ]
+    if not isolated:
+        raise AssertionError(
+            "nonorthogonal fixture produced no isolated BOUNDN0/BOUNDN1 edge node"
+        )
+    expected = (3.0, 0.0, 3.0)
+    for node in isolated:
+        for component, target in enumerate(expected):
+            actual = float(velocity[node][component])
+            if abs(actual - target) > 1.0e-12:
+                raise AssertionError(
+                    "nonorthogonal edge projection was not normalized at "
+                    f"node {node}, component {component}: "
+                    f"value={actual:.17e}, expected={target:.17e}"
+                )
+
+
+def check_parallel_normals_rejected(
+    exe: Path, template: str, run_root: Path, threads: int
+) -> None:
+    case_dir = run_root / f"parallel_normals_3d_omp{threads}"
+    case_dir.mkdir(parents=True, exist_ok=False)
+    poly_name = copy_poly(case_dir, "parallel_normals_3d.poly")
+    model = f"parallel_normals_3d_omp{threads}"
+    config = render_config(
+        template,
+        model=model,
+        poly_name=poly_name,
+        vbc_n0=1,
+        vbc_n1=1,
+    )
+    run_des(
+        exe,
+        config,
+        case_dir,
+        "run",
+        threads,
+        expected_code=42,
+        expected_text="meet but have no unique edge direction",
+    )
+
+
+def run_3d(exe: Path, template: str, run_root: Path, threads: list[int]) -> None:
+    for thread_count in threads:
+        check_nonorthogonal_edge_normalized(
+            exe, template, run_root, thread_count
+        )
+        check_parallel_normals_rejected(exe, template, run_root, thread_count)
+        print(f"boundary safety 3D OMP={thread_count}: PASS", flush=True)
+
+
 def main() -> None:
     args = parse_args()
-    exe = args.exe_2d.expanduser().resolve()
+    exe_2d = args.exe_2d.expanduser().resolve()
+    exe_3d = args.exe_3d.expanduser().resolve()
     cfg = args.cfg.expanduser().resolve()
-    if not exe.is_file() or not os.access(exe, os.X_OK):
-        raise FileNotFoundError(f"--exe-2d is not executable: {exe}")
+    if not exe_2d.is_file() or not os.access(exe_2d, os.X_OK):
+        raise FileNotFoundError(f"--exe-2d is not executable: {exe_2d}")
+    if not exe_3d.is_file() or not os.access(exe_3d, os.X_OK):
+        raise FileNotFoundError(f"--exe-3d is not executable: {exe_3d}")
     template = cfg.read_text(encoding="ascii")
 
     if args.run_dir is not None:
         run_root = args.run_dir.expanduser().resolve()
         run_root.mkdir(parents=True, exist_ok=False)
-        run_2d(exe, template, run_root, args.threads)
+        run_2d(exe_2d, template, run_root, args.threads)
+        run_3d(exe_3d, template, run_root, args.threads)
     else:
         with tempfile.TemporaryDirectory(prefix="des-boundary-safety-") as tmp:
-            run_2d(exe, template, Path(tmp), args.threads)
+            run_2d(exe_2d, template, Path(tmp), args.threads)
+            run_3d(exe_3d, template, Path(tmp), args.threads)
 
 
 if __name__ == "__main__":

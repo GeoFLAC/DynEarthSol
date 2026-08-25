@@ -217,29 +217,52 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
     for (int i=0; i<nbdrytypes; i++) {
         if (var.bfacets[i]->size() == 0) continue;
 
-        const double eps = 1e-15;
         for (int j=i+1; j<nbdrytypes; j++) {
             if (var.bfacets[j]->size() == 0) continue;
             double_vec s (NDIMS);  // intersection of two boundaries
                                             // whole-application lifetime, no need to delete manually
 #ifdef THREED
-            // quick path: both walls are vertical
-            if (std::abs((*var.bnormals)[i][NDIMS-1]) < eps &&
-                std::abs((*var.bnormals)[j][NDIMS-1]) < eps) {
-                s[0] = s[1] = 0;
-                s[NDIMS-1] = 1;
-            }
-            else {
-                // cross product of 2 normal vectors
-                s[0] = (*var.bnormals)[i][1]*(*var.bnormals)[j][2] - (*var.bnormals)[i][2]*(*var.bnormals)[j][1];
-                s[1] = (*var.bnormals)[i][2]*(*var.bnormals)[j][0] - (*var.bnormals)[i][0]*(*var.bnormals)[j][2];
-                s[2] = (*var.bnormals)[i][0]*(*var.bnormals)[j][1] - (*var.bnormals)[i][1]*(*var.bnormals)[j][0];
-            }
+            // Cross product of the two normals. Do not special-case vertical
+            // walls: parallel horizontal normals must remain a zero vector so
+            // the no-unique-edge guard below can reject their intersection.
+            s[0] = (*var.bnormals)[i][1]*(*var.bnormals)[j][2] - (*var.bnormals)[i][2]*(*var.bnormals)[j][1];
+            s[1] = (*var.bnormals)[i][2]*(*var.bnormals)[j][0] - (*var.bnormals)[i][0]*(*var.bnormals)[j][2];
+            s[2] = (*var.bnormals)[i][0]*(*var.bnormals)[j][1] - (*var.bnormals)[i][1]*(*var.bnormals)[j][0];
 #else
-            // 2D
+            // Preserve the established 2-D pair-intersection behavior. A
+            // general nonzero affine intersection needs a separate solver.
             s[0] = 0;
             s[1] = 1;
 #endif
+            double edge_norm2 = 0.0;
+            for (int d = 0; d < NDIMS; ++d)
+                edge_norm2 += s[d] * s[d];
+            if (edge_norm2 <= 1.0e-24) {
+                const bool needs_edge_projection =
+                    j >= iboundn0 && j <= iboundn3 &&
+                    var.vbc_types[j] == 1 && var.vbc_types[i] == 1;
+                if (!needs_edge_projection)
+                    continue;
+
+                bool shares_node = false;
+                for (int n = 0; n < var.nnode; ++n) {
+                    const uint flag = (*var.bcflag)[n];
+                    if ((flag & (1U << i)) && (flag & (1U << j))) {
+                        shares_node = true;
+                        break;
+                    }
+                }
+                if (shares_node) {
+                    std::cerr << "Error: boundaries " << i << " and " << j
+                              << " meet but have no unique edge direction.\n";
+                    die(EXIT_MESH_QUALITY);
+                }
+                continue;
+            }
+
+            const double inv_edge_norm = 1.0 / std::sqrt(edge_norm2);
+            for (int d = 0; d < NDIMS; ++d)
+                s[d] *= inv_edge_norm;
             edge_slot[i*nbdrytypes + j] = edge_vec.size() / NDIMS;
             edge_vec.push_back(s[0]);
             edge_vec.push_back(s[1]);
