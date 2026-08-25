@@ -51,6 +51,12 @@ jobs:
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
       run: make -j ndims=3 opt=2 openmp=1 hdf5=1
 
+    - name: test 3d fastest-element timestep diagnostic
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 timestep_diagnostics/run_fastest_element.py
+        --exe ../../dynearthsol3d --threads 1 4
+
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 

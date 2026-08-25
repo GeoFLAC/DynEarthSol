@@ -1594,6 +1594,65 @@ double compute_dt(const Param& param, Variables& var)
 
     #pragma acc wait
 
+    int debug_max_vel_elem = -1;
+    double debug_max_vel_mag = 0.0;
+    double debug_max_vel_x = 0.0;
+    double debug_max_vel_z = 0.0;
+    double debug_max_vel_vx = 0.0;
+    double debug_max_vel_vz = 0.0;
+#ifdef THREED
+    double debug_max_vel_y = 0.0;
+    double debug_max_vel_vy = 0.0;
+#endif
+    if (param.debug.dt) {
+        for (int e=0; e<var.nelem; ++e) {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            ConstArrayIndirectAccessor v = var.vel->view_const(conn);
+            double vx_element = 0.0;
+            double vz_element = 0.0;
+            double x_element = 0.0;
+            double z_element = 0.0;
+#ifdef THREED
+            double vy_element = 0.0;
+            double y_element = 0.0;
+#endif
+            const double weight = 1.0 / NODES_PER_ELEM;
+            for (int j=0; j<NODES_PER_ELEM; ++j) {
+                const int n = conn[j];
+                vx_element += v[j][0] * weight;
+#ifdef THREED
+                vy_element += v[j][1] * weight;
+                y_element += (*var.coord)[n][1] * weight;
+                vz_element += v[j][2] * weight;
+                z_element += (*var.coord)[n][2] * weight;
+#else
+                vz_element += v[j][1] * weight;
+                z_element += (*var.coord)[n][1] * weight;
+#endif
+                x_element += (*var.coord)[n][0] * weight;
+            }
+#ifdef THREED
+            const double vmag = std::sqrt(vx_element*vx_element +
+                                          vy_element*vy_element +
+                                          vz_element*vz_element);
+#else
+            const double vmag = std::sqrt(vx_element*vx_element + vz_element*vz_element);
+#endif
+            if (vmag > debug_max_vel_mag) {
+                debug_max_vel_mag = vmag;
+                debug_max_vel_elem = e;
+                debug_max_vel_x = x_element;
+                debug_max_vel_z = z_element;
+                debug_max_vel_vx = vx_element;
+                debug_max_vel_vz = vz_element;
+#ifdef THREED
+                debug_max_vel_y = y_element;
+                debug_max_vel_vy = vy_element;
+#endif
+            }
+        }
+    }
+
     double max_vbc_val;
     if (param.control.characteristic_speed == 0) {
         max_vbc_val = var.max_vbc_val;
@@ -1630,8 +1689,37 @@ double compute_dt(const Param& param, Variables& var)
     double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion}) * param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
     if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_diffusion << " " 
-                  << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << " sec\n";
+        const std::ios::fmtflags old_flags = std::cout.flags();
+        const std::streamsize old_precision = std::cout.precision();
+        std::cout.setf(std::ios::scientific, std::ios::floatfield);
+        std::cout.precision(17);
+        std::cout << "step #" << var.steps
+                  << " compute_dt:"
+                  << " selected=" << dt
+                  << " maxwell=" << dt_maxwell
+                  << " diffusion=" << dt_diffusion
+                  << " hydro_diffusion=" << dt_hydro_diffusion
+                  << " advection=" << dt_advection
+                  << " elastic=" << dt_elastic
+                  << " min_length=" << minl
+                  << " global_dt_min=" << global_dt_min
+                  << " max_global_vel_mag=" << global_max_vem;
+        if (debug_max_vel_elem >= 0) {
+            std::cout << " max_vel_elem=" << debug_max_vel_elem
+                      << " max_vel_coord=(" << debug_max_vel_x << ",";
+#ifdef THREED
+            std::cout << debug_max_vel_y << ",";
+#endif
+            std::cout << debug_max_vel_z << ")"
+                      << " max_vel=(" << debug_max_vel_vx << ",";
+#ifdef THREED
+            std::cout << debug_max_vel_vy << ",";
+#endif
+            std::cout << debug_max_vel_vz << ")";
+        }
+        std::cout << " sec\n";
+        std::cout.flags(old_flags);
+        std::cout.precision(old_precision);
     }
     if (dt <= 0) {
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
@@ -1925,4 +2013,3 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
-
