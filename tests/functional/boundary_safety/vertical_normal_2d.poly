@@ -1,0 +1,15 @@
+# Rectangle whose top horizontal side is BOUNDN0 (64).  Its normal is purely
+# vertical, so VBC type 11 or 13 has no horizontal direction to prescribe.
+4 2 0 0
+0 0.0  0.0
+1 0.0 -1.0
+2 1.0 -1.0
+3 1.0  0.0
+4 1
+0 0 1  1
+1 1 2 16
+2 2 3  2
+3 3 0 64
+0
+1
+0 0.5 -0.5 0 0.02

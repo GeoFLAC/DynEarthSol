@@ -1,0 +1,15 @@
+# Trapezoid whose right side is BOUNDN0 (64).  The regional area limit
+# inserts isolated BOUNDN0 nodes, away from all axis-aligned boundaries.
+4 2 0 0
+0 0.0  0.0
+1 0.0 -1.0
+2 1.0 -1.0
+3 0.5  0.0
+4 1
+0 0 1  1
+1 1 2 16
+2 2 3 64
+3 3 0 32
+0
+1
+0 0.35 -0.5 0 0.02

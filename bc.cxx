@@ -160,6 +160,26 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
         }
     }
 
+    // VBC types 11 and 13 prescribe a direction in the horizontal
+    // projection of an arbitrary-boundary normal. A purely vertical normal
+    // has no such direction; reject it before the device kernel can divide by
+    // zero and turn the velocity into NaN.
+    for (int ib = iboundn0; ib <= iboundn3; ++ib) {
+        if (var.bfacets[ib]->empty() ||
+            (var.vbc_types[ib] != 11 && var.vbc_types[ib] != 13))
+            continue;
+
+        double horizontal_norm2 = 0.0;
+        for (int d = 0; d < NDIMS - 1; ++d)
+            horizontal_norm2 += bnormals[ib][d] * bnormals[ib][d];
+        if (horizontal_norm2 <= 1.0e-24) {
+            std::cerr << "Error: arbitrary boundary " << ib
+                      << " uses VBC type " << var.vbc_types[ib]
+                      << " but its normal has no horizontal projection.\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+
     // -1 = this pair of boundaries shares no edge. Only pairs with facets on both sides
     // get an entry, so the table is sparse and the absent case has to be representable.
     std::fill_n(edge_slot, nbdrytypes * nbdrytypes, -1);
@@ -489,7 +509,6 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         // N
         //
         for (int ib=iboundn0; ib<=iboundn3; ib++) {
-            const double eps = 1e-15;
             ConstArrayAccessor n = (*var.bnormals)[ib]; // unit normal vector
 
             if (flag & (1 << ib)) {
@@ -537,14 +556,17 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                         v[d] = var.vbc_values[ib] * n[d];  // v must be normal to n
                     break;
                 case 11:
-                    fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
+                    fac = 0.0;
+                    for (int d=0; d<NDIMS-1; d++)
+                        fac += n[d] * n[d];
+                    fac = 1 / std::sqrt(fac);  // horizontal-normal normalization
                     if (flag == (1U << ib)) {  // ordinary boundary
                         double vn = 0;
                         for (int d=0; d<NDIMS-1; d++)
-                            vn += v[d] * n[d];  // normal velocity
+                            vn += v[d] * n[d] * fac;  // horizontal normal velocity
 
 			for (int d=0; d<NDIMS-1; d++)
-                            v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
+                            v[d] += (var.vbc_values[ib] - vn) * fac * n[d];  // setting horizontal normal velocity
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
@@ -552,10 +574,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                 if (var.vbc_types[ic] == 0) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS-1; d++)
-                                        vn += v[d] * n[d];  // normal velocity
+                                        vn += v[d] * n[d] * fac;  // horizontal normal velocity
 
 				    for (int d=0; d<NDIMS-1; d++)
-                                        v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
+                                        v[d] += (var.vbc_values[ib] - vn) * fac * n[d];  // setting horizontal normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
                                     // ic < ib, matching how create_boundary_normals keys the table.
@@ -575,7 +597,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                     }
                     break;
                 case 13:
-                    fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
+                    fac = 0.0;
+                    for (int d=0; d<NDIMS-1; d++)
+                        fac += n[d] * n[d];
+                    fac = 1 / std::sqrt(fac);  // horizontal-normal normalization
                     for (int d=0; d<NDIMS-1; d++)
                         v[d] = var.vbc_values[ib] * fac * n[d];
                     v[NDIMS-1] = 0;
