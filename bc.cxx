@@ -180,6 +180,35 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
         }
     }
 
+    // Type 11 is implemented as a single horizontal-normal projection. It
+    // does not solve simultaneous constraints at an intersection, so reject
+    // a node where another active VBC would make the requested velocity
+    // ambiguous. Intersections with type 0 remain valid because that boundary
+    // contributes no velocity constraint.
+    for (int ib = iboundn0; ib <= iboundn3; ++ib) {
+        if (var.bfacets[ib]->empty() || var.vbc_types[ib] != 11)
+            continue;
+
+        for (int n = 0; n < var.nnode; ++n) {
+            const uint flag = (*var.bcflag)[n];
+            if (!(flag & (1U << ib)))
+                continue;
+
+            for (int other = iboundx0; other < nbdrytypes; ++other) {
+                if (other == ib || var.vbc_types[other] == 0 ||
+                    !(flag & (1U << other)))
+                    continue;
+
+                std::cerr << "Error: arbitrary boundary " << ib
+                          << " uses VBC type 11 at node " << n
+                          << " together with active boundary " << other
+                          << "; this intersection has no unique type-11 "
+                             "velocity constraint.\n";
+                die(EXIT_CONFIG_VALUE);
+            }
+        }
+    }
+
     // -1 = this pair of boundaries shares no edge. Only pairs with facets on both sides
     // get an entry, so the table is sparse and the absent case has to be representable.
     std::fill_n(edge_slot, nbdrytypes * nbdrytypes, -1);
@@ -227,7 +256,7 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
     // silence. Report it here, the last place with somewhere to say it, for the pairs
     // the kernel can actually ask about.
     for (int ib=iboundn0; ib<=iboundn3; ib++) {
-        if (var.vbc_types[ib] != 1 && var.vbc_types[ib] != 11) continue;
+        if (var.vbc_types[ib] != 1) continue;
         for (int ic=iboundx0; ic<ib; ic++) {
             if (var.vbc_types[ic] != 1) continue;
             if (edge_slot[ic*nbdrytypes + ib] >= 0) continue;

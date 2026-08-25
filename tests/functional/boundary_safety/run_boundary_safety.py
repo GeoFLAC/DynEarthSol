@@ -50,6 +50,7 @@ def render_config(
     poly_name: str,
     vbc_n0: int,
     vbc_val_n0: float = 0.0,
+    vbc_z1: int = 0,
     initial_checkpoint: bool = False,
     restarting: bool = False,
     restart_model: str = "unused",
@@ -62,6 +63,7 @@ def render_config(
         "__RESTART_MODEL__": restart_model,
         "__VBC_N0__": str(vbc_n0),
         "__VBC_VAL_N0__": f"{vbc_val_n0:.17e}",
+        "__VBC_Z1__": str(vbc_z1),
     }
     result = template
     for token, value in replacements.items():
@@ -212,6 +214,31 @@ def check_vertical_normal_rejected(
     )
 
 
+def check_type11_active_intersection_rejected(
+    exe: Path, template: str, run_root: Path, threads: int
+) -> None:
+    case_dir = run_root / f"type11_intersection_omp{threads}"
+    case_dir.mkdir(parents=True, exist_ok=False)
+    poly_name = copy_poly(case_dir, "oblique_2d.poly")
+    model = f"type11_intersection_omp{threads}"
+    config = render_config(
+        template,
+        model=model,
+        poly_name=poly_name,
+        vbc_n0=11,
+        vbc_z1=1,
+    )
+    run_des(
+        exe,
+        config,
+        case_dir,
+        "run",
+        threads,
+        expected_code=11,
+        expected_text="together with active boundary",
+    )
+
+
 def run_2d(exe: Path, template: str, run_root: Path, threads: list[int]) -> None:
     seen: set[int] = set()
     for thread_count in threads:
@@ -221,6 +248,9 @@ def run_2d(exe: Path, template: str, run_root: Path, threads: list[int]) -> None
         check_type11_horizontal_projection(exe, template, run_root, thread_count)
         check_vertical_normal_rejected(exe, template, run_root, thread_count, 11)
         check_vertical_normal_rejected(exe, template, run_root, thread_count, 13)
+        check_type11_active_intersection_rejected(
+            exe, template, run_root, thread_count
+        )
         print(f"boundary safety 2D OMP={thread_count}: PASS", flush=True)
 
 
