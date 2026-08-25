@@ -827,6 +827,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 {
                     elastic(bulkm, shearm, de, s);
                 }
+                if (var.mat->is_plane_strain) {
+                    const double lambda = bulkm - 2.0 * shearm / 3.0;
+                    syy += lambda * trace(de);
+                    if (has_hydraulic_diffusion)
+                        syy += dpp;
+                }
             }
             break;
         case MatProps::rh_viscous:

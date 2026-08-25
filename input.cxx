@@ -770,7 +770,7 @@ static void declare_parameters(po::options_description &cfg,
          "'elasto-plastic-rate-state-friction', or 'elasto-visco-plastic-rate-state-friction' "
          "(short '-rsf' aliases are also accepted)")
         ("mat.is_plane_strain", po::value<bool>(&p.mat.is_plane_strain)->default_value(false),
-         "Is the rheology formulation in plane strain (2D elasto-plastic case only)?\n")
+         "Use plane-strain constitutive updates in 2D (elastic and elasto-plastic paths).\n")
 
         ("mat.phase_change_option", po::value<int>(&p.mat.phase_change_option)->default_value(0),
          "What kind of phase changes?\n"
