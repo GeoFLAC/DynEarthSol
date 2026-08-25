@@ -249,6 +249,7 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_shear_heating;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -756,6 +757,7 @@ struct Variables {
     double_vec *ntmp;
     double_vec *init_elem_size_n;   // frozen initial nodal element size for MMG metric
     double_vec *radiogenic_source;
+    double_vec *shear_heat; // non-elastic (viscous + plastic) dissipation, W/m^3
 
     // For hyraulic proceses
     double_vec *fmass; // pore water mass
