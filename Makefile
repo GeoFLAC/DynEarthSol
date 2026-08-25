@@ -715,6 +715,7 @@ SRCS =	\
 	nn-interpolation.cxx \
 	output.cxx \
 	phasechanges.cxx \
+	point_sources.cxx \
 	remeshing.cxx \
 	rheology.cxx \
 	runtime_info.cxx \
@@ -749,6 +750,7 @@ INCS =	\
 	output.hpp \
 	parameters.hpp \
 	phasechanges.hpp \
+	point_sources.hpp \
 	remeshing.hpp \
 	rheology.hpp \
 	runtime_info.hpp \

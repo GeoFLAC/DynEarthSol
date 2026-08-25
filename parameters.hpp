@@ -507,6 +507,11 @@ enum MonitorRebindMode {
     monitor_rebind_pre_remesh_coord = 1
 };
 
+enum InjectionRateModel {
+    injection_rate_constant = 0,
+    injection_rate_total_amount = 1
+};
+
 struct Monitor {
     bool enabled;
     int step_interval;
@@ -546,6 +551,24 @@ struct Monitor {
     bool output_state_variable;
 };
 
+struct Injection {
+    bool enabled;
+    int num_points;
+
+    std::string points_unit;
+    double points_scale_to_m;
+    int rate_model;
+
+    double_vec points_x;
+    double_vec points_y;
+    double_vec points_z;
+
+    double_vec rate;
+    double_vec total_amount;
+    double_vec start_time;
+    double_vec end_time;
+};
+
 struct PointCloud {
     const array_t &data;
 
@@ -567,6 +590,7 @@ using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adap
 struct Param {
     Sim sim;
     Monitor monitor;
+    Injection injection;
     Mesh mesh;
     Control control;
     BC bc;

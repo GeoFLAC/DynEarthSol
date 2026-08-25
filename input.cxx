@@ -141,6 +141,35 @@ static void declare_parameters(po::options_description &cfg,
         ;
 
     cfg.add_options()
+        ("injection.enabled", po::value<bool>(&p.injection.enabled)->default_value(false),
+         "Enable point fluid injection/pumping sources for hydraulic diffusion?")
+        ("injection.num_points", po::value<int>(&p.injection.num_points)->default_value(0),
+         "Number of fluid injection/pumping points.")
+        ("injection.points_x", po::value<std::string>()->default_value("[]"),
+         "Injection x coordinates array '[x0, x1, ...]'.")
+        ("injection.points_y", po::value<std::string>()->default_value("[]"),
+         "Injection y coordinates array '[y0, y1, ...]' (3D only; 2D legacy alias for injection.points_z).")
+        ("injection.points_z", po::value<std::string>()->default_value("[]"),
+         "Injection z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
+        ("injection.points_unit", po::value<std::string>(&p.injection.points_unit)->default_value("m"),
+         "Unit of injection.points_x/z in 2D, or injection.points_x/y/z in 3D: mm, cm, m, km.")
+        ("injection.rate_model", po::value<std::string>()->default_value("constant_rate"),
+         "Injection schedule model: constant_rate or total_amount.")
+        ("injection.rate", po::value<std::string>()->default_value("[0.0]"),
+         "Constant source rate per point. Positive injects fluid, negative pumps fluid. "
+         "Units are m^2/s in 2D and m^3/s in 3D.")
+        ("injection.total_amount", po::value<std::string>()->default_value("[0.0]"),
+         "Total source amount per point for rate_model=total_amount. "
+         "Units are m^2 in 2D and m^3 in 3D.")
+        ("injection.start_time_in_yr", po::value<std::string>()->default_value("[0.0]"),
+         "Injection start time per point '[t0, t1, ...]' in years.")
+        ("injection.end_time_in_yr", po::value<std::string>()->default_value("[]"),
+         "Injection end time per point '[t0, t1, ...]' in years. Mutually exclusive with duration.")
+        ("injection.duration_in_yr", po::value<std::string>()->default_value("[]"),
+         "Injection duration per point '[dt0, dt1, ...]' in years. Used when end_time_in_yr is omitted.")
+        ;
+
+    cfg.add_options()
         ("mesh.meshing_option", po::value<int>(&p.mesh.meshing_option)->default_value(1),
          "How to create the new mesh?\n"
          "1: rectangular box with roughly uniform resolution\n"
@@ -1225,6 +1254,230 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
         if (p.monitor.enabled && !any_monitor_output) {
             die(EXIT_CONFIG_VALUE, "monitor.enabled=true requires at least one monitor.output_* = true.");
+        }
+    }
+
+    //
+    // fluid point-injection sources
+    //
+    {
+        Injection& source = p.injection;
+
+        if (source.num_points < 0) {
+            die(EXIT_CONFIG_VALUE, "injection.num_points must be >= 0.");
+        }
+        if (source.enabled && source.num_points <= 0) {
+            die(EXIT_CONFIG_VALUE,
+                "injection.enabled=true requires injection.num_points > 0.");
+        }
+        if (source.enabled && !p.control.has_hydraulic_diffusion) {
+            die(EXIT_CONFIG_VALUE,
+                "injection.enabled=true requires control.has_hydraulic_diffusion=true.");
+        }
+        if (source.enabled && p.control.has_PT &&
+            p.control.has_moving_mesh) {
+            die(EXIT_CONFIG_VALUE,
+                "Fluid injection with PT-driven moving-mesh remeshing is not yet supported safely.");
+        }
+
+        if (source.num_points == 0) {
+            source.points_x.clear();
+            source.points_y.clear();
+            source.points_z.clear();
+            source.rate.clear();
+            source.total_amount.clear();
+            source.start_time.clear();
+            source.end_time.clear();
+            source.points_scale_to_m = 1.0;
+            source.rate_model = injection_rate_constant;
+        } else {
+            get_numbers(vm, "injection.points_x", source.points_x,
+                        source.num_points);
+#ifdef THREED
+            get_numbers(vm, "injection.points_y", source.points_y,
+                        source.num_points);
+            get_numbers(vm, "injection.points_z", source.points_z,
+                        source.num_points);
+#else
+            const std::string points_y_raw =
+                vm["injection.points_y"].as<std::string>();
+            const std::string points_z_raw =
+                vm["injection.points_z"].as<std::string>();
+            if (points_y_raw == "[]" && points_z_raw == "[]") {
+                die(EXIT_CONFIG_VALUE,
+                    "injection requires points_z in 2D (points_y remains a legacy alias).");
+            }
+            if (points_y_raw != "[]" && points_z_raw != "[]") {
+                die(EXIT_CONFIG_VALUE,
+                    "injection.points_y and injection.points_z are mutually exclusive in 2D; use points_z for new inputs.");
+            }
+            get_numbers(vm, "injection.points_y", source.points_y,
+                        (points_y_raw == "[]") ? 0 : source.num_points);
+            get_numbers(vm, "injection.points_z", source.points_z,
+                        (points_z_raw == "[]") ? 0 : source.num_points);
+            if (points_z_raw == "[]") {
+                source.points_z = source.points_y;
+            }
+#endif
+
+            if (source.points_unit == "mm")
+                source.points_scale_to_m = 1e-3;
+            else if (source.points_unit == "cm")
+                source.points_scale_to_m = 1e-2;
+            else if (source.points_unit == "m")
+                source.points_scale_to_m = 1.0;
+            else if (source.points_unit == "km")
+                source.points_scale_to_m = 1e3;
+            else
+                die(EXIT_CONFIG_VALUE,
+                    "injection.points_unit must be one of mm, cm, m, km.");
+
+            for (int i = 0; i < source.num_points; ++i) {
+                source.points_x[i] *= source.points_scale_to_m;
+#ifdef THREED
+                source.points_y[i] *= source.points_scale_to_m;
+                source.points_z[i] *= source.points_scale_to_m;
+#else
+                source.points_z[i] *= source.points_scale_to_m;
+#endif
+            }
+
+            const bool has_box_mesh =
+                p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2;
+#ifdef THREED
+            const double mapping_tolerance = 5e-11;
+#else
+            const double mapping_tolerance = 1e-12;
+#endif
+            auto validate_coordinate = [&](const char* name, double& value,
+                                           double lower, double upper) {
+                if (!std::isfinite(value)) {
+                    std::cerr << "Error: injection." << name
+                              << " entries must be finite after unit conversion.\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                if (!has_box_mesh) return;
+
+                const double tolerance =
+                    mapping_tolerance * std::abs(upper - lower);
+                if (value < lower - tolerance || value > upper + tolerance) {
+                    std::cerr << "Error: injection." << name << " entry "
+                              << value << " lies outside the box-mesh interval ["
+                              << lower << ", " << upper << "].\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                if (value < lower) value = lower;
+                if (value > upper) value = upper;
+            };
+            for (int i = 0; i < source.num_points; ++i) {
+                validate_coordinate("points_x", source.points_x[i],
+                                    0.0, p.mesh.xlength);
+#ifdef THREED
+                validate_coordinate("points_y", source.points_y[i],
+                                    0.0, p.mesh.ylength);
+#endif
+                validate_coordinate("points_z", source.points_z[i],
+                                    -p.mesh.zlength, 0.0);
+            }
+
+            const std::string rate_model =
+                vm["injection.rate_model"].as<std::string>();
+            if (rate_model == "constant_rate")
+                source.rate_model = injection_rate_constant;
+            else if (rate_model == "total_amount")
+                source.rate_model = injection_rate_total_amount;
+            else
+                die(EXIT_CONFIG_VALUE,
+                    "injection.rate_model must be constant_rate or total_amount.");
+
+            get_numbers(vm, "injection.rate", source.rate,
+                        source.num_points, -1);
+            get_numbers(vm, "injection.total_amount", source.total_amount,
+                        source.num_points, -1);
+            get_numbers(vm, "injection.start_time_in_yr", source.start_time,
+                        source.num_points, -1);
+
+            for (int i = 0; i < source.num_points; ++i) {
+                if (!std::isfinite(source.rate[i]))
+                    die(EXIT_CONFIG_VALUE,
+                        "injection.rate entries must be finite.");
+                if (!std::isfinite(source.total_amount[i]))
+                    die(EXIT_CONFIG_VALUE,
+                        "injection.total_amount entries must be finite.");
+                if (!std::isfinite(source.start_time[i]))
+                    die(EXIT_CONFIG_VALUE,
+                        "injection.start_time_in_yr entries must be finite.");
+            }
+
+            const std::string end_time_raw =
+                vm["injection.end_time_in_yr"].as<std::string>();
+            const std::string duration_raw =
+                vm["injection.duration_in_yr"].as<std::string>();
+            if (end_time_raw != "[]" && duration_raw != "[]") {
+                die(EXIT_CONFIG_VALUE,
+                    "injection.end_time_in_yr and injection.duration_in_yr are mutually exclusive.");
+            }
+            if (source.rate_model == injection_rate_total_amount &&
+                end_time_raw == "[]" && duration_raw == "[]") {
+                die(EXIT_CONFIG_VALUE,
+                    "injection.rate_model=total_amount requires end_time_in_yr or duration_in_yr.");
+            }
+
+            if (end_time_raw != "[]") {
+                get_numbers(vm, "injection.end_time_in_yr", source.end_time,
+                            source.num_points, -1);
+                for (int i = 0; i < source.num_points; ++i) {
+                    if (!std::isfinite(source.end_time[i]))
+                        die(EXIT_CONFIG_VALUE,
+                            "injection.end_time_in_yr entries must be finite when provided.");
+                }
+            } else if (duration_raw != "[]") {
+                double_vec duration;
+                get_numbers(vm, "injection.duration_in_yr", duration,
+                            source.num_points, -1);
+                source.end_time.resize(source.num_points);
+                for (int i = 0; i < source.num_points; ++i) {
+                    if (!std::isfinite(duration[i]) || !(duration[i] > 0.0))
+                        die(EXIT_CONFIG_VALUE,
+                            "injection.duration_in_yr entries must be finite and greater than zero.");
+                    source.end_time[i] = source.start_time[i] + duration[i];
+                    if (!std::isfinite(source.end_time[i]))
+                        die(EXIT_CONFIG_VALUE,
+                            "injection.duration_in_yr overflows its start time.");
+                }
+            } else {
+                source.end_time.assign(source.num_points,
+                                       std::numeric_limits<double>::infinity());
+            }
+
+            for (int i = 0; i < source.num_points; ++i) {
+                if (!(source.end_time[i] > source.start_time[i]))
+                    die(EXIT_CONFIG_VALUE,
+                        "Each injection end time must be greater than start time.");
+
+                source.start_time[i] *= YEAR2SEC;
+                if (!std::isfinite(source.start_time[i]))
+                    die(EXIT_CONFIG_VALUE,
+                        "injection.start_time_in_yr overflows when converted to seconds.");
+
+                if (std::isfinite(source.end_time[i])) {
+                    source.end_time[i] *= YEAR2SEC;
+                    if (!std::isfinite(source.end_time[i]) ||
+                        !(source.end_time[i] > source.start_time[i])) {
+                        die(EXIT_CONFIG_VALUE,
+                            "Injection end time must remain finite and greater than start time after conversion to seconds.");
+                    }
+                }
+
+                if (source.rate_model == injection_rate_total_amount) {
+                    const double interval =
+                        source.end_time[i] - source.start_time[i];
+                    if (!std::isfinite(interval) || !(interval > 0.0)) {
+                        die(EXIT_CONFIG_VALUE,
+                            "injection.rate_model=total_amount requires a finite positive schedule interval.");
+                    }
+                }
+            }
         }
     }
 

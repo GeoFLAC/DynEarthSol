@@ -5,6 +5,7 @@
 #include "bc.hpp"
 #include "matprops.hpp"
 #include "fields.hpp"
+#include "point_sources.hpp"
 #include "utils.hpp"
 
 #ifdef THREED
@@ -77,6 +78,8 @@ void allocate_variables(const Param &param, Variables& var)
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
         var.dppressure = new double_vec(n);
+        var.fluid_source = param.injection.enabled
+            ? new double_vec(n, 0) : nullptr;
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
@@ -156,6 +159,9 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.hmass;
     var.hmass = new double_vec(n);
+    delete var.fluid_source;
+    var.fluid_source = param.injection.enabled
+        ? new double_vec(n, 0) : nullptr;
     delete var.ymass;
     var.ymass = new double_vec(n);
   
@@ -288,6 +294,31 @@ inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
     return false;
 }
 
+static void validate_fluid_source_application(const Variables& var,
+                                              const double_vec& source)
+{
+    for (int n = 0; n < var.nnode; ++n) {
+        if (source[n] == 0.0) continue;
+        if (is_boundary_node_for_pp(n, var)) {
+            std::cerr << "Fluid point source has a nonzero contribution on fixed "
+                      << "pore-pressure node " << n << ".\n";
+            die(EXIT_RUNTIME_LOOKUP);
+        }
+
+        const double hydraulic_mass = (*var.hmass)[n];
+        if (!std::isfinite(hydraulic_mass)) {
+            std::cerr << "Fluid point source reached non-finite hydraulic mass at node "
+                      << n << ".\n";
+            die(EXIT_RUNTIME_NAN);
+        }
+        if (!(hydraulic_mass > 0.0)) {
+            std::cerr << "Fluid point source reached non-positive hydraulic mass at node "
+                      << n << ".\n";
+            die(EXIT_RUNTIME_LOOKUP);
+        }
+    }
+}
+
 
 void update_pore_pressure(const Param &param, const Variables &var,
                           double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache &tmp_result, tensor_t& stress, double_vec& old_mean_stress)
@@ -295,6 +326,12 @@ void update_pore_pressure(const Param &param, const Variables &var,
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
+
+    const bool has_fluid_source = param.injection.enabled;
+    if (has_fluid_source) {
+        assemble_fluid_point_sources(param, var, *var.fluid_source);
+        validate_fluid_source_application(var, *var.fluid_source);
+    }
 
     // Initialize diff_max_local for reduction
     double diff_max_local = 1.0e-38;
@@ -365,9 +402,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
     }
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
+    #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result, has_fluid_source)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop gang vector firstprivate(has_fluid_source) async
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
         {
@@ -377,6 +414,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
             for (int k = 0; k < npatch; ++k)
                 tdot[n] += tmp_result[patch[k]][lpatch[k]];
         }
+        if (has_fluid_source)
+            tdot[n] -= (*var.fluid_source)[n];
 
         // Update pore pressure for non-boundary nodes
         if (!is_boundary_node_for_pp(n, var)) {
