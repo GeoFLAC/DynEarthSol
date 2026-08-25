@@ -74,6 +74,13 @@ jobs:
         python3 plane_strain_elastic/run_plane_strain_elastic.py
         --exe ../../dynearthsol2d --threads 1 4
 
+    - name: test nodal displacement output in HDF5
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 displacement_output/run_displacement_output.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --expected-format hdf5 --threads 1 4
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
@@ -83,6 +90,16 @@ jobs:
 
     - name: test 2d RSF ATS benchmark subset
       run: bash 2d-rsf-ats.sh
+
+    - name: make 2d raw-binary output
+      working-directory: .
+      run: make -j ndims=2 opt=2 openmp=1 hdf5=0
+
+    - name: test nodal displacement raw-binary reader
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 displacement_output/run_displacement_output.py
+        --exe-2d ../../dynearthsol2d --expected-format binary --threads 1
 
     - name: make 3d hdf5 opt=-1
       working-directory: .

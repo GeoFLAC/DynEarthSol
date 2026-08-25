@@ -228,6 +228,14 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     bin.write_nodal_vec_array(*var.force, "force", var.force->size());
 
+    array_t displacement(var.nnode, 0.0);
+    #pragma omp parallel for default(none) shared(var, displacement)
+    for (int n = 0; n < var.nnode; ++n) {
+        for (int d = 0; d < NDIMS; ++d)
+            displacement[n][d] = (*var.coord)[n][d] - (*var.coord0)[n][d];
+    }
+    bin.write_nodal_vec_array(displacement, "displacement", displacement.size());
+
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 
     bin.write_array(*var.bcflag, "bcflag", var.bcflag->size());
