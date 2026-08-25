@@ -81,6 +81,12 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --expected-format hdf5 --threads 1 4
 
+    - name: test boundary projection cache after remeshing
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 boundary_remesh/run_boundary_remesh.py
+        --exe ../../dynearthsol2d --threads 1 4
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 

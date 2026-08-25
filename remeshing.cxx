@@ -11,6 +11,7 @@
 
 #include "barycentric-fn.hpp"
 #include "brc-interpolation.hpp"
+#include "bc.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
 #include "matprops.hpp"
@@ -3066,6 +3067,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int i=0; i<nbdrytypes; ++i)
         var.bnodes[i]->clear();
     create_boundary_nodes(var);
+
+    // Boundary normals and pair-edge directions are derived from the current
+    // mesh.  The boundary facets/flags above now describe the remeshed mesh,
+    // so retaining the initialization-time cache would make subsequent VBC
+    // projections use the old geometry.  Rebuild it only after both
+    // boundary-node and boundary-facet lifecycles are complete, matching the
+    // initialization/restart contract.
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
     delete var.top_elems;
     create_top_elems(var);

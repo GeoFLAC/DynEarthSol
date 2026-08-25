@@ -1,0 +1,17 @@
+# Trapezoid with one planar arbitrary boundary (marker 64 / BOUNDN0).
+# The top-right corner is displaced during step 1, rotating BOUNDN0 before
+# the forced remesh.  A large regional area limit keeps the initial arbitrary
+# boundary to one segment so the prescribed corner motion remains planar.
+4 2 0 0
+0 0.0  0.0
+1 0.0 -1.0
+2 1.0 -1.0
+3 0.5  0.0
+4 1
+0 0 1  1
+1 1 2 16
+2 2 3 64
+3 3 0 32
+0
+1
+0 0.35 -0.5 0 10.0
