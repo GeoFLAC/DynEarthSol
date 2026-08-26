@@ -3063,6 +3063,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // memory for new fields
     reallocate_variables(param, var);
 
+    // Interpolation is not a boundary-condition operation. Restore finite
+    // prescribed pressures and clear fixed-node pressure increments before
+    // post-remesh mechanics or output can consume them.
+    enforce_pore_pressure_bcs(param, var, *var.ppressure,
+                              *var.dppressure);
+
     // updating other arrays
     for (int i=0; i<nbdrytypes; ++i)
         var.bnodes[i]->clear();

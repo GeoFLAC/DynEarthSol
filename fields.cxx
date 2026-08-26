@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 
 #include "constants.hpp"
@@ -283,15 +284,81 @@ void update_temperature(const Param &param, const Variables &var,
 #endif
 }
 
-// Function to check if a node is a boundary node
-inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
-    int boundary_types[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i) {
-        if (((*var.bcflag)[n] & boundary_types[i]) && (var.hbc_types[i] == 1)) {
-            return true;
+void enforce_pore_pressure_bcs(const Param &param, const Variables &var,
+                               double_vec &ppressure,
+                               double_vec &dppressure)
+{
+    if (!has_pore_pressure_mechanical_coupling(param))
+        return;
+
+    const double value_x0 = param.bc.hbc_val_x0;
+    const double value_x1 = param.bc.hbc_val_x1;
+    const double value_y0 = param.bc.hbc_val_y0;
+    const double value_y1 = param.bc.hbc_val_y1;
+    const double value_z0 = param.bc.hbc_val_z0;
+    const double value_z1 = param.bc.hbc_val_z1;
+    const bool finite_x0 = std::isfinite(value_x0);
+    const bool finite_x1 = std::isfinite(value_x1);
+    const bool finite_y0 = std::isfinite(value_y0);
+    const bool finite_y1 = std::isfinite(value_y1);
+    const bool finite_z0 = std::isfinite(value_z0);
+    const bool finite_z1 = std::isfinite(value_z1);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) \
+        shared(var, ppressure, dppressure, value_x0, value_x1, value_y0, \
+               value_y1, value_z0, value_z1, finite_x0, finite_x1, \
+               finite_y0, finite_y1, finite_z0, finite_z1)
+#endif
+    #pragma acc parallel loop async \
+        firstprivate(value_x0, value_x1, value_y0, value_y1, value_z0, \
+                     value_z1, finite_x0, finite_x1, finite_y0, finite_y1, \
+                     finite_z0, finite_z1)
+    for (int node = 0; node < var.nnode; ++node) {
+        if (!is_fixed_pore_pressure_node(node, var))
+            continue;
+
+        const uint flag = (*var.bcflag)[node];
+        double prescribed_sum = 0.0;
+        int prescribed_count = 0;
+
+        if ((flag & BOUNDX0) && var.hbc_types[0] == 1 && finite_x0) {
+            prescribed_sum += value_x0;
+            ++prescribed_count;
         }
+        if ((flag & BOUNDX1) && var.hbc_types[1] == 1 && finite_x1) {
+            prescribed_sum += value_x1;
+            ++prescribed_count;
+        }
+#ifdef THREED
+        if ((flag & BOUNDY0) && var.hbc_types[2] == 1 && finite_y0) {
+            prescribed_sum += value_y0;
+            ++prescribed_count;
+        }
+        if ((flag & BOUNDY1) && var.hbc_types[3] == 1 && finite_y1) {
+            prescribed_sum += value_y1;
+            ++prescribed_count;
+        }
+#endif
+        if ((flag & BOUNDZ0) && var.hbc_types[4] == 1 && finite_z0) {
+            prescribed_sum += value_z0;
+            ++prescribed_count;
+        }
+        if ((flag & BOUNDZ1) && var.hbc_types[5] == 1 && finite_z1) {
+            prescribed_sum += value_z1;
+            ++prescribed_count;
+        }
+
+        // At corners, average every finite prescribed face value. If all
+        // incident fixed faces are NaN, retain the current/interpolated value.
+        if (prescribed_count > 0)
+            ppressure[node] = prescribed_sum / prescribed_count;
+
+        // Fixed pressure cannot carry a constitutive pressure increment.
+        dppressure[node] = 0.0;
     }
-    return false;
+
+    #pragma acc wait
 }
 
 static void validate_fluid_source_application(const Variables& var,
@@ -299,7 +366,7 @@ static void validate_fluid_source_application(const Variables& var,
 {
     for (int n = 0; n < var.nnode; ++n) {
         if (source[n] == 0.0) continue;
-        if (is_boundary_node_for_pp(n, var)) {
+        if (is_fixed_pore_pressure_node(n, var)) {
             std::cerr << "Fluid point source has a nonzero contribution on fixed "
                       << "pore-pressure node " << n << ".\n";
             die(EXIT_RUNTIME_LOOKUP);
@@ -415,7 +482,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
             tdot[n] -= (*var.fluid_source)[n];
 
         // Update pore pressure for non-boundary nodes
-        if (!is_boundary_node_for_pp(n, var)) {
+        if (!is_fixed_pore_pressure_node(n, var)) {
             // Ensure mass is non-zero before division
             if ((*var.hmass)[n] > 0.0) {
                 ppressure[n] -= tdot[n] * var.dt / (*var.hmass)[n]; // Update pore pressure
@@ -429,6 +496,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
         // }
             
     }
+
+    enforce_pore_pressure_bcs(param, var, ppressure, dppressure);
 
     #pragma acc wait
 #ifdef NPROF

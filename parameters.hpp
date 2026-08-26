@@ -347,6 +347,13 @@ struct BC {
     int hbc_z0;
     int hbc_z1;
 
+    double hbc_val_x0;
+    double hbc_val_x1;
+    double hbc_val_y0;
+    double hbc_val_y1;
+    double hbc_val_z0;
+    double hbc_val_z1;
+
     double stress_val_x0;
     double stress_val_x1;
     double stress_val_y0;

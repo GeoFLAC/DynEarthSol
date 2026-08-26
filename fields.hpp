@@ -1,6 +1,25 @@
 #ifndef DYNEARTHSOL3D_FIELDS_HPP
 #define DYNEARTHSOL3D_FIELDS_HPP
 
+#include "parameters.hpp"
+
+#ifdef ACC
+#pragma acc routine seq
+#endif
+inline bool is_fixed_pore_pressure_node(int node, const Variables &var)
+{
+    const uint flag = (*var.bcflag)[node];
+    return ((flag & BOUNDX0) && var.hbc_types[0] == 1) ||
+           ((flag & BOUNDX1) && var.hbc_types[1] == 1) ||
+           ((flag & BOUNDY0) && var.hbc_types[2] == 1) ||
+           ((flag & BOUNDY1) && var.hbc_types[3] == 1) ||
+           ((flag & BOUNDZ0) && var.hbc_types[4] == 1) ||
+           ((flag & BOUNDZ1) && var.hbc_types[5] == 1);
+}
+
+void enforce_pore_pressure_bcs(const Param &param, const Variables &var,
+                               double_vec &ppressure,
+                               double_vec &dppressure);
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_tmp(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);

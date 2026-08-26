@@ -478,11 +478,11 @@ static void declare_parameters(po::options_description &cfg,
          "Density of the loading water (in kg/m^3). Used for the top-boundary "
          "water load and for the free-surface stress pin that must match it.")
 
-         // pore pressure boundary condition
+        // pore pressure boundary condition
         ("bc.hbc_x0", po::value<int>(&p.bc.hbc_x0)->default_value(0),
-         "Type of boundary condition for the left/western side"
-         "0 indicates no flow boundary condition."
-         "1 indicates initial pore pressure is fixed.")
+         "Type of boundary condition for the left/western side. "
+         "0 indicates no flow boundary condition. "
+         "1 indicates pore pressure is fixed throughout the run.")
         ("bc.hbc_x1", po::value<int>(&p.bc.hbc_x1)->default_value(0),
          "Type of boundary condition for the right/eastern side")
         ("bc.hbc_y0", po::value<int>(&p.bc.hbc_y0)->default_value(0),
@@ -493,6 +493,25 @@ static void declare_parameters(po::options_description &cfg,
          "Type of boundary condition for the bottom side")
         ("bc.hbc_z1", po::value<int>(&p.bc.hbc_z1)->default_value(0),
          "Type of boundary condition for the top side")
+        ("bc.hbc_val_x0", po::value<double>(&p.bc.hbc_val_x0)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the left/western side (Pa). "
+         "NaN retains the current/interpolated pressure at each lifecycle stage. "
+         "A finite value is required when remeshing resets that boundary geometry.")
+        ("bc.hbc_val_x1", po::value<double>(&p.bc.hbc_val_x1)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the right/eastern side (Pa); "
+         "NaN retains the current/interpolated pressure.")
+        ("bc.hbc_val_y0", po::value<double>(&p.bc.hbc_val_y0)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the front/southern side (Pa); "
+         "NaN retains the current/interpolated pressure.")
+        ("bc.hbc_val_y1", po::value<double>(&p.bc.hbc_val_y1)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the back/northern side (Pa); "
+         "NaN retains the current/interpolated pressure.")
+        ("bc.hbc_val_z0", po::value<double>(&p.bc.hbc_val_z0)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the bottom side (Pa); "
+         "NaN retains the current/interpolated pressure.")
+        ("bc.hbc_val_z1", po::value<double>(&p.bc.hbc_val_z1)->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Optional fixed pore-pressure value for the top side (Pa); "
+         "NaN retains the current/interpolated pressure.")
 
          // General stress (Neumann) boundary conditions 
         ("bc.stress_bc_x0", po::value<int>(&p.bc.stress_bc_x0)->default_value(0),
@@ -1178,6 +1197,71 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
         die(EXIT_CONFIG_VALUE, "mesh.remesh_deborah_min must be positive and less than mesh.remesh_deborah_max.");
+    }
+
+    const uint hydraulic_boundary_bits[6] = {
+        BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1
+    };
+    const int hbc_types[6] = {
+        p.bc.hbc_x0, p.bc.hbc_x1, p.bc.hbc_y0,
+        p.bc.hbc_y1, p.bc.hbc_z0, p.bc.hbc_z1
+    };
+    const double hbc_values[6] = {
+        p.bc.hbc_val_x0, p.bc.hbc_val_x1, p.bc.hbc_val_y0,
+        p.bc.hbc_val_y1, p.bc.hbc_val_z0, p.bc.hbc_val_z1
+    };
+    const bool has_pressure_coupling =
+        has_pore_pressure_mechanical_coupling(p);
+    for (int face = 0; face < 6; ++face) {
+#ifndef THREED
+        if (face == 2 || face == 3)
+            continue;
+#endif
+        if (has_pressure_coupling && hbc_types[face] == 1 &&
+            !std::isfinite(hbc_values[face]) &&
+            !std::isnan(hbc_values[face])) {
+            die(EXIT_CONFIG_VALUE,
+                "A fixed bc.hbc_val_* value must be finite or NaN, not infinite.");
+        }
+    }
+
+    // A NaN fixed-pressure value relies on the current/interpolated boundary
+    // trace. After a face is moved to a reference coordinate, that trace no
+    // longer defines an explicit value there, so reset fixed faces require one.
+    if (has_pressure_coupling && p.control.has_moving_mesh) {
+        uint reset_boundary_mask = 0;
+        switch (p.mesh.remeshing_option) {
+        case 1:
+        case 2:
+        case 11:
+            reset_boundary_mask = BOUNDZ0;
+            break;
+        case 12:
+            reset_boundary_mask = BOUNDX0;
+            break;
+        case 13:
+            reset_boundary_mask = BOUNDX0 | BOUNDX1 | BOUNDZ0;
+#ifdef THREED
+            reset_boundary_mask |= BOUNDY0 | BOUNDY1;
+#endif
+            break;
+        default:
+            break;
+        }
+
+        for (int face = 0; face < 6; ++face) {
+#ifndef THREED
+            if (face == 2 || face == 3)
+                continue;
+#endif
+            if ((reset_boundary_mask & hydraulic_boundary_bits[face]) &&
+                hbc_types[face] == 1 &&
+                !std::isfinite(hbc_values[face])) {
+                die(EXIT_CONFIG_VALUE,
+                    "A fixed pore-pressure boundary whose geometry is reset "
+                    "during remeshing requires an explicit finite bc.hbc_val_* value.");
+            }
+        }
     }
 
     //

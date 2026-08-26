@@ -399,6 +399,9 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
+    enforce_pore_pressure_bcs(param, var, *var.ppressure,
+                              *var.dppressure);
+
     // the following fields are not required for restarting, yet
     {
         // for shear heating

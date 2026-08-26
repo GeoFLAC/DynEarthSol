@@ -88,6 +88,13 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --threads 1 4
 
+    - name: test fixed pore-pressure boundary lifecycle
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 fixed_hbc/run_fixed_hbc.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --threads 1 4
+
     - name: test hydraulic CFL and material-index invariance
       run: |
         OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \

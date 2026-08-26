@@ -3,6 +3,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "fields.hpp"
 #include "matprops.hpp"
 #include "markerset.hpp"
 
@@ -433,22 +434,12 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
     compensation_pressure = ref_pressure(param, -param.mesh.zlength);
 }
 
-// Function to check if a node is a boundary node
-inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
-    int boundary_types[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i) {
-        if (((*var.bcflag)[n] & boundary_types[i]) && (var.hbc_types[i] == 1)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 void initial_hydrostatic_state(const Param &param, const Variables &var,
                                double_vec &ppressure, double_vec &dppressure)
 {
     // Check if gravity is enabled
     if (param.control.gravity == 0) {
+        enforce_pore_pressure_bcs(param, var, ppressure, dppressure);
         return;
     }
 
@@ -485,11 +476,13 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         ppressure[i] = hydrostatic_pore_pressure(param, rho_fluid, z);
 
         // Add excess pore pressure for non-boundary nodes
-        if (!is_boundary_node_for_pp(i, var)) ppressure[i] += skempton * loading;
+        if (!is_fixed_pore_pressure_node(i, var)) ppressure[i] += skempton * loading;
         
         // Initialize pressure change (dppressure) to zero
         dppressure[i] = 0.0;
     }
+
+    enforce_pore_pressure_bcs(param, var, ppressure, dppressure);
 }
 
 void initial_weak_zone(const Param &param, const Variables &var,
