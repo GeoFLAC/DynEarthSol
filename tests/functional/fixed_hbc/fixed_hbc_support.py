@@ -81,7 +81,7 @@ def render_cfg(
     hbc_types: Mapping[str, int] | None = None,
     hbc_values: Mapping[str, float | str] | None = None,
 ) -> str:
-    """Fill the public fixed-HBC template without private-only options."""
+    """Fill the fixed-HBC configuration template."""
 
     hbc_types = dict(hbc_types or {})
     hbc_values = dict(hbc_values or {})
