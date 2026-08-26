@@ -63,6 +63,10 @@ public:
     double alpha_biot(int e) const;
     #pragma acc routine seq
     double beta_mineral(int e) const;
+    #pragma acc routine seq
+    double inverse_biot_modulus(int e) const;
+    #pragma acc routine seq
+    double pressure_storage(int e, bool poroelastic_feedback) const;
 
     // rate-and-state friction parameters
     #pragma acc routine seq

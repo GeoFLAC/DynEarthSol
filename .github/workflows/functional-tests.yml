@@ -81,6 +81,13 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --threads 1 4
 
+    - name: test Biot pressure storage
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 biot_storage/run_biot_storage.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --threads 1 4
+
     - name: test elastic plane-strain stress update
       run: >-
         PYTHONDONTWRITEBYTECODE=1

@@ -348,18 +348,15 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double mean_stress_change = current_mean_stress - old_mean_stress[e];
 
         // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(e);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
+        const double perm_e = var.mat->perm(e);          // Intrinsic permeability
+        const double mu_e = var.mat->mu_fluid(e);        // Fluid dynamic viscosity
+        const double alpha_b = var.mat->alpha_biot(e);   // Biot coefficient
         const double rho_f = var.mat->reference_fluid_density(e);
-        double phi_e = var.mat->phi(e);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(e);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(e);
-        double shearm = var.mat->shearm(e);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
-
-        double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-        if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
+        double constrained_modulus = var.mat->bulkm(e);
+#ifndef THREED
+        constrained_modulus += var.mat->shearm(e) / 3.0;
+#endif
+        const double bulk_comp = 1.0 / constrained_modulus;
 
         const double gamma_w = rho_f * param.control.gravity; // specific weight
 
@@ -371,7 +368,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
         const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
 
         // Hydraulic diffusivity is independent of gravity in pressure units.
-        const double diff_e = mobility / (phi_e * comp_fluid + alpha_b * matrix_comp);
+        const double storage = var.mat->pressure_storage(
+            e, param.control.has_poroelastic_pressure_feedback);
+        const double diff_e = mobility / storage;
         diff_max_local = std::max(diff_max_local, diff_e);
 
         // Mechanical-to-hydraulic poroelastic feedback is optional; diffusion

@@ -1854,12 +1854,20 @@ void compute_mass(const Param &param, const Variables &var,
         const double mu_m = param.mat.fluid_visc[mt];                     // Fluid dynamic viscosity
         const double alpha_b = param.mat.biot_coeff[mt];                  // Biot coefficient
         const double phi_m = param.mat.porosity[mt];                      // Porosity
-        const double comp_fluid = 1.0 / param.mat.fluid_bulk_modulus[mt]; // Fluid compressibility
-        const double matrix_comp = 1.0 / (param.mat.bulk_modulus[mt] + 4.0*param.mat.shear_modulus[mt]/3.0);
+        double storage = (alpha_b - phi_m) / param.mat.bulk_modulus_s[mt] +
+                         phi_m / param.mat.fluid_bulk_modulus[mt];
+        if (param.control.has_poroelastic_pressure_feedback) {
+            double constrained_modulus = param.mat.bulk_modulus[mt];
+#ifndef THREED
+            constrained_modulus += param.mat.shear_modulus[mt] / 3.0;
+#endif
+            storage += alpha_b * alpha_b / constrained_modulus;
+        }
 
         // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
-        // weight cancels between conductivity and storage, so it is not carried.
-        const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
+        // weight cancels between mobility and storage, so it is not carried. Raw
+        // arrays are required here because mt is a material index, not an element.
+        const double diff_ref = perm_m / (mu_m * storage);
 
         if (pseudo_speed < diff_ref) {
             std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
@@ -1909,13 +1917,11 @@ void compute_mass(const Param &param, const Variables &var,
 
             }
 
-            double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-            if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
-
-            double hm_coeff = (*var.mat).alpha_biot(e) + (*var.mat).phi(e) - (*var.mat).alpha_biot(e) * (*var.mat).phi(e); 
             double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
             double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
-            double hm = (hm_coeff * bulk_comp + (*var.mat).phi(e) * (*var.mat).beta_fluid(e)) * (*var.volume)[e] / NODES_PER_ELEM;
+            const double storage = var.mat->pressure_storage(
+                e, param.control.has_poroelastic_pressure_feedback);
+            double hm = storage * (*var.volume)[e] / NODES_PER_ELEM;
             double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
             tr[0] = (*var.volume)[e];

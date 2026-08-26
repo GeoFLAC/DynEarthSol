@@ -455,13 +455,13 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
     // Hydrostatic condition for pressure calculation
     const double rho_fluid = var.mat->reference_fluid_density(0);
     double loading = param.ic.excess_pore_pressure;
-    double ks = var.mat->bulkm(0);
-    double mu = var.mat->shearm(0);
-    double lame = ks - (2.0 / 3.0) * mu;
-    double alpha_c = var.mat->alpha_biot(0);
-    double phi = var.mat->phi(0);
-    double beta_w = var.mat->beta_fluid(0);
-    double skempton = 1.0/(phi * beta_w * (lame + 2 * mu) / (alpha_c + phi - phi*alpha_c) + alpha_c);
+    double constrained_modulus = var.mat->bulkm(0);
+#ifndef THREED
+    constrained_modulus += var.mat->shearm(0) / 3.0;
+#endif
+    const double alpha_c = var.mat->alpha_biot(0);
+    const double storage = var.mat->pressure_storage(0, true);
+    const double skempton = alpha_c / (constrained_modulus * storage);
     // skempton = 1.0;
     
     // Loop over all nodes

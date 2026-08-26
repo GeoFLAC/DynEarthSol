@@ -12,8 +12,9 @@ This focused functional suite checks the public fluid injection path:
   schedule starts;
 - shared-boundary ownership is deterministic, and single- and multi-point
   source totals are conserved by nodal assembly.
-- nonzero sources on fixed-pressure nodes or non-finite/non-positive hydraulic
-  mass are rejected instead of being silently discarded;
+- nonzero sources on fixed-pressure nodes are rejected instead of being
+  silently discarded, while invalid storage inputs fail during configuration
+  before source assembly;
 - PT-driven moving-mesh remeshing fails closed until its pre-existing hydraulic
   remesh lifecycle is safe.
 

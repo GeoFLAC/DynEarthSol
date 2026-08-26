@@ -1769,6 +1769,72 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                 p.mat.biot_coeff[m] = derived_biot;
             }
         }
+        if (has_pore_pressure_mechanical_coupling(p)) {
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const double fluid_bulk_modulus = p.mat.fluid_bulk_modulus[m];
+                const double grain_bulk_modulus = p.mat.bulk_modulus_s[m];
+                if (!std::isfinite(fluid_bulk_modulus) ||
+                    !(fluid_bulk_modulus > 0.0)) {
+                    std::cerr << "Error: mat.fluid_bulk_modulus must be finite and positive "
+                              << "when pore-pressure mechanical coupling is enabled "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                if (!std::isfinite(grain_bulk_modulus) ||
+                    !(grain_bulk_modulus > 0.0)) {
+                    std::cerr << "Error: mat.bulk_modulus_s must be finite and positive "
+                              << "when pore-pressure mechanical coupling is enabled "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+
+                const double porosity = p.mat.porosity[m];
+                const double biot = p.mat.biot_coeff[m];
+                const double inverse_biot_modulus =
+                    (biot - porosity) / grain_bulk_modulus +
+                    porosity / fluid_bulk_modulus;
+                double constrained_modulus = p.mat.bulk_modulus[m];
+#ifndef THREED
+                constrained_modulus += p.mat.shear_modulus[m] / 3.0;
+#endif
+                const double coupling_storage = inverse_biot_modulus +
+                    biot * biot / constrained_modulus;
+                if (p.control.has_hydraulic_diffusion) {
+                    const double fluid_viscosity = p.mat.fluid_visc[m];
+                    if (!std::isfinite(fluid_viscosity) ||
+                        !(fluid_viscosity > 0.0)) {
+                        std::cerr << "Error: mat.fluid_visc must be finite and positive "
+                                  << "when control.has_hydraulic_diffusion=true "
+                                  << "(material index " << m << ").\n";
+                        die(EXIT_CONFIG_VALUE);
+                    }
+                    const double hydraulic_storage =
+                        p.control.has_poroelastic_pressure_feedback ?
+                        coupling_storage : inverse_biot_modulus;
+                    if (!std::isfinite(hydraulic_storage) ||
+                        !(hydraulic_storage > 0.0)) {
+                        std::cerr << "Error: hydraulic pressure storage must be finite and positive "
+                                  << "(material index " << m << ").\n";
+                        die(EXIT_CONFIG_VALUE);
+                    }
+                    const double diffusivity =
+                        p.mat.hydraulic_perm[m] / fluid_viscosity /
+                        hydraulic_storage;
+                    if (!std::isfinite(diffusivity) ||
+                        !(diffusivity > 0.0)) {
+                        std::cerr << "Error: hydraulic diffusivity must be finite and positive "
+                                  << "(material index " << m << ").\n";
+                        die(EXIT_CONFIG_VALUE);
+                    }
+                }
+                if (!std::isfinite(coupling_storage) ||
+                    !(coupling_storage > 0.0)) {
+                    std::cerr << "Error: initial Skempton pressure storage must be finite and positive "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+            }
+        }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);

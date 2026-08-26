@@ -800,6 +800,27 @@ double MatProps::beta_mineral(int e) const
     return 1.0 / harmonic_mean(bulk_modulus_s, elemmarkers[e]);
 }
 
+double MatProps::inverse_biot_modulus(int e) const
+{
+    const double porosity = phi(e);
+    return (alpha_biot(e) - porosity) * beta_mineral(e) +
+           porosity * beta_fluid(e);
+}
+
+double MatProps::pressure_storage(int e, bool poroelastic_feedback) const
+{
+    double storage = inverse_biot_modulus(e);
+    if (poroelastic_feedback) {
+        double constrained_modulus = bulkm(e);
+#ifndef THREED
+        constrained_modulus += shearm(e) / 3.0;
+#endif
+        const double biot = alpha_biot(e);
+        storage += biot * biot / constrained_modulus;
+    }
+    return storage;
+}
+
 // Rate-and-state friction parameters
 double MatProps::d_a(int e) const
 {
