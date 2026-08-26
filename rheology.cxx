@@ -316,7 +316,7 @@ static void elasto_plastic(double bulkm, double shearm,
                            double hardn, double ten_max,
                            const double* de, double& depls, T s,
                            int &failure_mode,
-                           bool has_hydraulic_diffusion,
+                           bool pore_pressure_mechanical_coupling,
                            double &dpp)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion)
@@ -328,7 +328,7 @@ static void elasto_plastic(double bulkm, double shearm,
      */
 
     // elastic trial stress
-    if (has_hydraulic_diffusion)
+    if (pore_pressure_mechanical_coupling)
     {
         elastic_effective(bulkm, shearm, de, s, dpp);
     }
@@ -491,7 +491,7 @@ static void elasto_plastic2d(double bulkm, double shearm,
                              const double* de, double& depls,
                              T s, double &syy,
                              int &failure_mode,
-                             bool has_hydraulic_diffusion,
+                             bool pore_pressure_mechanical_coupling,
                              double &dpp)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion) */
@@ -523,8 +523,8 @@ static void elasto_plastic2d(double bulkm, double shearm,
     double sxz = s[2] + de[2]*2*shearm;
     syy += (de[0] + de[1]) * a2; // Stress YY component, plane strain
 
-    // Apply the pore pressure effect if hydraulic diffusion is enabled
-    if (has_hydraulic_diffusion)
+    // Apply the pore-pressure effect when mechanical coupling is enabled.
+    if (pore_pressure_mechanical_coupling)
     {
         sxx += dpp;
         syy += dpp;
@@ -712,7 +712,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
-    const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    const bool pore_pressure_mechanical_coupling =
+        has_pore_pressure_mechanical_coupling(param);
     // Only the two rate-and-state branches call compute_slip_rate*, which is the
     // sole consumer of the centroid velocity.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
@@ -722,9 +723,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     #pragma omp parallel for default(none) shared(param, var, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(has_hydraulic_diffusion, needs_slip_rate)
+        firstprivate(pore_pressure_mechanical_coupling, needs_slip_rate)
 #endif
-    #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop gang vector async firstprivate(pore_pressure_mechanical_coupling, needs_slip_rate) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 
@@ -732,7 +733,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // 2 + NDIMS nodal gathers per element per step in every run. The `ppressure` LEVEL
         // is not interpolated at all; restore it here if a rheology comes to need it.
         double dpp = 0.0;
-        if (has_hydraulic_diffusion) {
+        // dppressure belongs to the physical step and must be applied exactly
+        // once.  PT iterations still use the configured pressure-coupled
+        // material policy, but must not replay that same pressure increment.
+        if (pore_pressure_mechanical_coupling && !param.control.PT_jump) {
             #pragma acc loop seq
             for (int j = 0; j < NODES_PER_ELEM; ++j)
                 dpp += dppressure[conn[j]] / double(NODES_PER_ELEM);
@@ -819,7 +823,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             {
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                if (has_hydraulic_diffusion)
+                if (pore_pressure_mechanical_coupling)
                 {
                     elastic_effective(bulkm, shearm, de, s, dpp);
                 }
@@ -830,7 +834,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     const double lambda = bulkm - 2.0 * shearm / 3.0;
                     syy += lambda * trace(de);
-                    if (has_hydraulic_diffusion)
+                    if (pore_pressure_mechanical_coupling)
                         syy += dpp;
                 }
             }
@@ -864,12 +868,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     pore_pressure_mechanical_coupling, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   pore_pressure_mechanical_coupling, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -901,12 +905,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     pore_pressure_mechanical_coupling, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   pore_pressure_mechanical_coupling, dpp);
                 }
                 double spII = second_invariant2(sp);
 
@@ -948,12 +952,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     pore_pressure_mechanical_coupling, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   pore_pressure_mechanical_coupling, dpp);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -996,12 +1000,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     pore_pressure_mechanical_coupling, dpp);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   pore_pressure_mechanical_coupling, dpp);
                 }
                 double spII = second_invariant2(sp);
 

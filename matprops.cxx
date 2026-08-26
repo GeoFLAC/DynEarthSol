@@ -150,6 +150,16 @@ namespace {
 }
 
 
+#pragma acc routine seq
+bool has_pore_pressure_mechanical_coupling(const Param& param)
+{
+    // Hydraulic transport is currently the only public path that couples pore
+    // pressure into mechanics. Keep this policy in one place so later coupling
+    // modes do not have to overload the transport switch.
+    return param.control.has_hydraulic_diffusion;
+}
+
+
 double ref_pressure(const Param& param, double z)
 {
     // Get pressure at this depth

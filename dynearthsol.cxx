@@ -206,7 +206,7 @@ void init(const Param& param, Variables& var)
     var.mat->refresh_elem_cache();
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
-    if(param.control.has_hydraulic_diffusion)
+    if (has_pore_pressure_mechanical_coupling(param))
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
@@ -748,15 +748,11 @@ int main(int argc, const char* argv[])
     double residual_old = std::numeric_limits<double>::max();
     double relative_change = 1.0;
     double dt_copy = 0.0;
-    bool hydraulic_diffusion_switch = false;
-
     if(param.ic.has_body_force_adjustment)
     {
-        if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
         // this is similar to isostasy_adjustment(param, var); so maybe should be merged to it later.
         // Only works with PT loop
         initial_body_force_adjustment(param, var); 
-        if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
         param.ic.has_body_force_adjustment = false;
     }
 
@@ -803,11 +799,6 @@ int main(int argc, const char* argv[])
         if (param.control.has_PT)
         {   
             // var.dt = compute_dt_PT(param, var);
-            if (param.control.has_hydraulic_diffusion) {
-                param.control.has_hydraulic_diffusion = false;
-                hydraulic_diffusion_switch = true;
-            }
-
             param.control.PT_jump = true;
             for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
             {
@@ -857,7 +848,6 @@ int main(int argc, const char* argv[])
                     }
                 }
             }
-            if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
             // var.dt = dt_copy;
             param.control.PT_jump = false;
 

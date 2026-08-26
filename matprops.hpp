@@ -7,6 +7,9 @@
 #pragma acc routine seq
 double ref_pressure(const Param& param, double z);
 
+#pragma acc routine seq
+bool has_pore_pressure_mechanical_coupling(const Param& param);
+
 
 class MatProps
 {
