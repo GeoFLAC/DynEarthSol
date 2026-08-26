@@ -224,7 +224,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   visc_max(p.mat.visc_max),
   tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
-  hydro_diff_max(1e-1),
   coord(*var.coord),
   connectivity(*var.connectivity),
   temperature(*var.temperature),
@@ -819,6 +818,12 @@ double MatProps::pressure_storage(int e, bool poroelastic_feedback) const
         storage += biot * biot / constrained_modulus;
     }
     return storage;
+}
+
+double MatProps::hydraulic_diffusivity(int e, bool poroelastic_feedback) const
+{
+    const double mobility = perm(e) / mu_fluid(e);
+    return mobility / pressure_storage(e, poroelastic_feedback);
 }
 
 // Rate-and-state friction parameters

@@ -88,6 +88,15 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --threads 1 4
 
+    - name: test hydraulic CFL and material-index invariance
+      run: |
+        OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+          python3 hydraulic_cfl/run_hydraulic_cfl.py \
+          --exe ../../dynearthsol2d
+        OMP_NUM_THREADS=4 PYTHONDONTWRITEBYTECODE=1 \
+          python3 hydraulic_cfl/run_hydraulic_cfl.py \
+          --exe ../../dynearthsol2d
+
     - name: test elastic plane-strain stress update
       run: >-
         PYTHONDONTWRITEBYTECODE=1

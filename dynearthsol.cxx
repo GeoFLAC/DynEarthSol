@@ -34,6 +34,18 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
+namespace {
+
+void refresh_runtime_dt_and_mass(const Param& param, Variables& var)
+{
+    apply_vbcs(param, var, *var.vel);
+    var.dt = compute_dt(param, var);
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass,
+                 *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+}
+
+} // namespace
+
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
@@ -431,9 +443,13 @@ void restart(const Param& param, Variables& var)
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
-    // For some reason, the following is added by Denis
-    // However, it is not clear why this is needed.
-    if (param.control.use_global_velocity_scaling) {
+    // Dynamic hydraulic restarts must not retain a checkpoint timestep selected
+    // from an older mesh or material state.
+    const bool refresh_dynamic_hydraulic_dt =
+        param.control.has_hydraulic_diffusion &&
+        param.control.fixed_dt == 0.0;
+    if (param.control.use_global_velocity_scaling ||
+        refresh_dynamic_hydraulic_dt) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
@@ -484,7 +500,11 @@ void update_mesh(const Param& param, Variables& var)
     // surface_processes() above can move elemmarkers via correct_surface_marker().
     var.mat->refresh_elem_cache();
 
-    if (param.control.use_global_velocity_scaling) {
+    const bool refresh_dynamic_hydraulic_dt =
+        param.control.has_hydraulic_diffusion &&
+        param.control.fixed_dt == 0.0;
+    if (param.control.use_global_velocity_scaling ||
+        refresh_dynamic_hydraulic_dt) {
         var.dt = compute_dt(param, var);
     }
 
@@ -646,7 +666,13 @@ int main(int argc, const char* argv[])
             isostasy_adjustment(param, var);
         }
 
-        var.dt = compute_dt(param, var);
+        if (param.control.has_hydraulic_diffusion) {
+            // Temperature initialization may relabel materials. Rebuild the
+            // timestep and hydraulic mass from the same post-initialization state.
+            refresh_runtime_dt_and_mass(param, var);
+        } else {
+            var.dt = compute_dt(param, var);
+        }
 
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
@@ -886,7 +912,13 @@ int main(int argc, const char* argv[])
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
-            var.dt = compute_dt(param, var);
+            if (param.control.has_hydraulic_diffusion &&
+                param.mat.phase_change_option != 0) {
+                // Phase changes can alter both diffusivity and pressure storage.
+                refresh_runtime_dt_and_mass(param, var);
+            } else {
+                var.dt = compute_dt(param, var);
+            }
         }
 
         #pragma acc wait

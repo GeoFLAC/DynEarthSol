@@ -333,14 +333,10 @@ void update_pore_pressure(const Param &param, const Variables &var,
         validate_fluid_source_application(var, *var.fluid_source);
     }
 
-    // Initialize diff_max_local for reduction
-    double diff_max_local = 1.0e-38;
-
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        reduction(max:diff_max_local)
+    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param)
 #endif
-        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async
+    #pragma acc parallel loop gang vector async
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
@@ -366,12 +362,6 @@ void update_pore_pressure(const Param &param, const Variables &var,
         const double mobility = perm_e / mu_e;
         const double kv_pressure = mobility * (*var.volume)[e];
         const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
-
-        // Hydraulic diffusivity is independent of gravity in pressure units.
-        const double storage = var.mat->pressure_storage(
-            e, param.control.has_poroelastic_pressure_feedback);
-        const double diff_e = mobility / storage;
-        diff_max_local = std::max(diff_max_local, diff_e);
 
         // Mechanical-to-hydraulic poroelastic feedback is optional; diffusion
         // and explicitly prescribed fluid sources remain active when it is off.
@@ -441,8 +431,6 @@ void update_pore_pressure(const Param &param, const Variables &var,
     }
 
     #pragma acc wait
-    // Update global hydro_diff_max after the loop
-    var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();
 #endif

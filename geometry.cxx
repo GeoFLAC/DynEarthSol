@@ -1491,6 +1491,7 @@ double compute_dt(const Param& param, Variables& var)
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
+    double max_hydraulic_diffusivity = 0.0;
 
     // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
@@ -1503,13 +1504,13 @@ double compute_dt(const Param& param, Variables& var)
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, global_dt_min) \
+        reduction(max:global_max_vem) reduction(max:max_hydraulic_diffusivity) \
         default(none) shared(param, var)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) async
+    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, global_dt_min) \
+        reduction(max:global_max_vem) reduction(max:max_hydraulic_diffusivity) async
     for (int e=0; e<var.nelem; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -1580,12 +1581,12 @@ double compute_dt(const Param& param, Variables& var)
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
         
-        // Compute dt_hydro_diffusion (hydraulic)
-        if (param.control.has_hydraulic_diffusion)
-            if (var.mat->hydro_diff_max > 0) {
-                dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-                                            0.5 * minh * minh / var.mat->hydro_diff_max);
-            }
+        if (param.control.has_hydraulic_diffusion) {
+            const double diffusivity = var.mat->hydraulic_diffusivity(
+                e, param.control.has_poroelastic_pressure_feedback);
+            max_hydraulic_diffusivity = std::max(max_hydraulic_diffusivity,
+                                                diffusivity);
+        }
         minl = std::min(minl, minh);
 
         // Find global min delta t to meet CFL condition
@@ -1593,6 +1594,11 @@ double compute_dt(const Param& param, Variables& var)
     }
 
     #pragma acc wait
+
+    if (param.control.has_hydraulic_diffusion &&
+        max_hydraulic_diffusivity > 0.0)
+        dt_hydro_diffusion = 0.5 * minl * minl /
+                             max_hydraulic_diffusivity;
 
     int debug_max_vel_elem = -1;
     double debug_max_vel_mag = 0.0;
@@ -1788,11 +1794,6 @@ double compute_dt(const Param& param, Variables& var)
 //         //     dt_diffusion = std::min(dt_diffusion,
 //         //                             0.5 * minh * minh / var.mat->therm_diff_max);
         
-//         // // Compute dt_hydro_diffusion (hydraulic)
-//         // if (var.mat->hydro_diff_max > 0) {
-//         //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-//         //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-//         // }
 //         minl = std::min(minl, minh);
 //     }
 
@@ -1864,8 +1865,7 @@ void compute_mass(const Param &param, const Variables &var,
             storage += alpha_b * alpha_b / constrained_modulus;
         }
 
-        // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
-        // weight cancels between mobility and storage, so it is not carried. Raw
+        // The specific weight cancels between mobility and storage. Raw
         // arrays are required here because mt is a material index, not an element.
         const double diff_ref = perm_m / (mu_m * storage);
 

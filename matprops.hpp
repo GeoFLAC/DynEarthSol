@@ -67,6 +67,8 @@ public:
     double inverse_biot_modulus(int e) const;
     #pragma acc routine seq
     double pressure_storage(int e, bool poroelastic_feedback) const;
+    #pragma acc routine seq
+    double hydraulic_diffusivity(int e, bool poroelastic_feedback) const;
 
     // rate-and-state friction parameters
     #pragma acc routine seq
@@ -102,7 +104,6 @@ public:
     const double visc_max;
     const double tension_max;
     const double therm_diff_max;
-    double hydro_diff_max;
 
     const static int rh_elastic = 1 << 0; // Decimal value 1
     const static int rh_viscous = 1 << 1; // Decimal value 2
