@@ -556,7 +556,6 @@ struct Injection {
     int num_points;
 
     std::string points_unit;
-    double points_scale_to_m;
     int rate_model;
 
     double_vec points_x;

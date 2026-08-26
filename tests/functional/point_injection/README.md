@@ -7,9 +7,8 @@ a positive center-pressure effect relative to an otherwise identical
 source-disabled baseline.
 
 The fixture uses a `1e-6 s` explicit step and a `20e-6 s` source window. This
-keeps the public mechanical update below its elastic stability limit; the older
-private fixture's `1 s` step is unstable on this public solver even when the
-source is disabled, despite remaining below the hydraulic diffusion limit.
+keeps both the mechanical update and hydraulic diffusion below their explicit
+stability limits.
 
 From the repository root:
 

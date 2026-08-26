@@ -1288,7 +1288,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             source.total_amount.clear();
             source.start_time.clear();
             source.end_time.clear();
-            source.points_scale_to_m = 1.0;
             source.rate_model = injection_rate_constant;
         } else {
             get_numbers(vm, "injection.points_x", source.points_x,
@@ -1320,25 +1319,26 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             }
 #endif
 
+            double points_scale_to_m;
             if (source.points_unit == "mm")
-                source.points_scale_to_m = 1e-3;
+                points_scale_to_m = 1e-3;
             else if (source.points_unit == "cm")
-                source.points_scale_to_m = 1e-2;
+                points_scale_to_m = 1e-2;
             else if (source.points_unit == "m")
-                source.points_scale_to_m = 1.0;
+                points_scale_to_m = 1.0;
             else if (source.points_unit == "km")
-                source.points_scale_to_m = 1e3;
+                points_scale_to_m = 1e3;
             else
                 die(EXIT_CONFIG_VALUE,
                     "injection.points_unit must be one of mm, cm, m, km.");
 
             for (int i = 0; i < source.num_points; ++i) {
-                source.points_x[i] *= source.points_scale_to_m;
+                source.points_x[i] *= points_scale_to_m;
 #ifdef THREED
-                source.points_y[i] *= source.points_scale_to_m;
-                source.points_z[i] *= source.points_scale_to_m;
+                source.points_y[i] *= points_scale_to_m;
+                source.points_z[i] *= points_scale_to_m;
 #else
-                source.points_z[i] *= source.points_scale_to_m;
+                source.points_z[i] *= points_scale_to_m;
 #endif
             }
 
