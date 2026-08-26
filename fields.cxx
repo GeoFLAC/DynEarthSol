@@ -351,7 +351,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double perm_e = var.mat->perm(e);                // Intrinsic permeability 
         double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
         double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
-        const double rho_f = var.mat->reference_fluid_density(e);  // Reference fluid density
+        const double rho_f = var.mat->reference_fluid_density(e);
         double phi_e = var.mat->phi(e);        // Element porosity
         double comp_fluid = var.mat->beta_fluid(e);        // fluid comporessibility
         double bulkm = var.mat->bulkm(e);
@@ -361,14 +361,17 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
         if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        double kv = hydraulic_conductivity * (*var.volume)[e];
+        const double gamma_w = rho_f * param.control.gravity; // specific weight
 
-        // Compute element diffusivity and update max using reduction
-        double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
+        // Pressure-form Darcy mobility remains well-defined when gravity is zero.
+        // This is algebraically equivalent to the former head-form expression:
+        //   (k * gamma_w / mu) * grad(p / gamma_w + z).
+        const double mobility = perm_e / mu_e;
+        const double kv_pressure = mobility * (*var.volume)[e];
+        const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
+
+        // Hydraulic diffusivity is independent of gravity in pressure units.
+        const double diff_e = mobility / (phi_e * comp_fluid + alpha_b * matrix_comp);
         diff_max_local = std::max(diff_max_local, diff_e);
 
         // Mechanical-to-hydraulic poroelastic feedback is optional; diffusion
@@ -386,21 +389,23 @@ void update_pore_pressure(const Param &param, const Variables &var,
 #endif
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double diffusion = 0.0;
+            double pressure_diffusion = 0.0;
+            double gravity_drive = 0.0;
             for (int j = 0; j < NODES_PER_ELEM; ++j) {
 #ifdef THREED
-                diffusion += (shpdx[i] * shpdx[j] +
-                             shpdy[i] * shpdy[j] +
-                             shpdz[i] * shpdz[j]) * (ppressure[conn[j]]/gamma_w + (*var.coord)[conn[j]][NDIMS-1]); 
+                const double grad_dot = shpdx[i] * shpdx[j] +
+                                        shpdy[i] * shpdy[j] +
+                                        shpdz[i] * shpdz[j];
 #else
-                diffusion += (shpdx[i] * shpdx[j] +
-                             shpdz[i] * shpdz[j]) * (ppressure[conn[j]]/gamma_w + (*var.coord)[conn[j]][NDIMS-1]);
+                const double grad_dot = shpdx[i] * shpdx[j] +
+                                        shpdz[i] * shpdz[j];
 #endif
-                }
+                pressure_diffusion += grad_dot * ppressure[conn[j]];
+                gravity_drive += grad_dot * (*var.coord)[conn[j]][NDIMS-1];
+            }
 
             // Add diffusion, compressibility, poroelastic effects, and source term
-            tr[i] = kv * diffusion + pe;
-            // tr[i] = kv * diffusion;
+            tr[i] = kv_pressure * pressure_diffusion + kv_gravity * gravity_drive + pe;
         }
     }
 
