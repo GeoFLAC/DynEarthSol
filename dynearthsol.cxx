@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <cstdlib>
@@ -204,10 +205,10 @@ void init(const Param& param, Variables& var)
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
     // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
     var.mat->refresh_elem_cache();
-    initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
-    // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if (has_pore_pressure_mechanical_coupling(param))
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
+    initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
+    // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
 
     initial_weak_zone(param, var, *var.plstrain);
     if (param.mat.rheol_type & MatProps::rh_rsf) {
@@ -368,6 +369,11 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        if (bin_chkpt.has_array("pore pressure stress increment")) {
+            bin_chkpt.read_array(*var.dppressure, "pore pressure stress increment");
+        } else {
+            std::fill(var.dppressure->begin(), var.dppressure->end(), 0.0);
+        }
         // previous-step volume for volumetric strain rate.
         bin_chkpt.read_array(*var.volume_old, "volume_old");
 

@@ -249,6 +249,7 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_pore_pressure_effective_stress;
     bool has_poroelastic_pressure_feedback;
 
     bool has_hydration_processes;

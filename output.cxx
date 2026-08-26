@@ -401,6 +401,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 #endif
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
+    bin.write_array(*var.dppressure, "pore pressure stress increment", var.dppressure->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
     }

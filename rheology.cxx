@@ -261,21 +261,6 @@ static void elastic(double bulkm, double shearm, const double* de, T s)
 
 #pragma acc routine seq
 template <typename T>
-static void elastic_effective(double bulkm, double shearm, const double* de, T s,  double &dpp)
-{
-    /* increment the stress s according to the incremental strain de */
-    double lambda = bulkm - 2. /3 * shearm;
-    double dev = trace(de);
-
-    for (int i=0; i<NDIMS; ++i)
-        s[i] += 2 * shearm * de[i] + lambda * dev + dpp;
-
-    for (int i=NDIMS; i<NSTR; ++i)
-        s[i] += 2 * shearm * de[i];
-}
-
-#pragma acc routine seq
-template <typename T>
 static void maxwell(double bulkm, double shearm, double viscosity, double dt,
                     double dv, const double* de, T s)
 {
@@ -315,9 +300,7 @@ static void elasto_plastic(double bulkm, double shearm,
                            double amc, double anphi, double anpsi,
                            double hardn, double ten_max,
                            const double* de, double& depls, T s,
-                           int &failure_mode,
-                           bool pore_pressure_mechanical_coupling,
-                           double &dpp)
+                           int &failure_mode)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion)
      *
@@ -328,14 +311,7 @@ static void elasto_plastic(double bulkm, double shearm,
      */
 
     // elastic trial stress
-    if (pore_pressure_mechanical_coupling)
-    {
-        elastic_effective(bulkm, shearm, de, s, dpp);
-    }
-    else
-    {
-        elastic(bulkm, shearm, de, s);
-    }
+    elastic(bulkm, shearm, de, s);
     depls = 0;
     failure_mode = 0;
 
@@ -490,9 +466,7 @@ static void elasto_plastic2d(double bulkm, double shearm,
                              double hardn, double ten_max,
                              const double* de, double& depls,
                              T s, double &syy,
-                             int &failure_mode,
-                             bool pore_pressure_mechanical_coupling,
-                             double &dpp)
+                             int &failure_mode)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion) */
 
@@ -523,13 +497,6 @@ static void elasto_plastic2d(double bulkm, double shearm,
     double sxz = s[2] + de[2]*2*shearm;
     syy += (de[0] + de[1]) * a2; // Stress YY component, plane strain
 
-    // Apply the pore-pressure effect when mechanical coupling is enabled.
-    if (pore_pressure_mechanical_coupling)
-    {
-        sxx += dpp;
-        syy += dpp;
-        szz += dpp;
-    }
     //
     // transform to principal stress coordinate system
     //
@@ -714,36 +681,35 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     // Loop-invariant, so the per-element gathers they gate are decided once.
     const bool pore_pressure_mechanical_coupling =
         has_pore_pressure_mechanical_coupling(param);
+    // dppressure belongs to one physical step. PT constitutive iterations use
+    // the current pressure level but must not replay that same increment.
+    const bool apply_pore_pressure_increment = !param.control.PT_jump;
     // Only the two rate-and-state branches call compute_slip_rate*, which is the
     // sole consumer of the centroid velocity.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
                               || (param.mat.rheol_type == MatProps::rh_evp_rsf);
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dppressure, \
+    #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(pore_pressure_mechanical_coupling, needs_slip_rate)
+        firstprivate(pore_pressure_mechanical_coupling, apply_pore_pressure_increment, needs_slip_rate)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(pore_pressure_mechanical_coupling, needs_slip_rate) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop gang vector async firstprivate(pore_pressure_mechanical_coupling, apply_pore_pressure_increment, needs_slip_rate) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 
-        // Centroid interpolations, each gated on the branch that reads it: ungated they cost
-        // 2 + NDIMS nodal gathers per element per step in every run. The `ppressure` LEVEL
-        // is not interpolated at all; restore it here if a rheology comes to need it.
-        double dpp = 0.0;
-        // dppressure belongs to the physical step and must be applied exactly
-        // once.  PT iterations still use the configured pressure-coupled
-        // material policy, but must not replay that same pressure increment.
-        if (pore_pressure_mechanical_coupling && !param.control.PT_jump) {
+        // Interpolate the current pressure and its old-minus-new increment only
+        // when pressure participates mechanically.
+        double pp_element = 0.0;
+        double dpp_element = 0.0;
+        if (pore_pressure_mechanical_coupling) {
             #pragma acc loop seq
-            for (int j = 0; j < NODES_PER_ELEM; ++j)
-                dpp += dppressure[conn[j]] / double(NODES_PER_ELEM);
-            // Biot-weighted pore-pressure INCREMENT, not a rate: update_pore_pressure()
-            // folded dt in, and stores dppressure with the sign OPPOSITE to its change
-            // to ppressure. elastic_effective() adds this to the diagonal components.
-            dpp *= var.mat->alpha_biot(e);
+            for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                pp_element += ppressure[conn[j]] / double(NODES_PER_ELEM);
+                if (apply_pore_pressure_increment)
+                    dpp_element += dppressure[conn[j]] / double(NODES_PER_ELEM);
+            }
         }
 
         // No vz in 2D: compute_slip_rate2 takes the vertical component as its second
@@ -770,6 +736,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         TensorAccessor es = strain[e];
         TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
+
+        double pore_pressure_stress_old = 0.0;
+        double pore_pressure_stress_new = 0.0;
+        if (pore_pressure_mechanical_coupling) {
+            const double alpha_b = var.mat->alpha_biot(e);
+            // dppressure = p_old - p_new, while ppressure stores p_new.
+            pore_pressure_stress_new = alpha_b * pp_element;
+            pore_pressure_stress_old = alpha_b * (pp_element + dpp_element);
+        }
 
         // // Calculate the center of the element
         // const int *conn = (*var.connectivity)[e];
@@ -818,24 +793,25 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // that diffuses out of the yielding zones. Resetting to 0 makes it a true per-step rate.
         delta_plstrain[e] = 0.;
 
+        // Stress is stored as total stress outside this routine. Constitutive
+        // laws operate on the skeleton stress at the old pressure level.
+        if (pore_pressure_mechanical_coupling) {
+            #pragma acc loop seq
+            for (int i = 0; i < NDIMS; ++i)
+                s[i] += pore_pressure_stress_old;
+            if (var.mat->is_plane_strain)
+                syy += pore_pressure_stress_old;
+        }
+
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
             {
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                if (pore_pressure_mechanical_coupling)
-                {
-                    elastic_effective(bulkm, shearm, de, s, dpp);
-                }
-                else
-                {
-                    elastic(bulkm, shearm, de, s);
-                }
+                elastic(bulkm, shearm, de, s);
                 if (var.mat->is_plane_strain) {
                     const double lambda = bulkm - 2.0 * shearm / 3.0;
                     syy += lambda * trace(de);
-                    if (pore_pressure_mechanical_coupling)
-                        syy += dpp;
                 }
             }
             break;
@@ -867,13 +843,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, s, syy, failure_mode, 
-                                     pore_pressure_mechanical_coupling, dpp);
+                                     de, depls, s, syy, failure_mode);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, s, failure_mode, 
-                                   pore_pressure_mechanical_coupling, dpp);
+                                   de, depls, s, failure_mode);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -904,13 +878,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, sp, spyy, failure_mode, 
-                                     pore_pressure_mechanical_coupling, dpp);
+                                     de, depls, sp, spyy, failure_mode);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, sp, failure_mode, 
-                                   pore_pressure_mechanical_coupling, dpp);
+                                   de, depls, sp, failure_mode);
                 }
                 double spII = second_invariant2(sp);
 
@@ -951,13 +923,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, s, syy, failure_mode, 
-                                     pore_pressure_mechanical_coupling, dpp);
+                                     de, depls, s, syy, failure_mode);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, s, failure_mode, 
-                                   pore_pressure_mechanical_coupling, dpp);
+                                   de, depls, s, failure_mode);
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
@@ -999,13 +969,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (var.mat->is_plane_strain) {
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, sp, spyy, failure_mode, 
-                                     pore_pressure_mechanical_coupling, dpp);
+                                     de, depls, sp, spyy, failure_mode);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, sp, failure_mode, 
-                                   pore_pressure_mechanical_coupling, dpp);
+                                   de, depls, sp, failure_mode);
                 }
                 double spII = second_invariant2(sp);
 
@@ -1028,6 +996,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 //            std::exit(1);
             break;
         }
+
+        // Restore total stress at the new pressure level for force assembly,
+        // mixed-stress bookkeeping, output, remeshing, and restart.
+        if (pore_pressure_mechanical_coupling) {
+            #pragma acc loop seq
+            for (int i = 0; i < NDIMS; ++i)
+                s[i] -= pore_pressure_stress_new;
+            if (var.mat->is_plane_strain)
+                syy -= pore_pressure_stress_new;
+        }
+
         if (param.control.is_using_mixed_stress)
             dpressure[e] = trace(s) - old_s;
         // std::cerr << "stress " << e << ": ";

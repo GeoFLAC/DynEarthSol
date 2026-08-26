@@ -101,6 +101,13 @@ jobs:
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
         --threads 1 4
 
+    - name: test poroelastic total-stress bridge in HDF5
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 total_stress/run_total_stress.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --expected-format hdf5 --threads 1 4
+
     - name: test nodal displacement output in HDF5
       run: >-
         PYTHONDONTWRITEBYTECODE=1
@@ -181,6 +188,13 @@ jobs:
         PYTHONDONTWRITEBYTECODE=1
         python3 displacement_output/run_displacement_output.py
         --exe-2d ../../dynearthsol2d --expected-format binary --threads 1
+
+    - name: test poroelastic total-stress bridge in raw binary
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 total_stress/run_total_stress.py
+        --exe-2d ../../dynearthsol2d
+        --expected-format binary --threads 1 4
 
     - name: make 3d hdf5 opt=-1
       working-directory: .

@@ -428,6 +428,9 @@ static void declare_parameters(po::options_description &cfg,
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+        ("control.has_pore_pressure_effective_stress",
+         po::value<bool>(&p.control.has_pore_pressure_effective_stress)->default_value(false),
+         "Use pore pressure in the mechanical effective-stress calculation even when hydraulic diffusion is disabled.\n")
         ("control.has_poroelastic_pressure_feedback",
          po::value<bool>(&p.control.has_poroelastic_pressure_feedback)->default_value(true),
          "Include mechanical mean-stress changes as a pore-pressure source when hydraulic diffusion is enabled.\n")

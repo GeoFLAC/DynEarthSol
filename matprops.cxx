@@ -160,10 +160,10 @@ bool has_fluid_density_effect(const Param& param)
 #pragma acc routine seq
 bool has_pore_pressure_mechanical_coupling(const Param& param)
 {
-    // Hydraulic transport is currently the only public path that couples pore
-    // pressure into mechanics. Keep this policy in one place so later coupling
-    // modes do not have to overload the transport switch.
-    return param.control.has_hydraulic_diffusion;
+    // Pressure can participate in mechanics through hydraulic transport or as
+    // an explicitly requested effective-stress field with transport disabled.
+    return param.control.has_hydraulic_diffusion
+        || param.control.has_pore_pressure_effective_stress;
 }
 
 
