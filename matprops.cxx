@@ -151,12 +151,39 @@ namespace {
 
 
 #pragma acc routine seq
+bool has_fluid_density_effect(const Param& param)
+{
+    return has_pore_pressure_mechanical_coupling(param);
+}
+
+
+#pragma acc routine seq
 bool has_pore_pressure_mechanical_coupling(const Param& param)
 {
     // Hydraulic transport is currently the only public path that couples pore
     // pressure into mechanics. Keep this policy in one place so later coupling
     // modes do not have to overload the transport switch.
     return param.control.has_hydraulic_diffusion;
+}
+
+
+#pragma acc routine seq
+double hydrostatic_water_pressure(const Param& param, double fluid_density, double z)
+{
+    if (param.control.gravity == 0.0)
+        return 0.0;
+
+    const double water_depth = param.control.surf_base_level - z;
+    return water_depth > 0.0 ?
+        fluid_density * param.control.gravity * water_depth : 0.0;
+}
+
+
+#pragma acc routine seq
+double hydrostatic_pore_pressure(const Param& param, double fluid_density, double z)
+{
+    return fluid_density * param.control.gravity *
+           (param.control.surf_base_level - z);
 }
 
 
@@ -167,19 +194,24 @@ double ref_pressure(const Param& param, double z)
     double p = 0;
 
     if (param.control.ref_pressure_option == 0) {
-        if (param.control.has_hydraulic_diffusion) {
-        // Modified density considering porosity for hydraulic diffusion
-            p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
-                1000.0 * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
-        } else {
-            // Standard reference pressure without hydraulic diffusion
-            p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
+        const int m = param.mat.mattype_ref;
+        double density = param.mat.rho0[m];
+        if (has_fluid_density_effect(param)) {
+            density = param.mat.rho0[m] * (1.0 - param.mat.porosity[m]) +
+                      param.mat.fluid_rho0[m] * param.mat.porosity[m];
         }
+        p = density * param.control.gravity * depth;
     }
     else if (param.control.ref_pressure_option == 1)
         p = get_prem_pressure(depth);
     else if (param.control.ref_pressure_option == 2)
         p = get_prem_pressure_modified(depth);
+
+    // External water loading adds the same sea column to every reference-
+    // pressure model. PREM pressure is zero at its surface datum.
+    if (param.bc.has_water_loading)
+        p += hydrostatic_water_pressure(
+            param, param.bc.sea_water_density, 0.0);
     return p;
 }
 
@@ -745,6 +777,11 @@ double MatProps::rho_fluid(int e) const
 
     // Return the averaged fluid density
     return result / n;
+}
+
+double MatProps::reference_fluid_density(int e) const
+{
+    return arithmetic_mean(fluid_rho0, elemmarkers[e]);
 }
 
 double MatProps::mu_fluid(int e) const

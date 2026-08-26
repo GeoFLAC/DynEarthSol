@@ -803,32 +803,18 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 
                 double p;
                 if (i==iboundz0 && param.bc.has_winkler_foundation) {
-                    double rho_effective = var.mat->rho(e);  // Base density of the solid material
+                    double density = var.mat->rho(e);
+                    if (has_fluid_density_effect(param))
+                        density = var.mat->rho(e) * (1.0 - var.mat->phi(e)) +
+                                  var.mat->reference_fluid_density(e) * var.mat->phi(e);
 
-                    // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
-                    if (param.control.has_hydraulic_diffusion) {
-                        rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
-                        // 1000.0 is the fluid density (e.g., water, in kg/m³)
-                        // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
-                    }
-                    else
-                    {
-                        // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
-                    }
+                    p = var.compensation_pressure -
+                        (density + param.bc.winkler_delta_rho) *
+                        param.control.gravity * (zcenter + param.mesh.zlength);
                 }
                 else if (i==iboundz1 && param.bc.has_water_loading) {
-                    // hydrostatic water loading for the surface boundary
-                    p = 0;
-                    if (zcenter < param.control.surf_base_level) {
-                        // below sea level
-                        p = param.bc.sea_water_density * param.control.gravity * (param.control.surf_base_level - zcenter);
-                    }
+                    p = hydrostatic_water_pressure(
+                        param, param.bc.sea_water_density, zcenter);
                 }
                 else {
                     // sidewalls: lithostatic support pressure (Archimedes) from the exterior column.

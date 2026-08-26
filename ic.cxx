@@ -453,9 +453,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
     }
 
     // Hydrostatic condition for pressure calculation
-    double rho_fluid = var.mat->rho_fluid(0);
-    rho_fluid = 1000.0; // Assuming a standard fluid density (e.g., water)
-    double gravity = param.control.gravity; // Gravitational acceleration
+    const double rho_fluid = var.mat->reference_fluid_density(0);
     double loading = param.ic.excess_pore_pressure;
     double ks = var.mat->bulkm(0);
     double mu = var.mat->shearm(0);
@@ -484,7 +482,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         //     ppressure[i] = -1.0 * rho_fluid * gravity * z + skempton * loading;
         // }
 
-        ppressure[i] = -1.0 * rho_fluid * gravity * z;
+        ppressure[i] = hydrostatic_pore_pressure(param, rho_fluid, z);
 
         // Add excess pore pressure for non-boundary nodes
         if (!is_boundary_node_for_pp(i, var)) ppressure[i] += skempton * loading;
@@ -1021,4 +1019,3 @@ void initial_temperature(const Param &param, const Variables &var,
         if (temperature[i] > max_temp) max_temp = temperature[i];
     bottom_temperature = max_temp;
 }
-

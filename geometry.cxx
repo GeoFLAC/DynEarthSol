@@ -1843,6 +1843,7 @@ void compute_mass(const Param &param, const Variables &var,
 
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
+    const bool fluid_density_active = has_fluid_density_effect(param);
 
     if (param.control.has_hydraulic_diffusion) {
         // Index the per-material arrays: the MatProps accessors take an ELEMENT index.
@@ -1870,16 +1871,16 @@ void compute_mass(const Param &param, const Variables &var,
 
 #ifndef ACC
 #ifdef GPP1X
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(fluid_density_active)
 #else
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(fluid_density_active)
 #endif
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop gang vector async firstprivate(fluid_density_active)
         for (int e=0;e<var.nelem;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
@@ -1892,10 +1893,9 @@ void compute_mass(const Param &param, const Variables &var,
                 (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
                 (*var.mat).rho(e);  // true density for dynamic sim
 
-                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                    // Modified density considering porosity for hydraulic diffusion
-                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                    }
+                if (fluid_density_active && !param.control.is_quasi_static)
+                    rho = (*var.mat).rho(e) * (1.0 - (*var.mat).phi(e)) +
+                          (*var.mat).reference_fluid_density(e) * (*var.mat).phi(e);
             }
             else
             {    
@@ -1903,10 +1903,9 @@ void compute_mass(const Param &param, const Variables &var,
                 (*var.mat).bulkm(e) / (pseudo_speed * pseudo_speed) :  // pseudo density for quasi-static sim
                 (*var.mat).rho(e);  // true density for dynamic sim
 
-                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                    // Modified density considering porosity for hydraulic diffusion
-                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                    }
+                if (fluid_density_active && !param.control.is_quasi_static)
+                    rho = (*var.mat).rho(e) * (1.0 - (*var.mat).phi(e)) +
+                          (*var.mat).reference_fluid_density(e) * (*var.mat).phi(e);
 
             }
 

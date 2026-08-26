@@ -351,7 +351,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double perm_e = var.mat->perm(e);                // Intrinsic permeability 
         double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
         double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(e);            // Fluid density
+        const double rho_f = var.mat->reference_fluid_density(e);  // Reference fluid density
         double phi_e = var.mat->phi(e);        // Element porosity
         double comp_fluid = var.mat->beta_fluid(e);        // fluid comporessibility
         double bulkm = var.mat->bulkm(e);
@@ -361,7 +361,6 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
         if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
 
-        rho_f = 1000.0; 
         double gamma_w = rho_f * param.control.gravity; // specific weight
         
         // Hydraulic conductivity using permeability and viscosity
@@ -655,14 +654,15 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     nvtxRangePush(__FUNCTION__);
 #endif
 
+    const bool fluid_density_active = has_fluid_density_effect(param);
 #ifndef ACC
-    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result)
+    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result) firstprivate(fluid_density_active)
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop gang vector async firstprivate(fluid_density_active)
         for (int e=0;e<var.nelem;e++) {
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
@@ -677,9 +677,11 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
             double buoy = 0;
             if (param.control.gravity != 0) {
-                // Calculate buoyancy based on the gravity and element properties
-                // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
-                buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
+                const double density = fluid_density_active ?
+                    var.mat->rho(e) * (1.0 - var.mat->phi(e)) +
+                        var.mat->reference_fluid_density(e) * var.mat->phi(e) :
+                    var.mat->rho(e);
+                buoy = density * param.control.gravity / NODES_PER_ELEM;
             }
 
 

@@ -8,6 +8,15 @@
 double ref_pressure(const Param& param, double z);
 
 #pragma acc routine seq
+double hydrostatic_water_pressure(const Param& param, double fluid_density, double z);
+
+#pragma acc routine seq
+double hydrostatic_pore_pressure(const Param& param, double fluid_density, double z);
+
+#pragma acc routine seq
+bool has_fluid_density_effect(const Param& param);
+
+#pragma acc routine seq
 bool has_pore_pressure_mechanical_coupling(const Param& param);
 
 
@@ -45,6 +54,9 @@ public:
     double beta_fluid(int e) const;
     #pragma acc routine seq
     double rho_fluid(int e) const;
+    // Material-reference density, deliberately independent of temperature and pressure.
+    #pragma acc routine seq
+    double reference_fluid_density(int e) const;
     #pragma acc routine seq
     double mu_fluid(int e) const;
     #pragma acc routine seq
