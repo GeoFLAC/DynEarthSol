@@ -428,6 +428,9 @@ static void declare_parameters(po::options_description &cfg,
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+        ("control.has_poroelastic_pressure_feedback",
+         po::value<bool>(&p.control.has_poroelastic_pressure_feedback)->default_value(true),
+         "Include mechanical mean-stress changes as a pore-pressure source when hydraulic diffusion is enabled.\n")
 
         ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -895,6 +898,10 @@ static void declare_parameters(po::options_description &cfg,
          "Bulk modulus of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
         ("mat.fluid_visc", po::value<std::string>()->default_value("[1.002e-3]"),
          "Dynamic viscosity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
+        ("mat.derive_biot_coeff_from_bulk_moduli",
+         po::value<bool>(&p.mat.derive_biot_coeff_from_bulk_moduli)->default_value(false),
+         "Derive the Biot-Willis coefficient as 1 - mat.bulk_modulus / "
+         "mat.bulk_modulus_s. If false, mat.biot_coeff is used directly.")
         ("mat.biot_coeff", po::value<std::string>()->default_value("[1.0]"),
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
         ("mat.bulk_modulus_s", po::value<std::string>()->default_value("[37e9]"),
@@ -1724,6 +1731,41 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, -1);
         get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, -1);
         get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, -1);
+        if (p.mat.derive_biot_coeff_from_bulk_moduli) {
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const double drained_bulk_modulus = p.mat.bulk_modulus[m];
+                const double grain_bulk_modulus = p.mat.bulk_modulus_s[m];
+                if (!std::isfinite(grain_bulk_modulus) ||
+                    !(grain_bulk_modulus > 0.0)) {
+                    std::cerr << "Error: mat.bulk_modulus_s must be finite and positive when "
+                              << "mat.derive_biot_coeff_from_bulk_moduli=true "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                if (!std::isfinite(drained_bulk_modulus) ||
+                    !(drained_bulk_modulus > 0.0)) {
+                    std::cerr << "Error: mat.bulk_modulus must be finite and positive when "
+                              << "mat.derive_biot_coeff_from_bulk_moduli=true "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                if (drained_bulk_modulus > grain_bulk_modulus) {
+                    std::cerr << "Error: mat.bulk_modulus must not exceed mat.bulk_modulus_s when "
+                              << "mat.derive_biot_coeff_from_bulk_moduli=true "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                const double derived_biot =
+                    1.0 - drained_bulk_modulus / grain_bulk_modulus;
+                if (!std::isfinite(derived_biot) ||
+                    derived_biot < 0.0 || derived_biot > 1.0) {
+                    std::cerr << "Error: deriving mat.biot_coeff produced a value outside [0,1] "
+                              << "(material index " << m << ").\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+                p.mat.biot_coeff[m] = derived_biot;
+            }
+        }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);

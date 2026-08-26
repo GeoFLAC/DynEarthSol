@@ -249,6 +249,7 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_poroelastic_pressure_feedback;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -469,6 +470,7 @@ struct Mat {
     double_vec fluid_alpha; // pore fluid thermal expansivity
     double_vec fluid_bulk_modulus;  // pore fluid bulk modulus
     double_vec fluid_visc;  // pore fluid dynamic viscosity
+    bool derive_biot_coeff_from_bulk_moduli;
     double_vec biot_coeff;  // Biot-Willis coefficient
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
   

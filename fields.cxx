@@ -372,8 +372,12 @@ void update_pore_pressure(const Param &param, const Variables &var,
         double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
         diff_max_local = std::max(diff_max_local, diff_e);
 
-        // volume term (poroelastic effect)
-        double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
+        // Mechanical-to-hydraulic poroelastic feedback is optional; diffusion
+        // and explicitly prescribed fluid sources remain active when it is off.
+        double pe = 0.0;
+        if (param.control.has_poroelastic_pressure_feedback)
+            pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] /
+                 NODES_PER_ELEM / var.dt;
 #ifdef THREED
         double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
         get_local_shape_fn(var, e, shpdx, shpdy, shpdz);

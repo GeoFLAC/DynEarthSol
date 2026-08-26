@@ -80,6 +80,13 @@ jobs:
         python3 plane_strain_elastic/run_plane_strain_elastic.py
         --exe ../../dynearthsol2d --threads 1 4
 
+    - name: test poroelastic controls and validation
+      run: >-
+        PYTHONDONTWRITEBYTECODE=1
+        python3 poroelastic_controls/run_poroelastic_controls.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --threads 1 4 --clean
+
     - name: test nodal displacement output in HDF5
       run: >-
         PYTHONDONTWRITEBYTECODE=1
