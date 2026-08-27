@@ -624,6 +624,9 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
+
+		## Keep our symbols out of .dynsym
+		LDFLAGS += -Wl,--version-script=local-symbols.map
 		ifeq ($(nofma), 1)
 			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
