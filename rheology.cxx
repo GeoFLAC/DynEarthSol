@@ -355,6 +355,13 @@ static double nonelastic_dissipation(double bulkm, double shearm,
      * third principal stress in geoFLAC's inherently plane-strain formulation.
      * Its non-elastic strain increment is 0 by the plane-strain constraint.
      *
+     * Without it, 2-D still is not plane STRESS: elastic() and maxwell() spread
+     * lambda over the in-plane trace only, which is the plane-strain form and
+     * implies an unstored sigma_yy = lambda*tr(eps). Inverting with the 3-D trace
+     * would silently assume sigma_yy == 0 and leave a -dv*lambda^2/(2 mu (3 lambda
+     * + 2 mu)) residue on each diagonal whenever the element changes volume. So
+     * pick the inverse that matches the trace actually available.
+     *
      * Only the SUM is a dissipation. de_ne is deviatoric for every viscous and
      * non-dilatant plastic step, so the pressure part of s cancels across the
      * diagonal terms and sum(s_ii * de_ne_ii) == sum(s'_ii * de_ne_ii). A single
@@ -364,8 +371,10 @@ static double nonelastic_dissipation(double bulkm, double shearm,
      * order |p| instead of |s'|. Clamp q once, at the end.
      */
     double lambda = bulkm - 2./3 * shearm;
-    double denom = 3 * lambda + 2 * shearm;
-    if (std::fabs(denom) < 1e-30) denom = (denom < 0) ? -1e-30 : 1e-30;
+    // 3 lambda + 2 mu == 3 bulkm > 0, so no guard on denom is reachable. With only
+    // the in-plane trace, eps_yy == 0 inverts the 2x2 in-plane law with 2 lambda + 2 mu.
+    const int trace_dim = (NDIMS == 3 || has_syy) ? 3 : 2;
+    const double denom = trace_dim * lambda + 2 * shearm;
 
     double tr_start = trace(s_start) + (has_syy ? syy_start : 0.);
     double tr_final = trace(s_final) + (has_syy ? syy_final : 0.);
