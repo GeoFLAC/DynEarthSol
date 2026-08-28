@@ -334,7 +334,7 @@ static double viscous_dissipation(double viscosity, T edot, double dt)
 #pragma acc routine seq
 static double nonelastic_dissipation(double bulkm, double shearm,
                                      const double* s_start, const double* s_final,
-                                     const double* de,
+                                     const double* de, double dpp,
                                      bool has_syy, double syy_start, double syy_final)
 {
     /* Non-elastic (viscous and/or plastic) dissipation over this step, for any
@@ -349,6 +349,12 @@ static double nonelastic_dissipation(double bulkm, double shearm,
      * was dissipated as heat; it's evaluated against the trapezoidal-average
      * stress over the step. For a purely elastic update de_final == de and the
      * result is ~0, as it should be.
+     *
+     * dpp is the Biot-weighted pore-pressure increment the caller's branch folded
+     * into the diagonal of s_final, 0 for a branch that didn't. It moves stress
+     * with no strain attached, so it cannot have produced elastic strain: take it
+     * back out before inverting, or the whole jump reads as a non-elastic strain
+     * increment and lands in q. The work-conjugate stress keeps its actual value.
      *
      * has_syy carries the plane-strain out-of-plane stress (DES's stressyy,
      * only tracked by the plastic branches), playing the same role as the
@@ -376,13 +382,15 @@ static double nonelastic_dissipation(double bulkm, double shearm,
     const int trace_dim = (NDIMS == 3 || has_syy) ? 3 : 2;
     const double denom = trace_dim * lambda + 2 * shearm;
 
+    // NDIMS diagonal components carry dpp, plus the out-of-plane one when tracked.
     double tr_start = trace(s_start) + (has_syy ? syy_start : 0.);
-    double tr_final = trace(s_final) + (has_syy ? syy_final : 0.);
+    double tr_final = trace(s_final) - NDIMS * dpp
+                    + (has_syy ? syy_final - dpp : 0.);
 
     double q = 0.;
     for (int i=0; i<NDIMS; ++i) {
         double ee_start = (s_start[i] - (lambda/denom) * tr_start) / (2 * shearm);
-        double ee_final = (s_final[i] - (lambda/denom) * tr_final) / (2 * shearm);
+        double ee_final = ((s_final[i] - dpp) - (lambda/denom) * tr_final) / (2 * shearm);
         double de_ne = de[i] - (ee_final - ee_start);
         double s_avg = 0.5 * (s_start[i] + s_final[i]);
         q += s_avg * de_ne;
@@ -396,7 +404,7 @@ static double nonelastic_dissipation(double bulkm, double shearm,
     }
     if (has_syy) {
         double ee_start = (syy_start - (lambda/denom) * tr_start) / (2 * shearm);
-        double ee_final = (syy_final - (lambda/denom) * tr_final) / (2 * shearm);
+        double ee_final = ((syy_final - dpp) - (lambda/denom) * tr_final) / (2 * shearm);
         double de_ne = 0. - (ee_final - ee_start); // out-of-plane strain increment is 0
         double s_avg = 0.5 * (syy_start + syy_final);
         q += s_avg * de_ne;
@@ -925,6 +933,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             for (int i=0; i<NSTR; ++i) s_start[i] = s[i];
         }
 
+        // Which branch below ends up owning s: only the plastic routines track
+        // stressyy, and only they and elastic() fold dpp into the diagonal.
+        // maxwell() does neither, so an evp element that took the viscous path
+        // must not be read as if it had. Shear heating is the only consumer.
+        bool stress_has_syy = false;
+        bool stress_has_dpp = false;
+
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
             {
@@ -933,6 +948,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (has_hydraulic_diffusion)
                 {
                     elastic_effective(bulkm, shearm, de, s, dpp);
+                    stress_has_dpp = true;
                 }
                 else
                 {
@@ -978,6 +994,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
+                stress_has_syy = var.mat->is_plane_strain;
+                stress_has_dpp = has_hydraulic_diffusion;
             }
             break;
         case MatProps::rh_evp:
@@ -1026,6 +1044,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
                     if (var.mat->is_plane_strain) syy = spyy;
+                    stress_has_syy = var.mat->is_plane_strain;
+                    stress_has_dpp = has_hydraulic_diffusion;
                 }
             }
             break;
@@ -1062,6 +1082,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
+                stress_has_syy = var.mat->is_plane_strain;
+                stress_has_dpp = has_hydraulic_diffusion;
             }
             break;
         case MatProps::rh_evp_rsf: // rate-and-state frition model
@@ -1121,6 +1143,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
                     if (var.mat->is_plane_strain) syy = spyy;
+                    stress_has_syy = var.mat->is_plane_strain;
+                    stress_has_dpp = has_hydraulic_diffusion;
                 }
             }
             break;
@@ -1141,10 +1165,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                bool has_syy = var.mat->is_plane_strain &&
-                    (param.mat.rheol_type & MatProps::rh_plastic);
                 q = nonelastic_dissipation(bulkm, shearm, s_start, s_final, de,
-                                           has_syy, syy_start, syy);
+                                           stress_has_dpp ? dpp : 0.,
+                                           stress_has_syy, syy_start, syy);
             }
             shear_heat[e] = q / var.dt;
         }
