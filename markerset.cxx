@@ -1499,7 +1499,6 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
-    #pragma acc serial
     int ncount = 0, is_error = 0;
 #ifndef ACC
     #pragma omp parallel for reduction(+:ncount,is_error) default(none) shared(var,std::cerr)
