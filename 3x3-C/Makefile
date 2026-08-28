@@ -60,14 +60,17 @@ HEADER = dsytrd3.h dsyevc3.h dsyevq3.h dsyevh3.h
 # process than the build -- hence the re-entry in `all`.
 STAMP = .build-flags-3x3$(suffix)
 
+CC_ID = command -v $(firstword $(CC)); v=`$(CC) --version 2>/dev/null | head -1`; \
+        test -n "$$v" || v=`$(CC) -V 2>&1 | grep -m1 .`; echo "$$v"
+
 .PHONY: all clean FORCE
 all: $(STAMP)
 	@$(MAKE) -q --no-print-directory $(BIN) || $(MAKE) --no-print-directory $(BIN)
 
 $(STAMP): FORCE
-	@echo '$(CC)|$(CFLAGS)|$(INCFLAGS)' > $@.tmp
+	@{ echo '$(CC)|$(CFLAGS)|$(INCFLAGS)'; $(CC_ID); } > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
-		test -f $@ && echo "   3x3-C flags changed since the last build -- rebuilding"; \
+		test -f $@ && echo "   3x3-C compiler or flags changed since the last build -- rebuilding"; \
 		mv $@.tmp $@; rm -f $(OBJ) $(BIN); \
 	fi
 
