@@ -354,6 +354,15 @@ static double nonelastic_dissipation(double bulkm, double shearm,
      * only tracked by the plastic branches), playing the same role as the
      * third principal stress in geoFLAC's inherently plane-strain formulation.
      * Its non-elastic strain increment is 0 by the plane-strain constraint.
+     *
+     * de_ne is a discrete (trapezoidal-average-stress) approximation of a
+     * quantity that is exactly non-negative in continuous time, so it can
+     * come out with the wrong sign for a component that's actually elastic
+     * this step (round-off) or one crossing the yield surface mid-step
+     * (discretization error). Clamping each component's de_ne to 0 whenever
+     * it would dissipate negative energy -- rather than clamping the summed
+     * q -- keeps every genuinely dissipative component untouched and only
+     * suppresses the spurious ones.
      */
     double lambda = bulkm - 2./3 * shearm;
     double denom = 3 * lambda + 2 * shearm;
@@ -367,19 +376,25 @@ static double nonelastic_dissipation(double bulkm, double shearm,
         double ee_start = (s_start[i] - (lambda/denom) * tr_start) / (2 * shearm);
         double ee_final = (s_final[i] - (lambda/denom) * tr_final) / (2 * shearm);
         double de_ne = de[i] - (ee_final - ee_start);
-        q += 0.5 * (s_start[i] + s_final[i]) * de_ne;
+        double s_avg = 0.5 * (s_start[i] + s_final[i]);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += s_avg * de_ne;
     }
     for (int i=NDIMS; i<NSTR; ++i) {
         double ee_start = s_start[i] / (2 * shearm);
         double ee_final = s_final[i] / (2 * shearm);
         double de_ne = de[i] - (ee_final - ee_start);
-        q += 2 * 0.5 * (s_start[i] + s_final[i]) * de_ne;
+        double s_avg = 0.5 * (s_start[i] + s_final[i]);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += 2 * s_avg * de_ne;
     }
     if (has_syy) {
         double ee_start = (syy_start - (lambda/denom) * tr_start) / (2 * shearm);
         double ee_final = (syy_final - (lambda/denom) * tr_final) / (2 * shearm);
         double de_ne = 0. - (ee_final - ee_start); // out-of-plane strain increment is 0
-        q += 0.5 * (syy_start + syy_final) * de_ne;
+        double s_avg = 0.5 * (syy_start + syy_final);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += s_avg * de_ne;
     }
     return q;
 }
