@@ -767,8 +767,9 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
 #endif
         for (int i = 0; i < int(a_out.size()); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
-            auto it = std::find(emarkers.begin(), emarkers.end(), b_out[i]);
-            emarkers[it - emarkers.begin()] = a_out[i];
+            std::size_t pos = 0;
+            while (pos < emarkers.size() && emarkers[pos] != b_out[i]) ++pos;
+            emarkers[pos] = a_out[i];
             remove_marker_data(a_out[i],b_out[i]);
         }
     }
@@ -1505,7 +1506,10 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #endif
     #pragma acc parallel loop gang vector reduction(+:ncount,is_error)
     for (int e=0; e<var.nelem; ++e) {
-        int nmarker_mat = std::accumulate((*var.elemmarkers)[e].begin(), (*var.elemmarkers)[e].end(), 0);
+        const int_vec &em = (*var.elemmarkers)[e];
+        int nmarker_mat = 0;
+        for (std::size_t k=0; k<em.size(); ++k)
+            nmarker_mat += em[k];
         int elenmarkers = (*var.markers_in_elem)[e].size();
 
         if (elenmarkers != nmarker_mat) {
