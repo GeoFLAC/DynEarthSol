@@ -305,8 +305,9 @@ def process_single_frame(args):
 
         try:
             convert_field(des, frame, 'shear heating', fvtu)
-        except (KeyError, NameError):
-            # Optional field; not present unless control.has_shear_heating is on.
+        except KeyError:
+            # Absent in datasets predating the field; every newer frame carries it,
+            # zero-filled when control.has_shear_heating is off.
             pass
 
         # Optional RSF cell fields.
