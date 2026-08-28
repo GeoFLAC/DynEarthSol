@@ -575,6 +575,13 @@ namespace {
             double_vec *new_radiogenic_source = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.radiogenic_source, *new_radiogenic_source, e);
 
+            // Same shape as radiogenic_source: a volumetric heat source that
+            // update_temperature() consumes at the START of the next step, before
+            // update_stress() has rewritten it. Zeroing it here would drop one
+            // step of shear heating at every remesh.
+            double_vec *new_shear_heat = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.shear_heat, *new_shear_heat, e);
+
             double_vec *new_dyn_fric_coeff = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.dyn_fric_coeff, *new_dyn_fric_coeff, e);
 
@@ -620,6 +627,9 @@ namespace {
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
+
+            delete var.shear_heat;
+            var.shear_heat = new_shear_heat;
 
             delete var.dyn_fric_coeff;
             var.dyn_fric_coeff = new_dyn_fric_coeff;

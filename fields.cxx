@@ -168,8 +168,6 @@ void reallocate_variables(const Param& param, Variables& var)
     var.dpressure = new double_vec(e, 0);
     delete var.viscosity;
     var.viscosity = new double_vec(e,param.mat.visc_max);
-    delete var.shear_heat;
-    var.shear_heat = new double_vec(e, 0);
     delete var.force;
     var.force = new array_t(n, 0);
 
