@@ -422,6 +422,11 @@ void restart(const Param& param, Variables& var)
         if (!restored_state_variable) {
             std::cout << "  RSF restart fallback applied for missing state variable dataset.\n";
         }
+        if (param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_total_strain_rate) {
+            update_strain_rate(var, *var.strain_rate);
+            #pragma acc wait
+        }
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 

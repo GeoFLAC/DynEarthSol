@@ -419,6 +419,14 @@ static void declare_parameters(po::options_description &cfg,
          ("control.use_global_velocity_scaling",
           po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
           "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
+        ("control.rsf_slip_rate_projection_option",
+         po::value<int>(&p.control.rsf_slip_rate_projection_option)
+             ->default_value(rsf_slip_rate_projection_maximum_shear),
+         "Velocity-dimensional rate supplied to the RSF update.\n"
+         "0: project the element velocity onto the maximum-shear direction inferred from stress\n"
+         "   (default; the historical behavior).\n"
+         "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
+         "   element's minimum altitude.\n")
         ;
 
     cfg.add_options()
@@ -1307,6 +1315,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Error: control.ref_pressure_option must be 0, 1, or 2 (got "
                       << p.control.ref_pressure_option << ").\n";
             die(EXIT_CONFIG_VALUE);
+        }
+        if (p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_maximum_shear &&
+            p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_total_strain_rate) {
+            die(EXIT_CONFIG_VALUE,
+                "control.rsf_slip_rate_projection_option must be 0 or 1.");
         }
 
     }

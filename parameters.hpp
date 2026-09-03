@@ -260,6 +260,7 @@ struct Control {
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
+    int rsf_slip_rate_projection_option;
 
 };
 
@@ -500,6 +501,11 @@ struct Markers {
 struct Debug {
     bool dt;
 //    bool has_two_layers_for;
+};
+
+enum RSFSlipRateProjectionOption {
+    rsf_slip_rate_projection_maximum_shear = 0,
+    rsf_slip_rate_projection_total_strain_rate = 1
 };
 
 enum MonitorRebindMode {
