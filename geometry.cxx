@@ -115,6 +115,15 @@ static inline double current_strain_rate_invariant(
     return second_invariant(strain_rate);
 }
 
+#pragma acc routine seq
+static inline double mass_scaling_modulus(
+    const Param& param, const MatProps& mat, int e)
+{
+    return (param.control.mass_scaling_reference_speed ==
+            mass_scaling_speed_bulk) ?
+        mat.bulkm(e) : mat.shearm(e);
+}
+
 /* Given two points, returns the distance^2 */
 template <typename T>
 double dist2(T a, T b)
@@ -1714,7 +1723,11 @@ double compute_dt(const Param& param, Variables& var,
         minl = std::min(minl, minh);
 
         // Find global min delta t to meet CFL condition
-        global_dt_min = std::min(global_dt_min, minh/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
+        global_dt_min = std::min(
+            global_dt_min,
+            minh / std::sqrt(
+                mass_scaling_modulus(param, *var.mat, e) /
+                var.mat->rho(e)) / 5.0);
     }
 
     #pragma acc wait
@@ -1927,7 +1940,11 @@ void compute_mass(const Param &param, const Variables &var,
 
             if(param.control.use_global_velocity_scaling)
             {
-                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
+                double apprent_speed = std::min(
+                    pseudo_speed_ATP,
+                    std::sqrt(
+                        mass_scaling_modulus(param, *var.mat, e) /
+                        var.mat->rho(e)));
 
                 rho = (param.control.is_quasi_static) ?
                 (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim

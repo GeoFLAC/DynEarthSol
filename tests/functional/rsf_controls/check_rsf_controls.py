@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused checks for RSF slip-rate and aging-law stepping."""
+"""Focused checks for RSF controls and the GVS elastic-speed ceiling."""
 
 from __future__ import annotations
 
@@ -524,6 +524,186 @@ def check_moving_mesh_rate_refresh(exe: Path, root: Path) -> None:
     print("[ok] moving mesh uses the analytically updated geometry")
 
 
+def make_mass_scaling_cfg(
+    reference: str | None,
+    *,
+    dynamic: bool = False,
+    global_scaling: bool = True,
+) -> str:
+    cfg = make_cfg(
+        fixed_dt=0.0,
+        dc=1.0e-3,
+        rate_option=None,
+        top_velocity=0.0,
+        moving_mesh=False,
+        inertial_scaling=1.0e6,
+    )
+    cfg = replace_once(
+        cfg,
+        "use_global_velocity_scaling = true",
+        "use_global_velocity_scaling = "
+        + ("true" if global_scaling else "false"),
+    )
+    controls = [
+        "damping_option = 0",
+        "is_quasi_static = " + ("no" if dynamic else "yes"),
+    ]
+    if reference is not None:
+        controls.append(f"mass_scaling_reference_speed = {reference}")
+    cfg = replace_once(
+        cfg, "damping_option = 1", "\n".join(controls)
+    )
+    cfg = replace_once(
+        cfg,
+        "rheology_type = elasto-plastic-rate-state-friction",
+        "rheology_type = elastic",
+    )
+    cfg = replace_once(cfg, "bulk_modulus = [2.0e8]", "bulk_modulus = [5]")
+    cfg = replace_once(cfg, "shear_modulus = [2.0e8]", "shear_modulus = [3]")
+    cfg = replace_once(cfg, "vbc_val_x0 = 0", "vbc_val_x0 = -1e-5")
+    cfg = replace_once(cfg, "vbc_val_x1 = 0", "vbc_val_x1 = 1e-5")
+    cfg = replace_once(cfg, "vbc_z0 = 1", "vbc_z0 = 3")
+    cfg = replace_once(
+        cfg,
+        "vbc_z1 = 4",
+        "vbc_z1 = 0\nstress_bc_z1 = 3\nstress_val_z1 = -1",
+    )
+    cfg = replace_once(
+        cfg,
+        "points_x = [0.3333333333333333, 0.6666666666666666]",
+        "points_x = [0, 1]",
+    )
+    cfg = replace_once(
+        cfg,
+        "points_y = [-0.6666666666666666, -0.3333333333333333]",
+        "points_y = [0, 0]",
+    )
+    cfg = replace_once(
+        cfg,
+        "output_velocity = no",
+        "output_velocity = yes\noutput_force = yes",
+    )
+    cfg = replace_once(
+        cfg, "output_dynamic_friction = yes", "output_dynamic_friction = no"
+    )
+    cfg = replace_once(
+        cfg, "output_state_variable = yes", "output_state_variable = no"
+    )
+    return cfg
+
+
+def check_mass_scaling_reference(exe: Path, root: Path) -> None:
+    cases = (
+        ("default", None, False),
+        ("shear", "shear", False),
+        ("bulk", "bulk", False),
+        ("dynamic", "bulk", True),
+    )
+    times = {}
+    masses = {}
+    for label, reference, dynamic in cases:
+        run_dir, _ = run_cfg(
+            exe,
+            root,
+            f"mass_{label}",
+            make_mass_scaling_cfg(reference, dynamic=dynamic),
+        )
+        rows = monitor_rows(run_dir)
+        times[label] = float(rows[0][1]["time_s"])
+        masses[label] = []
+        for point, point_rows in enumerate(rows):
+            if len(point_rows) != 2:
+                raise AssertionError(
+                    f"mass {label} point {point}: expected two rows"
+                )
+            expected_vx = -1.0e-5 if point == 0 else 1.0e-5
+            assert_close(
+                f"mass {label} point {point} initial velocity_x",
+                float(point_rows[0]["velocity_x"]),
+                expected_vx,
+            )
+            dt = (
+                float(point_rows[1]["time_s"])
+                - float(point_rows[0]["time_s"])
+            )
+            dv = (
+                float(point_rows[1]["velocity_z"])
+                - float(point_rows[0]["velocity_z"])
+            )
+            force = float(point_rows[1]["force_z"])
+            if (
+                not all(math.isfinite(value) for value in (dt, dv, force))
+                or dt <= 0.0
+                or force == 0.0
+                or dv == 0.0
+                or force * dv <= 0.0
+            ):
+                raise AssertionError(
+                    f"mass {label} point {point}: invalid response "
+                    f"dt={dt}, force={force}, dv={dv}"
+                )
+            masses[label].append(dt * force / dv)
+
+    altitude = 1.0 / math.sqrt(2.0)
+    assert_close(
+        "default shear-wave dt floor",
+        times["default"],
+        altitude / (5.0 * math.sqrt(3.0)),
+    )
+    assert_close("explicit shear dt", times["shear"], times["default"])
+    assert_close(
+        "bulk-wave dt floor",
+        times["bulk"],
+        altitude / (5.0 * math.sqrt(5.0)),
+    )
+    for point in range(2):
+        assert_close(
+            f"point {point} default pseudo-mass",
+            masses["default"][point],
+            masses["shear"][point],
+        )
+        assert_close(
+            f"point {point} shear/bulk mass ratio",
+            masses["shear"][point] / masses["bulk"][point],
+            5.0 / 3.0,
+        )
+        assert_close(
+            f"point {point} bulk physical mass",
+            masses["bulk"][point],
+            masses["dynamic"][point],
+        )
+    for index, (actual, expected) in enumerate(
+        zip(sorted(masses["bulk"]), (1.0 / 6.0, 1.0 / 3.0))
+    ):
+        assert_close(f"bulk nodal mass {index}", actual, expected)
+    print(
+        "[ok] GVS preserves the shear default and reaches physical density "
+        "at the bulk-wave ceiling"
+    )
+
+    invalid = (
+        (
+            "invalid_mass_reference",
+            make_mass_scaling_cfg("pwave"),
+            "must be 'shear' or 'bulk'",
+        ),
+        (
+            "bulk_without_gvs",
+            make_mass_scaling_cfg("bulk", global_scaling=False),
+            "requires control.use_global_velocity_scaling=true",
+        ),
+    )
+    for name, cfg, message in invalid:
+        _, result = run_cfg(
+            exe, root, name, cfg, expect_success=False
+        )
+        if message not in result.stdout:
+            raise AssertionError(
+                f"{name}: missing diagnostic {message!r}\n{result.stdout}"
+            )
+    print("[ok] unsupported mass-scaling selections are rejected")
+
+
 def check_invalid_option(exe: Path, root: Path) -> None:
     _, result = run_cfg(
         exe,
@@ -638,6 +818,7 @@ def main() -> None:
         check_state_rate_limit(exe, root)
         check_state_healing_limit(exe, root)
         check_moving_mesh_rate_refresh(exe, root)
+        check_mass_scaling_reference(exe, root)
         check_invalid_option(exe, root)
         check_invalid_state_limits(exe, root)
 

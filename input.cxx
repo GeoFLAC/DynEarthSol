@@ -419,6 +419,13 @@ static void declare_parameters(po::options_description &cfg,
          ("control.use_global_velocity_scaling",
           po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
           "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
+        ("control.mass_scaling_reference_speed",
+         po::value<std::string>()->default_value("shear"),
+         "Elastic-speed ceiling used by global velocity scaling. It sets the floor of\n"
+         "the fictitious density rho_fict = K / v_elastic^2.\n"
+         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (historical default).\n"
+         "bulk : sqrt(K/rho), giving rho_fict >= rho and restoring physical density\n"
+         "       when the pseudo-wave speed reaches the bulk-wave ceiling.\n")
         ("control.rsf_slip_rate_projection_option",
          po::value<int>(&p.control.rsf_slip_rate_projection_option)
              ->default_value(rsf_slip_rate_projection_maximum_shear),
@@ -1389,6 +1396,23 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // material properties
     //
     {
+        const std::string str =
+            vm["control.mass_scaling_reference_speed"].as<std::string>();
+        if (str == std::string("shear"))
+            p.control.mass_scaling_reference_speed =
+                mass_scaling_speed_shear;
+        else if (str == std::string("bulk"))
+            p.control.mass_scaling_reference_speed =
+                mass_scaling_speed_bulk;
+        else {
+            std::cerr
+                << "Error: control.mass_scaling_reference_speed must be "
+                   "'shear' or 'bulk', not '" << str << "'\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+
+    {
         std::string str = vm["mat.rheology_type"].as<std::string>();
         if (str == std::string("elastic"))
             p.mat.rheol_type = MatProps::rh_elastic;
@@ -1414,6 +1438,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.use_global_velocity_scaling) {
             p.control.use_global_velocity_scaling = true;
             std::cerr << "Warning: RSF rheology requires control.use_global_velocity_scaling=true. Forcing it on.\n";
+        }
+        if (p.control.mass_scaling_reference_speed ==
+                mass_scaling_speed_bulk &&
+            !p.control.use_global_velocity_scaling) {
+            die(EXIT_CONFIG_VALUE,
+                "control.mass_scaling_reference_speed=bulk requires "
+                "control.use_global_velocity_scaling=true.");
         }
 
 #ifdef THREED
