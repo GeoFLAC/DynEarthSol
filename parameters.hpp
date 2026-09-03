@@ -261,6 +261,7 @@ struct Control {
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
     int rsf_slip_rate_projection_option;
+    double rsf_dtheta_max;
 
 };
 

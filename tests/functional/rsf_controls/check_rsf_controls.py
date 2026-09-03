@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused checks for selectable RSF slip-rate calculations."""
+"""Focused checks for RSF slip-rate and aging-law stepping."""
 
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ def make_cfg(
     dc: float,
     state_model: int = 1,
     rate_option: int | None = 1,
+    dtheta_max: float | None = None,
+    characteristic_velocity: float = 1.0e-5,
+    top_velocity: float = VX_TOP,
+    moving_mesh: bool | None = None,
+    inertial_scaling: float = 1.0e5,
     max_steps: int = 1,
 ) -> str:
     case = BenchmarkCase(
@@ -48,19 +53,32 @@ def make_cfg(
         direct_a=0.2,
         evolution_b=0.3,
         characteristic_distance=dc,
-        characteristic_velocity=1.0e-5,
+        characteristic_velocity=characteristic_velocity,
         state_var_model=state_model,
     )
     template = (BENCHMARK_DIR / "simple_shear_base.cfg").read_text(encoding="utf-8")
     cfg = render_cfg(template, case, max_steps, max_steps, 1)
     cfg = replace_once(cfg, "fixed_dt = 1.0", f"fixed_dt = {fixed_dt:.17e}")
-    if rate_option is not None:
-        cfg = replace_once(
-            cfg,
-            "damping_option = 1",
-            "damping_option = 1\n"
-            f"rsf_slip_rate_projection_option = {rate_option}",
+    cfg = replace_once(
+        cfg,
+        "inertial_scaling = 1e5",
+        f"inertial_scaling = {inertial_scaling:.17e}",
+    )
+    cfg = replace_once(
+        cfg,
+        "vbc_val_z1 = 1e-5",
+        f"vbc_val_z1 = {top_velocity:.17e}",
+    )
+    controls = ["damping_option = 1", "dt_fraction = 1"]
+    if moving_mesh is not None:
+        controls.append(
+            "has_moving_mesh = " + ("yes" if moving_mesh else "no")
         )
+    if rate_option is not None:
+        controls.append(f"rsf_slip_rate_projection_option = {rate_option}")
+    if dtheta_max is not None:
+        controls.append(f"rsf_dtheta_max = {dtheta_max:.17e}")
+    cfg = replace_once(cfg, "damping_option = 1", "\n".join(controls))
     return cfg
 
 
@@ -299,6 +317,213 @@ def check_maximum_shear_default(exe: Path, root: Path) -> None:
     print("[ok] the default matches option 0 maximum-shear projection")
 
 
+def check_adaptive_state_limit_disabled(exe: Path, root: Path) -> None:
+    dc = 1.0e-3
+    v0 = 1.0e-5
+    expected_dt = 0.5 / math.sqrt(2.0)
+    rate = VX_TOP / math.sqrt(2.0)
+    theta0 = dc / v0
+    expected_theta = theta0 + expected_dt * (
+        1.0 - rate * theta0 / dc
+    )
+    outputs = []
+    for label, limit in (("omitted", None), ("explicit_zero", 0.0)):
+        run_dir, _ = run_cfg(
+            exe,
+            root,
+            f"state_limit_{label}",
+            make_cfg(
+                fixed_dt=0.0,
+                dc=dc,
+                dtheta_max=limit,
+                characteristic_velocity=v0,
+                moving_mesh=False,
+            ),
+        )
+        rows = monitor_rows(run_dir)
+        outputs.append(rows)
+        for point, point_rows in enumerate(rows):
+            if len(point_rows) != 2:
+                raise AssertionError(
+                    f"{label} point {point}: expected two rows"
+                )
+            assert_close(
+                f"{label} point {point} adaptive dt",
+                float(point_rows[1]["time_s"]),
+                expected_dt,
+            )
+            assert_close(
+                f"{label} point {point} theta",
+                float(point_rows[1]["state_variable"]),
+                expected_theta,
+            )
+
+    for point, (omitted, explicit) in enumerate(zip(*outputs)):
+        for row, (omitted_record, explicit_record) in enumerate(
+            zip(omitted, explicit)
+        ):
+            for field in ("time_s", "state_variable", "dynamic_friction"):
+                assert_close(
+                    f"disabled parity point {point} row {row} {field}",
+                    float(explicit_record[field]),
+                    float(omitted_record[field]),
+                )
+    print("[ok] a disabled state bound preserves adaptive stepping")
+
+
+def check_state_rate_limit(exe: Path, root: Path) -> None:
+    dc = 1.0e-6
+    fraction = 0.2
+    v0 = 1.0e-6
+    velocity = VX_TOP
+    cfg = make_cfg(
+        fixed_dt=0.0,
+        dc=dc,
+        dtheta_max=fraction,
+        characteristic_velocity=v0,
+        top_velocity=0.0,
+        moving_mesh=False,
+        max_steps=3,
+    )
+    cfg = replace_once(cfg, "vbc_z1 = 4", "vbc_z1 = 1")
+    cfg = replace_once(
+        cfg,
+        "vbc_val_x1 = 0",
+        f"vbc_val_x1 = {velocity:.17e}\n"
+        "num_vbc_period_x1 = 2\n"
+        "vbc_period_x1_time_in_yr = [0, 1.0e-12]\n"
+        "vbc_period_x1_ratio = [1, 2]",
+    )
+    run_dir, _ = run_cfg(exe, root, "state_rate_limit", cfg)
+    rows = monitor_rows(run_dir)
+    rates = (
+        velocity / math.sqrt(2.0),
+        2.0 * velocity / math.sqrt(2.0),
+        2.0 * velocity / math.sqrt(2.0),
+    )
+    theta = dc / v0
+    for index, point_rows in enumerate(rows):
+        if len(point_rows) != 4:
+            raise AssertionError(
+                f"point {index}: expected initial plus three rows, "
+                f"got {len(point_rows)}"
+            )
+        expected_time = 0.0
+        expected_theta = theta
+        for step, record in enumerate(point_rows):
+            assert_close(
+                f"point {index} step {step} rate-limited time",
+                float(record["time_s"]),
+                expected_time,
+            )
+            assert_close(
+                f"point {index} step {step} rate-limited theta",
+                float(record["state_variable"]),
+                expected_theta,
+            )
+            if step < len(rates):
+                expected_dt = fraction * dc / rates[step]
+                expected_time += expected_dt
+                expected_theta += expected_dt * (
+                    1.0 - rates[step] * expected_theta / dc
+                )
+    print("[ok] fixed mesh refreshes the bound from the current boundary rate")
+
+
+def check_state_healing_limit(exe: Path, root: Path) -> None:
+    dc = 1.0e-6
+    fraction = 0.2
+    v0 = 1.0e-5
+    run_dir, _ = run_cfg(
+        exe,
+        root,
+        "state_healing_limit",
+        make_cfg(
+            fixed_dt=0.0,
+            dc=dc,
+            dtheta_max=fraction,
+            characteristic_velocity=v0,
+            moving_mesh=True,
+        ),
+    )
+    rows = monitor_rows(run_dir)
+    theta0 = dc / v0
+    expected_dt = fraction * theta0
+    rate = VX_TOP / math.sqrt(2.0)
+    theta1 = theta0 + expected_dt * (1.0 - rate * theta0 / dc)
+    for index, point_rows in enumerate(rows):
+        assert_close(
+            f"point {index} healing-limited dt",
+            float(point_rows[1]["time_s"]),
+            expected_dt,
+        )
+        assert_close(
+            f"point {index} healing-limited theta",
+            float(point_rows[1]["state_variable"]),
+            theta1,
+        )
+    print("[ok] the theta arm bounds fractional healing in one step")
+
+
+def check_moving_mesh_rate_refresh(exe: Path, root: Path) -> None:
+    dc = 1.0e-1
+    fraction = 0.2
+    velocity = 1.0
+    cfg = make_cfg(
+        fixed_dt=0.0,
+        dc=dc,
+        dtheta_max=fraction,
+        characteristic_velocity=1.0e-1,
+        top_velocity=0.0,
+        moving_mesh=True,
+        inertial_scaling=1.0,
+        max_steps=2,
+    )
+    cfg = replace_once(
+        cfg,
+        "vbc_val_x1 = 0",
+        f"vbc_val_x1 = {velocity:.17e}",
+    )
+    cfg = replace_once(cfg, "vbc_z1 = 4", "vbc_z1 = 1")
+    run_dir, _ = run_cfg(
+        exe,
+        root,
+        "moving_mesh_rate_refresh",
+        cfg,
+    )
+    rows = monitor_rows(run_dir)
+    for point, point_rows in enumerate(rows):
+        if len(point_rows) != 3:
+            raise AssertionError(
+                f"moving point {point}: expected three rows"
+            )
+        length = 1.0
+        theta = dc / 1.0e-1
+        expected_time = 0.0
+        for step, record in enumerate(point_rows):
+            assert_close(
+                f"moving point {point} step {step} time",
+                float(record["time_s"]),
+                expected_time,
+            )
+            assert_close(
+                f"moving point {point} step {step} theta",
+                float(record["state_variable"]),
+                theta,
+            )
+            if step == 2:
+                continue
+
+            rate = velocity / math.sqrt(length * length + 1.0)
+            dt = fraction * dc / rate
+            if dt >= fraction * theta:
+                raise AssertionError("moving test is not rate limited")
+            expected_time += dt
+            theta += dt * (1.0 - rate * theta / dc)
+            length += velocity * dt
+    print("[ok] moving mesh uses the analytically updated geometry")
+
+
 def check_invalid_option(exe: Path, root: Path) -> None:
     _, result = run_cfg(
         exe,
@@ -315,6 +540,87 @@ def check_invalid_option(exe: Path, root: Path) -> None:
     print("[ok] unsupported projection options are rejected")
 
 
+def check_invalid_state_limits(exe: Path, root: Path) -> None:
+    limit_isostasy = replace_once(
+        make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=0.2),
+        "weakzone_option = 0",
+        "weakzone_option = 0\nisostasy_adjustment_time_in_yr = 1",
+    )
+    limit_pt = replace_once(
+        make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=0.2),
+        "dt_fraction = 1",
+        "dt_fraction = 1\nhas_PT = yes",
+    )
+    limit_body_force = replace_once(
+        make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=0.2),
+        "weakzone_option = 0",
+        "weakzone_option = 0\nhas_body_force_adjustment = yes",
+    )
+    limit_non_rsf = replace_once(
+        make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=0.2),
+        "rheology_type = elasto-plastic-rate-state-friction",
+        "rheology_type = elastic",
+    )
+    cases = (
+        (
+            "limit_option0",
+            make_cfg(
+                fixed_dt=0.0,
+                dc=1.0e-6,
+                rate_option=0,
+                dtheta_max=0.2,
+            ),
+            "projection_option=1",
+        ),
+        (
+            "limit_steady",
+            make_cfg(
+                fixed_dt=0.0,
+                dc=1.0e-6,
+                state_model=0,
+                dtheta_max=0.2,
+            ),
+            "state_var_model=1",
+        ),
+        (
+            "limit_fixed_dt",
+            make_cfg(fixed_dt=1.0e-2, dc=1.0e-6, dtheta_max=0.2),
+            "requires control.fixed_dt=0",
+        ),
+        (
+            "limit_two",
+            make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=2.0),
+            "finite and in [0, 2)",
+        ),
+        (
+            "limit_nan",
+            make_cfg(fixed_dt=0.0, dc=1.0e-6, dtheta_max=math.nan),
+            "finite and in [0, 2)",
+        ),
+        ("limit_pt", limit_pt, "control.has_PT=true"),
+        (
+            "limit_body_force",
+            limit_body_force,
+            "ic.has_body_force_adjustment=true",
+        ),
+        (
+            "limit_isostasy",
+            limit_isostasy,
+            "not supported during isostasy adjustment",
+        ),
+        ("limit_non_rsf", limit_non_rsf, "requires an RSF rheology"),
+    )
+    for name, cfg, message in cases:
+        _, result = run_cfg(
+            exe, root, name, cfg, expect_success=False
+        )
+        if message not in result.stdout:
+            raise AssertionError(
+                f"{name}: missing diagnostic {message!r}\n{result.stdout}"
+            )
+    print("[ok] unsupported aging-law timestep combinations are rejected")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", required=True, type=Path)
@@ -328,7 +634,12 @@ def main() -> None:
         check_invariant_rate(exe, root)
         check_invariant_restart_refresh(exe, root)
         check_maximum_shear_default(exe, root)
+        check_adaptive_state_limit_disabled(exe, root)
+        check_state_rate_limit(exe, root)
+        check_state_healing_limit(exe, root)
+        check_moving_mesh_rate_refresh(exe, root)
         check_invalid_option(exe, root)
+        check_invalid_state_limits(exe, root)
 
 
 if __name__ == "__main__":

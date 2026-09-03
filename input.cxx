@@ -427,6 +427,12 @@ static void declare_parameters(po::options_description &cfg,
          "   (default; the historical behavior).\n"
          "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
          "   element's minimum altitude.\n")
+        ("control.rsf_dtheta_max",
+         po::value<double>(&p.control.rsf_dtheta_max)->default_value(0.0),
+         "For adaptive stepping with the aging law and total-strain rate option 1, apply\n"
+         "dt <= f D_c / V and dt <= f theta over all elements. The two bounds limit\n"
+         "slip within one characteristic distance and fractional healing per step.\n"
+         "f must be in [0, 2); 0 (default) disables this state-update limit.\n")
         ;
 
     cfg.add_options()
@@ -1323,6 +1329,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE,
                 "control.rsf_slip_rate_projection_option must be 0 or 1.");
         }
+        if (!std::isfinite(p.control.rsf_dtheta_max) ||
+            p.control.rsf_dtheta_max < 0 ||
+            p.control.rsf_dtheta_max >= 2) {
+            die(EXIT_CONFIG_VALUE,
+                "control.rsf_dtheta_max must be finite and in [0, 2).");
+        }
 
     }
 
@@ -1493,6 +1505,42 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
+        }
+        if (p.control.rsf_dtheta_max > 0) {
+            if (p.control.fixed_dt != 0.0) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires control.fixed_dt=0.");
+            }
+            if (p.control.has_PT) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported with "
+                    "control.has_PT=true.");
+            }
+            if (p.ic.has_body_force_adjustment) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported with "
+                    "ic.has_body_force_adjustment=true.");
+            }
+            if (p.ic.isostasy_adjustment_time_in_yr > 0) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported during "
+                    "isostasy adjustment.");
+            }
+            if (!(p.mat.rheol_type & MatProps::rh_rsf)) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires an RSF rheology.");
+            }
+            if (p.mat.state_var_model != 1) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires the aging law "
+                    "(mat.state_var_model=1).");
+            }
+            if (p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_total_strain_rate) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires "
+                    "control.rsf_slip_rate_projection_option=1.");
+            }
         }
         if (p.mat.rheol_type & MatProps::rh_rsf) {
             for (int m = 0; m < p.mat.nmat; ++m) {
