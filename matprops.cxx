@@ -9,6 +9,13 @@
 namespace {
 
     #pragma acc routine seq
+    inline double rsf_slip_rate_eff(double slip_rate)
+    {
+        const double cutoff = 1e-16;
+        return (slip_rate > cutoff) ? slip_rate : cutoff;
+    }
+
+    #pragma acc routine seq
     double get_prem_pressure(double depth)
     {
         // reference pressure profile from isotropic PREM model
@@ -491,7 +498,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     const double static_friction_angle = f / n;
     const double mu_0 = std::tan(DEG2RAD * static_friction_angle);
 
-    const double v_eff = std::max(slip_rate, 1e-30);
+    const double v_eff = rsf_slip_rate_eff(slip_rate);
     const double cv_eff = std::max(c_v_avg, 1e-30);
     const double dc_eff = std::max(d_c_avg, 1e-30);
     const double theta_eff = std::max(state_variable, 1e-30);
@@ -537,7 +544,8 @@ void MatProps::update_state_variable(int e, double slip_rate, double& state_vari
             d = (n > 0) ? (d / n) : 0.0;
             if (d < 1e-12) return;
 
-            const double dtheta = (1.0 - (slip_rate * state_variable / d)) * dt;
+            const double slip_rate_eff = rsf_slip_rate_eff(slip_rate);
+            const double dtheta = (1.0 - (slip_rate_eff * state_variable / d)) * dt;
             if (!std::isfinite(dtheta)) return;
 
             double new_theta = state_variable + dtheta;
@@ -563,21 +571,22 @@ void MatProps::update_state_variable(int e, double slip_rate, double& state_vari
             if (theta < theta_min) theta = theta_min;
             if (theta > theta_max) theta = theta_max;
 
-            double ratio = slip_rate * theta / d;
+            const double slip_rate_eff = rsf_slip_rate_eff(slip_rate);
+            double ratio = slip_rate_eff * theta / d;
             if (ratio < ratio_min) ratio = ratio_min;
 
             const double dtheta = -ratio * std::log(ratio) * dt;
             if (std::isfinite(dtheta)) {
                 double new_theta = theta + dtheta;
                 if (!std::isfinite(new_theta) || new_theta <= 0.0) {
-                    state_variable = d / std::max(slip_rate, 1e-30);
+                    state_variable = d / slip_rate_eff;
                 } else {
                     if (new_theta < theta_min) new_theta = theta_min;
                     if (new_theta > theta_max) new_theta = theta_max;
                     state_variable = new_theta;
                 }
             } else {
-                state_variable = d / std::max(slip_rate, 1e-30);
+                state_variable = d / slip_rate_eff;
             }
         }
         break;
