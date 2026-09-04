@@ -781,6 +781,19 @@ static void declare_parameters(po::options_description &cfg,
          "Initial excess_pore_pressure except for boundary.\n")
          ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
+        ("ic.initial_stress_option", po::value<int>(&p.ic.initial_stress_option)->default_value(0),
+         "How to initialize stress?\n"
+         "0: use the legacy gravity-dependent initialization.\n"
+         "1: prescribe a homogeneous absolute Cauchy stress tensor; requires gravity=0.\n")
+#ifdef THREED
+        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0,0,0,0]"),
+         "Homogeneous absolute Cauchy stress [sxx,syy,szz,sxy,sxz,syz] in Pa; "
+         "compression is negative.")
+#else
+        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0]"),
+         "Homogeneous absolute Cauchy stress [sxx,szz,sxz] in Pa; compression is "
+         "negative. Plane strain initializes syy=(sxx+szz)/2.")
+#endif
 
         ;
 
@@ -1375,6 +1388,26 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
                     " small to big values.\n";
                 die(EXIT_CONFIG_VALUE);
+            }
+        }
+
+        if (p.ic.initial_stress_option != 0 &&
+            p.ic.initial_stress_option != 1) {
+            die(EXIT_CONFIG_VALUE,
+                "ic.initial_stress_option must be 0 or 1.");
+        }
+        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR);
+        if (p.ic.initial_stress_option == 1) {
+            if (p.control.gravity != 0.0) {
+                die(EXIT_CONFIG_VALUE,
+                    "ic.initial_stress_option=1 prescribes an absolute stress "
+                    "tensor and requires control.gravity=0.");
+            }
+            for (int i = 0; i < NSTR; ++i) {
+                if (!std::isfinite(p.ic.initial_stress[i])) {
+                    die(EXIT_CONFIG_VALUE,
+                        "ic.initial_stress must contain only finite values.");
+                }
             }
         }
 

@@ -421,6 +421,8 @@ struct IC {
 
     double excess_pore_pressure;
     bool has_body_force_adjustment;
+    int initial_stress_option;
+    double_vec initial_stress;
 };
 
 struct Mat {
