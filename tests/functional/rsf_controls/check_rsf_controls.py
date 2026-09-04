@@ -20,7 +20,11 @@ REPO_ROOT = SCRIPT_DIR.parents[2]
 BENCHMARK_DIR = REPO_ROOT / "benchmarks" / "simple_shear_rsf"
 sys.path.insert(0, str(BENCHMARK_DIR))
 
-from run_simple_shear_benchmark import BenchmarkCase, render_cfg  # noqa: E402
+from run_simple_shear_benchmark import (  # noqa: E402
+    BenchmarkCase,
+    RunSpec,
+    render_cfg,
+)
 
 
 VX_TOP = 1.0e-5
@@ -57,25 +61,37 @@ def make_cfg(
         state_var_model=state_model,
     )
     template = (BENCHMARK_DIR / "simple_shear_base.cfg").read_text(encoding="utf-8")
-    cfg = render_cfg(template, case, max_steps, max_steps, 1)
-    cfg = replace_once(cfg, "fixed_dt = 1.0", f"fixed_dt = {fixed_dt:.17e}")
+    spec = RunSpec(
+        name="rsf_control",
+        case=case,
+        max_steps=max_steps,
+        output_step_interval=max_steps,
+        monitor_step_interval=1,
+        fixed_dt_s=fixed_dt,
+        upper_boundary_x_mode=4,
+        upper_boundary_x_velocity=top_velocity,
+        characteristic_speed_line="",
+    )
+    cfg = render_cfg(template, spec)
     cfg = replace_once(
         cfg,
         "inertial_scaling = 1e5",
         f"inertial_scaling = {inertial_scaling:.17e}",
     )
-    cfg = replace_once(
-        cfg,
-        "vbc_val_z1 = 1e-5",
-        f"vbc_val_z1 = {top_velocity:.17e}",
-    )
+    rate_control = "rsf_slip_rate_projection_option = 1"
+    if rate_option is None:
+        cfg = replace_once(cfg, rate_control, "")
+    elif rate_option != 1:
+        cfg = replace_once(
+            cfg,
+            rate_control,
+            f"rsf_slip_rate_projection_option = {rate_option}",
+        )
     controls = ["damping_option = 1", "dt_fraction = 1"]
     if moving_mesh is not None:
         controls.append(
             "has_moving_mesh = " + ("yes" if moving_mesh else "no")
         )
-    if rate_option is not None:
-        controls.append(f"rsf_slip_rate_projection_option = {rate_option}")
     if dtheta_max is not None:
         controls.append(f"rsf_dtheta_max = {dtheta_max:.17e}")
     cfg = replace_once(cfg, "damping_option = 1", "\n".join(controls))
