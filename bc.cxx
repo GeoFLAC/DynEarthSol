@@ -251,46 +251,32 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double vbc_applied_x1 = bc.vbc_val_x1 * interp1(bc.vbc_period_x1_time_in_yr,bc.vbc_period_x1_ratio, t_now);
 
     // find max and min coordinate for BOUNDX0
-    double BOUNDX0_max = 0.;
-    double BOUNDX0_min = 0.;
-    double BOUNDX1_max = 0.;
-    double BOUNDX1_min = 0.;
-    bool if_init0 = false;
-    bool if_init1 = false;
+    // Side-wall extents as device reductions: the serial host scan over every node ran each
+    // step and migrated coord/bcflag to the host. max/min are exact, so the result is the
+    // scan's; a wall with no node keeps the old 0 extent.
+    double BOUNDX0_max = -1e300, BOUNDX0_min = 1e300;
+    double BOUNDX1_max = -1e300, BOUNDX1_min = 1e300;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) \
+        reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min)
+#endif
+    #pragma acc parallel loop gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
     for (int i=0; i<var.nnode; ++i) {
         if (! is_on_boundary(*var.bcflag, i)) continue;
-
         uint flag = (*var.bcflag)[i];
         if (flag & BOUNDX0) {
-            ConstArrayAccessor x = (*var.coord)[i];
-            if (!if_init0) {
-               BOUNDX0_max = x[1];
-               BOUNDX0_min = x[1];
-               if_init0 = true;
-            } else {
-                if (x[1]>BOUNDX0_max) {
-                    BOUNDX0_max = x[1];
-                }
-                if (x[1]<BOUNDX0_min) {
-                    BOUNDX0_min = x[1];
-                }
-            }
+            const double z = (*var.coord)[i][1];
+            if (z > BOUNDX0_max) BOUNDX0_max = z;
+            if (z < BOUNDX0_min) BOUNDX0_min = z;
         } else if (flag & BOUNDX1) {
-            ConstArrayAccessor x = (*var.coord)[i];
-            if (!if_init1) {
-               BOUNDX1_max = x[1];
-               BOUNDX1_min = x[1];
-               if_init1 = true;
-            } else {
-                if (x[1]>BOUNDX1_max) {
-                    BOUNDX1_max = x[1];
-                }
-                if (x[1]<BOUNDX1_min) {
-                    BOUNDX1_min = x[1];
-                }
-            }            
+            const double z = (*var.coord)[i][1];
+            if (z > BOUNDX1_max) BOUNDX1_max = z;
+            if (z < BOUNDX1_min) BOUNDX1_min = z;
         }
     }
+    #pragma acc wait
+    if (BOUNDX0_max < BOUNDX0_min) { BOUNDX0_max = 0.; BOUNDX0_min = 0.; }
+    if (BOUNDX1_max < BOUNDX1_min) { BOUNDX1_max = 0.; BOUNDX1_min = 0.; }
     double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
     double BOUNDX1_width = BOUNDX1_max - BOUNDX1_min;
 
@@ -686,13 +672,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
-        int bound, nbdry_nodes;
-
-        #pragma acc kernels
-        {
-            bound = static_cast<int>(var.bfacets[i]->size());
-            nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
-        }
+        // Plain host reads of two vector sizes. This used to be an `acc kernels` block, which
+        // nvc++ turned into a serial device kernel plus a synchronization per boundary per step.
+        int bound = static_cast<int>(var.bfacets[i]->size());
+        int nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
 
 #ifndef ACC
         #pragma omp parallel default(none) \
@@ -1638,14 +1621,21 @@ void surface_plstrain_diffusion(const Param &param, \
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
-    // Not parallelized: the loop is over top elements only and runs once per step.
-    // #pragma omp parallel for default(none) shared(param, var, plstrain, lambha)
-    for (auto e=(*var.top_elems).begin();e<(*var.top_elems).end();e++) {
-        // Find the most abundant marker mattype in this element
-        int_vec &a = (*var.elemmarkers)[*e];
-        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-        if (mat != param.mat.mattype_oceanic_crust)
-            plstrain[*e] -= plstrain[*e] * lambha * var.dt;
+    int mat_oc = param.mat.mattype_oceanic_crust;
+    // Top elements only, but a host loop here dragged plstrain off the device every check.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, plstrain, lambha, mat_oc)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int ti = 0; ti < var.ntop_elems; ++ti) {
+        const int e = (*var.top_elems)[ti];
+        // most abundant marker mattype: first maximum, as std::max_element
+        const int_vec &a = (*var.elemmarkers)[e];
+        int mat = 0;
+        for (std::size_t m = 1; m < a.size(); ++m)
+            if (a[m] > a[mat]) mat = (int)m;
+        if (mat != mat_oc)
+            plstrain[e] -= plstrain[e] * lambha * var.dt;
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();

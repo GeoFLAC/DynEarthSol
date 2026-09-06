@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -71,30 +72,35 @@ bool is_boundary(uint flag)
 }
 
 
+#pragma acc routine seq
 bool is_bottom(uint flag)
 {
     return flag & BOUNDZ0;
 }
 
 
+#pragma acc routine seq
 bool is_x0(uint flag)
 {
     return flag & BOUNDX0;
 }
 
 
+#pragma acc routine seq
 bool is_x1(uint flag)
 {
     return flag & BOUNDX1;
 }
 
 
+#pragma acc routine seq
 bool is_y0(uint flag)
 {
     return flag & BOUNDY0;
 }
 
 
+#pragma acc routine seq
 bool is_y1(uint flag)
 {
     return flag & BOUNDY1;
@@ -4773,9 +4779,20 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     // Tiny-element trigger at smallest_vol / remesh_tiny_margin, BELOW the size the remesher floors
     // elements at: margin == 1 puts the floor on the trigger and remeshing thrashes; margin > 1
     // opens a hysteresis gap.
-    const double smallest_vol = refine_floors(param.mesh).smallest_vol / param.mesh.remesh_tiny_margin;
-    for (int e=0; e<var.nelem; e++) {
-        if ((*var.volume)[e] < smallest_vol) {
+    double smallest_vol = refine_floors(param.mesh).smallest_vol / param.mesh.remesh_tiny_margin;
+    // Device scans (the serial host loops pulled volume/coord/bcflag off the device on every
+    // quality check); each reports the FIRST offender = the minimum index, as the loops did.
+    int tiny = INT_MAX;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, smallest_vol) reduction(min:tiny)
+#endif
+    #pragma acc parallel loop gang vector reduction(min:tiny) async
+    for (int e=0; e<var.nelem; e++)
+        if ((*var.volume)[e] < smallest_vol && e < tiny) tiny = e;
+    #pragma acc wait
+    if (tiny < INT_MAX) {
+        {
+            const int e = tiny;
             index = e;
             // report location + the nodes' boundary flags, so a chronic re-trigger spot
             // is identifiable (interior vs which boundary it is pinned to)
@@ -4802,11 +4819,24 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
         param.mesh.remeshing_option == 11 ||
         param.mesh.remeshing_option == 13) {
         double bottom = - param.mesh.zlength;
-        const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        int far = INT_MAX;
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, bottom, dist) reduction(min:far)
+#endif
+        #pragma acc parallel loop gang vector reduction(min:far) async
         for (int i=0; i<var.nnode; ++i) {
-            if (is_bottom((*var.bcflag)[i])) {
+            if (is_bottom((*var.bcflag)[i]) && i < far) {
                 double z = (*var.coord)[i][NDIMS-1];
-                if (std::fabs(z - bottom) > dist) {
+                if (std::fabs(z - bottom) > dist) far = i;
+            }
+        }
+        #pragma acc wait
+        if (far < INT_MAX) {
+            {
+                const int i = far;
+                {
+                    double z = (*var.coord)[i][NDIMS-1];
                     index = i;
                     std::cout << "    Node #" << i << " is too far from the bottom: z = " << z
                               << " (plane z = " << bottom << ", limit +-" << dist << ")\n";
@@ -4821,8 +4851,34 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     // check if any side node is too far away from the side
     if (param.mesh.remeshing_option == 13) {
         index = -1;
-        const double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        double xlen = param.mesh.xlength;
+#ifdef THREED
+        double ylen = param.mesh.ylength;
+#endif
+        int side = INT_MAX;
+#ifndef ACC
+#ifdef THREED
+        #pragma omp parallel for default(none) shared(var, dist, xlen, ylen) reduction(min:side)
+#else
+        #pragma omp parallel for default(none) shared(var, dist, xlen) reduction(min:side)
+#endif
+#endif
+        #pragma acc parallel loop gang vector reduction(min:side) async
         for (int i=0; i<var.nnode; ++i) {
+            if (i >= side) continue;
+            const uint f = (*var.bcflag)[i];
+            bool bad = false;
+            if (is_x0(f))      bad = std::fabs((*var.coord)[i][0]) > dist;
+            else if (is_x1(f)) bad = std::fabs((*var.coord)[i][0] - xlen) > dist;
+#ifdef THREED
+            else if (is_y0(f)) bad = std::fabs((*var.coord)[i][1]) > dist;
+            else if (is_y1(f)) bad = std::fabs((*var.coord)[i][1] - ylen) > dist;
+#endif
+            if (bad) side = i;
+        }
+        #pragma acc wait
+        for (int i = side; i < var.nnode && i == side; ++i) {   // at most the one offender
             if (is_x0((*var.bcflag)[i])) {
                 double x = (*var.coord)[i][0];
                 if (std::fabs(x) > dist) {
