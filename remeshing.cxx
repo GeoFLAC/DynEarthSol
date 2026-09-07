@@ -2735,6 +2735,11 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
     init_elem_size_n.resize(var.nnode);
     std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
 
+    // var.volume_n is zero-filled until compute_mass writes it; dividing by that silently
+    // yields inf for every node and poisons the frozen MMG metric base.
+    if (var.volume_n->empty() || (*var.volume_n)[0] <= 0.0)
+        die(EXIT_INTERNAL_ASSERT, "initialize_elem_size_n() ran before compute_mass()");
+
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, init_elem_size_n)
 #endif
