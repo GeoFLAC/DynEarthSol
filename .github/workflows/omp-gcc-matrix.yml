@@ -40,23 +40,26 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory '*' || true
 
-      - name: install boost (archive fallback for EOL Debian bases)
+      - name: install boost
         run: |
-          apt-get update || { \
-            sed -i -e 's|deb.debian.org/debian|archive.debian.org/debian|g' \
-                   -e 's|security.debian.org|archive.debian.org|g' \
-                   -e '/-updates/d' /etc/apt/sources.list; \
-            apt-get -o Acquire::Check-Valid-Until=false update; }
+          set -eu
+          if ! apt-get -o Acquire::Retries=3 update; then
+            grep -rq snapshot.debian.org /etc/apt/ || { echo "no snapshot pin"; exit 1; }
+            perl -0pi -e 's{^# (http://snapshot\S+)\nURIs: \S+}{URIs: $1}gm;
+                          s{^deb }{#deb }gm; s{^# deb (http://snapshot)}{deb $1}gm' \
+              $(ls /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null)
+            apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=3 update
+          fi
           apt-get install -y --no-install-recommends libboost-program-options-dev
 
       - name: g++ version
         run: g++ --version
 
       - name: make 2d openmp
-        run: make clean ndims=2; make -j4 ndims=2 opt=2 openmp=1 hdf5=0
+        run: make -j4 ndims=2 opt=2 openmp=1 hdf5=0
 
       - name: make 3d openmp
-        run: make clean ndims=3; make -j4 ndims=3 opt=2 openmp=1 hdf5=0
+        run: make -j4 ndims=3 opt=2 openmp=1 hdf5=0
 
   thread-count-check:
     runs-on: ubuntu-latest
