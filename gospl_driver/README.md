@@ -104,6 +104,14 @@ If you prefer manual control or the wrapper doesn't work:
    - DES adds `delta_h` (erosion + diffusion only) to its surface node z-coordinates.
 3. GoSPL **owns** the topography between coupling events and accumulates its drainage network state continuously. DES remeshing does **not** reset GoSPL's elevation or drainage state.
 
+### Known Limitations
+
+- **Coupling interval is a trigger, not a clamp.** In `gospl_coupling_mode = time`, `gospl_coupling_interval_in_yr` only gates *when* coupling fires (`accumulated_dt >= gospl_coupling_interval_in_yr`); the `dt` actually passed to GoSPL is `accumulated_dt` itself. If DES's adaptive `dt` exceeds the configured interval, coupling fires every DES step and GoSPL's Δt silently becomes DES's `dt` instead of the configured value — there is no sub-stepping or truncation back to the nominal interval.
+
+- **Remeshing mid-interval.** The coupling clock (`accumulated_dt`/`step_counter`) is time-based and unaffected by DES remeshing — a remesh occurring between two coupling events does not skip or reset the coupling schedule, and GoSPL's elevation state is not reseeded from DES after a remesh (consistent with "GoSPL owns the topography" above). However, the internal time-averaged-velocity calculation only guards against a *change in surface node count* across the remesh; if a remesh happens to leave the top-boundary node count unchanged (common when only the interior remeshes), node identity/order is not otherwise verified, and the "time-averaged" velocity computed for the next coupling event can silently difference unrelated nodes. Treat the coupling event immediately following a remesh with caution until this is hardened.
+
+- **GoSPL mesh domain is fixed at initialization.** `generate_mesh()` runs once, at startup, sized to the DES model's *initial* top-surface extent plus `gospl_mesh_padding` (default 10%) on each side. It is never regenerated during the run (and on restart, an existing mesh file is reused as-is rather than rebuilt). There is currently no mechanism to re-center or resize the GoSPL domain as the DES model deforms. Consequently, the padding fraction effectively upper-bounds the lateral extension the DES model can accumulate before its surface nodes migrate out of the padded domain's interior and approach the GoSPL mesh boundary, where the truncated-drainage-basin / BC-enforcement artifacts the padding was meant to avoid can reappear. No runtime check warns when this happens.
+
 ### Coupling API (`GoSPLDriver` C++ class)
 
 | Method | Purpose |
