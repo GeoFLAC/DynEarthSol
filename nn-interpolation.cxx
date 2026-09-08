@@ -570,6 +570,14 @@ namespace {
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
+            // Zero out plastic strain and accumulated strain for elements that lie
+            // fully or partially outside the old mesh (empty_vec > 0).  This prevents
+            // spurious non-zero plastic strain on freshly created elements, e.g. the
+            // gap elements introduced by remeshing_option=11 (restore_bottom).
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_plstrain, e);
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_delta_pls, e);
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_strain, e);
+
             #pragma acc wait
 
             double_vec *new_radiogenic_source = new double_vec(e);
