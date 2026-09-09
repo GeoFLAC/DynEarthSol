@@ -260,6 +260,9 @@ struct Control {
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
+    int mass_scaling_reference_speed;
+    int rsf_slip_rate_projection_option;
+    double rsf_dtheta_max;
 
 };
 
@@ -418,6 +421,8 @@ struct IC {
 
     double excess_pore_pressure;
     bool has_body_force_adjustment;
+    int initial_stress_option;
+    double_vec initial_stress;
 };
 
 struct Mat {
@@ -500,6 +505,16 @@ struct Markers {
 struct Debug {
     bool dt;
 //    bool has_two_layers_for;
+};
+
+enum RSFSlipRateProjectionOption {
+    rsf_slip_rate_projection_maximum_shear = 0,
+    rsf_slip_rate_projection_total_strain_rate = 1
+};
+
+enum MassScalingReferenceSpeed {
+    mass_scaling_speed_shear = 0,
+    mass_scaling_speed_bulk = 1
 };
 
 enum MonitorRebindMode {

@@ -419,6 +419,27 @@ static void declare_parameters(po::options_description &cfg,
          ("control.use_global_velocity_scaling",
           po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
           "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
+        ("control.mass_scaling_reference_speed",
+         po::value<std::string>()->default_value("shear"),
+         "Elastic-speed ceiling used by global velocity scaling. It sets the floor of\n"
+         "the fictitious density rho_fict = K / v_elastic^2.\n"
+         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (historical default).\n"
+         "bulk : sqrt(K/rho), giving rho_fict >= rho and restoring physical density\n"
+         "       when the pseudo-wave speed reaches the bulk-wave ceiling.\n")
+        ("control.rsf_slip_rate_projection_option",
+         po::value<int>(&p.control.rsf_slip_rate_projection_option)
+             ->default_value(rsf_slip_rate_projection_maximum_shear),
+         "Velocity-dimensional rate supplied to the RSF update.\n"
+         "0: project the element velocity onto the maximum-shear direction inferred from stress\n"
+         "   (default; the historical behavior).\n"
+         "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
+         "   element's minimum altitude.\n")
+        ("control.rsf_dtheta_max",
+         po::value<double>(&p.control.rsf_dtheta_max)->default_value(0.0),
+         "For adaptive stepping with the aging law and total-strain rate option 1, apply\n"
+         "dt <= f D_c / V and dt <= f theta over all elements. The two bounds limit\n"
+         "slip within one characteristic distance and fractional healing per step.\n"
+         "f must be in [0, 2); 0 (default) disables this state-update limit.\n")
         ;
 
     cfg.add_options()
@@ -760,6 +781,19 @@ static void declare_parameters(po::options_description &cfg,
          "Initial excess_pore_pressure except for boundary.\n")
          ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
+        ("ic.initial_stress_option", po::value<int>(&p.ic.initial_stress_option)->default_value(0),
+         "How to initialize stress?\n"
+         "0: use the legacy gravity-dependent initialization.\n"
+         "1: prescribe a homogeneous absolute Cauchy stress tensor; requires gravity=0.\n")
+#ifdef THREED
+        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0,0,0,0]"),
+         "Homogeneous absolute Cauchy stress [sxx,syy,szz,sxy,sxz,syz] in Pa; "
+         "compression is negative.")
+#else
+        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0]"),
+         "Homogeneous absolute Cauchy stress [sxx,szz,sxz] in Pa; compression is "
+         "negative. Plane strain initializes syy=(sxx+szz)/2.")
+#endif
 
         ;
 
@@ -1308,6 +1342,19 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                       << p.control.ref_pressure_option << ").\n";
             die(EXIT_CONFIG_VALUE);
         }
+        if (p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_maximum_shear &&
+            p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_total_strain_rate) {
+            die(EXIT_CONFIG_VALUE,
+                "control.rsf_slip_rate_projection_option must be 0 or 1.");
+        }
+        if (!std::isfinite(p.control.rsf_dtheta_max) ||
+            p.control.rsf_dtheta_max < 0 ||
+            p.control.rsf_dtheta_max >= 2) {
+            die(EXIT_CONFIG_VALUE,
+                "control.rsf_dtheta_max must be finite and in [0, 2).");
+        }
 
     }
 
@@ -1344,6 +1391,26 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             }
         }
 
+        if (p.ic.initial_stress_option != 0 &&
+            p.ic.initial_stress_option != 1) {
+            die(EXIT_CONFIG_VALUE,
+                "ic.initial_stress_option must be 0 or 1.");
+        }
+        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR);
+        if (p.ic.initial_stress_option == 1) {
+            if (p.control.gravity != 0.0) {
+                die(EXIT_CONFIG_VALUE,
+                    "ic.initial_stress_option=1 prescribes an absolute stress "
+                    "tensor and requires control.gravity=0.");
+            }
+            for (int i = 0; i < NSTR; ++i) {
+                if (!std::isfinite(p.ic.initial_stress[i])) {
+                    die(EXIT_CONFIG_VALUE,
+                        "ic.initial_stress must contain only finite values.");
+                }
+            }
+        }
+
         if (p.ic.temperature_option == 3) {
             if (p.ic.radiogenic_heat_dome_width == 0) {
                 die(EXIT_CONFIG_VALUE, "ic.radiogenic_heat_dome_width must be greater than 0 for ic.temperature_option=3.");
@@ -1361,6 +1428,23 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     //
     // material properties
     //
+    {
+        const std::string str =
+            vm["control.mass_scaling_reference_speed"].as<std::string>();
+        if (str == std::string("shear"))
+            p.control.mass_scaling_reference_speed =
+                mass_scaling_speed_shear;
+        else if (str == std::string("bulk"))
+            p.control.mass_scaling_reference_speed =
+                mass_scaling_speed_bulk;
+        else {
+            std::cerr
+                << "Error: control.mass_scaling_reference_speed must be "
+                   "'shear' or 'bulk', not '" << str << "'\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+
     {
         std::string str = vm["mat.rheology_type"].as<std::string>();
         if (str == std::string("elastic"))
@@ -1387,6 +1471,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.use_global_velocity_scaling) {
             p.control.use_global_velocity_scaling = true;
             std::cerr << "Warning: RSF rheology requires control.use_global_velocity_scaling=true. Forcing it on.\n";
+        }
+        if (p.control.mass_scaling_reference_speed ==
+                mass_scaling_speed_bulk &&
+            !p.control.use_global_velocity_scaling) {
+            die(EXIT_CONFIG_VALUE,
+                "control.mass_scaling_reference_speed=bulk requires "
+                "control.use_global_velocity_scaling=true.");
         }
 
 #ifdef THREED
@@ -1478,6 +1569,42 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
+        }
+        if (p.control.rsf_dtheta_max > 0) {
+            if (p.control.fixed_dt != 0.0) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires control.fixed_dt=0.");
+            }
+            if (p.control.has_PT) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported with "
+                    "control.has_PT=true.");
+            }
+            if (p.ic.has_body_force_adjustment) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported with "
+                    "ic.has_body_force_adjustment=true.");
+            }
+            if (p.ic.isostasy_adjustment_time_in_yr > 0) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max is not supported during "
+                    "isostasy adjustment.");
+            }
+            if (!(p.mat.rheol_type & MatProps::rh_rsf)) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires an RSF rheology.");
+            }
+            if (p.mat.state_var_model != 1) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires the aging law "
+                    "(mat.state_var_model=1).");
+            }
+            if (p.control.rsf_slip_rate_projection_option !=
+                rsf_slip_rate_projection_total_strain_rate) {
+                die(EXIT_CONFIG_VALUE,
+                    "control.rsf_dtheta_max requires "
+                    "control.rsf_slip_rate_projection_option=1.");
+            }
         }
         if (p.mat.rheol_type & MatProps::rh_rsf) {
             for (int m = 0; m < p.mat.nmat; ++m) {

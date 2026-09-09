@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run a small simple-shear RSF subset, verify against analytics, and clean up outputs."""
+"""Run paper benchmark cases, check their references, and clean the outputs."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-import math
 import shutil
 import subprocess
 import sys
@@ -14,13 +13,25 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from run_simple_shear_benchmark import BENCHMARK_CASES, BenchmarkCase
+from benchmark_reference import (
+    analytical_stress,
+    healing_reference,
+    load_monitor_case,
+    pointwise_error_metrics,
+    recovered_rate_errors,
+)
+from run_simple_shear_benchmark import (
+    BENCHMARK_CASES,
+    HEALING_CASE,
+    BenchmarkCase,
+)
 
 
-VX_TOP = 1e-5
-SHEAR_MODULUS = 200.0e6
-COHESION = 1.0e6
-DT = 1.0
+DEFAULT_CASES = (
+    "steady_ab_neg_v0_1e-6",
+    "aging_ab_neg_dc_1e-3",
+)
+HEALING_RELATIVE_TOLERANCE = 1.0e-12
 
 
 def cleanup_pycache(root_dir: Path) -> None:
@@ -29,212 +40,9 @@ def cleanup_pycache(root_dir: Path) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
-def effective_velocity() -> float:
-    v1 = VX_TOP / 3.0
-    v2 = 2.0 * VX_TOP / 3.0
-    return math.sqrt(v1 * v2)
-
-
-def analytical_ep(phi_deg: float, total_time: float) -> tuple[list[float], list[float]]:
-    phi = math.radians(phi_deg)
-    sf = math.sin(phi)
-    nphi = (1.0 + sf) / (1.0 - sf)
-    npsi = 1.0
-
-    nstep = int(total_time / DT) + 1
-    time_s = [DT * i for i in range(nstep)]
-    stress_xy = [0.0] * nstep
-
-    for i in range(1, nstep):
-        d_exy = 0.5 * VX_TOP * DT
-        d_stress_el = 2.0 * SHEAR_MODULUS * d_exy
-        stress_el = stress_xy[i - 1] + d_stress_el
-
-        s1_el = -stress_el
-        s3_el = stress_el
-        yield_fn = s1_el - s3_el * nphi + 2.0 * COHESION * math.sqrt(nphi)
-
-        if yield_fn > 0.0:
-            stress_xy[i] = stress_el
-        else:
-            d_beta = yield_fn / (2.0 * SHEAR_MODULUS * (1.0 + nphi * npsi))
-            s3_bar = s3_el + 2.0 * SHEAR_MODULUS * d_beta * npsi
-            stress_xy[i] = s3_bar
-
-    return time_s, stress_xy
-
-
-def analytical_rsf_steady(
-    phi_deg: float,
-    a: float,
-    b: float,
-    v0: float,
-    total_time: float,
-) -> tuple[list[float], list[float]]:
-    phi0 = math.radians(phi_deg)
-    mu0 = math.tan(phi0)
-    velocity = effective_velocity()
-
-    nstep = int(total_time / DT) + 1
-    time_s = [DT * i for i in range(nstep)]
-    stress_xy = [0.0] * nstep
-
-    mu_ss = max(mu0 + (a - b) * math.log(velocity / v0), 1.0e-6)
-    phi_eff = math.atan(mu_ss)
-    sf_eff = math.sin(phi_eff)
-    nphi_eff = (1.0 + sf_eff) / (1.0 - sf_eff)
-    npsi = 1.0
-
-    for i in range(1, nstep):
-        d_exy = 0.5 * VX_TOP * DT
-        d_stress_el = 2.0 * SHEAR_MODULUS * d_exy
-        stress_el = stress_xy[i - 1] + d_stress_el
-
-        s1_el = -stress_el
-        s3_el = stress_el
-        yield_fn = s1_el - nphi_eff * s3_el + 2.0 * COHESION * math.sqrt(nphi_eff)
-
-        if yield_fn > 0.0:
-            stress_xy[i] = stress_el
-        else:
-            d_beta = yield_fn / (2.0 * SHEAR_MODULUS * (1.0 + nphi_eff * npsi))
-            s3_bar = s3_el + 2.0 * SHEAR_MODULUS * d_beta * npsi
-            stress_xy[i] = s3_bar
-
-    return time_s, stress_xy
-
-
-def analytical_rsf_aging(
-    phi_deg: float,
-    a: float,
-    b: float,
-    dc: float,
-    v0: float,
-    total_time: float,
-) -> tuple[list[float], list[float]]:
-    phi0 = math.radians(phi_deg)
-    mu0 = math.tan(phi0)
-    velocity = max(effective_velocity(), 1.0e-12)
-    theta = dc / v0
-
-    nstep = int(total_time / DT) + 1
-    time_s = [DT * i for i in range(nstep)]
-    stress_xy = [0.0] * nstep
-    npsi = 1.0
-
-    for i in range(1, nstep):
-        d_exy = 0.5 * VX_TOP * DT
-        d_stress_el = 2.0 * SHEAR_MODULUS * d_exy
-        stress_el = stress_xy[i - 1] + d_stress_el
-
-        theta = theta + DT * (1.0 - velocity * theta / dc)
-        theta = max(theta, 1.0e-30)
-        mu = max(mu0 + a * math.log(velocity / v0) + b * math.log((theta * v0) / dc), 1.0e-6)
-        phi_eff = math.atan(mu)
-        sf_eff = math.sin(phi_eff)
-        nphi_eff = (1.0 + sf_eff) / (1.0 - sf_eff)
-
-        s1_el = -stress_el
-        s3_el = stress_el
-        yield_fn = s1_el - nphi_eff * s3_el + 2.0 * COHESION * math.sqrt(nphi_eff)
-
-        if yield_fn > 0.0:
-            stress_xy[i] = stress_el
-        else:
-            d_beta = yield_fn / (2.0 * SHEAR_MODULUS * (1.0 + nphi_eff * npsi))
-            s3_bar = s3_el + 2.0 * SHEAR_MODULUS * d_beta * npsi
-            stress_xy[i] = s3_bar
-
-    return time_s, stress_xy
-
-
-def analytical_series(case: BenchmarkCase, total_time: float) -> tuple[list[float], list[float]]:
-    if case.group == "ep":
-        return analytical_ep(case.friction_angle_deg, total_time)
-    if case.group in ("steady_ab_pos", "steady_ab_neg"):
-        return analytical_rsf_steady(
-            phi_deg=case.friction_angle_deg,
-            a=case.direct_a,
-            b=case.evolution_b,
-            v0=case.characteristic_velocity,
-            total_time=total_time,
-        )
-    if case.group == "aging_ab_neg":
-        return analytical_rsf_aging(
-            phi_deg=case.friction_angle_deg,
-            a=case.direct_a,
-            b=case.evolution_b,
-            dc=case.characteristic_distance,
-            v0=case.characteristic_velocity,
-            total_time=total_time,
-        )
-    raise ValueError(f"Unsupported group: {case.group}")
-
-
-def load_monitor_stress(case_dir: Path) -> tuple[list[float], list[float]]:
-    csv_paths = sorted(case_dir.glob("monitor_point_*.csv"))
-    if not csv_paths:
-        raise FileNotFoundError(f"No monitor CSV found in {case_dir}")
-
-    series: list[tuple[list[float], list[float]]] = []
-    for csv_path in csv_paths:
-        with csv_path.open("r", encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            rows = sorted(reader, key=lambda row: float(row["time_s"]))
-        time_s = [float(row["time_s"]) for row in rows]
-        stress_xy = [abs(float(row["stress_2"])) for row in rows]
-        if not time_s:
-            raise ValueError(f"No monitor rows found in {csv_path}")
-        series.append((time_s, stress_xy))
-
-    ref_time = series[0][0]
-    for idx, (time_s, _) in enumerate(series[1:], start=1):
-        if len(time_s) != len(ref_time):
-            raise ValueError(f"Monitor time axis length mismatch between point 0 and point {idx} in {case_dir}")
-        for t0, t1 in zip(ref_time, time_s):
-            if abs(t0 - t1) > 1.0e-12:
-                raise ValueError(f"Monitor time axis mismatch between point 0 and point {idx} in {case_dir}")
-
-    mean_abs_stress: list[float] = []
-    for sample_index in range(len(ref_time)):
-        mean_abs_stress.append(
-            sum(stress_series[sample_index] for _, stress_series in series) / float(len(series))
-        )
-
-    return ref_time, mean_abs_stress
-
-
-def interpolate_linear(x_values: list[float], y_values: list[float], x: float) -> float:
-    if x <= x_values[0]:
-        return y_values[0]
-    if x >= x_values[-1]:
-        return y_values[-1]
-
-    hi = 1
-    while x_values[hi] < x:
-        hi += 1
-    lo = hi - 1
-    x0 = x_values[lo]
-    x1 = x_values[hi]
-    y0 = y_values[lo]
-    y1 = y_values[hi]
-    if x1 == x0:
-        return y0
-    return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
-
-
-def compare_series(
-    num_time: list[float],
-    num_stress: list[float],
-    ana_time: list[float],
-    ana_stress: list[float],
-) -> float:
-    ana_on_num = [interpolate_linear(ana_time, ana_stress, x) for x in num_time]
-    scale = max(max(abs(value) for value in ana_on_num), 1.0)
-    return max(abs(num - ana) for num, ana in zip(num_stress, ana_on_num)) / scale
-
-
-def selected_cases(case_names: list[str]) -> list[BenchmarkCase]:
+def selected_cases(case_names: list[str], use_all: bool) -> list[BenchmarkCase]:
+    if use_all:
+        return list(BENCHMARK_CASES)
     cases_by_name = {case.name: case for case in BENCHMARK_CASES}
     missing = [name for name in case_names if name not in cases_by_name]
     if missing:
@@ -242,23 +50,83 @@ def selected_cases(case_names: list[str]) -> list[BenchmarkCase]:
     return [cases_by_name[name] for name in case_names]
 
 
+def check_healing(case_dir: Path) -> tuple[float, float]:
+    paths = sorted(case_dir.glob("monitor_point_*.csv"))
+    if len(paths) != 2:
+        raise FileNotFoundError(f"Expected two monitor CSVs in {case_dir}")
+
+    series: list[list[tuple[int, float, float]]] = []
+    for path in paths:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = [
+                (
+                    int(row["step"]),
+                    float(row["time_s"]),
+                    float(row["state_variable"]),
+                )
+                for row in csv.DictReader(handle)
+            ]
+        rows.sort(key=lambda item: item[0])
+        if not rows:
+            raise ValueError(f"No monitor rows found in {path}")
+        series.append(rows)
+
+    final_step = min(rows[-1][0] for rows in series)
+    if final_step != 1_546:
+        raise ValueError(f"Unexpected healing final step: {final_step}")
+    reference = healing_reference(final_step)
+
+    errors: list[float] = []
+    final_states: list[float] = []
+    for rows in series:
+        for step, time_s, state_s in rows:
+            if abs(time_s - step * 259_200.0) > 1.0e-6:
+                raise ValueError(f"Healing time does not match step {step}.")
+            errors.append(
+                abs(state_s - reference[step])
+                / max(abs(reference[step]), 1.0e-300)
+            )
+        final_states.append(rows[-1][2])
+
+    mean_final_state = sum(final_states) / len(final_states)
+    theta0_s = HEALING_CASE.characteristic_distance / HEALING_CASE.characteristic_velocity
+    final_time_s = final_step * 259_200.0
+    linear_deficit = (
+        theta0_s + final_time_s - mean_final_state
+    ) / final_time_s
+    return max(errors), linear_deficit
+
+
 def main() -> None:
     script_dir = Path(__file__).resolve().parent
     runner = script_dir / "run_simple_shear_benchmark.py"
 
-    parser = argparse.ArgumentParser(description="Check a small RSF simple-shear subset and clean outputs.")
+    parser = argparse.ArgumentParser(
+        description="Check the paper's local EP/RSF benchmark references."
+    )
     parser.add_argument("--exe", default=None, help="Path to dynearthsol2d. If omitted, auto-detect.")
     parser.add_argument(
         "--cases",
         nargs="+",
-        default=["steady_ab_pos_v0_1e-6", "aging_ab_neg_dc_1e-6"],
-        help="Representative cases to run and verify.",
+        default=list(DEFAULT_CASES),
+        help="Representative simple-shear cases to run and verify.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run all nine simple-shear cases instead of the representative subset.",
     )
     parser.add_argument(
         "--max-relative-error",
         type=float,
-        default=5e-2,
-        help="Relative error tolerance for CI-style checks.",
+        default=2.0e-5,
+        help="Maximum allowed pointwise stress error as a fraction.",
+    )
+    parser.add_argument(
+        "--max-rate-relative-error",
+        type=float,
+        default=5.0e-4,
+        help="Maximum allowed error in the rate recovered from friction outputs.",
     )
     parser.add_argument(
         "--keep-output",
@@ -267,7 +135,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    cases = selected_cases(args.cases)
+    cases = selected_cases(args.cases, args.all)
     temp_ctx: tempfile.TemporaryDirectory[str] | None = None
     if args.keep_output:
         output_root = Path(tempfile.mkdtemp(prefix="simple_shear_rsf_check_"))
@@ -280,30 +148,56 @@ def main() -> None:
             "python3",
             str(runner),
             "--clean",
-            "--output-step-interval",
-            "40",
+            "--healing",
             "--output-root",
             str(output_root),
             "--cases",
-            *args.cases,
+            *[case.name for case in cases],
         ]
         if args.exe:
-            run_cmd.extend(["--exe", args.exe])
+            run_cmd.extend(["--exe", str(Path(args.exe).expanduser().resolve())])
         subprocess.run(run_cmd, cwd=script_dir, check=True)
 
-        failures: list[tuple[str, float]] = []
+        failures: list[str] = []
         for case in cases:
-            case_dir = output_root / case.name
-            num_time, num_stress = load_monitor_stress(case_dir)
-            ana_time, ana_stress = analytical_series(case, total_time=num_time[-1])
-            rel_error = compare_series(num_time, num_stress, ana_time, ana_stress)
-            print(f"[ok] {case.name}: max relative error = {rel_error:.3e}")
-            if rel_error > args.max_relative_error:
-                failures.append((case.name, rel_error))
+            data = load_monitor_case(output_root / case.name)
+            reference = analytical_stress(case, data.time_s)
+            metrics = pointwise_error_metrics(data.mean_abs_stress, reference)
+            print(
+                f"[stress] {case.name}: "
+                f"mean={100.0 * metrics.mean_fraction:.3e}%, "
+                f"max={100.0 * metrics.max_fraction:.3e}%"
+            )
+            if metrics.max_fraction > args.max_relative_error:
+                failures.append(
+                    f"{case.name} stress={metrics.max_fraction:.3e}"
+                )
+
+            rate_errors = recovered_rate_errors(case, data)
+            if rate_errors:
+                max_rate_error = max(rate_errors)
+                print(
+                    f"[rate]   {case.name}: "
+                    f"max relative error={max_rate_error:.3e}"
+                )
+                if max_rate_error > args.max_rate_relative_error:
+                    failures.append(
+                        f"{case.name} rate={max_rate_error:.3e}"
+                    )
+
+        healing_error, linear_deficit = check_healing(
+            output_root / HEALING_CASE.name
+        )
+        print(
+            "[healing] "
+            f"max relative error={healing_error:.3e}, "
+            f"linear-growth deficit={linear_deficit:.3e}"
+        )
+        if healing_error > HEALING_RELATIVE_TOLERANCE:
+            failures.append(f"healing={healing_error:.3e}")
 
         if failures:
-            details = ", ".join(f"{name}={err:.3e}" for name, err in failures)
-            raise SystemExit(f"Benchmark check failed: {details}")
+            raise SystemExit("Benchmark check failed: " + ", ".join(failures))
     finally:
         if args.keep_output:
             print(f"[kept] {output_root}")
