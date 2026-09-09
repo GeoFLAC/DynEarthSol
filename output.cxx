@@ -183,6 +183,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.stress, "stress", var.stress->size());
 
     bin.write_array(*var.viscosity, "viscosity", var.viscosity->size());
+    bin.write_array(*var.shear_heat, "shear heating", var.shear_heat->size());
 
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();

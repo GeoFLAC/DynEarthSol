@@ -311,6 +311,96 @@ static void viscous(double bulkm, double viscosity, double total_dv,
 
 #pragma acc routine seq
 template <typename T>
+static double viscous_dissipation(double viscosity, T edot, double dt)
+{
+    /* Dissipation rate of a memoryless (rh_viscous) flow: deviatoric stress is
+     * an instantaneous function of strain rate, with no elastic energy storage,
+     * so the entire deviatoric strain increment is non-elastic. The volumetric
+     * term (bulkm * total_dv in viscous()) is a reversible incompressibility
+     * penalty and does not contribute here, same as the bulk term is excluded
+     * from dissipation everywhere else below.
+     */
+    double dev = trace(edot) / NDIMS;
+    double q = 0.;
+    for (int i=0; i<NDIMS; ++i) {
+        double d = edot[i] - dev;
+        q += d * d;
+    }
+    for (int i=NDIMS; i<NSTR; ++i)
+        q += 2 * edot[i] * edot[i];
+    return 2 * viscosity * q * dt;
+}
+
+#pragma acc routine seq
+static double nonelastic_dissipation(double bulkm, double shearm,
+                                     const double* s_start, const double* s_final,
+                                     const double* de,
+                                     bool has_syy, double syy_start, double syy_final)
+{
+    /* Non-elastic (viscous and/or plastic) dissipation over this step, for any
+     * rheology whose stress update is tied to the material's actual elastic
+     * moduli (elastic, maxwell, and the plastic/viscoplastic branches).
+     *
+     * The strain increment de[] this step is split into an elastic part and a
+     * non-elastic remainder. The elastic part is recovered by inverting the
+     * isotropic Hooke's law at the start and end of the step: this works
+     * regardless of which branch produced s_final, since they all share the
+     * same bulkm/shearm. What strain increment isn't accounted for elastically
+     * was dissipated as heat; it's evaluated against the trapezoidal-average
+     * stress over the step. For a purely elastic update de_final == de and the
+     * result is ~0, as it should be.
+     *
+     * has_syy carries the plane-strain out-of-plane stress (DES's stressyy,
+     * only tracked by the plastic branches), playing the same role as the
+     * third principal stress in geoFLAC's inherently plane-strain formulation.
+     * Its non-elastic strain increment is 0 by the plane-strain constraint.
+     *
+     * de_ne is a discrete (trapezoidal-average-stress) approximation of a
+     * quantity that is exactly non-negative in continuous time, so it can
+     * come out with the wrong sign for a component that's actually elastic
+     * this step (round-off) or one crossing the yield surface mid-step
+     * (discretization error). Clamping each component's de_ne to 0 whenever
+     * it would dissipate negative energy -- rather than clamping the summed
+     * q -- keeps every genuinely dissipative component untouched and only
+     * suppresses the spurious ones.
+     */
+    double lambda = bulkm - 2./3 * shearm;
+    double denom = 3 * lambda + 2 * shearm;
+    if (std::fabs(denom) < 1e-30) denom = (denom < 0) ? -1e-30 : 1e-30;
+
+    double tr_start = trace(s_start) + (has_syy ? syy_start : 0.);
+    double tr_final = trace(s_final) + (has_syy ? syy_final : 0.);
+
+    double q = 0.;
+    for (int i=0; i<NDIMS; ++i) {
+        double ee_start = (s_start[i] - (lambda/denom) * tr_start) / (2 * shearm);
+        double ee_final = (s_final[i] - (lambda/denom) * tr_final) / (2 * shearm);
+        double de_ne = de[i] - (ee_final - ee_start);
+        double s_avg = 0.5 * (s_start[i] + s_final[i]);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += s_avg * de_ne;
+    }
+    for (int i=NDIMS; i<NSTR; ++i) {
+        double ee_start = s_start[i] / (2 * shearm);
+        double ee_final = s_final[i] / (2 * shearm);
+        double de_ne = de[i] - (ee_final - ee_start);
+        double s_avg = 0.5 * (s_start[i] + s_final[i]);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += 2 * s_avg * de_ne;
+    }
+    if (has_syy) {
+        double ee_start = (syy_start - (lambda/denom) * tr_start) / (2 * shearm);
+        double ee_final = (syy_final - (lambda/denom) * tr_final) / (2 * shearm);
+        double de_ne = 0. - (ee_final - ee_start); // out-of-plane strain increment is 0
+        double s_avg = 0.5 * (syy_start + syy_final);
+        if (s_avg * de_ne < 0.) de_ne = 0.;
+        q += s_avg * de_ne;
+    }
+    return q;
+}
+
+#pragma acc routine seq
+template <typename T>
 static void elasto_plastic(double bulkm, double shearm,
                            double amc, double anphi, double anpsi,
                            double hardn, double ten_max,
@@ -705,7 +795,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel,
-                   double_vec& dyn_fric_coeff, double_vec& state_variable)
+                   double_vec& dyn_fric_coeff, double_vec& state_variable,
+                   double_vec& shear_heat)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -713,6 +804,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
     const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    const bool has_shear_heating = param.control.has_shear_heating;
     // Only the two rate-and-state branches call compute_slip_rate*, which is the
     // sole consumer of the centroid velocity.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
@@ -721,8 +813,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
-        strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(has_hydraulic_diffusion, needs_slip_rate)
+        strain_rate, dyn_fric_coeff, state_variable, shear_heat) \
+        firstprivate(has_hydraulic_diffusion, needs_slip_rate, has_shear_heating)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -813,6 +905,16 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // mesh by the nearest-neighbour remap at each remesh, growing a spurious nonzero halo
         // that diffuses out of the yielding zones. Resetting to 0 makes it a true per-step rate.
         delta_plstrain[e] = 0.;
+
+        // Stress (and plane-strain out-of-plane stress) before this step's
+        // constitutive update, kept around to recover the non-elastic strain
+        // increment for shear heating once the update below is done.
+        double s_start[NSTR];
+        double syy_start = syy;
+        if (has_shear_heating) {
+            #pragma acc loop seq
+            for (int i=0; i<NSTR; ++i) s_start[i] = s[i];
+        }
 
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
@@ -1018,6 +1120,26 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 //            std::exit(1);
             break;
         }
+
+        if (has_shear_heating) {
+            double q;
+            if (param.mat.rheol_type == MatProps::rh_viscous) {
+                q = viscous_dissipation(viscosity[e], edot, var.dt);
+            } else {
+                double s_final[NSTR];
+                #pragma acc loop seq
+                for (int i=0; i<NSTR; ++i) s_final[i] = s[i];
+
+                double bulkm = var.mat->bulkm(e);
+                double shearm = var.mat->shearm(e);
+                bool has_syy = var.mat->is_plane_strain &&
+                    (param.mat.rheol_type & MatProps::rh_plastic);
+                q = nonelastic_dissipation(bulkm, shearm, s_start, s_final, de,
+                                           has_syy, syy_start, syy);
+            }
+            shear_heat[e] = q / var.dt;
+        }
+
         if (param.control.is_using_mixed_stress)
             dpressure[e] = trace(s) - old_s;
         // std::cerr << "stress " << e << ": ";
