@@ -624,6 +624,9 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
+
+		## Keep our symbols out of .dynsym
+		LDFLAGS += -Wl,--version-script=local-symbols.map
 		ifeq ($(nofma), 1)
 			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
@@ -881,10 +884,13 @@ GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS) $(BOOST_CXXFLAGS))
 ## which the outer make finishes before `all` runs `$(MAKE) build`. The map's
 ## dependency edges stay too: they cover a stamp that does not exist yet.
 FLAG_STAMPS = $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS)
+CXX_ID = command -v $(firstword $(CXX)); v=`$(CXX) --version 2>/dev/null | head -1`; \
+         test -n "$$v" || v=`$(CXX) -V 2>&1 | grep -m1 .`; echo "$$v"
+
 $(BUILD_STAMP): FORCE
-	@echo '$(CXX)|$(GLOBAL_CXXFLAGS)' > $@.tmp
+	@{ echo '$(CXX)|$(GLOBAL_CXXFLAGS)'; $(CXX_ID); } > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
-		test -f $@ && echo "   compile flags changed since the last build -- rebuilding"; \
+		test -f $@ && echo "   compiler or compile flags changed since the last build -- rebuilding"; \
 		mv $@.tmp $@; rm -f $(OBJS) $(M_OBJS); \
 	fi
 
