@@ -303,8 +303,50 @@ relaxed toward the physical elastic target of the current velocity iterate:
 τ^{k+1} = ( τ^k + θ τ* ) / ( 1 + θ ),     θ_e = G̃Δτ / (G_e Δt)
 ```
 
-This is Räss et al. Eq. 36 written for a total-stress, compressible
-formulation. The essential point — and the reason a naive implementation
+**Derivation from Räss et al.**  Eq. 34 of Räss et al. (2022) is the
+dual-time PT augmentation of the visco-elastic Stokes stress equation
+(Eq. 33): it adds a pseudo-time derivative (1/2G̃) ∂τ/∂τ alongside the
+physical Maxwell relaxation:
+
+```
+(1/2G̃) ∂τ_ij/∂τ  +  (τ_ij − τ̂_ij)/(2GΔt)  +  τ_ij/(2μ_s)  =  ε̇_ij(v)
+```
+
+where τ̂_ij = τ_old.  Discretising ∂τ/∂τ forward-in-pseudo-time and
+collecting τ^{k+1}:
+
+```
+τ^{k+1} [ 1/(2G̃Δτ) + 1/(2μ_ve) ]  =  ε̇_ij + τ^k/(2G̃Δτ) + τ_old/(2GΔt)
+```
+
+using 1/μ_ve = 1/(GΔt) + 1/μ_s (Eq. 35).  Multiplying through by 2G̃Δτ
+and letting θ = G̃Δτ/μ_ve:
+
+```
+τ^{k+1}(1 + θ)  =  τ^k  +  2G̃Δτ ε̇_ij  +  θ · (μ_ve/GΔt) · τ_old
+```
+
+In the **elastic limit** (μ_s → ∞, μ_ve = GΔt, θ = G̃Δτ/(GΔt)):
+
+```
+τ^{k+1}(1 + θ)  =  τ^k  +  θ · 2GΔt ε̇_ij  +  θ · τ_old
+                 =  τ^k  +  θ · (τ_old + 2GΔt ε̇_ij)
+                 =  τ^k  +  θ · τ*
+```
+
+which gives the update formula above exactly.  DynEarthSol's elasto-plastic
+rheology satisfies this limit (μ_s → ∞).  For a true Maxwell viscoelastic
+run (finite μ_s) the term θ · (μ_ve/GΔt) · τ_old no longer equals θ · τ_old,
+and a modified θ = G̃Δτ/μ_ve (using the effective μ_ve) would keep the same
+(τ^k + θ τ*)/(1 + θ) form but with a different τ* definition.
+
+The derivation above is for the deviatoric Räss et al. formulation
+(incompressible, deviatoric τ).  DynEarthSol uses total stress with
+compressibility: `C:ε̇Δt` includes the volumetric term `λΔt tr(ε̇) I`.
+The algebra is identical per component; only the physical elastic target
+τ* is broader.
+
+The essential point — and the reason a naive implementation
 diverges — is that the relaxation rate must be built from the **numerical**
 modulus `G̃`, not the physical one:
 
@@ -542,6 +584,64 @@ levels are higher than you can accept, reduce the increment size
 (`dt_fraction`): smaller steps mean smaller excursions past yield and a
 lower floor.
 
+### 2.11 Periodic retuning and Rayleigh-quotient adaptive Re
+
+The analytical parameters Re, CFL, r are derived for a homogeneous medium
+(§2.3).  For problems with spatially varying viscosity (plasticity, large
+thermal contrasts) the effective λ_min of the assembled system can differ
+substantially from the value the uniform-medium formula assumed, causing either
+overdamping (wasted iterations) or convergence failure.  Two coordinated
+mechanisms, both gated on `PT_retune_interval > 0`, adapt the parameters
+during the iteration.
+
+**Periodic `update_pt_params()`.** Every `PT_retune_interval` PT iterations
+the per-element `G̃Δτ|_e` and per-node `dτ_ρ[i]` factors are recomputed
+(Phase 1, commit `3c6f15d`).  During elastic phases these are nearly constant;
+during progressive yielding μ_ve,e softens and the local stepping factors
+follow.  Cost per call is O(nelem + nnode), ~1–2% of one iteration at interval 100.
+
+**Rayleigh-quotient Re estimate.** Every `PT_retune_interval` iterations
+`rayleigh_update_Re()` also estimates λ_min from the ratio of iterate
+differences over the preceding window (Phase 2, commit `a80bec5`):
+
+```
+λ_min ≈ ( −Σ_i Δv_i · Δf_i ) / ( Σ_i (1/dτ_ρ[i]) |Δv_i|² )
+```
+
+where Δv = v_current − v_snapshot and Δf = f_current − f_snapshot captured at
+the last retune call.  The optimal Re is then
+
+```
+Re_new = 2√(λ_min · λ_max) · (r+2) · L · G̅ · Δt / (CFL · h̅ · μ̅_ve)
+```
+
+with λ_max = CFL²/(r+2) from the stability limit.  To limit overshoot during
+the first few windows (when the iterate differences may not yet represent the
+slow-mode eigenvalue), Re_new is clamped to [0.5, 2.0] × `PT_Re`.
+
+**Retune guard.** The retune is skipped when `l2_residual / force_scale <
+100 × PT_relative_tolerance` (= 1e-4 with the default tolerance).  Near
+convergence the quotient would estimate numerical noise rather than physics.
+
+**Resetting between PT loops.** `PT_Re_adaptive` is reset to `param.PT_Re` at
+the start of each PT loop (init and main), so adaptation does not carry across
+physical time steps.
+
+**Observed behavior and benchmark.** In a 2D elasto-plastic benchmark
+(`examples/pt-retune-demo.cfg`, 5 time steps, `PT_max_iter = 10000`):
+
+- Without retuning: the init loop and step 1 both fail to converge (hit
+  max_iter = 10000).  Total iterations: 24 351.
+- With `PT_retune_interval = 100`: the init loop and step 1 converge at 5979
+  and 5266 iterations respectively.  Total iterations: 16 488 (**−32%**).
+
+The adaptive mechanism enables convergence by reducing Re from the default
+~14.9 to ~7.5 (lower clamping bound) once slow modes dominate, which gives
+larger `dτ_ρ` (more aggressive velocity stepping).  Step 2 is ~39% slower
+because its first 100-iteration window captures a fast-mode transient (200×
+residual drop), biasing λ_min high; this is outweighed by the savings on the
+previously-failing loops.
+
 ## 3. Practical usage
 
 ### 3.1 Minimal configuration
@@ -552,6 +652,7 @@ has_PT = yes
 PT_max_iter = 50000          # safety cap per time step
 PT_relative_tolerance = 1e-6 # unbalanced-force ratio (see below)
 PT_info_interval = 100       # print residual every N PT iterations (0 = quiet)
+PT_retune_interval = 100     # re-evaluate PT params every N iterations (0 = off)
 ```
 
 Everything else has sensible defaults. The optional tuning knobs:
@@ -593,6 +694,18 @@ PT iter 0:   residual = ..., residual/residual_0 = ...
 ...
 PT converged at iter 193: residual = 7.53511e+08 (residual/residual_0 = 0.000001)
 ```
+
+With `PT_retune_interval > 0`, retune calls appear on stderr between the
+iteration lines:
+
+```
+PT iter 100: residual = 6.33204e+07, residual/force_scale = 8.19e-08
+[retune] λ_min=1.24e-03, Re=2.21→clamped to 7.45, PT_Gdtau updated
+PT iter 200: residual = 1.41283e+07, residual/force_scale = 1.83e-08
+```
+
+The `→clamped` token appears when `Re_new` falls outside the [0.5, 2] ×
+`PT_Re` guard range (§2.11).
 
 - `force scale` is the gross-force denominator. `initial residual / force
   scale` tells you how far from equilibrium the step starts; values near
@@ -651,6 +764,18 @@ geometric), so this is cheap.
 - **Residual grows.** Should not happen with default parameters; if it does,
   reduce `PT_CFL`. Persistent growth indicates a configuration the stability
   analysis does not cover — please report it.
+- **Adaptive Re (retune) behaves unexpectedly.**  The first retune call at
+  iter `PT_retune_interval` can observe a fast-mode transient — a large initial
+  residual drop — which gives a high λ_min and pushes Re toward its upper
+  bound (2 × `PT_Re`), *slowing* that particular PT loop.  This is normal: the
+  upper bound prevents instability, and later retune calls (once slow modes
+  dominate) will return Re to the lower range.  If the first retune is
+  consistently mis-estimating in a problematic way, try doubling
+  `PT_retune_interval` to skip the transient window.  To disable adaptive Re
+  entirely while keeping periodic `update_pt_params`, set
+  `PT_retune_interval = 0` (disables both) or — if you want periodic
+  param updates only — you can set `PT_retune_interval` to a value but note
+  that both features share the same interval guard.
 - **Steps that hit `PT_max_iter` leave the last (unconverged) velocity
   iterate in `vel`**, which then advects the mesh. A run where many steps do
   this will produce distorted meshes and remeshing failures — treat
@@ -677,8 +802,9 @@ geometric), so this is cheap.
 
 | function | file | role |
 |---|---|---|
-| `update_pt_params()` | geometry.cxx | per-element `G̃Δτ`, per-node `dτ_ρ`, diagnostics |
-| `update_stress_PT()` | rheology.cxx | Eq. 36 relaxation + plastic projection |
+| `update_pt_params()` | geometry.cxx | per-element `G̃Δτ`, per-node `dτ_ρ`, volume-weighted μ_ve / G means; reads `PT_Re_adaptive` when set |
+| `rayleigh_update_Re()` | geometry.cxx | Rayleigh-quotient λ_min estimate → adaptive Re (§2.11) |
+| `update_stress_PT()` | rheology.cxx | Sect. 2.4 (Eq. 34) relaxation + plastic projection |
 | `update_velocity_PT()` | fields.cxx | accelerated velocity update |
 | `copy_stress_PT()` | fields.cxx | save/restore `τ_old` |
 | `calculate_characteristic_force()` | fields.cxx | gross-force scale for convergence test |
@@ -686,7 +812,7 @@ geometric), so this is cheap.
 | `update_force()` (residual section) | fields.cxx | BC-inclusive, DOF-masked residual assembly |
 | `compute_dt_PT()` | geometry.cxx | physical `Δt` without the DR stability limit (§2.9) |
 | `pt_stagnation_window()` | dynearthsol.cxx | auto check window, `2L/(CFL·h_mean)` (§2.10) |
-| PT loops + predictor–corrector | dynearthsol.cxx | step orchestration |
+| PT loops + predictor–corrector | dynearthsol.cxx | step orchestration, retune guard, snapshot management |
 
 ## 4. References
 
