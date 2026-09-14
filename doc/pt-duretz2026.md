@@ -60,10 +60,11 @@ estimates the actual λ_min of the assembled system from the Rayleigh quotient
 
 $$
 \lambda_\min \approx \frac{-\sum_{i,j} \Delta v_{ij}\,\Delta f_{ij}}
-                          {\sum_i \frac{1}{\texttt{PT\_dtau\_rho}[i]}\sum_j(\Delta v_{ij})^2}
+                          {\sum_i \frac{1}{\Delta\tau_{\rho,i}}\sum_j(\Delta v_{ij})^2}
 $$
 
-where Δv = v_current − v_snapshot and Δf = f_current − f_snapshot over the last
+where $\Delta\tau_{\rho,i}$ is the per-node pseudo-time step (`var.PT_dtau_rho[i]`),
+Δv = v_current − v_snapshot and Δf = f_current − f_snapshot over the last
 `PT_retune_interval` iterations.  The critical-damping Reynolds number is then
 
 $$

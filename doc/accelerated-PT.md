@@ -48,7 +48,7 @@ only then advances the physical state.
 **Where the "order" hides.**  The classification cannot be read off the
 momentum equation alone.  Both variants can be written in the same form,
 
-$$\tilde{\rho}\,\partial v/\partial\tau = \nabla \cdot \sigma + f,$$
+$$\tilde{\rho}\partial v/\partial\tau = \nabla \cdot \sigma + f,$$
 
 which is first order in time and second order in space *as written* — yet
 one variant is parabolic and the other hyperbolic.  The "order" refers to
@@ -77,7 +77,7 @@ stress of the *previous physical step*, a constant during the iteration —
 it contributes no pseudo-time dynamics).  Substituting this into the
 momentum update leaves a single pseudo-time derivative,
 
-$$\tilde{\rho}\,\partial v/\partial\tau = \nabla \cdot (C\Delta t : \dot{\varepsilon}(v)) + (\text{known terms}),$$
+$$\tilde{\rho}\partial v/\partial\tau = \nabla \cdot (C\Delta t : \dot{\varepsilon}(v)) + (\text{known terms}),$$
 
 a **parabolic** (diffusion) equation in pseudo-time with diffusivity
 `D ~ GΔt/ρ̃`.  There is no wave: the stress has no independent dynamics, so
@@ -137,8 +137,8 @@ Strip the scheme to its 1D scalar essence (elastic limit, `μ_ve = GΔt`).
 Per unit pseudo-time, the two updates read
 
 $$\begin{aligned}
-\tilde{\rho}\,\partial v/\partial\tau &= \partial\sigma/\partial x && \text{(momentum — no damping)}\\
-\partial\sigma/\partial\tau &= \tilde{G}\,\partial v/\partial x - \eta(\sigma - \tau^*) && \text{(stress relaxation)}
+\tilde{\rho}\partial v/\partial\tau &= \partial\sigma/\partial x && \text{(momentum — no damping)}\\
+\partial\sigma/\partial\tau &= \tilde{G}\partial v/\partial x - \eta(\sigma - \tau^*) && \text{(stress relaxation)}
 \end{aligned}$$
 
 The second line is the discrete θ-update of §2.4 in continuous form, with
@@ -152,7 +152,7 @@ momentum equation.
 `∂v/∂τ` from momentum (the target τ* is constant for the error), and the
 perturbation about the converged state obeys
 
-$$\partial^2\sigma/\partial\tau^2 + \eta\,\partial\sigma/\partial\tau = \hat{V}^2\,\partial^2\sigma/\partial x^2, \qquad \hat{V}^2 \propto \tilde{G}/\tilde{\rho}.$$
+$$\partial^2\sigma/\partial\tau^2 + \eta\partial\sigma/\partial\tau = \hat{V}^2\partial^2\sigma/\partial x^2, \qquad \hat{V}^2 \propto \tilde{G}/\tilde{\rho}.$$
 
 **Dispersion relation.**  A Fourier mode `σ ∝ e^{λτ} e^{ikx}` gives
 
@@ -576,9 +576,10 @@ follow.  Cost per call is O(nelem + nnode), ~1–2% of one iteration at interval
 `rayleigh_update_Re()` also estimates λ_min from the ratio of iterate
 differences over the preceding window (Phase 2, commit `a80bec5`):
 
-$$\lambda_\min \approx \frac{-\sum_{i,j} \Delta v_{ij}\,\Delta f_{ij}}{\sum_i \frac{1}{\texttt{PT\_dtau\_rho}[i]}\sum_j (\Delta v_{ij})^2}$$
+$$\lambda_\min \approx \frac{-\sum_{i,j} \Delta v_{ij}\,\Delta f_{ij}}{\sum_i \frac{1}{\Delta\tau_{\rho,i}}\sum_j (\Delta v_{ij})^2}$$
 
-where Δv = v_current − v_snapshot and Δf = f_current − f_snapshot captured at
+where $\Delta\tau_{\rho,i}$ is the per-node pseudo-time step (`var.PT_dtau_rho[i]`),
+Δv = v_current − v_snapshot and Δf = f_current − f_snapshot captured at
 the last retune call.  The optimal Re is then
 
 $$\mathrm{Re}_\text{new} = 2\sqrt{\lambda_\min \cdot \lambda_\max} \cdot \frac{(r+2)\,L\,\bar{G}\,\Delta t}{\mathrm{CFL}\,\bar{h}\,\bar{\mu}_{ve}}$$
