@@ -101,7 +101,7 @@ $$\Delta\tau \lesssim \frac{1}{D k_\max^2} \sim \frac{h^2}{D}.$$
 
 At this ceiling, the amplification factor for the *slowest* mode $k_\min = \pi/L$ is
 
-$$g(k_\min) = 1 - D\!\left(\frac{\pi}{L}\right)^{\!2}\!\frac{h^2}{D}
+$$g(k_\min) = 1 - D\left(\frac{\pi}{L}\right)^{2}\frac{h^2}{D}
             = 1 - \left(\frac{\pi h}{L}\right)^2
             \approx 1 - \left(\frac{h}{L}\right)^2,$$
 
