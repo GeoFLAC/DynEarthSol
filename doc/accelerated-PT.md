@@ -86,9 +86,27 @@ for Stokes flow (the setting of Räss et al.), where velocity *is* the
 equilibrium unknown and `τ = 2μ ε̇(v)` is instantaneous; the analogue for
 an elastic problem is moving each node in proportion to its current
 out-of-balance force with σ rebuilt from the total strain — steepest
-descent.  Explicit stability caps the step at `Δτ ≤ h²/(2d·D)`; the slowest
-error mode (`k_min = π/L`) then decays by only `~(h/L)²` per iteration, so
-the iteration count scales as `O((L/h)² · ln(1/tol))` — prohibitive for
+descent.  Explicit stability caps the step at `Δτ ≤ h²/(2d·D)` (here *d* is
+the number of spatial dimensions).  To see why the slowest mode decays so
+slowly, consider the 1D case.  For a mode of wavenumber *k*, explicit Euler
+multiplies its amplitude each iteration by the factor
+
+$$g(k) = 1 - D k^2 \Delta\tau,$$
+
+so the fractional decay per iteration is $1 - g(k) = D k^2 \Delta\tau$.
+Stability requires $|g| \le 1$ for all *k*; the binding constraint comes from
+the fastest (highest-*k*) mode, $k_\max = \pi/h$ (Nyquist), giving
+
+$$\Delta\tau \lesssim \frac{1}{D k_\max^2} \sim \frac{h^2}{D}.$$
+
+At this ceiling, the amplification factor for the *slowest* mode $k_\min = \pi/L$ is
+
+$$g(k_\min) = 1 - D\!\left(\frac{\pi}{L}\right)^{\!2}\!\frac{h^2}{D}
+            = 1 - \left(\frac{\pi h}{L}\right)^2
+            \approx 1 - \left(\frac{h}{L}\right)^2,$$
+
+so each iteration removes only a fraction $\sim(h/L)^2$ of the slow-mode error,
+and the iteration count scales as `O((L/h)² · ln(1/tol))` — prohibitive for
 fine meshes.  Information spreads the way diffusion spreads: incoherently,
 over a radius `~h√k` after `k` iterations.
 
