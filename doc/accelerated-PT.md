@@ -108,7 +108,19 @@ $$g(k_\min) = 1 - D\left(\frac{\pi}{L}\right)^{2}\frac{h^2}{D}
 so each iteration removes only a fraction $\sim(h/L)^2$ of the slow-mode error,
 and the iteration count scales as `O((L/h)² · ln(1/tol))` — prohibitive for
 fine meshes.  Information spreads the way diffusion spreads: incoherently,
-over a radius `~h√k` after `k` iterations.
+over a radius `~h√k` after `k` iterations.  To see why, note that after $k$
+iterations of size $\Delta\tau$, the elapsed pseudo-time is $k\Delta\tau$, so
+a diffusive disturbance spreads over
+
+$$r \sim \sqrt{D \cdot k\Delta\tau} \sim \sqrt{D \cdot k \cdot \frac{h^2}{D}} = h\sqrt{k}.$$
+
+This is the random-walk result: each degree of freedom nudges its neighbours
+by a small amount each step, with no organised wave front, so the spread
+grows as $\sqrt{k}$ rather than linearly in $k$.  To reach across the domain
+($r \sim L$) requires $k \sim (L/h)^2$, confirming the scaling above.  The
+second-order scheme escapes this because its stress dynamics carry a genuine
+wave front that advances $\sim h$ per iteration, crossing the domain
+coherently in $O(L/h)$ steps.
 
 **Second-order PT: the stress gets its own pseudo-time evolution.**  Instead
 of enforcing the constitutive law, each iteration *relaxes toward* it (the
