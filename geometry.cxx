@@ -2095,9 +2095,11 @@ void update_pt_params(const Param& param, Variables& var)
     for (int i = 0; i < var.nnode; ++i) {
         double h_i  = std::numeric_limits<double>::max();
         double mu_i = 0.0;
-        for (auto e = (*var.support)[i].begin(); e < (*var.support)[i].end(); ++e) {
-            h_i  = std::min(h_i, h_e_vec[*e]);
-            mu_i = std::max(mu_i, mu_ve_vec[*e]);
+        const int npatch = var.support.size(i);
+        const int* patch = var.support.patch(i);
+        for (int k = 0; k < npatch; ++k) {
+            h_i  = std::min(h_i, h_e_vec[patch[k]]);
+            mu_i = std::max(mu_i, mu_ve_vec[patch[k]]);
         }
         (*var.PT_dtau_rho)[i] = (mu_i > 0.0)
             ? CFL * h_i * L * NODES_PER_ELEM / (Re * mu_i * (*var.volume_n)[i])

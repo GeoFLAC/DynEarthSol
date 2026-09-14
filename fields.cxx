@@ -816,17 +816,14 @@ double calculate_characteristic_force(const Param& param, Variables& var, elem_c
 
         double g[NDIMS];
         for (int j = 0; j < NDIMS; ++j) g[j] = 0;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[*e];
-            ConstElemCacheAccessor tr = tmp_result[*e];
-
-            for (int i = 0; i < NODES_PER_ELEM; i++) {
-                if (n == conn[i]) {
-                    for (int j = 0; j < NDIMS; j++)
-                        if (!fix[j]) g[j] += std::fabs(tr[i+NODES_PER_ELEM*j]);
-                    break;
-                }
-            }
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        const int* lpatch = var.support.local(n);
+        for (int k = 0; k < npatch; ++k) {
+            ConstElemCacheAccessor tr = tmp_result[patch[k]];
+            const int i = lpatch[k];
+            for (int j = 0; j < NDIMS; j++)
+                if (!fix[j]) g[j] += std::fabs(tr[i+NODES_PER_ELEM*j]);
         }
         for (int j = 0; j < NDIMS; ++j)
             l2 += g[j] * g[j] / num;

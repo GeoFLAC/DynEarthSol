@@ -537,10 +537,10 @@ void initial_stress_state_from_spatialdb(const Param &param, const Variables &va
         read_spatialdb_refstate(filenames[m], clouds[m], sdb_stress[m], sdb_strain[m]);
         std::cout << clouds[m].size() << " points\n";
 
-        cloud_wrappers[m] = std::make_unique<SDBCloud>(clouds[m]);
-        kdtrees[m] = std::make_unique<SDBKDTree>(
+        cloud_wrappers[m].reset(new SDBCloud(clouds[m]));
+        kdtrees[m].reset(new SDBKDTree(
             3, *cloud_wrappers[m],
-            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* leaf size */));
+            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* leaf size */)));
         kdtrees[m]->buildIndex();
     }
 
