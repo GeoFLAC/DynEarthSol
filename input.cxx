@@ -424,6 +424,10 @@ static void declare_parameters(po::options_description &cfg,
         ("control.PT_char_length", po::value<double>(&p.control.PT_char_length)->default_value(0),
          "Accelerated PT characteristic domain length L [m].\n"
          "0 = auto: max(xlength, ylength, zlength).\n")
+        ("control.PT_retune_interval", po::value<int>(&p.control.PT_retune_interval)->default_value(100),
+         "Re-evaluate per-element/node PT stepping factors every N PT iterations.\n"
+         "Keeps damping in sync with evolving plastic state (Duretz et al. 2026).\n"
+         "0 = disable (evaluate once before the loop, legacy behaviour).\n")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")

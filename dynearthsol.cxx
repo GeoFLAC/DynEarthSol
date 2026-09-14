@@ -604,6 +604,11 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             // convergence, in the caller.
             update_strain_rate(var, *var.strain_rate);
             update_stress_PT(param, var, *var.stress);
+            if (param.control.PT_retune_interval > 0 &&
+                pt_step > 0 &&
+                pt_step % param.control.PT_retune_interval == 0 &&
+                var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance)
+                update_pt_params(param, var);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             update_velocity_PT(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
@@ -984,6 +989,11 @@ int main(int argc, const char* argv[])
                     // force balance and caused the boundary-pluck.  See
                     // doc/pt-boundary-pluck.md.)
                     update_stress_PT(param, var, *var.stress);
+                    if (param.control.PT_retune_interval > 0 &&
+                        pt_step > 0 &&
+                        pt_step % param.control.PT_retune_interval == 0 &&
+                        var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance)
+                        update_pt_params(param, var);
                     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                     update_velocity_PT(param, var, *var.vel);
                     var.l2_residual = calculate_residual_force(var, *var.force_residual);

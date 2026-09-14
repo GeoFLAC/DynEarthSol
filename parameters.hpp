@@ -261,6 +261,7 @@ struct Control {
     double PT_CFL;         // CFL-like stability factor (default: 0.9/sqrt(NDIMS))
     double PT_r;           // K̃/G̃ ratio (default: 0.5)
     double PT_char_length; // characteristic domain length L (0 = auto: max(xlength,ylength,zlength))
+    int PT_retune_interval; // re-evaluate PT params every N iters inside loop (0 = off)
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
