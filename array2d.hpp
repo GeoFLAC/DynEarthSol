@@ -180,17 +180,18 @@ public:
         if (a_ == nullptr) {
             a_ = new T[N * count];
             n_ = count;
-        } else if (count > n_ || should_strip) {
+        } else if (count > std::size_t(n_) || should_strip) {
             this->resize(count, false);
             n_ = count;
         }
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(count > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
-                (*this)[i][d] = buffer[i * N + d]; 
+                (*this)[i][d] = buffer[i * N + d];
             }
         }
     }
@@ -208,13 +209,14 @@ public:
 //     }
 
     void pack_to(std::vector<T>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
         std::size_t total_elements = count * N;
 
         buffer.resize(total_elements);
 
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(n_ > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
@@ -226,7 +228,7 @@ public:
 
 #ifdef ACC
     void pack_to_xyz_float(std::vector<float3>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
 
         if (buffer.size() < count)
             buffer.resize(count);
@@ -273,7 +275,8 @@ public:
             if (aos_data != nullptr) {
 #ifdef SOA
 #ifndef ACC
-                #pragma omp parallel for collapse(2) if(n_ > 10000)
+                #pragma omp parallel for default(none) shared(aos_data) \
+                    collapse(2) if(n_ > 10000)
 #endif
                 #pragma acc parallel loop gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
@@ -388,7 +391,8 @@ public:
 #endif
 
 #ifndef ACC
-        #pragma omp parallel for if(n_ > 10000)
+        #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
+            if(n_ > 10000)
 #endif
         #pragma acc parallel loop gang vector
         for (int i = 0; i < n_; ++i) {

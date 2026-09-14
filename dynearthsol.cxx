@@ -36,6 +36,7 @@ namespace std { using ::snprintf; }
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
+    var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -185,6 +186,9 @@ void init(const Param& param, Variables& var)
     #pragma acc wait
 
     *var.volume_old = *var.volume;
+    // Must precede apply_vbcs: it is the only writer of edge_vec/edge_slot, which
+    // apply_vbcs reads for any node on two boundaries at once.
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
     var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
                                     : compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
@@ -195,12 +199,12 @@ void init(const Param& param, Variables& var)
 #endif
 
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
-    // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
+    // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
+    var.mat->refresh_elem_cache();
     switch (param.ic.stress_ic_option) {
     case 1:
         initial_stress_state_from_spatialdb(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
@@ -271,7 +275,7 @@ void restart(const Param& param, Variables& var)
         if (!got_meta) {
             std::cerr << "Error: frame " << param.sim.restarting_from_frame
                     << " not found in " << filename << ".\n";
-            exit(2);
+            die(EXIT_IO_RESTART);
         }
     } else {
         std::cerr << "Warning: cannot open info file " << filename
@@ -287,7 +291,7 @@ void restart(const Param& param, Variables& var)
         } else {
             std::cerr << "Error: cannot read frame metadata from " << filename
                       << " and " << filename_save << " has none embedded.\n";
-            std::exit(2);
+            die(EXIT_IO_RESTART);
         }
     }
 
@@ -356,6 +360,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.dt, "dt");
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
+        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
@@ -399,7 +404,7 @@ void restart(const Param& param, Variables& var)
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
     apply_vbcs(param, var, *var.vel);
 
@@ -478,6 +483,9 @@ void update_mesh(const Param& param, Variables& var)
 #endif
 
     compute_volume(var, *var.volume);
+
+    // surface_processes() above can move elemmarkers via correct_surface_marker().
+    var.mat->refresh_elem_cache();
 
     if (param.control.use_global_velocity_scaling) {
         var.dt = (param.control.has_PT) ? compute_dt_PT(param, var)
@@ -747,8 +755,10 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
-    report_cpu_runtime_status();
-    report_openacc_runtime_status();
+    // Selects the offload device, so it must precede any compute.
+    init_offload_device();
+    report_host_runtime_status();
+    report_device_runtime_status();
 
     //
     // run simulation
@@ -901,6 +911,8 @@ int main(int argc, const char* argv[])
 #endif
         var.steps ++;
         var.time += var.dt;
+        // Pick up what the previous step's phase changes and remeshing moved.
+        var.mat->refresh_elem_cache();
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
@@ -1093,11 +1105,8 @@ int main(int argc, const char* argv[])
         }
 
 
-        // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
-            #pragma acc wait // following founction is not ACC parallelized
+        if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
-        }
 
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
@@ -1115,6 +1124,8 @@ int main(int argc, const char* argv[])
             // The functions inside this if-block are expensive in computation is expensive,
             // and only changes slowly. Don't have to do it every time step
             phase_changes(param, var);
+            // phase_changes() moved elemmarkers; compute_dt() below reads them.
+            var.mat->refresh_elem_cache();
 
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,

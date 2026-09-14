@@ -1,5 +1,8 @@
 name: Functional tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "master", "bugfix*" ]

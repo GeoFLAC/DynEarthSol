@@ -233,6 +233,23 @@ static void declare_parameters(po::options_description &cfg,
          "12: flatten x0 when using fixed bottom boundary.\n"
          "13: move all bottom, left, and right nodes to initial dimensions.\n")
 
+        ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
+         "During remeshing the element stress is a Deborah-number-weighted blend of "
+         "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
+         "the last remesh. The weight is a smoothstep -- the cubic 3t^2 - 2t^3, flat "
+         "at both ends -- in log10(De): high-De (cold, effectively "
+         "elastic) elements keep the NN stress, preserving elastic stress memory; "
+         "low-De (weak, viscous) elements take the SPR average, which suppresses "
+         "element-scale noise. This sets the De at or below which the remeshed "
+         "stress is purely the SPR recovery.")
+
+        ("mesh.remesh_deborah_max", po::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
+         "De at or above which the remeshed stress is purely the NN-remapped stress. "
+         "The default puts the two limits two decades apart, which keeps them clear of "
+         "the De = 1 crossover while remesh intervals themselves vary by a factor of a "
+         "few between events; widen it to blend more of the domain, narrow it to make "
+         "the switch sharper. The window width is otherwise untuned.")
+
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discarding internal segments after initial mesh is created? "
          "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
@@ -309,9 +326,10 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.ref_pressure_option", po::value<int>(&p.control.ref_pressure_option)->default_value(0),
          "How to define reference pressure?\n"
-         "0: using density of the 0-th element to compute lithostatic pressure.\n"
+         "0: using density of the mat.mattype_ref-th material to compute lithostatic pressure.\n"
          "1: computing reference pressure from the PREM model.\n"
-         "2: computing reference pressure from the PREM model, modified for continent.\n")
+         "2: computing reference pressure from the PREM model, modified for continent.\n"
+         "Any other value is rejected at startup.\n")
 //        ("control.surface_pressure_correction", po::value<bool>(&p.control.surface_pressure_correction)->default_value(false),
 //         "Correct the pressure of surface elements"
 //         "which has positive stress 1st invariant"
@@ -395,39 +413,8 @@ static void declare_parameters(po::options_description &cfg,
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
          "tolerance for relative change for breaking PT loop")
-        ("control.PT_info_interval", po::value<int>(&p.control.PT_info_interval)->default_value(0),
-         "Print PT loop progress every N iterations (0 = silent).")
-        ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(-1),
-         "Exit the PT loop early if the best residual improves by less than 0.1%\n"
-         "over two consecutive windows of this many iterations (nonlinear\n"
-         "stagnation, e.g. the plastic projection floor).  A warning reports\n"
-         "the achieved residual level.\n"
-         "-1 = auto (two pseudo-wave domain crossings, 2*L/(CFL*h_mean));\n"
-         "0 = disabled (iterate until tolerance or PT_max_iter).\n")
-        ("control.PT_dpls_fraction", po::value<double>(&p.control.PT_dpls_fraction)->default_value(0.1),
-         "PT mode only: cap dt so that no element traverses more than this\n"
-         "fraction of its piecewise-linear weakening ramp (pls1 - pls0) per\n"
-         "step.  Evaluated per element against the curves of its constituent\n"
-         "materials: saturated elements impose no limit, and elements below a\n"
-         "ramp get the flat run-up to pls0 for free.  The increment is\n"
-         "estimated from the previous step's delta_plstrain, so the cap adapts\n"
-         "to the fastest active shear band.  0 = disabled.\n")
-        ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
-         "Accelerated PT numerical Reynolds number Re (Räss et al. 2022, Eq. 31).\n"
-         "Optimal value for 2D/3D Stokes: 3*sqrt(10)/2*pi ≈ 14.93.\n")
-        ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.9/std::sqrt((double)NDIMS)),
-         "Accelerated PT CFL-like stability factor (Räss et al. 2022, Eq. 8).\n"
-         "Default: 0.9/sqrt(NDIMS).\n")
-        ("control.PT_r", po::value<double>(&p.control.PT_r)->default_value(0.5),
-         "Accelerated PT bulk-to-shear pseudo-modulus ratio K̃/G̃ (Räss et al. 2022, Eq. 32).\n"
-         "Optimal value: 0.5.\n")
-        ("control.PT_char_length", po::value<double>(&p.control.PT_char_length)->default_value(0),
-         "Accelerated PT characteristic domain length L [m].\n"
-         "0 = auto: max(xlength, ylength, zlength).\n")
         ("control.PT_retune_interval", po::value<int>(&p.control.PT_retune_interval)->default_value(100),
-         "Re-evaluate per-element/node PT stepping factors every N PT iterations.\n"
-         "Keeps damping in sync with evolving plastic state (Duretz et al. 2026).\n"
-         "0 = disable (evaluate once before the loop, legacy behaviour).\n")
+         "Re-run update_pt_params every N PT iterations (0 = never). Only fires when residual > 100*PT_relative_tolerance.")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
@@ -453,6 +440,10 @@ static void declare_parameters(po::options_description &cfg,
 
         ("bc.has_water_loading", po::value<bool>(&p.bc.has_water_loading)->default_value(true),
          "Applying water loading for top boundary that is below sea level?")
+
+        ("bc.sea_water_density", po::value<double>(&p.bc.sea_water_density)->default_value(1030),
+         "Density of the loading water (in kg/m^3). Used for the top-boundary "
+         "water load and for the free-surface stress pin that must match it.")
 
          // pore pressure boundary condition
         ("bc.hbc_x0", po::value<int>(&p.bc.hbc_x0)->default_value(0),
@@ -771,13 +762,6 @@ static void declare_parameters(po::options_description &cfg,
          "Initial excess_pore_pressure except for boundary.\n")
          ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
-        ("ic.stress_ic_option", po::value<int>(&p.ic.stress_ic_option)->default_value(0),
-         "Initial stress state option.\n"
-         "0: lithostatic (default).\n"
-         "1: interpolated from per-material PyLith spatialdb files.\n")
-        ("ic.spatialdb_stress_filenames", po::value<std::string>()->default_value(""),
-         "Semicolon-separated list of spatialdb file paths (one per material, in material-index order).\n"
-         "Required when ic.stress_ic_option = 1.\n")
 
         ;
 
@@ -799,7 +783,7 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
-         "Index of reference material. For compute_dt(), ref_pressure()")
+         "Index of reference material. For compute_dt(), compute_mass() and ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
@@ -820,12 +804,8 @@ static void declare_parameters(po::options_description &cfg,
          "Max. value of viscosity (in Pa.s)")
         ("mat.min_viscosity", po::value<double>(&p.mat.visc_min)->default_value(1e18),
          "Min. value of viscosity (in Pa.s)")
-        ("mat.max_tension", po::value<std::string>()->default_value("[1e9]"),
-         "Max. value of tensile stress (in Pa), per material (single value broadcasts to all)")
-        ("mat.reassign_markers_file", po::value<std::string>(&p.mat.reassign_markers_file)->default_value(""),
-         "Path to a file of 'elem_id new_mattype' pairs. At start/restart, markers in "
-         "those elements are retagged to the given material and their stress/plastic strain "
-         "zeroed (excavation/backfill). Requires remeshing_option=0. Empty = disabled.")
+        ("mat.max_tension", po::value<double>(&p.mat.tension_max)->default_value(1e9),
+         "Max. value of tensile stress (in Pa)")
         ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
@@ -941,12 +921,12 @@ static void read_parameters_from_file
     }
     catch (const boost::program_options::multiple_occurrences& e) {
         std::cerr << e.what() << " from option: " << e.get_option_name() << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
     catch (std::exception& e) {
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
-        std::exit(1);
+        die(EXIT_CONFIG);
     }
 }
 
@@ -995,7 +975,7 @@ static void get_numbers(const po::variables_map &vm, const char *name,
 {
     if ( ! vm.count(name) ) {
         std::cerr << "Error: " << name << " is not provided.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     std::string str = vm[name].as<std::string>();
@@ -1013,7 +993,7 @@ static void get_numbers(const po::variables_map &vm, const char *name,
     if (err) {
         std::cerr << "Error: incorrect format for " << name << ",\n"
                   << "       must be '[d0, d1, d2, ...]'\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 }
 
@@ -1026,8 +1006,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // stopping condition and output interval are based on either model time or step
     //
     if ( ! (vm.count("sim.max_steps") || vm.count("sim.max_time_in_yr")) ) {
-        std::cerr << "Must provide either sim.max_steps or sim.max_time_in_yr\n";
-        std::exit(1);
+        die(EXIT_CONFIG, "Must provide either sim.max_steps or sim.max_time_in_yr");
     }
     if ( ! vm.count("sim.max_steps") )
         p.sim.max_steps = std::numeric_limits<int>::max();
@@ -1035,8 +1014,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
-        std::cerr << "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr\n";
-        std::exit(1);
+        die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
     }
     if ( ! vm.count("sim.output_step_interval") )
         p.sim.output_step_interval = std::numeric_limits<int>::max();
@@ -1048,26 +1026,28 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     //
     if (p.sim.is_restarting) {
         if ( ! vm.count("sim.restarting_from_modelname") ) {
-            std::cerr << "Must provide sim.restarting_from_modelname when restarting.\n";
-            std::exit(1);
+            die(EXIT_CONFIG, "Must provide sim.restarting_from_modelname when restarting.");
         }
         if ( ! vm.count("sim.restarting_from_frame") ) {
-            std::cerr << "Must provide sim.restarting_from_frame when restarting.\n";
-            std::exit(1);
+            die(EXIT_CONFIG, "Must provide sim.restarting_from_frame when restarting.");
         }
     }
 
-    if (p.sim.is_outputting_averaged_fields == true &&
-        p.mesh.quality_check_step_interval > 0)
+    // Both are modulo divisors, the first one just below, so a zero is a SIGFPE.
+    if (p.mesh.quality_check_step_interval < 1) {
+        die(EXIT_CONFIG_VALUE, "mesh.quality_check_step_interval must be positive.");
+    }
+    if (p.sim.checkpoint_frame_interval < 1) {
+        die(EXIT_CONFIG_VALUE, "sim.checkpoint_frame_interval must be positive.");
+    }
+
+    if (p.sim.is_outputting_averaged_fields == true)
         if (vm.count("sim.output_step_interval") &&
             p.sim.output_step_interval%p.mesh.quality_check_step_interval !=0) {
-            std::cerr << "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.");
     }
 
     // Ensure info_display_step_interval is a multiple of quality_check_step_interval
-    // (skipped when quality_check_step_interval == 0, meaning quality checks are disabled)
-    if (p.mesh.quality_check_step_interval > 0) {
     if (p.sim.info_display_step_interval <= 0)
         p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
@@ -1077,16 +1057,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << p.sim.info_display_step_interval
                   << " (must be a multiple of quality_check_step_interval="
                   << q << ")\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
-    } // end if (quality_check_step_interval > 0)
     if (p.sim.earthquake_output_step_interval < 1) {
-        std::cerr << "Error: sim.earthquake_output_step_interval must be >= 1.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE, "sim.earthquake_output_step_interval must be >= 1.");
     }
     if (p.sim.earthquake_start_factor <= 0 || p.sim.earthquake_end_factor <= 0) {
-        std::cerr << "Error: sim.earthquake_start_factor and sim.earthquake_end_factor must be > 0.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE, "sim.earthquake_start_factor and sim.earthquake_end_factor must be > 0.");
     }
     if (p.sim.earthquake_start_factor <= p.sim.earthquake_end_factor) {
         std::cerr << "Warning: sim.earthquake_start_factor <= sim.earthquake_end_factor; "
@@ -1096,14 +1073,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     // these parameters are required in mesh.meshing_elem_shape >= 1
 #ifdef THREED
     if (p.mesh.meshing_elem_shape == 2) {
-        std::cerr << "Error: mesh.meshing_elem_shape == 2 is not available in 3D.\n";
-        std::exit(1);
+        die(EXIT_UNSUPPORTED_DIM, "mesh.meshing_elem_shape == 2 is not available in 3D.");
     }
 #endif
     if (p.mesh.meshing_elem_shape >= 1) {
         if ( p.mesh.meshing_option != 1) {
-            std::cerr << "Error: mesh.meshing_elem_shape >= 1 is only for mesh.meshing_option == 1.\n";
-            std::exit(1);
+            die(EXIT_UNSUPPORTED_DIM, "mesh.meshing_elem_shape >= 1 is only for mesh.meshing_option == 1.");
         }
     }
 
@@ -1121,7 +1096,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << "mesh.refined_zoney, "
 #endif
                   << "mesh.refined_zonez.\n";
-        std::exit(1);
+        die(EXIT_CONFIG);
         }
 
         /* get 2 numbers from the string */
@@ -1133,7 +1108,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refine_zonex,\n"
                       << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonex.first = tmp[0];
         p.mesh.refined_zonex.second = tmp[1];
@@ -1143,7 +1118,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refine_zoney,\n"
                       << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zoney.first = tmp[0];
         p.mesh.refined_zoney.second = tmp[1];
@@ -1153,15 +1128,19 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refine_zonez,\n"
                       << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonez.first = tmp[0];
         p.mesh.refined_zonez.second = tmp[1];
     }
 
     if (p.mesh.smallest_size > p.mesh.largest_size) {
-        std::cerr << "Error: mesh.smallest_size is greater than mesh.largest_size.\n";
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
+    }
+
+    if (p.mesh.remesh_deborah_min <= 0 ||
+        p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
+        die(EXIT_CONFIG_VALUE, "mesh.remesh_deborah_min must be positive and less than mesh.remesh_deborah_max.");
     }
 
     //
@@ -1169,12 +1148,10 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     //
     {
         if (p.monitor.step_interval < 1) {
-            std::cerr << "Error: monitor.step_interval must be >= 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.step_interval must be >= 1.");
         }
         if (p.monitor.num_points < 0) {
-            std::cerr << "Error: monitor.num_points must be >= 0.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.num_points must be >= 0.");
         }
 
         get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
@@ -1194,8 +1171,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 #endif
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
-            std::cerr << "Error: monitor.enabled=true requires monitor.num_points > 0.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.enabled=true requires monitor.num_points > 0.");
         }
 
         if (p.monitor.points_unit == "mm")
@@ -1207,8 +1183,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         else if (p.monitor.points_unit == "km")
             p.monitor.points_scale_to_m = 1e3;
         else {
-            std::cerr << "Error: monitor.points_unit must be one of mm, cm, m, km.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.points_unit must be one of mm, cm, m, km.");
         }
 
         for (int i = 0; i < p.monitor.num_points; ++i) {
@@ -1227,8 +1202,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         else if (rebind_mode == "pre_remesh_coord")
             p.monitor.remesh_rebind_mode = monitor_rebind_pre_remesh_coord;
         else {
-            std::cerr << "Error: monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.");
         }
 
         const bool any_monitor_output =
@@ -1252,15 +1226,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             p.monitor.output_state_variable;
 
         if (p.monitor.enabled && !any_monitor_output) {
-            std::cerr << "Error: monitor.enabled=true requires at least one monitor.output_* = true.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "monitor.enabled=true requires at least one monitor.output_* = true.");
         }
     }
 
 #ifdef THREED
     if (p.mesh.remeshing_option == 2) {
-        std::cerr << "Error: mesh.remeshing_option=2 is not available in 3D.\n";
-        std::exit(1);
+        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
 #endif
 
@@ -1294,38 +1266,30 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
 #ifdef THREED
         if ( p.bc.vbc_z0 > 3) {
-            std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, or 3.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z0 is not 0, 1, 2, or 3.");
         }
         if ( p.bc.vbc_z1 > 3) {
-            std::cerr << "Error: bc.vbc_z1 is not 0, 1, 2, or 3.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, or 3.");
         }
 #else
         if ( p.bc.vbc_z0 > 4) {
-            std::cerr << "Error: bc.vbc_z0 is not 0, 1, 2, 3, or 4.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z0 is not 0, 1, 2, 3, or 4.");
         }
         if ( p.bc.vbc_z1 > 4) {
-            std::cerr << "Error: bc.vbc_z1 is not 0, 1, 2, 3, or 4.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, 3, or 4.");
         }
 #endif
         if ( p.bc.vbc_n0 != 1 && p.bc.vbc_n0 != 3 && p.bc.vbc_n0 != 11 && p.bc.vbc_n0 != 13 ) {
-            std::cerr << "Error: bc.vbc_n0 is not 1, 3, 11, or 13.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_n0 is not 1, 3, 11, or 13.");
         }
         if ( p.bc.vbc_n1 != 1 && p.bc.vbc_n1 != 3 && p.bc.vbc_n1 != 11 && p.bc.vbc_n1 != 13 ) {
-            std::cerr << "Error: bc.vbc_n1 is not 1, 3, 11, or 13.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_n1 is not 1, 3, 11, or 13.");
         }
         if ( p.bc.vbc_n2 != 1 && p.bc.vbc_n2 != 3 && p.bc.vbc_n2 != 11 && p.bc.vbc_n2 != 13 ) {
-            std::cerr << "Error: bc.vbc_n2 is not 1, 3, 11, or 13.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_n2 is not 1, 3, 11, or 13.");
         }
         if ( p.bc.vbc_n3 != 1 && p.bc.vbc_n3 != 3 && p.bc.vbc_n3 != 11 && p.bc.vbc_n3 != 13 ) {
-            std::cerr << "Error: bc.vbc_n3 is not 1, 3, 11, or 13.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "bc.vbc_n3 is not 1, 3, 11, or 13.");
         }
     }
 
@@ -1334,12 +1298,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     //
     {
         if ( p.control.dt_fraction < 0 || p.control.dt_fraction > 1 ) {
-            std::cerr << "Error: control.dt_fraction must be between 0 and 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "control.dt_fraction must be between 0 and 1.");
         }
         if ( p.control.damping_factor < 0 || p.control.damping_factor > 1 ) {
-            std::cerr << "Error: control.damping_factor must be between 0 and 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "control.damping_factor must be between 0 and 1.");
+        }
+        // ref_pressure() is 'acc routine seq' and cannot reject an option itself; it
+        // returns 0. Keep this range in step with its branches and the help above.
+        if (p.control.ref_pressure_option < 0 || p.control.ref_pressure_option > 2) {
+            std::cerr << "Error: control.ref_pressure_option must be 0, 1, or 2 (got "
+                      << p.control.ref_pressure_option << ").\n";
+            die(EXIT_CONFIG_VALUE);
         }
 
     }
@@ -1373,14 +1342,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             if (! std::is_sorted(p.ic.mattype_layer_depths.begin(), p.ic.mattype_layer_depths.end())) {
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
                     " small to big values.\n";
-                std::exit(1);
+                die(EXIT_CONFIG_VALUE);
             }
         }
 
         if (p.ic.temperature_option == 3) {
             if (p.ic.radiogenic_heat_dome_width == 0) {
-                std::cerr << "Error: ic.radiogenic_heat_dome_width must be greater than 0 for ic.temperature_option=3.\n";
-                std::exit(1);
+                die(EXIT_CONFIG_VALUE, "ic.radiogenic_heat_dome_width must be greater than 0 for ic.temperature_option=3.");
             }
         }
     }
@@ -1415,7 +1383,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             p.mat.rheol_type = MatProps::rh_evp_rsf;
         else {
             std::cerr << "Error: unknown rheology: '" << str << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE);
         }
 
         if ((p.mat.rheol_type & MatProps::rh_rsf) && !p.control.use_global_velocity_scaling) {
@@ -1431,17 +1399,23 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 #endif
 
         if (p.mat.phase_change_option != 0 && p.mat.nmat == 1) {
-            std::cerr << "Error: mat.phase_change_option is chosen, but mat.num_materials is 1.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_option is chosen, but mat.num_materials is 1.");
         }
         if (p.mat.phase_change_option == 1 && p.mat.nmat < 8) {
-            std::cerr << "Error: mat.phase_change_option is 1, but mat.num_materials is less than 8.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 1, but mat.num_materials is less than 8.");
         }
 
         if (p.mat.nmat < 1) {
-            std::cerr << "Error: mat.num_materials must be greater than 0.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "mat.num_materials must be greater than 0.");
+        }
+
+        // mattype_ref indexes the per-material arrays directly in ref_pressure(),
+        // compute_dt() and compute_mass(), so it must be a valid material.
+        if (p.mat.mattype_ref < 0 || p.mat.mattype_ref >= p.mat.nmat) {
+            std::cerr << "Error: mat.mattype_ref (" << p.mat.mattype_ref
+                      << ") must be within [0, mat.num_materials-1] = [0, "
+                      << p.mat.nmat - 1 << "].\n";
+            die(EXIT_CONFIG_VALUE);
         }
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {
@@ -1489,7 +1463,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
         get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
         get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.max_tension", p.mat.tension_max, p.mat.nmat, -1);
 
         // Hydraulic parameters
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);
@@ -1506,8 +1479,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
         get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
-            std::cerr << "Error: mat.state_var_model must be 0, 1, or 2.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }
         if (p.mat.rheol_type & MatProps::rh_rsf) {
             for (int m = 0; m < p.mat.nmat; ++m) {
@@ -1515,39 +1487,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                     p.mat.characteristic_velocity[m] <= 0.0) {
                     std::cerr << "Error: mat.characteristic_velocity must be > 0 for RSF materials "
                               << "(material index " << m << ").\n";
-                    std::exit(1);
+                    die(EXIT_CONFIG_VALUE);
                 }
                 if (!std::isfinite(p.mat.characteristic_distance[m]) ||
                     p.mat.characteristic_distance[m] <= 0.0) {
                     std::cerr << "Error: mat.characteristic_distance must be > 0 for RSF materials "
                               << "(material index " << m << ").\n";
-                    std::exit(1);
+                    die(EXIT_CONFIG_VALUE);
                 }
             }
-        }
-    }
-
-    // Parse spatialdb stress filenames (semicolon-separated) when stress_ic_option == 1
-    if (p.ic.stress_ic_option == 1) {
-        std::string raw = vm["ic.spatialdb_stress_filenames"].as<std::string>();
-        if (raw.empty()) {
-            std::cerr << "Error: ic.spatialdb_stress_filenames must be provided when ic.stress_ic_option = 1.\n";
-            std::exit(1);
-        }
-        std::istringstream ss(raw);
-        std::string tok;
-        while (std::getline(ss, tok, ';')) {
-            // trim leading/trailing whitespace
-            size_t a = tok.find_first_not_of(" \t");
-            size_t b = tok.find_last_not_of(" \t");
-            if (a != std::string::npos)
-                p.ic.spatialdb_stress_filenames.push_back(tok.substr(a, b - a + 1));
-        }
-        if ((int)p.ic.spatialdb_stress_filenames.size() != p.mat.nmat) {
-            std::cerr << "Error: ic.spatialdb_stress_filenames must contain " << p.mat.nmat
-                      << " semicolon-separated paths (one per material), got "
-                      << p.ic.spatialdb_stress_filenames.size() << ".\n";
-            std::exit(1);
         }
     }
 
@@ -1564,7 +1512,9 @@ void get_input_parameters(const char* filename, Param& p)
     if (std::strncmp(filename, "-h", 3) == 0 ||
         std::strncmp(filename, "--help", 7) == 0) {
         std::cout << cfg;
-        std::exit(0);
+        // Not die(): that prints an "[DES exit N] <category>" banner meant for
+        // failures, and --help is a successful run with nothing to diagnose.
+        std::exit(EXIT_OK);
     }
     read_parameters_from_file(filename, cfg, vm);
     validate_parameters(vm, p);

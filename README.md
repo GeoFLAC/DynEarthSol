@@ -327,6 +327,9 @@ make nprof=1
 
 # OpenACC build (NVHPC compiler)
 make openacc=1
+
+# OpenACC targeting a specific GPU (else from nvidia-smi, default 80; see make config)
+make openacc=1 GPU_CC=90
 ```
 
 # Running DES3D

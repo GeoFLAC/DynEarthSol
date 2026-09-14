@@ -1,5 +1,10 @@
 name: nvc build
 
+permissions:
+  contents: read
+  pull-requests: read
+  packages: read
+
 on:
   push:
     branches:
@@ -147,14 +152,14 @@ jobs:
       run: |
         echo "BASE_MAKE=make hdf5=1 NVHPC_DIR=$NVHPC_DIR" >> $GITHUB_ENV
 
-    - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1
-      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 SM=80 -j
+    - name: make ndims=${{ matrix.ndims }} openacc=1 GPU_CC=80 hdf5=1
+      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 GPU_CC=80 -j
 
-    - name: make ndims=${{ matrix.ndims }} openacc=1 SM=80 hdf5=1 usemmg=1
-      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 usemmg=1 SM=80 -j
+    - name: make ndims=${{ matrix.ndims }} openacc=1 GPU_CC=80 hdf5=1 usemmg=1
+      run: make clean openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 usemmg=1 GPU_CC=80 -j
 
-    - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 SM=80 hdf5=1
-      run: make cleanall openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 nprof=1 SM=80 -j
+    - name: make ndims=${{ matrix.ndims }} openacc=1 nprof=1 GPU_CC=80 hdf5=1
+      run: make cleanall openacc=1 ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} openacc=1 hdf5=1 nprof=1 GPU_CC=80 -j
 
     - name: make ndims=${{ matrix.ndims }} nprof=1 opt=0 hdf5=1
       run: make cleanall ndims=${{ matrix.ndims }} && $BASE_MAKE ndims=${{ matrix.ndims }} hdf5=1 nprof=1 opt=0 -j

@@ -195,6 +195,10 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
+    double remesh_deborah_min;
+    double remesh_deborah_max;
+
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
@@ -279,6 +283,7 @@ struct BC {
     bool has_elastic_foundation;
 
     bool has_water_loading;
+    double sea_water_density;
 
     int vbc_x0;
     int vbc_x1;
@@ -590,6 +595,36 @@ struct Param {
 //
 // Structures for surface processes
 //
+// Node-support graph in CSR: node n owns [idx[n], idx[n+1]) of arr and lidx.
+// Owns the arrays and caches their pointers beside them, because .data() is not
+// callable from device code -- rebind() after anything that resizes them.
+struct Support {
+    int_vec arr_data;   // element ids, one per (node, element) incidence
+    int_vec idx_data;   // row-pointers, size nnode+1
+    int_vec lidx_data;  // which local node of arr[i] the gather node is; may be
+                        // left empty when only element ids are needed, and then
+                        // local() must not be called
+
+    const int* arr  = NULL;
+    const int* idx  = NULL;
+    const int* lidx = NULL;
+
+    void rebind() {
+        arr  = arr_data.data();
+        idx  = idx_data.data();
+        lidx = lidx_data.empty() ? NULL : lidx_data.data();
+    }
+
+    #pragma acc routine seq
+    int size(int inode) const { return idx[inode+1] - idx[inode]; }
+
+    #pragma acc routine seq
+    const int* patch(int inode) const { return arr + idx[inode]; }
+
+    #pragma acc routine seq
+    const int* local(int inode) const { return lidx + idx[inode]; }
+};
+
 struct SurfaceInfo {
 
 //    const double sec_year = 31556925.2;
@@ -624,7 +659,7 @@ struct SurfaceInfo {
     double_vec *dhacc;
     // variable allocate by remesh
     double_vec *edvacc_surf;
-    int_vec2D *node_and_elems;
+    Support support_surf;  // surface node -> its top facets; no lidx needed
     segment_t *elem_and_nodes;
 
     int_map arctop_facet_elems;
@@ -642,19 +677,6 @@ struct SurfaceInfo {
 
 };
 
-//
-// Non-owning view over the flattened (CSR) node-support arrays.
-// idx[n] = start of node n's entries in arr; idx[n+1]-idx[n] = count.
-struct SupportView {
-    const int* arr;  // flat element IDs
-    const int* idx;  // CSR row-pointers (size nnode+1)
-
-    #pragma acc routine seq
-    int size(int inode) const { return idx[inode+1] - idx[inode]; }
-
-    #pragma acc routine seq
-    const int* patch(int inode) const { return arr + idx[inode]; }
-};
 
 // Structures for model variables
 //
@@ -662,6 +684,7 @@ class MatProps;
 class MarkerSet;
 struct Variables {
     double time;
+    double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
     double l2_residual;
     // Accelerated PT state (updated by update_pt_params() before each PT loop)
@@ -724,9 +747,13 @@ struct Variables {
     double stress_bc_values[nbdrytypes];
     double vbc_val_z1_loading_period;
 
-    std::map<std::pair<int,int>, double_vec> edge_vectors;
+    // Unit vector along the edge where two boundaries meet, NDIMS doubles per pair in
+    // edge_vec. edge_slot[i*nbdrytypes + j] with i < j indexes it, and is -1 when that
+    // pair shares no edge -- the state apply_vbcs has to test before dereferencing.
+    // A dense nbdrytypes^2 table rather than a searchable list: 100 ints is smaller than
+    // any index it could carry, so the device lookup is one load and needs no pointer.
     double_vec edge_vec;
-    int_vec edge_vec_idx;
+    int edge_slot[nbdrytypes * nbdrytypes];
     double_vec vbc_vertical_div_x0;
     double_vec vbc_vertical_div_x1;
     double_vec vbc_vertical_ratio_x0;
@@ -737,10 +764,7 @@ struct Variables {
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;
 
-    int_vec2D *support;
-    int_vec *support_arr;
-    int_vec *support_idx;
-    SupportView sup;
+    Support support;  // node-support graph; rebuilt by create_support()
     conn_t *neighbor; // neighboring elements for each element
     int_pair_vec *contact; // contact elements for each element
     double_vec *ctmp; // temporary array for contact elements
@@ -784,9 +808,20 @@ struct Variables {
     double_vec *etmp;
     int_vec *etmp_int;
 
-    // For remeshing
+    // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise.
+    // stress_n and spr_blend_weight double as the switch for the SPR recovery:
+    // remesh() leaves them null when the rheology has no viscous component, and each
+    // consumer skips its part of the chain on that.
+    // - stress_n, stressyy_n: SPR-recovered nodal stress
+    // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
+    // - spr_p_ref_old: reference pressure added at pressure-centering, per element
+    // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
+    //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
     tensor_t *stress_n;
     double_vec *stressyy_n;
+    double_vec *spr_blend_weight;
+    double_vec *spr_p_ref_old;
+    int_vec *remesh_is_changed;
 
     // Stress at the start of the physical time step; relaxation target
     // reference for the accelerated PT stress update (Räss et al. 2022, Eq. 36)
@@ -802,6 +837,11 @@ struct Variables {
 
     Variables()
     {
+        stress_n = nullptr;
+        stressyy_n = nullptr;
+        spr_blend_weight = nullptr;
+        spr_p_ref_old = nullptr;
+        remesh_is_changed = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

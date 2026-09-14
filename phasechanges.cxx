@@ -154,7 +154,7 @@ void phase_changes(const Param& param, Variables& var)
 
     if (is_error) {
         std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     if (param.control.has_hydration_processes) {
@@ -188,8 +188,7 @@ void phase_changes(const Param& param, Variables& var)
                         if (hydms.get_elem(mh) == el) break;
                     }
                     if (mh >= hydms.get_nmarkers()) {
-                        std::cerr << "Error: hydrous marker phase change\n";
-                        std::exit(12);
+                        die(EXIT_RUNTIME_LOOKUP, "hydrous marker phase change");
                     }
                     #pragma omp critical(phase_change_simple_subduction)
                     {
