@@ -21,9 +21,7 @@ tetrahedral/triangular meshes with local pseudo-time stepping.
 At every physical time step of size `Δt`, DynEarthSol needs the quasi-static
 momentum balance
 
-```
-∇·σ + ρg = 0
-```
+$$\nabla \cdot \sigma + \rho g = 0$$
 
 with the constitutive update
 
@@ -50,9 +48,7 @@ only then advances the physical state.
 **Where the "order" hides.**  The classification cannot be read off the
 momentum equation alone.  Both variants can be written in the same form,
 
-```
-ρ̃ ∂v/∂τ = ∇·σ + f,
-```
+$$\tilde{\rho}\,\partial v/\partial\tau = \nabla \cdot \sigma + f,$$
 
 which is first order in time and second order in space *as written* — yet
 one variant is parabolic and the other hyperbolic.  The "order" refers to
@@ -81,9 +77,7 @@ stress of the *previous physical step*, a constant during the iteration —
 it contributes no pseudo-time dynamics).  Substituting this into the
 momentum update leaves a single pseudo-time derivative,
 
-```
-ρ̃ ∂v/∂τ = ∇·( CΔt : ε̇(v) ) + (known terms),
-```
+$$\tilde{\rho}\,\partial v/\partial\tau = \nabla \cdot (C\Delta t : \dot{\varepsilon}(v)) + (\text{known terms}),$$
 
 a **parabolic** (diffusion) equation in pseudo-time with diffusivity
 `D ~ GΔt/ρ̃`.  There is no wave: the stress has no independent dynamics, so
@@ -122,9 +116,7 @@ update `∂σ/∂t = C:ε̇(v)` makes σ a second history-carrying state variabl
 not a function of the current field.  Differentiating the momentum equation
 in time and substituting gives
 
-```
-ρ ∂²v/∂t² = ∇·( C:∇ˢv ),
-```
+$$\rho\,\partial^2 v/\partial t^2 = \nabla \cdot (C : \nabla^s v),$$
 
 a genuine wave equation (equivalently `ρ ü = ∇·(C:∇ˢu)` in displacement):
 the second time derivative was hidden in the stress memory.  So dynamic
@@ -144,10 +136,10 @@ it.
 Strip the scheme to its 1D scalar essence (elastic limit, `μ_ve = GΔt`).
 Per unit pseudo-time, the two updates read
 
-```
-ρ̃ ∂v/∂τ = ∂σ/∂x                        (momentum — no damping here)
-∂σ/∂τ   = G̃ ∂v/∂x  −  η (σ − τ*)       (stress relaxation)
-```
+$$\begin{aligned}
+\tilde{\rho}\,\partial v/\partial\tau &= \partial\sigma/\partial x && \text{(momentum — no damping)}\\
+\partial\sigma/\partial\tau &= \tilde{G}\,\partial v/\partial x - \eta(\sigma - \tau^*) && \text{(stress relaxation)}
+\end{aligned}$$
 
 The second line is the discrete θ-update of §2.4 in continuous form, with
 relaxation rate `η = θ/Δτ = G̃/(GΔt)`.  The numerical modulus `G̃` plays two
@@ -160,15 +152,11 @@ momentum equation.
 `∂v/∂τ` from momentum (the target τ* is constant for the error), and the
 perturbation about the converged state obeys
 
-```
-∂²σ/∂τ² + η ∂σ/∂τ = V̂² ∂²σ/∂x² ,      V̂² ∝ G̃/ρ̃ .
-```
+$$\partial^2\sigma/\partial\tau^2 + \eta\,\partial\sigma/\partial\tau = \hat{V}^2\,\partial^2\sigma/\partial x^2, \qquad \hat{V}^2 \propto \tilde{G}/\tilde{\rho}.$$
 
 **Dispersion relation.**  A Fourier mode `σ ∝ e^{λτ} e^{ikx}` gives
 
-```
-λ² + η λ + V̂²k² = 0    ⟹    λ = −η/2 ± √( η²/4 − V̂²k² ) .
-```
+$$\lambda^2 + \eta\lambda + \hat{V}^2 k^2 = 0 \quad\Rightarrow\quad \lambda = -\eta/2 \pm \sqrt{\eta^2/4 - \hat{V}^2 k^2}.$$
 
 Each error component, labeled by its wavenumber `k`, decays as:
 
@@ -192,9 +180,7 @@ maximize the minimum decay rate.  Underdamped modes (`k > η/2V̂`) decay at
 hurts them.  The optimum places the boundary between the regimes exactly at
 the smallest wavenumber:
 
-```
-η* = 2 V̂ k_min = 2π V̂ / L .
-```
+$$\eta^* = 2\hat{V} k_\min = \frac{2\pi\hat{V}}{L}.$$
 
 Then the `k_min` mode is exactly critical (rate `V̂ k_min`) and every other
 mode is underdamped with the *same* rate `η*/2 = V̂ k_min`: the entire
@@ -205,9 +191,7 @@ and the minimum drops.
 stably — that is where CFL enters: `Δτ = CFL·h/V̂`.  The decay per iteration
 of every mode is then
 
-```
-|λ| Δτ = V̂ k_min · CFL·h/V̂ = π · CFL · h / L ,
-```
+$$|\lambda|\,\Delta\tau = \hat{V} k_\min \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L},$$
 
 so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations — the
 `O(L/h)` scaling, now with its constant.  Note that V̂ cancels here exactly
@@ -216,15 +200,11 @@ are ever needed, which is why the code never chooses a wave speed.
 
 **Where Re comes from.**  From the definitions in §2.3,
 
-```
-η = G̃/(GΔt) = [ ρ̃V̂²/(r+2) ] / μ_ve = Re · V̂ / ((r+2)·L) .
-```
+$$\eta = \frac{\tilde{G}}{G\Delta t} = \frac{\tilde{\rho}\hat{V}^2/(r+2)}{\mu_{ve}} = \frac{\mathrm{Re}\cdot\hat{V}}{(r+2)\cdot L}.$$
 
 Setting this equal to `η* = 2πV̂/L` gives
 
-```
-Re* = 2π (r+2) ≈ 15.7      (r = 0.5) ,
-```
+$$\mathrm{Re}^* = 2\pi(r+2) \approx 15.7 \qquad (r = 0.5),$$
 
 within 5% of the default `Re = 3√10·π/2 ≈ 14.93`, which comes from the same
 analysis carried out for the full coupled vector system (velocity +
@@ -284,9 +264,7 @@ G̃Δτ   = Re · CFL · h · μ_ve / ((r+2) · L)            (stress update)
 `μ_ve` is the effective visco-elastic viscosity of the *physical* problem over
 one time step (Räss et al. Eq. 35):
 
-```
-μ_ve = 1 / ( 1/(G·Δt) + 1/μ_s )
-```
+$$\mu_{ve} = \frac{1}{1/(G\Delta t) + 1/\mu_s}$$
 
 For DynEarthSol's elastic and elasto-plastic rheologies (`μ_s` effectively
 infinite) this reduces to `μ_ve = G·Δt`.
@@ -308,37 +286,31 @@ dual-time PT augmentation of the visco-elastic Stokes stress equation
 (Eq. 33): it adds a pseudo-time derivative (1/2G̃) ∂τ/∂τ alongside the
 physical Maxwell relaxation:
 
-```
-(1/2G̃) ∂τ_ij/∂τ  +  (τ_ij − τ̂_ij)/(2GΔt)  +  τ_ij/(2μ_s)  =  ε̇_ij(v)
-```
+$$\frac{1}{2\tilde{G}}\frac{\partial\tau_{ij}}{\partial\tau} + \frac{\tau_{ij} - \hat{\tau}_{ij}}{2G\Delta t} + \frac{\tau_{ij}}{2\mu_s} = \dot{\varepsilon}_{ij}(v)$$
 
-where τ̂_ij = τ_old.  Discretising ∂τ/∂τ forward-in-pseudo-time and
-collecting τ^{k+1}:
+where $\hat{\tau}_{ij} = \tau_\text{old}$.  Discretising $\partial\tau/\partial\tau$ forward-in-pseudo-time and
+collecting $\tau^{k+1}$:
 
-```
-τ^{k+1} [ 1/(2G̃Δτ) + 1/(2μ_ve) ]  =  ε̇_ij + τ^k/(2G̃Δτ) + τ_old/(2GΔt)
-```
+$$\tau^{k+1}\!\left[\frac{1}{2\tilde{G}\Delta\tau} + \frac{1}{2\mu_{ve}}\right] = \dot{\varepsilon}_{ij} + \frac{\tau^k}{2\tilde{G}\Delta\tau} + \frac{\tau_\text{old}}{2G\Delta t}$$
 
-using 1/μ_ve = 1/(GΔt) + 1/μ_s (Eq. 35).  Multiplying through by 2G̃Δτ
-and letting θ = G̃Δτ/μ_ve:
+using $1/\mu_{ve} = 1/(G\Delta t) + 1/\mu_s$ (Eq. 35).  Multiplying through by $2\tilde{G}\Delta\tau$
+and letting $\theta = \tilde{G}\Delta\tau/\mu_{ve}$:
 
-```
-τ^{k+1}(1 + θ)  =  τ^k  +  2G̃Δτ ε̇_ij  +  θ · (μ_ve/GΔt) · τ_old
-```
+$$\tau^{k+1}(1+\theta) = \tau^k + 2\tilde{G}\Delta\tau\,\dot{\varepsilon}_{ij} + \theta\cdot\frac{\mu_{ve}}{G\Delta t}\cdot\tau_\text{old}$$
 
-In the **elastic limit** (μ_s → ∞, μ_ve = GΔt, θ = G̃Δτ/(GΔt)):
+In the **elastic limit** ($\mu_s \to \infty$, $\mu_{ve} = G\Delta t$, $\theta = \tilde{G}\Delta\tau/(G\Delta t)$):
 
-```
-τ^{k+1}(1 + θ)  =  τ^k  +  θ · 2GΔt ε̇_ij  +  θ · τ_old
-                 =  τ^k  +  θ · (τ_old + 2GΔt ε̇_ij)
-                 =  τ^k  +  θ · τ*
-```
+$$\begin{aligned}
+\tau^{k+1}(1+\theta) &= \tau^k + \theta\cdot 2G\Delta t\,\dot{\varepsilon}_{ij} + \theta\cdot\tau_\text{old}\\
+                     &= \tau^k + \theta\cdot(\tau_\text{old} + 2G\Delta t\,\dot{\varepsilon}_{ij})\\
+                     &= \tau^k + \theta\cdot\tau^*
+\end{aligned}$$
 
 which gives the update formula above exactly.  DynEarthSol's elasto-plastic
-rheology satisfies this limit (μ_s → ∞).  For a true Maxwell viscoelastic
-run (finite μ_s) the term θ · (μ_ve/GΔt) · τ_old no longer equals θ · τ_old,
-and a modified θ = G̃Δτ/μ_ve (using the effective μ_ve) would keep the same
-(τ^k + θ τ*)/(1 + θ) form but with a different τ* definition.
+rheology satisfies this limit ($\mu_s \to \infty$).  For a true Maxwell viscoelastic
+run (finite $\mu_s$) the term $\theta\cdot(\mu_{ve}/G\Delta t)\cdot\tau_\text{old}$ no longer equals $\theta\cdot\tau_\text{old}$,
+and a modified $\theta = \tilde{G}\Delta\tau/\mu_{ve}$ (using the effective $\mu_{ve}$) would keep the same
+$(\tau^k + \theta\tau^*)/(1+\theta)$ form but with a different $\tau^*$ definition.
 
 The derivation above is for the deviatoric Räss et al. formulation
 (incompressible, deviatoric τ).  DynEarthSol uses total stress with
@@ -604,18 +576,14 @@ follow.  Cost per call is O(nelem + nnode), ~1–2% of one iteration at interval
 `rayleigh_update_Re()` also estimates λ_min from the ratio of iterate
 differences over the preceding window (Phase 2, commit `a80bec5`):
 
-```
-λ_min ≈ ( −Σ_i Δv_i · Δf_i ) / ( Σ_i (1/dτ_ρ[i]) |Δv_i|² )
-```
+$$\lambda_\min \approx \frac{-\sum_{i,j} \Delta v_{ij}\,\Delta f_{ij}}{\sum_i \frac{1}{\texttt{PT\_dtau\_rho}[i]}\sum_j (\Delta v_{ij})^2}$$
 
 where Δv = v_current − v_snapshot and Δf = f_current − f_snapshot captured at
 the last retune call.  The optimal Re is then
 
-```
-Re_new = 2√(λ_min · λ_max) · (r+2) · L · G̅ · Δt / (CFL · h̅ · μ̅_ve)
-```
+$$\mathrm{Re}_\text{new} = 2\sqrt{\lambda_\min \cdot \lambda_\max} \cdot \frac{(r+2)\,L\,\bar{G}\,\Delta t}{\mathrm{CFL}\,\bar{h}\,\bar{\mu}_{ve}}$$
 
-with λ_max = CFL²/(r+2) from the stability limit.  To limit overshoot during
+with $\lambda_\max = \mathrm{CFL}^2/(r+2)$ from the stability limit.  To limit overshoot during
 the first few windows (when the iterate differences may not yet represent the
 slow-mode eigenvalue), Re_new is clamped to [0.5, 2.0] × `PT_Re`.
 
