@@ -413,6 +413,21 @@ static void declare_parameters(po::options_description &cfg,
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
          "tolerance for relative change for breaking PT loop")
+        ("control.PT_info_interval", po::value<int>(&p.control.PT_info_interval)->default_value(0),
+         "Print PT loop progress every N iterations (0 = silent).")
+        ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(-1),
+         "Exit the PT loop early if the best residual improves by less than 0.1%\n"
+         "over two consecutive windows of this many iterations.  -1 = auto; 0 = disabled.\n")
+        ("control.PT_dpls_fraction", po::value<double>(&p.control.PT_dpls_fraction)->default_value(0.1),
+         "PT mode only: cap dt so no element traverses more than this fraction of its weakening ramp per step. 0 = disabled.\n")
+        ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
+         "Accelerated PT numerical Reynolds number Re (Raess et al. 2022, Eq. 31).\n")
+        ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.9/std::sqrt((double)NDIMS)),
+         "Accelerated PT CFL-like stability factor. Default: 0.9/sqrt(NDIMS).\n")
+        ("control.PT_r", po::value<double>(&p.control.PT_r)->default_value(0.5),
+         "Accelerated PT bulk-to-shear pseudo-modulus ratio. Optimal value: 0.5.\n")
+        ("control.PT_char_length", po::value<double>(&p.control.PT_char_length)->default_value(0),
+         "Accelerated PT characteristic domain length L [m]. 0 = auto: max(xlength, ylength, zlength).\n")
         ("control.PT_retune_interval", po::value<int>(&p.control.PT_retune_interval)->default_value(100),
          "Re-run update_pt_params every N PT iterations (0 = never). Only fires when residual > 100*PT_relative_tolerance.")
 

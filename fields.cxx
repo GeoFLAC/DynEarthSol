@@ -69,11 +69,17 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.PT_dtau_rho = new double_vec(n, 0);
     var.PT_Gdtau_e = new double_vec(e, 0);
+    var.PT_vel_prev = new array_t(n, 0);
+    var.PT_force_prev = new array_t(n, 0);
+    var.PT_Re_adaptive = 0;  // initialized from param.control.PT_Re before each PT loop
+    var.PT_mu_ve_mean = 0;
+    var.PT_G_mean = 0;
     var.old_mean_stress = new double_vec(e, 0);
 
     {
         // these fields are reallocated during remeshing interpolation
         var.stress = new tensor_t(e, 0);
+        var.stress_old = new tensor_t(e, 0);  // PT predictor anchor; copy_stress_PT auto-resizes
         var.stressyy = new double_vec(e, 0);
         var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);

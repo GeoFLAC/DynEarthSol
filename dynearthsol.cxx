@@ -588,6 +588,8 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         if (param.control.PT_info_interval > 0)
             std::cout << "  PT (init) start: initial residual = " << residual_initial_init
                       << ", force scale = " << force_scale << "\n";
+        // Phase 2: initialize adaptive Re for this PT loop
+        var.PT_Re_adaptive = param.control.PT_Re;
         update_pt_params(param, var);
         if (param.control.PT_info_interval > 0)
             std::cout << "  PT (init) params: h_min=" << var.PT_h_min
@@ -596,6 +598,15 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         // τ_old = current (initial-condition) stress; PT relaxes toward
         // τ_old + C:ε̇Δt, i.e. a single static elastic adjustment solve.
         copy_stress_PT(*var.stress, *var.stress_old);
+        // Phase 2: snapshot initial vel/force for Rayleigh quotient
+        if (param.control.PT_retune_interval > 0) {
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+            for (int i = 0; i < var.nnode; ++i)
+                for (int j = 0; j < NDIMS; ++j) {
+                    (*var.PT_vel_prev)[i][j]   = (*var.vel)[i][j];
+                    (*var.PT_force_prev)[i][j] = (*var.force)[i][j];
+                }
+        }
         // Stagnation detection (see main loop).
         const int stag_window = pt_stagnation_window(param, var);
         double best_residual = std::numeric_limits<double>::max();
@@ -615,8 +626,10 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             if (param.control.PT_retune_interval > 0 &&
                 pt_step > 0 &&
                 pt_step % param.control.PT_retune_interval == 0 &&
-                var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance)
+                var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance) {
+                rayleigh_update_Re(param, var, *var.vel, *var.force);
                 update_pt_params(param, var);
+            }
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             update_velocity_PT(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
@@ -964,11 +977,21 @@ int main(int argc, const char* argv[])
             if (param.control.PT_info_interval > 0)
                 std::cout << "  PT start: initial residual = " << residual_initial_step
                           << ", force scale = " << force_scale << "\n";
+            // Phase 2: initialize adaptive Re for this PT loop
+            var.PT_Re_adaptive = param.control.PT_Re;
             update_pt_params(param, var);
             if (param.control.PT_info_interval > 0)
                 std::cout << "  PT params: h_min=" << var.PT_h_min
                           << " m, mu_ve_max=" << var.PT_mu_ve_max
                           << " Pa*s, Gdtau=" << var.PT_Gdtau << " Pa*s\n";
+            // Phase 2: snapshot initial vel/force for Rayleigh quotient
+            if (param.control.PT_retune_interval > 0) {
+                for (int i = 0; i < var.nnode; ++i)
+                    for (int j = 0; j < NDIMS; ++j) {
+                        (*var.PT_vel_prev)[i][j]   = (*var.vel)[i][j];
+                        (*var.PT_force_prev)[i][j] = (*var.force)[i][j];
+                    }
+            }
             if (param.control.has_hydraulic_diffusion) {
                 param.control.has_hydraulic_diffusion = false;
                 hydraulic_diffusion_switch = true;
@@ -1004,8 +1027,10 @@ int main(int argc, const char* argv[])
                     if (param.control.PT_retune_interval > 0 &&
                         pt_step > 0 &&
                         pt_step % param.control.PT_retune_interval == 0 &&
-                        var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance)
+                        var.l2_residual / residual_scale >= 100.0 * param.control.PT_relative_tolerance) {
+                        rayleigh_update_Re(param, var, *var.vel, *var.force);
                         update_pt_params(param, var);
+                    }
                     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                     update_velocity_PT(param, var, *var.vel);
                     var.l2_residual = calculate_residual_force(var, *var.force_residual);

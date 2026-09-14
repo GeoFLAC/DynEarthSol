@@ -1954,6 +1954,83 @@ double compute_dt_PT(const Param& param, Variables& var)
     return dt;
 }
 
+// Rayleigh-quotient estimate of the minimum eigenvalue λ_min of the assembled
+// pseudo-stiffness/inertia system, used to adapt Re for critical damping.
+//
+// λ_min ≈ (-Σ Δv·Δf) / (Σ (1/PT_dtau_rho[i]) |Δv_i|²)
+//
+// where Δv = vel - PT_vel_prev and Δf = force - PT_force_prev accumulate
+// the changes since the last retune checkpoint.  The negative sign corrects
+// for the restoring-force sign: Δf ≈ -K Δv, so -Δv·Δf = Δv^T K Δv > 0.
+// Both numerator and denominator have units of Watts (N·m/s), so λ_min is
+// dimensionless in the pseudo-time-step sense.
+//
+// λ_max is estimated from the CFL stability limit: λ_max = CFL²/(r+2),
+// the dimensionless spectral radius bound of the most constrained element.
+//
+// Re_opt = 2√(λ_min·λ_max) · (r+2)·L·G_mean·Δt / (CFL·h_mean·μ_ve_mean)
+//
+// This inverts the relationship θ_mean = Re·CFL·h_mean·μ_ve_mean/((r+2)·L·G_mean·Δt)
+// to achieve η* = 2√(λ_min·λ_max) critical damping (Duretz et al. 2026, Sec. 3.2).
+//
+// The update is bounded to [0.5, 2]×Re_input to prevent unstable jumps on
+// the first few retune calls before Δv and Δf are representative.
+void rayleigh_update_Re(const Param& param, Variables& var,
+                        const array_t& vel, const array_t& force)
+{
+    if (!var.PT_vel_prev || !var.PT_force_prev) return;
+
+    double num = 0.0, den = 0.0;
+
+    #pragma omp parallel for reduction(+:num,den) default(none) \
+        shared(var, vel, force)
+    for (int i = 0; i < var.nnode; ++i) {
+        const double dtau_rho = (*var.PT_dtau_rho)[i];
+        if (dtau_rho <= 0.0) continue;
+        const double inv_dtau_rho = 1.0 / dtau_rho;
+        double dv2 = 0.0, dv_df = 0.0;
+        for (int j = 0; j < NDIMS; ++j) {
+            const double dv = vel[i][j]   - (*var.PT_vel_prev)[i][j];
+            const double df = force[i][j] - (*var.PT_force_prev)[i][j];
+            dv_df += dv * df;
+            dv2   += dv * dv;
+        }
+        num += -dv_df;            // -Δv·Δf = Δv^T K Δv > 0 (restoring)
+        den += inv_dtau_rho * dv2;
+    }
+
+    // Copy current state to snapshots for the next retune interval
+    for (int i = 0; i < var.nnode; ++i) {
+        for (int j = 0; j < NDIMS; ++j) {
+            (*var.PT_vel_prev)[i][j]   = vel[i][j];
+            (*var.PT_force_prev)[i][j] = force[i][j];
+        }
+    }
+
+    // Guard: no signal yet, or iteration has diverged (wrong signs)
+    if (den <= 0.0 || num <= 0.0) return;
+
+    const double lambda_min = num / den;
+
+    // λ_max from CFL stability limit (dimensionless)
+    const double CFL = param.control.PT_CFL;
+    const double rp2 = param.control.PT_r + 2.0;
+    const double lambda_max = CFL * CFL / rp2;
+
+    // Critical-damping Re
+    // Re_opt = 2√(λ_min·λ_max) · (r+2)·L·G_mean·Δt / (CFL·h_mean·μ_ve_mean)
+    if (var.PT_G_mean <= 0.0 || var.PT_mu_ve_mean <= 0.0 ||
+        var.PT_h_mean <= 0.0 || var.PT_L <= 0.0 || var.dt <= 0.0) return;
+
+    const double eta_star = 2.0 * std::sqrt(lambda_min * lambda_max);
+    const double Re_new = eta_star * rp2 * var.PT_L * var.PT_G_mean * var.dt
+                          / (CFL * var.PT_h_mean * var.PT_mu_ve_mean);
+
+    // Bound to [0.5, 2] × Re_input to avoid instability on early retunes
+    const double Re_ref = param.control.PT_Re;
+    var.PT_Re_adaptive = std::max(0.5 * Re_ref, std::min(2.0 * Re_ref, Re_new));
+}
+
 void update_pt_params(const Param& param, Variables& var)
 {
     // Pre-compute LOCAL pseudo-time-stepping factors (Räss et al. 2022,
@@ -1980,7 +2057,8 @@ void update_pt_params(const Param& param, Variables& var)
     // This is called immediately after calculate_residual_force() which contains
     // #pragma acc wait, so managed memory is coherent on the host.
 
-    const double Re  = param.control.PT_Re;
+    // Phase 2: use adaptive Re if set (initialized to param.control.PT_Re at start of each PT loop)
+    const double Re  = (var.PT_Re_adaptive > 0) ? var.PT_Re_adaptive : param.control.PT_Re;
     const double CFL = param.control.PT_CFL;
     const double rp2 = param.control.PT_r + 2.0;
 
@@ -2000,6 +2078,9 @@ void update_pt_params(const Param& param, Variables& var)
     double h_min     = std::numeric_limits<double>::max();
     double h_sum     = 0.0;
     double mu_ve_max = 0.0;
+    double mu_ve_sum = 0.0;  // for volume-weighted mean (Phase 2)
+    double G_sum     = 0.0;
+    double vol_sum   = 0.0;
 
     // Yield-aware modulus softening (experimental). update_stress_PT()
     // relaxes stress toward the elastic target with a damped rate theta
@@ -2020,7 +2101,8 @@ void update_pt_params(const Param& param, Variables& var)
     const bool has_plastic = (param.mat.rheol_type & MatProps::rh_plastic) != 0;
     const double yield_onset = 0.7, yield_floor = 0.05;
 
-    #pragma omp parallel for reduction(min:h_min) reduction(+:h_sum) reduction(max:mu_ve_max) \
+    #pragma omp parallel for reduction(min:h_min) reduction(+:h_sum,mu_ve_sum,G_sum,vol_sum) \
+        reduction(max:mu_ve_max) \
         default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L) \
         firstprivate(has_plastic, yield_onset, yield_floor)
     for (int e = 0; e < var.nelem; ++e) {
@@ -2085,6 +2167,11 @@ void update_pt_params(const Param& param, Variables& var)
             : mu_e;
         mu_ve_max = std::max(mu_ve_max, mu_ve_e);
 
+        const double vol_e = (*var.volume)[e];
+        mu_ve_sum += mu_ve_e * vol_e;
+        G_sum     += G_e     * vol_e;
+        vol_sum   += vol_e;
+
         h_e_vec[e]   = minh;
         mu_ve_vec[e] = mu_ve_e;
         (*var.PT_Gdtau_e)[e] = Re * CFL * minh * mu_ve_e / (rp2 * L);
@@ -2106,11 +2193,13 @@ void update_pt_params(const Param& param, Variables& var)
             : 0.0;
     }
 
-    var.PT_h_min     = h_min;
-    var.PT_h_mean    = h_sum / var.nelem;
-    var.PT_L         = L;
-    var.PT_mu_ve_max = mu_ve_max;
-    var.PT_Gdtau     = Re * CFL * h_min * mu_ve_max / (rp2 * L);
+    var.PT_h_min      = h_min;
+    var.PT_h_mean     = h_sum / var.nelem;
+    var.PT_L          = L;
+    var.PT_mu_ve_max  = mu_ve_max;
+    var.PT_mu_ve_mean = (vol_sum > 0) ? mu_ve_sum / vol_sum : mu_ve_max;
+    var.PT_G_mean     = (vol_sum > 0) ? G_sum / vol_sum : 0.0;
+    var.PT_Gdtau      = Re * CFL * h_min * mu_ve_max / (rp2 * L);
 }
 
 void compute_mass(const Param &param, const Variables &var,

@@ -692,10 +692,16 @@ struct Variables {
     double PT_h_mean;     // mean element height (sets the stagnation-check window)
     double PT_L;          // characteristic domain length L actually used
     double PT_mu_ve_max;  // max effective visco-elastic viscosity: mu^ve = 1/(1/(G*dt) + 1/mu) (diagnostic)
+    double PT_mu_ve_mean; // volume-weighted mean mu_ve (for Phase 2 Rayleigh-quotient Re update)
+    double PT_G_mean;     // volume-weighted mean shear modulus (for Phase 2 Re update)
     double PT_Gdtau;      // global numerical G~*dtau = Re*CFL*h_min*mu_ve_max/((r+2)*L) (diagnostic)
+    double PT_Re_adaptive; // current adaptive Re (Phase 2); initialized from param.control.PT_Re each step
     // Local pseudo-time stepping factors (recomputed by update_pt_params()):
     double_vec *PT_dtau_rho;  // per-node dtau/(rho~*V_node) for update_velocity_PT()
     double_vec *PT_Gdtau_e;   // per-element numerical G~*dtau for update_stress_PT()
+    // Snapshot arrays for Rayleigh-quotient Re adaptation (Phase 2):
+    array_t *PT_vel_prev;     // velocity snapshot at last retune checkpoint
+    array_t *PT_force_prev;   // force snapshot at last retune checkpoint
     double reference_frame_time;
     int steps;
     int nremesh;

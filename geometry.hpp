@@ -97,6 +97,8 @@ double compute_dt(const Param& param, Variables& var);
 // double compute_dt(const Param& param, const Variables& var);
 
 double compute_dt_PT(const Param& param, Variables& var);
+void rayleigh_update_Re(const Param& param, Variables& var,
+                        const array_t& vel, const array_t& force);
 void update_pt_params(const Param& param, Variables& var);
 
 void compute_mass(const Param &param, const Variables &var,
