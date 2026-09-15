@@ -338,7 +338,7 @@ Applying the full physical increment `C:ε̇Δt` every iteration is equivalent t
 `θ = 1`, which violates the pseudo-wave CFL condition by a factor `~L/h`. 
 Such a test case blew up within tens of iterations.
 
-**Plastic projection** (within the same interation step). After the relaxation, 
+**Plastic projection** (`update_stress_PT()`, rheology.cxx but using one the existing functions, `elasto_plastic` or `elastic_plastic2D`). After the relaxation, 
 only the stress is projected back onto the yield surface 
 (Mohr–Coulomb + tension cutoff) by calling the standard return mapping. Plastic strain is **not** accumulated during PT iterations (see §2.7).
 
@@ -366,6 +366,7 @@ being convex, which holds for Mohr–Coulomb and Drucker–Prager.
 **Velocity update** (`update_velocity_PT()`, fields.cxx):
 
 $$v_i^{k+1} = v_i^k + \Delta\tau_{\rho,i}\, f_i,$$
+where $\Delta\tau_{\rho,i}$ denotes $\Delta\tau/\tilde{\rho}$ in §2.3.
 
 $$\Delta\tau_{\rho,i} = \frac{\mathrm{CFL}\cdot h_i \cdot L \cdot N_\text{npe}}{\mathrm{Re}\cdot\mu_{ve,i}\cdot V_i}$$
 
@@ -380,13 +381,13 @@ relaxation, whose rate the optimal `Re` controls.
 
 Räss et al. derive the parameters for a uniform grid spacing `h`. On graded
 unstructured meshes a single global `h = h_min` throttles the entire domain to
-the pace of the worst element: a model with `h_min/L ~ 10⁻⁴` (one sliver in a
+the pace of the worst element: a model with `h_min/L ~ 10⁻⁴` (e.g., one sliver in a
 7 km domain) needed `>5·10⁴` iterations. DynEarthSol therefore uses **local**
 factors, precomputed once per PT loop by `update_pt_params()` (geometry.cxx):
 
 - per element: `G̃Δτ|_e = Re·CFL·h_e·μ_ve,e / ((r+2)·L)` with `h_e` the
   element's minimum height (stored in `var.PT_Gdtau_e`);
-- per node: `dτ_ρ[i]` built from `h_i = min(h_e)` and `μ_ve,i = max(μ_ve,e)`
+- per node: `dτ_ρ[i]` (=Δτ/ρ̃ ) built from `h_i = min(h_e)` and `μ_ve,i = max(μ_ve,e)`
   over the node's adjacent elements (stored in `var.PT_dtau_rho`).
 
 The min/max choices at nodes are conservative: at any element–node pair the
@@ -416,18 +417,20 @@ For `control.has_PT = yes` the main loop executes each step as:
 2. Assemble forces of the `τ_old` state; record the initial residual and the
    characteristic force scale (§2.8).
 3. `update_pt_params()` — recompute the local PT factors.
-4. **PT loop** (up to `PT_max_iter`): `apply_vbcs → update_strain_rate →
-   update_stress_PT (relax + project) → update_force → update_velocity_PT →
-   residual check`.
+4. **Predictor — PT loop** (up to `PT_max_iter`): `apply_vbcs →
+   update_strain_rate → update_stress_PT (relax + project) → update_force →
+   update_velocity_PT → residual check`.  The stress update here uses only
+   the elastic target `τ* = τ_old + C:ε̇(v^k)Δt`; viscous evolution, plastic
+   strain accumulation, and other constitutive bookkeeping are deliberately
+   omitted so that the PT stress can be relaxed freely across many iterations.
+   The loop converges to the velocity field that balances the forces implied
+   by the full elastic constitutive law.
 5. **Corrector**: restore `τ_old`, then run the full physical
    `update_stress()` once with the converged velocity (followed by NMD if
    enabled). This is the only place where total strain, `plstrain`,
    `delta_plstrain`, viscosity, etc. are updated — so the constitutive
    bookkeeping is done exactly once per step and is consistent with the
-   equilibrated velocity field. The pre-PT "predictor" stress update that the
-   non-PT path performs is skipped entirely in PT mode: its plastic-strain
-   increments would come from the stale previous-step velocity and be
-   double-counted by the corrector.
+   equilibrated velocity field.
 
 The corrector's stress is (up to the relaxation tolerance) the same operation
 the PT loop converged on, so the post-correction imbalance remains small.
