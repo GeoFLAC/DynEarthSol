@@ -417,22 +417,23 @@ For `control.has_PT = yes` the main loop executes each step as:
 2. Assemble forces of the `τ_old` state; record the initial residual and the
    characteristic force scale (§2.8).
 3. `update_pt_params()` — recompute the local PT factors.
-4. **Predictor — PT loop** (up to `PT_max_iter`): `apply_vbcs →
+4. **PT loop, the Predictor step** (up to `PT_max_iter`): `apply_vbcs →
    update_strain_rate → update_stress_PT (relax + project) → update_force →
    update_velocity_PT → residual check`.  The stress update here uses only
-   the elastic target `τ* = τ_old + C:ε̇(v^k)Δt`; viscous evolution, plastic
+   the elastic target `τ* = τ_old + C:ε̇(v^k)Δt`; plastic
    strain accumulation, and other constitutive bookkeeping are deliberately
    omitted so that the PT stress can be relaxed freely across many iterations.
    The loop converges to the velocity field that balances the forces implied
    by the full elastic constitutive law.
 5. **Corrector**: restore `τ_old`, then run the full physical
-   `update_stress()` once with the converged velocity (followed by NMD if
+   `update_stress()` once with the *converged velocity* (followed by NMD if
    enabled). This is the only place where total strain, `plstrain`,
-   `delta_plstrain`, viscosity, etc. are updated — so the constitutive
+   `delta_plstrain`, etc. are updated. So, the constitutive
    bookkeeping is done exactly once per step and is consistent with the
-   equilibrated velocity field.
+   equilibrated velocity field. The stress update in the FLAC Dynamic Relaxation
+   is skipped entirely in PT mode.
 
-The corrector's stress is (up to the relaxation tolerance) the same operation
+The corrector's stress is (up to the convergence tolerance) the same operation
 the PT loop converged on, so the post-correction imbalance remains small.
 
 ### 2.8 Convergence criterion: unbalanced-force ratio
