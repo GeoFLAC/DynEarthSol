@@ -1094,9 +1094,11 @@ ifeq ($(usemmg), 1)
 	fi
 
 	@mkdir -p mmg/build
+	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
+	@# from the environment on the FIRST configure, so an exported one is baked in.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
 	fi
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		$(MAKE) -C mmg/build; \
