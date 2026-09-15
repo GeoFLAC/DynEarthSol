@@ -365,16 +365,16 @@ being convex, which holds for Mohr–Coulomb and Drucker–Prager.
 
 **Velocity update** (`update_velocity_PT()`, fields.cxx):
 
-```
-v^{k+1}_i = v^k_i + dτ_ρ[i] · f_i ,
-dτ_ρ[i]   = CFL · h_i · L · NODES_PER_ELEM / ( Re · μ_ve,i · volume_n[i] )
-```
+$$v_i^{k+1} = v_i^k + \Delta\tau_{\rho,i}\, f_i,$$
 
-where `f_i` is the assembled nodal out-of-balance force (internal tractions +
-gravity + boundary forces) and `volume_n[i]/NODES_PER_ELEM` is the nodal
-volume. There is *no* velocity damping and *no* FLAC local damping in this
-update — all dissipation comes from the stress relaxation, whose rate the
-optimal `Re` controls.
+$$\Delta\tau_{\rho,i} = \frac{\mathrm{CFL}\cdot h_i \cdot L \cdot N_\text{npe}}{\mathrm{Re}\cdot\mu_{ve,i}\cdot V_i}$$
+
+where $f_i$ is the assembled nodal out-of-balance force (internal tractions +
+gravity + boundary forces), $V_i = \texttt{volume\_n}[i]$ is the summed nodal
+volume, and $N_\text{npe} = \texttt{NODES\_PER\_ELEM}$ so that
+$V_i/N_\text{npe}$ is the nodal volume. There is *no* velocity damping and
+*no* FLAC local damping in this update — all dissipation comes from the stress
+relaxation, whose rate the optimal `Re` controls.
 
 ### 2.5 Local pseudo-time stepping
 
