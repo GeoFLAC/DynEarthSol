@@ -833,6 +833,14 @@ endif
 # Enable Array2D structure of Array
 CXXFLAGS += -DSOA
 
+## nanoflann uses std::thread, which needs pthread on glibc. openmp=1 gets it for
+## free from -fopenmp; openmp=0 linked nothing and failed with an undefined
+## pthread_create. Harmless where libc already provides it.
+ifneq ($(strip $(openmp)), 1)
+	CXXFLAGS += -pthread
+	LDFLAGS += -pthread
+endif
+
 ## Action
 
 .PHONY: all clean take-snapshot prepare build check-deps config FORCE
