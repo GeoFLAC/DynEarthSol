@@ -92,13 +92,13 @@ $$g(k) = 1 - D k^2 \Delta\tau,$$
 
 so the fractional decay per iteration is $1 - g(k) = D k^2 \Delta\tau$.
 Stability requires $|g| \le 1$ for all *k*; the binding constraint comes from
-the fastest (highest-*k*) mode, $k_\max = \pi/h$ (Nyquist), giving
+the fastest (highest-*k*) mode, $k_{\max} = \pi/h$ (Nyquist), giving
 
-$$\Delta\tau \lesssim \frac{1}{D k_\max^2} \sim \frac{h^2}{D}.$$
+$$\Delta\tau \lesssim \frac{1}{D k_{\max}^2} \sim \frac{h^2}{D}.$$
 
-At this ceiling, the amplification factor for the *slowest* mode $k_\min = \pi/L$ is
+At this ceiling, the amplification factor for the *slowest* mode $k_{\min} = \pi/L$ is
 
-$$g(k_\min) = 1 - D\left(\frac{\pi}{L}\right)^{2}\frac{h^2}{D}
+$$g(k_{\min}) = 1 - D\left(\frac{\pi}{L}\right)^{2}\frac{h^2}{D}
             = 1 - \left(\frac{\pi h}{L}\right)^2
             \approx 1 - \left(\frac{h}{L}\right)^2,$$
 
@@ -203,7 +203,7 @@ maximize the minimum decay rate.  Underdamped modes (`k > η/2V̂`) decay at
 hurts them.  The optimum places the boundary between the regimes exactly at
 the smallest wavenumber:
 
-$$\eta^* = 2\hat{V} k_\min = \frac{2\pi\hat{V}}{L}.$$
+$$\eta^* = 2\hat{V} k_{\min} = \frac{2\pi\hat{V}}{L}.$$
 
 Then the `k_min` mode is exactly critical (rate `V̂ k_min`) and every other
 mode is underdamped with the *same* rate `η*/2 = V̂ k_min`: the entire
@@ -214,7 +214,7 @@ and the minimum drops.
 stably — that is where CFL enters: `Δτ = CFL·h/V̂`.  The decay per iteration
 of every mode is then
 
-$$|\lambda| \Delta\tau = \hat{V} k_\min \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L}$$
+$$|\lambda|\,\Delta\tau = \hat{V} k_{\min} \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L}$$
 
 so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations.  Note that V̂ cancels here exactly
 as it does in the implementation: only the combinations `Δτ/ρ̃` and `G̃Δτ`
@@ -297,13 +297,13 @@ $$\tau^{k+1}\!\left[\frac{1}{2\tilde{G}\Delta\tau} + \frac{1}{2\mu_{ve}}\right] 
 using $1/\mu_{ve} = 1/(G\Delta t) + 1/\mu_s$ (Eq. 35).  Multiplying through by $2\tilde{G}\Delta\tau$
 and letting $\theta = \tilde{G}\Delta\tau/\mu_{ve}$:
 
-$$\tau^{k+1}(1+\theta) = \tau^k + 2\tilde{G}\Delta\tau\,\dot{\varepsilon}_{ij} + \theta\cdot\frac{\mu_{ve}}{G\Delta t}\cdot\tau_\text{old}$$
+$$\tau^{k+1}(1+\theta) = \tau^k + 2\tilde{G}\Delta\tau \dot{\varepsilon}_{ij} + \theta\cdot\frac{\mu_{ve}}{G\Delta t}\cdot\tau_\text{old}$$
 
 In the **elastic limit** ($\mu_s \to \infty$, $\mu_{ve} = G\Delta t$, $\theta = \tilde{G}\Delta\tau/(G\Delta t)$):
 
 $$\begin{aligned}
-\tau^{k+1}(1+\theta) &= \tau^k + \theta\cdot 2G\Delta t\,\dot{\varepsilon}_{ij} + \theta\cdot\tau_\text{old}\\
-                     &= \tau^k + \theta\cdot(\tau_\text{old} + 2G\Delta t\,\dot{\varepsilon}_{ij})\\
+\tau^{k+1}(1+\theta) &= \tau^k + \theta\cdot 2G\Delta t \dot{\varepsilon}_{ij} + \theta\cdot\tau_\text{old}\\
+                     &= \tau^k + \theta\cdot(\tau_\text{old} + 2G\Delta t \dot{\varepsilon}_{ij})\\
                      &= \tau^k + \theta\cdot\tau^*
 \end{aligned}$$
 
@@ -319,30 +319,34 @@ compressibility: `C:ε̇Δt` includes the volumetric term `λΔt tr(ε̇) I`.
 The algebra is identical per component; only the physical elastic target
 τ* is broader.
 
-The essential point — and the reason a naive implementation
-diverges — is that the relaxation rate must be built from the **numerical**
-modulus `G̃`, not the physical one:
+The essential point is that the relaxation rate must be built from the **numerical**
+modulus `G̃` (see §2.3), not the physical one:
 
 ```
-θ_e = Re·CFL·h_e / ((r+2)·L) · (μ_ve,e / (G_e Δt))  ≈  Re·CFL·h_e/((r+2)L)  ~  h/L  ≪ 1
+θ_e = Re·CFL·h_e / ((r+2)·L) · (μ_ve,e / (G_e Δt)),
 ```
+where h_e and G_e are element size and element stiffness. 
+In the elastic limit, μ_ve,e = G_e Δt. So,
 
+```
+θ_e ≈  Re·CFL·h_e/((r+2)L)  ~  h/L  ≪ 1.
+```
 The stress must build up *slowly* (a fraction `~h/L` of the physical increment
 per iteration). That slow build-up is exactly what turns the coupled iteration
-into a damped wave and allows the large velocity step below. Applying the full
-physical increment `C:ε̇Δt` every iteration is equivalent to `θ = 1`, which
-violates the pseudo-wave CFL condition by a factor `~L/h` and blows up within
-tens of iterations.
+into a damped wave and allows the large velocity step in the accelerated PT. 
+Applying the full physical increment `C:ε̇Δt` every iteration is equivalent to 
+`θ = 1`, which violates the pseudo-wave CFL condition by a factor `~L/h`. 
+Such a test case blew up within tens of iterations.
 
-**Plastic projection** (same kernel). After the relaxation, the stress is
-projected back onto the yield surface (Mohr–Coulomb + tension cutoff) by
-calling the standard return map with a *zero* strain increment.
+**Plastic projection** (within the same interation step). After the relaxation, 
+only the stress is projected back onto the yield surface 
+(Mohr–Coulomb + tension cutoff) by calling the standard return mapping. Plastic strain is **not** accumulated during PT iterations (see §2.7).
 
 The term *projection* is precise: the yield surface (a Mohr–Coulomb cone in
 stress space) bounds a convex feasible region, and the return map finds the
-closest stress on that surface — the orthogonal projection $P(\sigma^{trial})$
-onto the convex set.  *Non-expansive* means that for any two stress states the
-projection never increases the distance between them,
+closest stress on that surface: i.e., the orthogonal projection $P(\sigma^{trial})$
+onto the convex set. Thus, the projection is *non-expansive*, which means that for 
+any two stress states, the projection never increases the distance between them,
 
 $$\|P(\sigma^a) - P(\sigma^b)\| \leq \|\sigma^a - \sigma^b\|,$$
 
@@ -350,15 +354,14 @@ a standard result for projections onto convex sets.  This is why the
 projection cannot amplify the error $\|\sigma^k - \sigma^*\|$ and therefore
 cannot destabilize the convergence driven by the relaxation step.
 
-The *fixed point* of the combined operator (relax then project) is the state
-where neither step moves the stress: the relaxation is stationary when momentum
+The projection operation also has a *fixed point*. The fixed point of the combined 
+operator (elastic or viscoelastic guess then project) is the state
+where neither step moves the stress: the guessed stress is stationary when momentum
 is balanced and the constitutive law is satisfied, and the projection is
 stationary when the stress is already on the yield surface.  Both hold
 simultaneously only at the physical solution, so the fixed point satisfies both
 equilibrium and the yield condition.  The argument relies on the yield surface
 being convex, which holds for Mohr–Coulomb and Drucker–Prager.
-
-Plastic strain is **not** accumulated during PT iterations (see §2.7).
 
 **Velocity update** (`update_velocity_PT()`, fields.cxx):
 
