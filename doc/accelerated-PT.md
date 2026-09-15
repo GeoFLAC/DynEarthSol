@@ -590,14 +590,14 @@ mechanisms, both gated on `PT_retune_interval > 0`, adapt the parameters
 during the iteration.
 
 **Periodic `update_pt_params()`.** Every `PT_retune_interval` PT iterations
-the per-element `G̃Δτ|_e` and per-node `dτ_ρ[i]` factors are recomputed
-(Phase 1, commit `3c6f15d`).  During elastic phases these are nearly constant;
+the per-element `G̃Δτ|_e` and per-node `dτ_ρ[i]` factors are recomputed.
+During elastic phases these are nearly constant;
 during progressive yielding μ_ve,e softens and the local stepping factors
 follow.  Cost per call is O(nelem + nnode), ~1–2% of one iteration at interval 100.
 
 **Rayleigh-quotient Re estimate.** Every `PT_retune_interval` iterations
 `rayleigh_update_Re()` also estimates λ_min from the ratio of iterate
-differences over the preceding window (Phase 2, commit `a80bec5`):
+differences over the preceding window (Duretz et al., 2026, Sect. 3):
 
 $$\lambda_\min \approx \frac{-\sum_{i,j} \Delta v_{ij}\,\Delta f_{ij}}{\sum_i \frac{1}{\Delta\tau_{\rho,i}}\sum_j (\Delta v_{ij})^2}$$
 
@@ -816,6 +816,7 @@ geometric), so this is cheap.
   In *Analytical and Computational Methods in Engineering Rock Mechanics* —
   origin of the dynamic-relaxation / unbalanced-force-ratio practice used by
   FLAC and inherited by DynEarthSol's convergence metric.
-- Duretz, T., Räss, L., Podladchikov, Y. Y., and coworkers' PT viscoplasticity
-  papers for the relax-then-project treatment of plastic yield inside
-  pseudo-transient iterations.
+- Duretz, T., de Montserrat, A., Sevilla, R., Räss, L., Utkin, I., and Spang, A.
+  (2026). Automatic tuning of iterative pseudo-transient solvers for modeling
+  the deformation of heterogeneous media. *Geoscientific Model Development*, 19,
+  5343–5362. https://doi.org/10.5194/gmd-19-5343-2026
