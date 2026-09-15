@@ -303,6 +303,12 @@ def process_single_frame(args):
                 file=sys.stderr,
             )
 
+        try:
+            convert_field(des, frame, 'shear heating', fvtu)
+        except (KeyError, NameError):
+            # Optional field; not present unless control.has_shear_heating is on.
+            pass
+
         # Optional RSF cell fields.
         try:
             convert_field(des, frame, 'dynamic friction coefficient', fvtu)

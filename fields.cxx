@@ -108,6 +108,7 @@ void allocate_variables(const Param &param, Variables& var)
     var.dpressure = new double_vec(e, 0);
 
     var.viscosity = new double_vec(e,param.mat.visc_max);
+    var.shear_heat = new double_vec(e, 0);
 
     var.force = new array_t(n, 0);
     var.force_residual = new array_t(n, 0);
@@ -167,6 +168,8 @@ void reallocate_variables(const Param& param, Variables& var)
     var.dpressure = new double_vec(e, 0);
     delete var.viscosity;
     var.viscosity = new double_vec(e,param.mat.visc_max);
+    delete var.shear_heat;
+    var.shear_heat = new double_vec(e, 0);
     delete var.force;
     var.force = new array_t(n, 0);
 
@@ -215,6 +218,9 @@ void update_temperature(const Param &param, const Variables &var,
             ElemCacheAccessor tr = tmp_result[e];
             double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
+            // shear_heat is already a volumetric power density (W/m^3), unlike
+            // radiogenic_source (W/kg), so it is not scaled by density here.
+            rh += (*var.shear_heat)[e] * (*var.volume)[e] / NODES_PER_ELEM;
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
             get_local_shape_fn(var, e, shpdx, shpdy, shpdz);

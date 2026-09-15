@@ -385,6 +385,10 @@ void restart(const Param& param, Variables& var)
     {
         // for shear heating
         bin_save.read_array(*var.strain_rate, "strain-rate");
+        // Absent in save files predating this field: leave shear_heat at its
+        // zero-initialized default rather than failing the restart.
+        if (bin_save.has_array("shear heating"))
+            bin_save.read_array(*var.shear_heat, "shear heating");
         // for tidal heating
         bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
@@ -511,7 +515,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
             *var.ppressure, *var.dppressure, *var.vel,
-            *var.dyn_fric_coeff, *var.state_variable);
+            *var.dyn_fric_coeff, *var.state_variable, *var.shear_heat);
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -571,7 +575,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
                 *var.ppressure, *var.dppressure, *var.vel,
-                *var.dyn_fric_coeff, *var.state_variable);
+                *var.dyn_fric_coeff, *var.state_variable, *var.shear_heat);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -788,7 +792,7 @@ int main(int argc, const char* argv[])
             *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
             *var.strain_rate,
             *var.ppressure, *var.dppressure, *var.vel,
-            *var.dyn_fric_coeff, *var.state_variable);
+            *var.dyn_fric_coeff, *var.state_variable, *var.shear_heat);
 
         // Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -821,7 +825,7 @@ int main(int argc, const char* argv[])
                     *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                     *var.strain_rate,
                     *var.ppressure, *var.dppressure, *var.vel,
-                    *var.dyn_fric_coeff, *var.state_variable);
+                    *var.dyn_fric_coeff, *var.state_variable, *var.shear_heat);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);
