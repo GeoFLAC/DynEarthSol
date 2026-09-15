@@ -336,10 +336,29 @@ tens of iterations.
 
 **Plastic projection** (same kernel). After the relaxation, the stress is
 projected back onto the yield surface (Mohr–Coulomb + tension cutoff) by
-calling the standard return map with a *zero* strain increment. The projection
-is non-expansive, so it does not destabilize the iteration, and its fixed
-point satisfies both equilibrium and the yield condition. Plastic strain is
-**not** accumulated during PT iterations (see §2.7).
+calling the standard return map with a *zero* strain increment.
+
+The term *projection* is precise: the yield surface (a Mohr–Coulomb cone in
+stress space) bounds a convex feasible region, and the return map finds the
+closest stress on that surface — the orthogonal projection $P(\sigma^{trial})$
+onto the convex set.  *Non-expansive* means that for any two stress states the
+projection never increases the distance between them,
+
+$$\|P(\sigma^a) - P(\sigma^b)\| \leq \|\sigma^a - \sigma^b\|,$$
+
+a standard result for projections onto convex sets.  This is why the
+projection cannot amplify the error $\|\sigma^k - \sigma^*\|$ and therefore
+cannot destabilize the convergence driven by the relaxation step.
+
+The *fixed point* of the combined operator (relax then project) is the state
+where neither step moves the stress: the relaxation is stationary when momentum
+is balanced and the constitutive law is satisfied, and the projection is
+stationary when the stress is already on the yield surface.  Both hold
+simultaneously only at the physical solution, so the fixed point satisfies both
+equilibrium and the yield condition.  The argument relies on the yield surface
+being convex, which holds for Mohr–Coulomb and Drucker–Prager.
+
+Plastic strain is **not** accumulated during PT iterations (see §2.7).
 
 **Velocity update** (`update_velocity_PT()`, fields.cxx):
 
