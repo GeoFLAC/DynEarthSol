@@ -366,7 +366,7 @@ class DynearthsolCheckpoint(Dynearthsol):
 
         dtype = np.float64 if name != 'connectivity' else np.int32
 
-        if name in set(['volume_old']):
+        if name in set(['volume_old', 'plstrain_remesh']):
             count = nelem
             shape = (nelem, )
         else:

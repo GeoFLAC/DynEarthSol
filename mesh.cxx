@@ -43,6 +43,7 @@
 #include "sortindex.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
+#include "mmg_utils.hpp"
 #include "markerset.hpp"
 
 #ifdef WIN32
@@ -850,8 +851,34 @@ static void propagate_regattr_nearest(
 }
 
 
+// Measure (area in 2D, volume in 3D) of element e -- the as-meshed size of elements in
+// regions without a size constraint (compute_init_metric below).
+static double elem_measure(const double *coord, const int *conn, int e)
+{
+    const int *c = conn + e * NODES_PER_ELEM;
+    const double *a = coord + c[0] * NDIMS;
+    const double *b = coord + c[1] * NDIMS;
+    const double *d = coord + c[2] * NDIMS;
+#ifdef THREED
+    const double *f = coord + c[3] * NDIMS;
+    double ab[3], ad[3], af[3];
+    for (int i = 0; i < 3; ++i) {
+        ab[i] = b[i] - a[i];
+        ad[i] = d[i] - a[i];
+        af[i] = f[i] - a[i];
+    }
+    return std::fabs(ab[0] * (ad[1]*af[2] - ad[2]*af[1])
+                   - ab[1] * (ad[0]*af[2] - ad[2]*af[0])
+                   + ab[2] * (ad[0]*af[1] - ad[1]*af[0])) / 6.0;
+#else
+    return 0.5 * std::fabs((b[0] - a[0]) * (d[1] - a[1])
+                         - (d[0] - a[0]) * (b[1] - a[1]));
+#endif
+}
+
 static void compute_init_metric(
     int nnode, int nelem,
+    const double *coord,           // node coordinates [nnode × NDIMS]
     const int *conn,               // coarse connectivity [nelem × NODES_PER_ELEM]
     const double *elem_region,     // coarse pregattr [nelem]: region indices when per-region, ignored when uniform
     int n_regions, const double *regattr,  // original region attrs (NDIMS+2 per region)
@@ -881,7 +908,12 @@ static void compute_init_metric(
             int r = (int)elem_region[e];
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
-            double target = (vol > 0) ? std::pow(vol / sizefactor, 1.0 / NDIMS) : resolution;
+            // A region without a size constraint (.poly size <= 0) means "as coarse as the mesher
+            // likes", as on the non-MMG path: target each element's OWN as-meshed size, not a fixed
+            // fallback (mesh.resolution would refine the whole region).
+            double target = (vol > 0)
+                ? std::pow(vol / sizefactor, 1.0 / NDIMS)
+                : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
 
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 int ni = conn[e * NODES_PER_ELEM + k];
@@ -916,100 +948,29 @@ static void mmg_refine_init_mesh_3d(
     double_vec cra(pregattr ? pregattr : nullptr,
                             pregattr ? pregattr + ce : nullptr);
 
-    // --- Initialize MMG3D ---
-    MMG5_pMesh mmgMesh = NULL;
-    MMG5_pSol  mmgSol  = NULL;
-    MMG3D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh,
-                    MMG5_ARG_ppMet,  &mmgSol,
-                    MMG5_ARG_end);
-
-    if (MMG3D_Set_meshSize(mmgMesh, cn, ce, 0, cs, 0, 0) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Vertices: pcoord is already AoS x0,y0,z0,... as produced by TetGen
-    if (MMG3D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Tetrahedra: MMG is 1-indexed
-    int_vec conn1(ce * NODES_PER_ELEM);
-    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
-        conn1[i] = pconn[i] + 1;
-    if (MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Boundary triangles: MMG is 1-indexed
-    int_vec seg1(cs * NODES_PER_FACET);
-    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
-        seg1[i] = pseg[i] + 1;
-    if (MMG3D_Set_triangles(mmgMesh, seg1.data(), psegflag) != 1)
-        die(EXIT_MESH_MMG);
-
-    // --- Compute uniform or per-region metric ---
-    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        die(EXIT_MESH_MMG);
-    if (MMG3D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        die(EXIT_MESH_MMG);
+    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true, nullptr };
+    MMGOutput mmg_out;
+    mmg_adapt(mesh, mmg_in, mmg_out);
 
-    // --- MMG parameters ---
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_verbose,  mesh.mmg_verbose);
-    MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_debug,    mesh.mmg_debug);
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmax,
-                         mesh.mmg_hmax_factor * mesh.resolution);
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmin,
-                         mesh.mmg_hmin_factor * mesh.resolution);
-    MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hausd,
-                         mesh.mmg_hausd_factor * mesh.resolution);
-
-    // --- Run ---
-    const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
-    if (ier == MMG5_STRONGFAILURE) {
-        die(EXIT_MESH_MMG, "MMG init mesh refinement failed (strong failure)");
-    }
-
-    // --- Free old coarse arrays ---
-    delete [] pcoord;    pcoord    = nullptr;
-    delete [] pconn;     pconn     = nullptr;
-    delete [] pseg;      pseg      = nullptr;
-    delete [] psegflag;  psegflag  = nullptr;
-    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
-
-    // --- Extract fine mesh ---
-    int na;
-    MMG3D_Get_meshSize(mmgMesh, &nnode, &nelem, NULL, &nseg, NULL, &na);
-
+    // --- Free old coarse arrays; reallocate outputs from the adapted mesh ---
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
     pcoord   = new double[nnode * NDIMS];
     pconn    = new int   [nelem * NODES_PER_ELEM];
     pseg     = new int   [nseg  * NODES_PER_FACET];
     psegflag = new int   [nseg];
     pregattr = new double[nelem];
-
-    for (int i = 0; i < nnode; ++i)
-        MMG3D_Get_vertex(mmgMesh,
-            pcoord + i*3, pcoord + i*3+1, pcoord + i*3+2,
-            NULL, NULL, NULL);
-
-    for (int i = 0; i < nelem; ++i) {
-        MMG3D_Get_tetrahedron(mmgMesh,
-            pconn + i*4, pconn + i*4+1, pconn + i*4+2, pconn + i*4+3,
-            NULL, NULL);
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            pconn[i*NODES_PER_ELEM+j] -= 1;  // back to 0-indexed
-    }
-
-    for (int i = 0; i < nseg; ++i) {
-        MMG3D_Get_triangle(mmgMesh,
-            pseg + i*3, pseg + i*3+1, pseg + i*3+2,
-            psegflag + i, NULL);
-        for (int j = 0; j < NODES_PER_FACET; ++j)
-            pseg[i*NODES_PER_FACET+j] -= 1;  // back to 0-indexed
-    }
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
 
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     // Propagate coarse REGION INDICES (from cra) to fine elements, then project to nodes.
@@ -1021,7 +982,7 @@ static void mmg_refine_init_mesh_3d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, max_elem_size, mesh.resolution, *fine_init_metric_n);
         } else {
             // Uniform case: exact constant metric
@@ -1050,11 +1011,6 @@ static void mmg_refine_init_mesh_3d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    MMG3D_Free_all(MMG5_ARG_start,
-                   MMG5_ARG_ppMesh, &mmgMesh,
-                   MMG5_ARG_ppMet,  &mmgSol,
-                   MMG5_ARG_end);
-
     std::cerr << "MMG init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
@@ -1081,99 +1037,29 @@ static void mmg_refine_init_mesh_2d(
     double_vec cra(pregattr ? pregattr : nullptr,
                             pregattr ? pregattr + ce : nullptr);
 
-    // --- Initialize MMG2D ---
-    MMG5_pMesh mmgMesh = NULL;
-    MMG5_pSol  mmgSol  = NULL;
-    MMG2D_Init_mesh(MMG5_ARG_start,
-                    MMG5_ARG_ppMesh, &mmgMesh,
-                    MMG5_ARG_ppMet,  &mmgSol,
-                    MMG5_ARG_end);
-
-    if (MMG2D_Set_meshSize(mmgMesh, cn, ce, 0, cs) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Vertices
-    if (MMG2D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Triangles
-    int_vec conn1(ce * NODES_PER_ELEM);
-    for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
-        conn1[i] = pconn[i] + 1;
-    if (MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL) != 1)
-        die(EXIT_MESH_MMG);
-
-    // Edges
-    int_vec seg1(cs * NODES_PER_FACET);
-    for (int i = 0; i < cs * NODES_PER_FACET; ++i)
-        seg1[i] = pseg[i] + 1;
-    if (MMG2D_Set_edges(mmgMesh, seg1.data(), psegflag) != 1)
-        die(EXIT_MESH_MMG);
-
-    // --- Compute metric ---
-    // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
+    // --- Metric on the coarse mesh (uniform or per-region) ---
     double_vec metric;
-    compute_init_metric(cn, ce, ck.data(), cra.data(),
+    compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
-    if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        die(EXIT_MESH_MMG);
-    if (MMG2D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        die(EXIT_MESH_MMG);
+    // --- Adapt the coarse mesh with the shared MMG driver (mmg_utils.cxx) ---
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true, nullptr };
+    MMGOutput mmg_out;
+    mmg_adapt(mesh, mmg_in, mmg_out);
 
-    // --- Run ---
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose,  mesh.mmg_verbose);
-    MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_debug,    mesh.mmg_debug);
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmax,
-                         mesh.mmg_hmax_factor * mesh.resolution);
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmin,
-                         mesh.mmg_hmin_factor * mesh.resolution);
-    MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hausd,
-                         mesh.mmg_hausd_factor * mesh.resolution);
-
-    const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
-    if (ier == MMG5_STRONGFAILURE) {
-        die(EXIT_MESH_MMG, "MMG2D init mesh refinement failed (strong failure)");
-    }
-
-    // --- Free old coarse arrays ---
-    delete [] pcoord;    pcoord    = nullptr;
-    delete [] pconn;     pconn     = nullptr;
-    delete [] pseg;      pseg      = nullptr;
-    delete [] psegflag;  psegflag  = nullptr;
-    if (pregattr) { delete [] pregattr; pregattr = nullptr; }
-
-    // --- Extract fine mesh ---
-    int nquad;
-    MMG2D_Get_meshSize(mmgMesh, &nnode, &nelem, &nquad, &nseg);
-
+    // --- Free old coarse arrays; reallocate outputs from the adapted mesh ---
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
     pcoord   = new double[nnode * NDIMS];
     pconn    = new int   [nelem * NODES_PER_ELEM];
     pseg     = new int   [nseg  * NODES_PER_FACET];
     psegflag = new int   [nseg];
     pregattr = new double[nelem];
-
-    for (int i = 0; i < nnode; ++i)
-        MMG2D_Get_vertex(mmgMesh,
-            pcoord + i*2, pcoord + i*2+1,
-            NULL, NULL, NULL);
-
-    for (int i = 0; i < nelem; ++i) {
-        MMG2D_Get_triangle(mmgMesh,
-            pconn + i*3, pconn + i*3+1, pconn + i*3+2,
-            NULL, NULL);
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            pconn[i*NODES_PER_ELEM+j] -= 1;
-    }
-
-    for (int i = 0; i < nseg; ++i) {
-        MMG2D_Get_edge(mmgMesh,
-            pseg + i*2, pseg + i*2+1,
-            psegflag + i, NULL, NULL);
-        for (int j = 0; j < NODES_PER_FACET; ++j)
-            pseg[i*NODES_PER_FACET+j] -= 1;
-    }
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
 
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     if (fine_init_metric_n && !cra.empty()) {
@@ -1181,7 +1067,7 @@ static void mmg_refine_init_mesh_2d(
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
-            compute_init_metric(nnode, nelem, pconn, fine_region_idx.data(),
+            compute_init_metric(nnode, nelem, pcoord, pconn, fine_region_idx.data(),
                                 n_regions, regattr, 0.0, mesh.resolution, *fine_init_metric_n);
         } else {
             const double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
@@ -1207,14 +1093,141 @@ static void mmg_refine_init_mesh_2d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    MMG2D_Free_all(MMG5_ARG_start,
-                   MMG5_ARG_ppMesh, &mmgMesh,
-                   MMG5_ARG_ppMet,  &mmgSol,
-                   MMG5_ARG_end);
     std::cerr << "MMG2D init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
+
 #endif // !THREED
+
+// Refine the RESTORED side walls of the INITIAL mesh to ~mesh.resolution (remeshing_option 13):
+// the incoming-material profile is sampled at wall-node spacing, so a coarse initial wall would
+// freeze a kinked profile for the whole run. One MMG pass with the per-node size CLAMPED at the
+// wall nodes refines only the wall band. var.init_elem_size_n is filled from the UNCLAMPED sizes,
+// so the frozen metric base keeps the cfg-intended size and off-wall elements coarsen back at the
+// next remesh. Both dimensions: x0/x1 (and y0/y1 in 3D), the restored walls of option 13.
+static void refine_initial_side_walls(const Param &param, Variables &var,
+        int &nnode, int &nelem, int &nseg,
+        double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
+{
+    const double res = param.mesh.resolution;
+
+    // Per-node actual element size (edge length of the equilateral element of the same measure,
+    // measure-weighted nodal average -- the same convention as initialize_elem_size_n).
+    std::vector<double> size_n(nnode, 0.0), wsum(nnode, 0.0), esize(nelem, 0.0);
+    for (int e = 0; e < nelem; ++e) {
+        const int *c = pconn + e*NODES_PER_ELEM;
+        const double measure = elem_measure(pcoord, pconn, e);
+        esize[e] = std::pow(measure / sizefactor, 1.0 / NDIMS);
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            size_n[c[k]] += esize[e] * measure;
+            wsum [c[k]] += measure;
+        }
+    }
+    for (int n = 0; n < nnode; ++n)
+        if (wsum[n] > 0) size_n[n] /= wsum[n];
+
+    // Clamp the metric at the side-wall nodes of ALL restored walls regardless of the BC: a static
+    // wall keeps a thin ~resolution column and a full-resolution profile should the flow turn
+    // inward; only the unfreeze and the field restore are inflow-gated at remesh time.
+    auto on_wall = [&](int n) {
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const double plane = side_wall_plane(param.mesh, t);
+            const double tol = 1e-9 * (SIDEWALL_AXIS[t] == 0 ? param.mesh.xlength : param.mesh.ylength);
+            if (std::abs(pcoord[n*NDIMS + SIDEWALL_AXIS[t]] - plane) < tol) return true;
+        }
+        return false;
+    };
+    std::vector<double> metric(size_n);
+    bool needs_refining = false;
+    for (int n = 0; n < nnode; ++n) {
+        if (on_wall(n) && metric[n] > res) {
+            metric[n] = res;
+            needs_refining = true;
+        }
+    }
+    if (!needs_refining) return;
+
+    // The cfg-intended size hint that must survive the refinement: the zone-aware hint the
+    // use_mmg_init path already computed, or the actual (pre-refinement) sizes otherwise.
+    // Copied, not referenced: init_elem_size_n itself is reassigned below.
+    const double_vec hint = ((int)var.init_elem_size_n->size() == nnode)
+                            ? *var.init_elem_size_n : size_n;
+
+    // Freeze everything except the wall bands: wall-faceted elements + TWO connectivity rings are
+    // modifiable (one ring wider than the remesh-time R4 strip), and only where the element is
+    // COARSER than the target; the rest of the initial mesh is carried verbatim.
+    std::vector<char> free_elem(nelem, 0), free_node(nnode, 0);
+    for (int n = 0; n < nnode; ++n)
+        if (on_wall(n))
+            free_node[n] = 1;                        // ring 0 grows from the wall nodes
+    for (int r = 0; r <= 2; ++r) {
+        std::vector<char> next(nnode, 0);
+        for (int e = 0; e < nelem; ++e) {
+            if (free_elem[e]) continue;
+            if (esize[e] <= res) continue;           // already at/below resolution
+            const int *c = pconn + e*NODES_PER_ELEM;
+            bool touch = false;
+            for (int k = 0; k < NODES_PER_ELEM && !touch; ++k) touch = free_node[c[k]];
+            if (!touch) continue;
+            free_elem[e] = 1;
+            for (int k = 0; k < NODES_PER_ELEM; ++k) next[c[k]] = 1;
+        }
+        for (int n = 0; n < nnode; ++n)
+            if (next[n]) free_node[n] = 1;
+    }
+    std::vector<char> req_elem(nelem), req_node(nnode);
+    for (int e = 0; e < nelem; ++e) req_elem[e] = !free_elem[e];
+    for (int n = 0; n < nnode; ++n) req_node[n] = !free_node[n];
+
+    MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
+                         metric.data(), req_node.data(), req_elem.data(), true, nullptr };
+    MMGOutput mmg_out;
+    mmg_adapt(param.mesh, mmg_in, mmg_out);
+
+    // init_elem_size_n on the refined mesh = nearest-old-node transfer of the UNCLAMPED hint.
+    {
+        CentroidCloud cloud(pcoord, nnode);   // plain AoS point cloud; works for nodes too
+        CentroidKDTree kdtree(NDIMS, cloud,
+            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+        kdtree.buildIndex();
+        var.init_elem_size_n->assign(mmg_out.nnode, 0.0);
+        for (int n = 0; n < mmg_out.nnode; ++n) {
+            std::size_t nearest_idx;
+            double dist_sq;
+            nanoflann::KNNResultSet<double> result(1);
+            result.init(&nearest_idx, &dist_sq);
+            kdtree.findNeighbors(result, &mmg_out.coord[(std::size_t)n*NDIMS],
+                                 nanoflann::SearchParameters());
+            (*var.init_elem_size_n)[n] = hint[nearest_idx];
+        }
+    }
+
+    // Material regions follow via nearest old element centroid.
+    double *fine_regattr = new double[mmg_out.nelem];
+    if (pregattr)
+        propagate_regattr_nearest(nelem, pcoord, pconn, pregattr,
+                                  mmg_out.nelem, mmg_out.coord.data(), mmg_out.conn.data(),
+                                  fine_regattr);
+    else
+        std::fill(fine_regattr, fine_regattr + mmg_out.nelem, 0.0);
+
+    // Replace the mesh buffers with the refined mesh.
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
+    pcoord   = new double[(std::size_t)nnode * NDIMS];
+    pconn    = new int   [(std::size_t)nelem * NODES_PER_ELEM];
+    pseg     = new int   [(std::size_t)nseg  * NODES_PER_FACET];
+    psegflag = new int   [nseg];
+    pregattr = fine_regattr;
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
+
+    std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
+              << nnode << " nodes, " << nelem << " elements\n";
+}
 #endif // USEMMG
 
 
@@ -1413,6 +1426,15 @@ void points_to_mesh(const Param &param, Variables &var,
                        max_elem_size, vertex_per_polygon,
                        var.nnode, var.nelem, var.nseg,
                        pcoord, pconnectivity, psegment, psegflag, pregattr);
+#endif
+
+#ifdef USEMMG
+    // Restored side walls (remeshing_option 13) must start at ~mesh.resolution so the recorded
+    // incoming-material profiles (temperature, layering) resolve the initial structure. The
+    // cfg-intended sizes are preserved in init_elem_size_n (see refine_initial_side_walls).
+    if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
+        refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
+                                  pcoord, pconnectivity, psegment, psegflag, pregattr);
 #endif
 
     var.coord = new array_t(pcoord, var.nnode);
@@ -1822,7 +1844,10 @@ void new_mesh_refined_zone(const Param& param, Variables& var)
 #else
     const double area1 = 0.7 * (d*d*d);
 #endif
-    const double area0 = area1 * m.largest_size;
+    // Coarse-region max area uses the same relative-volume convention as MMG's hmax and the
+    // tiny-element check (volume = largest_size * sizefactor * resolution^NDIMS), so the Triangle
+    // coarse zone stays inside the [smallest_size, largest_size] band MMG remeshing enforces.
+    const double area0 = m.largest_size * sizefactor * std::pow(d, NDIMS);
     int pos = 0;
     region0[pos] = +d/2;  region1[pos++] = +x0*Lx+d/2; // x
 #if THREED

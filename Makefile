@@ -714,6 +714,7 @@ SRCS =	\
 	input.cxx \
 	matprops.cxx \
 	mesh.cxx \
+	mmg_utils.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -747,6 +748,7 @@ INCS =	\
 	markerset.hpp \
 	matprops.hpp \
 	mesh.hpp \
+	mmg_utils.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
