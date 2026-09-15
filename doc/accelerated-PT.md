@@ -214,7 +214,7 @@ and the minimum drops.
 stably — that is where CFL enters: `Δτ = CFL·h/V̂`.  The decay per iteration
 of every mode is then
 
-$$|\lambda|\,\Delta\tau = \hat{V} k_\min \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L},$$
+$$|\lambda|\,\Delta\tau = \hat{V} k_\min \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L}$$
 
 so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations — the
 `O(L/h)` scaling, now with its constant.  Note that V̂ cancels here exactly
