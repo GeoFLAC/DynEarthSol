@@ -12,6 +12,118 @@
 #include "mesh.hpp"
 #include "output.hpp"
 
+#ifdef THREED
+#pragma acc routine seq
+static inline void get_geometry_shape_fn(
+    const Variables &var, int e,
+    double shpdx[4], double shpdy[4], double shpdz[4])
+{
+    ConstArrayIndirectAccessor d =
+        var.coord->view_const((*var.connectivity)[e]);
+    const double iv = 1.0 / (6.0 * (*var.volume)[e]);
+
+    const double x01 = d[0][0] - d[1][0];
+    const double x02 = d[0][0] - d[2][0];
+    const double x03 = d[0][0] - d[3][0];
+    const double x12 = d[1][0] - d[2][0];
+    const double x13 = d[1][0] - d[3][0];
+    const double x23 = d[2][0] - d[3][0];
+    const double y01 = d[0][1] - d[1][1];
+    const double y02 = d[0][1] - d[2][1];
+    const double y03 = d[0][1] - d[3][1];
+    const double y12 = d[1][1] - d[2][1];
+    const double y13 = d[1][1] - d[3][1];
+    const double y23 = d[2][1] - d[3][1];
+    const double z01 = d[0][2] - d[1][2];
+    const double z02 = d[0][2] - d[2][2];
+    const double z03 = d[0][2] - d[3][2];
+    const double z12 = d[1][2] - d[2][2];
+    const double z13 = d[1][2] - d[3][2];
+    const double z23 = d[2][2] - d[3][2];
+
+    shpdx[0] = iv * (y13*z12 - y12*z13);
+    shpdx[1] = iv * (y02*z23 - y23*z02);
+    shpdx[2] = iv * (y13*z03 - y03*z13);
+    shpdx[3] = iv * (y01*z02 - y02*z01);
+
+    shpdy[0] = iv * (z13*x12 - z12*x13);
+    shpdy[1] = iv * (z02*x23 - z23*x02);
+    shpdy[2] = iv * (z13*x03 - z03*x13);
+    shpdy[3] = iv * (z01*x02 - z02*x01);
+
+    shpdz[0] = iv * (x13*y12 - x12*y13);
+    shpdz[1] = iv * (x02*y23 - x23*y02);
+    shpdz[2] = iv * (x13*y03 - x03*y13);
+    shpdz[3] = iv * (x01*y02 - x02*y01);
+}
+#else
+#pragma acc routine seq
+static inline void get_geometry_shape_fn(
+    const Variables &var, int e, double shpdx[3], double shpdz[3])
+{
+    ConstArrayIndirectAccessor d =
+        var.coord->view_const((*var.connectivity)[e]);
+    const double iv = 1.0 / (2.0 * (*var.volume)[e]);
+
+    shpdx[0] = iv * (d[1][1] - d[2][1]);
+    shpdx[1] = iv * (d[2][1] - d[0][1]);
+    shpdx[2] = iv * (d[0][1] - d[1][1]);
+
+    shpdz[0] = iv * (d[2][0] - d[1][0]);
+    shpdz[1] = iv * (d[0][0] - d[2][0]);
+    shpdz[2] = iv * (d[1][0] - d[0][0]);
+}
+#endif
+
+#pragma acc routine seq
+static inline double current_strain_rate_invariant(
+    const Variables &var, int e)
+{
+#ifdef THREED
+    double shpdx[NODES_PER_ELEM];
+    double shpdy[NODES_PER_ELEM];
+    double shpdz[NODES_PER_ELEM];
+    get_geometry_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+    double shpdx[NODES_PER_ELEM];
+    double shpdz[NODES_PER_ELEM];
+    get_geometry_shape_fn(var, e, shpdx, shpdz);
+#endif
+    ConstArrayIndirectAccessor v =
+        var.vel->view_const((*var.connectivity)[e]);
+    double strain_rate[NSTR] = {0.0};
+
+    #pragma acc loop seq
+    for (int i = 0; i < NODES_PER_ELEM; ++i) {
+        strain_rate[0] += v[i][0] * shpdx[i];
+#ifdef THREED
+        strain_rate[1] += v[i][1] * shpdy[i];
+        strain_rate[2] += v[i][2] * shpdz[i];
+        strain_rate[3] +=
+            0.5 * (v[i][0] * shpdy[i] + v[i][1] * shpdx[i]);
+        strain_rate[4] +=
+            0.5 * (v[i][0] * shpdz[i] + v[i][2] * shpdx[i]);
+        strain_rate[5] +=
+            0.5 * (v[i][1] * shpdz[i] + v[i][2] * shpdy[i]);
+#else
+        strain_rate[1] += v[i][1] * shpdz[i];
+        strain_rate[2] +=
+            0.5 * (v[i][0] * shpdz[i] + v[i][1] * shpdx[i]);
+#endif
+    }
+
+    return second_invariant(strain_rate);
+}
+
+#pragma acc routine seq
+static inline double mass_scaling_modulus(
+    const Param& param, const MatProps& mat, int e)
+{
+    return (param.control.mass_scaling_reference_speed ==
+            mass_scaling_speed_bulk) ?
+        mat.bulkm(e) : mat.shearm(e);
+}
+
 /* Given two points, returns the distance^2 */
 template <typename T>
 double dist2(T a, T b)
@@ -1477,7 +1589,8 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
 #endif
 }
 
-double compute_dt(const Param& param, Variables& var)
+double compute_dt(const Param& param, Variables& var,
+                  bool include_rsf_state_limit)
 
 {
 #ifdef NPROF
@@ -1488,9 +1601,18 @@ double compute_dt(const Param& param, Variables& var)
 
     // dynamic dt
     double dt_maxwell = std::numeric_limits<double>::max();
+    double dt_rsf = std::numeric_limits<double>::max();
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
+    const bool uses_rsf_state_step_limit =
+        include_rsf_state_limit &&
+        (param.mat.rheol_type & MatProps::rh_rsf) &&
+        param.mat.state_var_model == 1 &&
+        param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_total_strain_rate;
+    const double rsf_dtheta_max = uses_rsf_state_step_limit ?
+        param.control.rsf_dtheta_max : 0.0;
 
     // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
@@ -1503,12 +1625,12 @@ double compute_dt(const Param& param, Variables& var)
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
-        default(none) shared(param, var)
+        default(none) shared(param, var) firstprivate(rsf_dtheta_max)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) async
     for (int e=0; e<var.nelem; ++e) {
 
@@ -1576,6 +1698,18 @@ double compute_dt(const Param& param, Variables& var)
 #endif
         dt_maxwell = std::min(dt_maxwell,
                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
+        if (rsf_dtheta_max > 0) {
+            const double rate =
+                2.0 * minh * current_strain_rate_invariant(var, e);
+            const double dc = var.mat->d_c(e);
+            if (rate > 0 && dc > 0)
+                dt_rsf = std::min(
+                    dt_rsf, rsf_dtheta_max * dc / rate);
+            const double theta = (*var.state_variable)[e];
+            if (theta > 0)
+                dt_rsf = std::min(
+                    dt_rsf, rsf_dtheta_max * theta);
+        }
         if (param.control.has_thermal_diffusion)
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
@@ -1589,7 +1723,11 @@ double compute_dt(const Param& param, Variables& var)
         minl = std::min(minl, minh);
 
         // Find global min delta t to meet CFL condition
-        global_dt_min = std::min(global_dt_min, minh/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
+        global_dt_min = std::min(
+            global_dt_min,
+            minh / std::sqrt(
+                mass_scaling_modulus(param, *var.mat, e) /
+                var.mat->rho(e)) / 5.0);
     }
 
     #pragma acc wait
@@ -1627,14 +1765,18 @@ double compute_dt(const Param& param, Variables& var)
     }
 
     // Combine dt calculations and incorporate dt_hydro_diffusion
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion}) * param.control.dt_fraction;
+    double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
+                          dt_diffusion, dt_hydro_diffusion}) *
+                param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
     if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_diffusion << " " 
+        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
+                  << dt_rsf << " " << dt_diffusion << " "
                   << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << " sec\n";
     }
     if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
+        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
+                  << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
         var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
@@ -1798,7 +1940,11 @@ void compute_mass(const Param &param, const Variables &var,
 
             if(param.control.use_global_velocity_scaling)
             {
-                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
+                double apprent_speed = std::min(
+                    pseudo_speed_ATP,
+                    std::sqrt(
+                        mass_scaling_modulus(param, *var.mat, e) /
+                        var.mat->rho(e)));
 
                 rho = (param.control.is_quasi_static) ?
                 (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
@@ -1925,4 +2071,3 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
-

@@ -316,6 +316,32 @@ namespace {
     };
 
 
+void set_homogeneous_initial_stress(const Param &param, const Variables &var,
+                                    tensor_t &stress, double_vec &stressyy,
+                                    double_vec &old_mean_stress,
+                                    tensor_t &strain)
+{
+    double imposed[NSTR];
+    for (int i = 0; i < NSTR; ++i)
+        imposed[i] = param.ic.initial_stress[i];
+    const bool is_plane_strain = param.mat.is_plane_strain;
+
+    #pragma acc parallel loop gang vector copyin(imposed[0:NSTR]) async
+    for (int e = 0; e < var.nelem; ++e) {
+        TensorAccessor s = stress[e];
+        TensorAccessor eps = strain[e];
+        for (int i = 0; i < NSTR; ++i) {
+            s[i] = imposed[i];
+            eps[i] = 0.0;
+        }
+        old_mean_stress[e] = trace(s) / NDIMS;
+        if (is_plane_strain)
+            stressyy[e] = old_mean_stress[e];
+    }
+    #pragma acc wait
+}
+
+
 } // anonymous namespace
 
 
@@ -325,6 +351,9 @@ void initial_stress_state(const Param &param, const Variables &var,
 {
     if (param.control.gravity == 0) {
         compensation_pressure = 0;
+        if (param.ic.initial_stress_option == 1)
+            set_homogeneous_initial_stress(
+                param, var, stress, stressyy, old_mean_stress, strain);
         return;
     }
 
@@ -367,6 +396,9 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
 {
     if (param.control.gravity == 0) {
         compensation_pressure = 0;
+        if (param.ic.initial_stress_option == 1)
+            set_homogeneous_initial_stress(
+                param, var, stress, stressyy, old_mean_stress, strain);
         return;
     }
 
