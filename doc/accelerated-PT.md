@@ -184,7 +184,9 @@ Each error component, labeled by its wavenumber `k`, decays as:
 - **underdamped** (`η < 2V̂k`): complex roots, `Re(λ) = −η/2` — the mode
   oscillates (a wave sloshing through the domain) while decaying at rate
   `η/2`, *independent of k*;
-- **overdamped** (`η > 2V̂k`): the slow real root is `λ ≈ −V̂²k²/η` — a
+- **overdamped** (`η > 2V̂k`): both roots are real; expanding
+  $\sqrt{\eta^2/4 - \hat{V}^2k^2} \approx \eta/2 - \hat{V}^2k^2/\eta$
+  gives the slow root $\lambda \approx -\hat{V}^2k^2/\eta$ — a
   diffusive rate `−Dk²` with `D = V̂²/η`.  Overdamping does not merely slow
   a mode down; it reverts that mode to first-order (parabolic) behavior.
   In the limit `η → ∞` (stress slaved to velocity) the whole spectrum is
