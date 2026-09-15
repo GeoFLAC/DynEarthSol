@@ -433,8 +433,9 @@ For `control.has_PT = yes` the main loop executes each step as:
    equilibrated velocity field. The stress update in the FLAC Dynamic Relaxation
    is skipped entirely in PT mode.
 
-The corrector's stress is (up to the convergence tolerance) the same operation
-the PT loop converged on, so the post-correction imbalance remains small.
+Because the corrector applies the same constitutive law the PT loop was
+targeting, the corrected stress agrees with the PT-converged stress to within
+the convergence tolerance, and the post-correction force imbalance remains small.
 
 ### 2.8 Convergence criterion: unbalanced-force ratio
 
