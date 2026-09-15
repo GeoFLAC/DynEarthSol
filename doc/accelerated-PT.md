@@ -411,27 +411,29 @@ practice this reduced a >50 000-iteration solve to a few hundred iterations.
 
 ### 2.7 Predictor–corrector structure of a time step
 
-For `control.has_PT = yes` the main loop executes each step as:
+For `control.has_PT = yes` the main loop executes each step as
+(`dynearthsol.cxx`: `init()` for the initialisation loop, `main()` for
+subsequent time steps):
 
-1. Save `τ_old` (`copy_stress_PT` → `var.stress_old`).
-2. Assemble forces of the `τ_old` state; record the initial residual and the
-   characteristic force scale (§2.8).
-3. `update_pt_params()` — recompute the local PT factors.
-4. **PT loop, the Predictor step** (up to `PT_max_iter`): `apply_vbcs →
+1. Save `τ_old` (`copy_stress_PT`, `fields.cxx` → `var.stress_old`).
+2. Assemble forces of the `τ_old` state (`update_force`, `geometry.cxx`);
+   record the initial residual and the characteristic force scale (§2.8).
+3. `update_pt_params()` (`geometry.cxx`) — recompute the local PT factors.
+4. **Predictor — PT loop** (up to `PT_max_iter`): `apply_vbcs →
    update_strain_rate → update_stress_PT (relax + project) → update_force →
-   update_velocity_PT → residual check`.  The stress update here uses only
-   the elastic target `τ* = τ_old + C:ε̇(v^k)Δt`; plastic
-   strain accumulation, and other constitutive bookkeeping are deliberately
+   update_velocity_PT → residual check` (all in `dynearthsol.cxx`, calling
+   into `rheology.cxx`, `geometry.cxx`, and `fields.cxx`).  The stress update
+   here uses only the elastic target `τ* = τ_old + C:ε̇(v^k)Δt`; plastic
+   strain accumulation and other constitutive bookkeeping are deliberately
    omitted so that the PT stress can be relaxed freely across many iterations.
    The loop converges to the velocity field that balances the forces implied
    by the full elastic constitutive law.
 5. **Corrector**: restore `τ_old`, then run the full physical
-   `update_stress()` once with the *converged velocity* (followed by NMD if
-   enabled). This is the only place where total strain, `plstrain`,
-   `delta_plstrain`, etc. are updated. So, the constitutive
+   `update_stress()` (`rheology.cxx`) once with the converged velocity
+   (followed by NMD if enabled). This is the only place where total strain,
+   `plstrain`, `delta_plstrain`, etc. are updated, so the constitutive
    bookkeeping is done exactly once per step and is consistent with the
-   equilibrated velocity field. The stress update in the FLAC Dynamic Relaxation
-   is skipped entirely in PT mode.
+   equilibrated velocity field.
 
 Because the corrector applies the same constitutive law the PT loop was
 targeting, the corrected stress agrees with the PT-converged stress to within
@@ -453,11 +455,13 @@ residual / force_scale < control.PT_relative_tolerance
 ```
 
 where `force_scale` is the **characteristic gross force**: the RMS over DOFs
-of `Σ_e |element nodal contribution|`, computed once per PT loop
-(`calculate_characteristic_force()`). This is the FLAC-style *unbalanced force
-ratio*: a value of `10⁻⁶` means the large opposing forces at every node cancel
-to six significant digits — the same physical accuracy statement at every
-step, for every model.
+of `Σ_e |element nodal contribution|`, computed once per PT loop by
+`calculate_characteristic_force()` (`fields.cxx`); the residual norm itself
+is computed by `calculate_residual_force()` (`fields.cxx`) after each
+`update_force()` call. This is the FLAC-style *unbalanced force ratio*: a
+value of `10⁻⁶` means the large opposing forces at every node cancel to six
+significant digits — the same physical accuracy statement at every step, for
+every model.
 
 Normalizing by the *initial* residual instead (the previous behavior) fails in
 both directions: a step that starts at equilibrium (e.g. any boundary-driven
