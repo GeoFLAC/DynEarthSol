@@ -124,7 +124,7 @@ of enforcing the constitutive law, each iteration *relaxes toward* it (the
 θ-update of §2.4 — a Maxwell element in pseudo-time).  The stress now
 depends on its own previous value — it has memory — so eliminating it
 produces a **second** pseudo-time derivative of the primary field: the
-telegraph (damped wave) equation analyzed in §2.2.  Information travels
+damped wave equation analyzed in §2.2.  Information travels
 coherently — one element per iteration, radius `~h·k·CFL` — so a domain
 crossing costs `O(L/h)` iterations, and a correctly tuned damping makes the
 total count `O((L/h) · ln(1/tol))`, achieved with purely local, explicitly
@@ -169,7 +169,7 @@ dial on the Maxwell-type dissipation.  That is the structural trick of the
 method — all dissipation lives in the constitutive update, none in the
 momentum equation.
 
-**Telegraph equation.**  Differentiate the stress equation in τ, substitute
+**Damped wave equation.**  Differentiate the stress equation in τ, substitute
 `∂v/∂τ` from momentum (the target τ* is constant for the error), and the
 perturbation about the converged state obeys
 
@@ -230,7 +230,7 @@ $$\mathrm{Re}^* = 2\pi(r+2) \approx 15.7 \qquad (r = 0.5),$$
 within 5% of the default `Re = 3√10·π/2 ≈ 14.93`, which comes from the same
 analysis carried out for the full coupled vector system (velocity +
 pressure, with r-dependent P- and S-wave branches) instead of the scalar
-telegraph equation.  The identity is the point: **`Re` is the
+scalar damped wave equation.  The identity is the point: **`Re` is the
 damping-to-wave-crossing ratio `η·L/V̂` (up to the `(r+2)` factor), and its
 optimal value is the one that places the slowest mode at critical damping.**
 
