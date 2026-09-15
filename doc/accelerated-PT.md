@@ -83,10 +83,7 @@ a **parabolic** (diffusion) equation in pseudo-time with diffusivity
 `D ~ GΔt/ρ̃`.  There is no wave: the stress has no independent dynamics, so
 nothing stores and returns kinetic information.  This is the natural form
 for Stokes flow (the setting of Räss et al.), where velocity *is* the
-equilibrium unknown and `τ = 2μ ε̇(v)` is instantaneous; the analogue for
-an elastic problem is moving each node in proportion to its current
-out-of-balance force with σ rebuilt from the total strain — steepest
-descent.  Explicit stability caps the step at `Δτ ≤ h²/(2d·D)` (here *d* is
+equilibrium unknown and `τ = 2μ ε̇(v)` is instantaneous.  Explicit stability caps the step at `Δτ ≤ h²/(2d·D)` (here *d* is
 the number of spatial dimensions).  To see why the slowest mode decays so
 slowly, consider the 1D case.  For a mode of wavenumber *k*, explicit Euler
 multiplies its amplitude each iteration by the factor
