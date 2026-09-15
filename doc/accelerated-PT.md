@@ -216,8 +216,7 @@ of every mode is then
 
 $$|\lambda|\,\Delta\tau = \hat{V} k_\min \cdot \frac{\mathrm{CFL}\cdot h}{\hat{V}} = \frac{\pi\cdot\mathrm{CFL}\cdot h}{L}$$
 
-so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations — the
-`O(L/h)` scaling, now with its constant.  Note that V̂ cancels here exactly
+so tolerance ε is reached in `N ≈ ln(1/ε) · L/(π·CFL·h)` iterations.  Note that V̂ cancels here exactly
 as it does in the implementation: only the combinations `Δτ/ρ̃` and `G̃Δτ`
 are ever needed, which is why the code never chooses a wave speed.
 
