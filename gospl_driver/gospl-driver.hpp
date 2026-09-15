@@ -55,7 +55,8 @@ public:
     double accumulated_dt;       // Time (yr) accumulated since last coupling
 
     // Simple coupling scheme (ASPECT–FastScape style)
-    bool needs_elevation_reset;  // true at init and after remeshing; GoSPL re-inits from DES
+    bool needs_elevation_reset;  // true only at init (GoSPL re-inits hGlobal from DES once);
+                                  // never re-armed after remeshing in the current implementation
     bool velocity_coupling;      // if true, send all 3 DES velocity components each coupling step
     
     /**
