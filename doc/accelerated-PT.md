@@ -235,27 +235,6 @@ scalar damped wave equation.  The identity is the point: **`Re` is the
 damping-to-wave-crossing ratio `η·L/V̂` (up to the `(r+2)` factor), and its
 optimal value is the one that places the slowest mode at critical damping.**
 
-Three practical consequences follow directly:
-
-- **`PT_char_length` *is* `k_min`.**  Set L twice too large and η is half
-  the critical value: every mode is underdamped, convergence is ~2× slower,
-  and the residual *rings* (oscillates) as the error wave sloshes across
-  the domain.  Set L too small and the true `k_min` mode goes overdamped:
-  the residual drops fast at first (short modes die) and then crawls
-  through a long, smooth diffusive tail.  These two log signatures tell you
-  which way L (or Re) is mistuned — see §3.4.
-- **The momentum update must stay undamped.**  Adding FLAC local damping to
-  the velocity update moves the root structure the analysis assumes; that
-  is why `apply_damping` is gated out during PT iterations — it is not
-  merely redundant, it detunes the root locus that Re was chosen to
-  produce.
-- **Enforcing the constitutive law exactly (θ = 1, i.e. `ηΔτ = 1`) while
-  stepping the velocity at the wave-sized Δτ is not a slow scheme but an
-  unstable one.**  Discrete stability of the damped-wave update requires
-  the per-step damping `ηΔτ ~ 2πh/L ≪ 1` alongside `V̂Δτ ≤ CFL·h`.  A
-  parabolic operator advanced at hyperbolic step sizes leaves the unit
-  circle — this was the original divergence on this branch.
-
 ### 2.3 Optimal numerical parameters
 
 The scheme has three numerical parameters (Räss et al. 2022, Sec. 2.4):
