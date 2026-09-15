@@ -130,12 +130,6 @@ crossing costs `O(L/h)` iterations, and a correctly tuned damping makes the
 total count `O((L/h) · ln(1/tol))`, achieved with purely local, explicitly
 parallel updates (ideal for GPUs).
 
-In the optimization analogy: first-order PT is Richardson iteration /
-gradient descent, needing `~κ` iterations with condition number
-`κ ~ (L/h)²` for the elliptic operator; second-order PT is Polyak's
-heavy-ball momentum, needing `~√κ = L/h`.  The stress's pseudo-inertia is
-literally the momentum term.
-
 **Why FLAC-style dynamic relaxation is second-order despite its first-order
 momentum equation.**  DynEarthSol's native mode marches
 `ρ ∂v/∂t = ∇·σ + f` — first order in v as written.  But its hypoelastic
