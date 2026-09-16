@@ -1,5 +1,5 @@
 <!-- Citation & License -->
-[![DOI](https://zenodo.org/badge/838469917.svg)](https://doi.org/10.5281/zenodo.20293557)
+[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.20293557-blue.svg)](https://doi.org/10.5281/zenodo.20293557)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 <br> <!-- Core Platforms & Compilers -->
 [![Basic build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/basic-build.yml)
