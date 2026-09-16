@@ -152,6 +152,7 @@ cmp: detect-orig
 	${VTKFLAG}
 	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
+	-cp ${MODELNAME}.manifest ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.manifest
 
 restart: detect-orig
 	${RESTART_TEST}
@@ -159,6 +160,7 @@ restart: detect-orig
 	${VTKFLAG}
 	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
+	-cp ${MODELNAME}.manifest ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.manifest
 
 # restart reproducibility test; config file with restart information is needed
 IS_RESTART_EXISTS := $(shell grep -i "^[[:space:]\#]*is_restarting[[:space:]]*=" $(CASE))

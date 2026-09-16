@@ -20,8 +20,11 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
-Output::Output(const Param& param, int64_t start_time, int start_frame) :
+Output::Output(const Param& param, const Manifest& manifest, int64_t start_time,
+               int start_frame) :
     modelname(param.sim.modelname),
+    param_(param),
+    manifest(manifest),
     start_time(start_time),
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
@@ -47,6 +50,10 @@ void Output::write_info(const Variables& var, double dt)
                   var.nnode, var.nelem, var.nseg);
 
     std::string filename(modelname + ".info");
+
+    // The record goes out with the first .info row, so .manifest and .info change together.
+    if (frame == start_frame_)
+        write_manifest(param_, manifest);
 
     // On the first output of a same-name restart, back up the old .info and
     // rewrite it with only the rows for frames before start_frame_, so there

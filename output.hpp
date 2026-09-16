@@ -2,11 +2,16 @@
 #define DYNEARTHSOL3D_OUTPUT_HPP
 
 #include "array2d.hpp"
+#include "runtime_info.hpp"
 
 class Output
 {
 private:
     const std::string &modelname;
+    // Outlives this, like modelname.
+    const Param &param_;
+    // Copied, unlike modelname: it spares callers from keeping the originals alive.
+    const Manifest manifest;
     const int64_t start_time;
     const bool is_averaged;
     const int average_interval;
@@ -28,7 +33,8 @@ private:
     void _write(const Variables& var, bool disable_averaging=false);
 
 public:
-    Output(const Param& param, int64_t start_time, int start_frame);
+    Output(const Param& param, const Manifest& manifest, int64_t start_time,
+           int start_frame);
     ~Output();
     void write(Variables& var);
     void write_exact(Variables& var);

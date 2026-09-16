@@ -48,8 +48,9 @@ static void declare_parameters(po::options_description &cfg,
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
          ">0: must be a multiple of mesh.quality_check_step_interval.")
         ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
-         "Print the build identity ([build] lines) and the host, thread and device\n"
-         "status ([Runtime] lines) at run start?")
+         "Print the .manifest's sections on screen at run start, one line each,\n"
+         "[build] then [runtime]. On by default: it is the start-of-run report every\n"
+         "run printed before this option. The .manifest is written regardless.")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")

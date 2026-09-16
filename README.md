@@ -337,9 +337,9 @@ make openacc=1 GPU_CC=90
   cfg from a web form.
 * Benchmark cases with analytical solutions are under `benchmarks/`; the
   regression cases the developers compare against are under `benchmarks-cores/`.
-* **Provenance**: every executable records where it came from:
-  `strings <exe> | grep '^build\.snapshot\.'` shows its build. The fields are described in
-  [doc/provenance.md](doc/provenance.md).
+* **Provenance**: every executable and run records where it came from:
+  `strings <exe> | grep '^build\.snapshot\.'` shows the build, and `<modelname>.manifest`
+  each run. The fields are described in [doc/provenance.md](doc/provenance.md).
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash
