@@ -371,6 +371,27 @@ make openacc=1 GPU_CC=90
   A manifest describes the binary that *wrote* it: compare its `exe_mtime_utc` and
   `code_state_utc` with the executable you still have, to see whether it was rebuilt
   since. A plain `cp` or a `touch` moves the mtime, so it dates the file, not the link.
+* **Frame provenance**: every frame and checkpoint names its own origin -- `code_*`
+  and `build_*`, the run's `os`/`runner`/`cpu_model`/`logical_cores`/`mem_total_gib`,
+  `kernel` and `omp_threads` (measured at that write, `-1` in an `openmp=0` build),
+  `restart_from`, and on a GPU run `gpu_model`/`gpu_device`/`gpu_visible_devices` and
+  `gpu_cuda_driver` with the device's memory (`gpu_mem_free_at_start_gib` is genuinely free device
+  memory, unlike the host's MemAvailable estimate). Then machine health and resource use
+  **at that frame**:
+  `mem_rss_gib`, `mem_peak_rss_gib`, `mem_avail_gib`, `cpu_time_sec`, `load_avg_1m`,
+  `gpu_mem_used_dev_gib` (the whole device, not this run) and `write_utc`, so a run's
+  frames are a time series. Read the
+  series with its caveats: `mem_rss_gib` and `cpu_time_sec` restart from zero on a
+  restart leg, `mem_rss_gib` also falls when the kernel reclaims pages under external
+  pressure (macOS), and `cpu_time_sec / (walltime_sec x omp_threads)` cannot see a
+  stall while workers spin -- which is the macOS default, since DES sets
+  `OMP_WAIT_POLICY=active` there. `mem_avail_gib` / `load_avg_1m` say whether the
+  machine itself went bad rather than the model, and include this run's own load.
+  Static host inventory (physical/perf/eff cores, free memory at start) stays in the
+  `.manifest`. HDF5 builds keep it in a `/provenance` group
+  (`h5dump -A -g /provenance <model>.save.000000.vtkhdf`), des-binary builds in a
+  `provenance` record (`strings <model>.save.000000`). Unknowns are `"unknown"`,
+  `-1` and `0`.
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash
