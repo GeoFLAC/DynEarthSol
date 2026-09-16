@@ -20,6 +20,10 @@
  * 4: Add write/read scalar for binary io
  */
 
+struct BuildInfo;
+struct CpuInfo;
+struct DeviceInfo;
+
 void rename_to_old_backup(const char *filename);
 
 #ifndef HDF5
@@ -48,6 +52,10 @@ public:
 
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
+
+    void write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                              const DeviceInfo& dev, const std::string& restart_from,
+                              double rss_gib, double peak_rss_gib);
 
     void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len);
 };
@@ -118,6 +126,10 @@ public:
     void write_attribute(const std::vector<T>& A, const std::string& name, hsize_t len, hid_t& vtkgrpBlock_id);
 
     void write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms = nullptr);
+
+    void write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                              const DeviceInfo& dev, const std::string& restart_from,
+                              double rss_gib, double peak_rss_gib);
 
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& src_space_id, hid_t& dtype_id);
     void create_virtual_dataset(const std::string& src_name, const std::string& dest_name, hid_t& space_id, hid_t& dtype_id, hsize_t len);
