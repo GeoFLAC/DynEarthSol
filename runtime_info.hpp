@@ -3,6 +3,10 @@
 
 #include "parameters.hpp"
 
+// Prints the executable's embedded build.snapshot block as [build][topic] lines. The
+// caller gates it on sim.has_runtime_info_display, together with the [Runtime] lines.
+void report_build_snapshot();
+
 // Selects and initializes the OpenACC device; a non-ACC build does nothing. Call it
 // exactly once and before any compute.
 void init_offload_device();
