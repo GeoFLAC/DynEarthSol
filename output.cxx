@@ -20,11 +20,20 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
-Output::Output(const Param& param, const Manifest& manifest, int64_t start_time,
+Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
+               const DeviceInfo& dev, const Manifest& manifest, int64_t start_time,
                int start_frame) :
     modelname(param.sim.modelname),
     param_(param),
+    restart_from(param.sim.is_restarting
+                 ? param.sim.restarting_from_modelname + ":"
+                   + std::to_string(param.sim.restarting_from_frame)
+                 : std::string("no")),
+    build(build),
+    cpu(cpu),
+    dev(dev),
     manifest(manifest),
+    peak_rss_gib(0),
     start_time(start_time),
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
@@ -138,6 +147,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_scalar(var.nnode, "nnode");
     bin.write_scalar(var.nelem, "nelem");
 #endif
+
+    bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
     bin.write_scalar(var.time, "time_sec");
     bin.write_scalar(dt, "dt_sec");
@@ -375,6 +386,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 #endif
+
+    bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
     bin.write_scalar(var.time, "time");
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");

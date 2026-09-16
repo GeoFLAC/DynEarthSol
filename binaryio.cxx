@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 
@@ -7,6 +8,7 @@
 #include "binaryio.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
+#include "runtime_info.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -27,11 +29,67 @@ namespace std { using ::snprintf; }
  * 2  The rests are binary data.
  ****************************************************************************/
 
+
 namespace {
     const std::size_t headerlen = 4096;
     const std::string revision_str = "# DynEarthSol ndims=" + std::to_string(NDIMS)
                                    + " revision=" + std::to_string(BINARY_FILE_REVISION) + "\n";
 }
+
+namespace {
+
+// A frame's provenance, one field list for both formats: sink(name, value) takes a
+// std::string, an int or a double. The set is fixed, so an unknown value is a sentinel
+// ("unknown", -1, 0) that a reader must reject. peak_rss_gib is the caller's running peak.
+template <class Sink>
+void provenance_fields(Sink& sink, const BuildInfo& build, const CpuInfo& cpu,
+                       const DeviceInfo& dev, const std::string& restart_from,
+                       double& peak_rss_gib)
+{
+    const std::string unknown("unknown");
+    sink("code_rev", build.rev);
+    sink("code_branch", build.branch);
+    sink("code_dirty", build.dirty);
+    sink("code_origin", build.origin);
+    sink("code_state_utc", build.state_utc);
+    sink("build_os", build.build_os);
+    sink("builder", build.builder);
+    sink("exe_mtime_utc", build.exe_mtime_utc);
+
+    sink("os", cpu.os);
+    sink("runner", cpu.runner);
+    sink("cpu_model", cpu.model);
+    sink("logical_cores", cpu.logical_cores);
+    sink("mem_total_gib", cpu.mem_total_gib);
+    // Sampled per frame: the PT loop's reduction order, so its results, follow the team size.
+    sink("omp_threads", omp_team_size_now());
+
+    sink("kernel", dev.kernel);
+    // A filtered 8-GPU node reads gpu_device "0/1": only the filter names the card.
+    if (dev.acc_build)
+        sink("gpu_visible_devices", dev.visible_devices);
+    if (dev.using_gpu) {
+        sink("gpu_model", dev.name.empty() ? unknown : dev.name);
+        // N/M, the manifest's selected= form, so a grep for either finds both.
+        sink("gpu_device", std::to_string(dev.active_dev) + "/" + std::to_string(dev.num_devices));
+        sink("gpu_cuda_driver", dev.cuda_driver.empty() ? unknown : dev.cuda_driver);
+        sink("gpu_mem_total_gib", dev.mem_total_gib);
+        sink("gpu_mem_free_at_start_gib", dev.mem_free_gib);
+        sink("gpu_mem_used_dev_gib", device_mem_used_dev_gib(dev));
+    }
+    // Else a lone frame of a restarted run credits its whole state to this leg.
+    sink("restart_from", restart_from);
+
+    // Resource use at this write, so a run's frames form a time series.
+    sink("mem_rss_gib", sample_rss_gib(peak_rss_gib));
+    sink("mem_peak_rss_gib", peak_rss_gib);
+    sink("mem_avail_gib", host_mem_avail_gib_now());
+    sink("cpu_time_sec", process_cpu_time_sec());
+    sink("load_avg_1m", host_load_avg_1m());
+    sink("write_utc", utc_now());
+}
+
+} // anonymous namespace
 
 
 /* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
@@ -190,6 +248,49 @@ template
 void BinaryOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, std::size_t);
 template
 void BinaryOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
+
+namespace {
+
+void kv(std::string& p, const char* name, const std::string& value)
+{
+    p += name; p += '='; p += value; p += '\n';
+}
+
+void kv(std::string& p, const char* name, int value)
+{
+    char b[32];
+    std::snprintf(b, sizeof(b), "%d", value);
+    kv(p, name, std::string(b));
+}
+
+// %.9g: %g's 6 digits step a 10 GiB rss by ~105 KiB, coarser than a page.
+void kv(std::string& p, const char* name, double value)
+{
+    char b[32];
+    std::snprintf(b, sizeof(b), "%.9g", value);
+    kv(p, name, std::string(b));
+}
+
+struct TextSink {
+    std::string& p;
+    template <class T> void operator()(const char* name, const T& v) { kv(p, name, v); }
+};
+
+} // anonymous namespace
+
+// The provenance as one text record, readable with strings(1). No revision bump: records
+// are looked up by name, so a reader that does not know this one skips it.
+void BinaryOutput::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                                        const DeviceInfo& dev, const std::string& restart_from,
+                                        double& peak_rss_gib)
+{
+    std::string p;
+    TextSink sink = {p};
+    provenance_fields(sink, build, cpu, dev, restart_from, peak_rss_gib);
+    write_header("provenance");
+    eof_pos += std::fwrite(p.data(), sizeof(char), p.size(), f) * sizeof(char);
+}
+
 
 void BinaryOutput::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len)
 {
@@ -454,6 +555,30 @@ void HDF5Output::write_header()
     gid = create_group_with_order("/VTKHDF/Assembly");
     H5Gclose(gid);
 }
+
+namespace {
+
+struct AttrSink {
+    HDF5Output& out;
+    hid_t& g;
+    template <class T> void operator()(const char* name, const T& v) { out.write_attribute(v, name, g); }
+};
+
+} // anonymous namespace
+
+// The provenance as attributes of a /provenance group, outside /VTKHDF where it cannot
+// collide with the schema.
+void HDF5Output::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                                      const DeviceInfo& dev, const std::string& restart_from,
+                                      double& peak_rss_gib)
+{
+    hid_t g = H5Gcreate2(file_id, "/provenance", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    if (g < 0) return;   // metadata must never abort a run
+    AttrSink sink = {*this, g};
+    provenance_fields(sink, build, cpu, dev, restart_from, peak_rss_gib);
+    H5Gclose(g);
+}
+
 
 void HDF5Output::write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms)
 {
