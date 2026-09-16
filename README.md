@@ -315,6 +315,9 @@ make use_gospl=1
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
 
+# embed the uncommitted code changes in the executable (off by default)
+make snapshot_diff=1
+
 # OpenACC build (NVHPC compiler)
 make openacc=1
 
@@ -334,6 +337,23 @@ make openacc=1 GPU_CC=90
   cfg from a web form.
 * Benchmark cases with analytical solutions are under `benchmarks/`; the
   regression cases the developers compare against are under `benchmarks-cores/`.
+* **Build provenance**: every executable embeds a `build.snapshot` block -- revision,
+  make options, dependency versions and providers, toolchain, compile and link flags:
+  ```bash
+  strings <exe> | grep '^build\.snapshot\.'
+  ```
+  A run prints the same block at start as `[build][...]` lines, ahead of the `[Runtime]`
+  host and device lines; `has_runtime_info_display = no` in the cfg silences both.
+  A toolchain that also emits the literal into `.debug_*` may print it more than
+  once; the copies are identical.
+* **Uncommitted changes**: `make snapshot_diff=1` (off by default) also embeds the
+  working-tree diff:
+  ```bash
+  strings <exe> | sed -n '/^build\.code-changes\.begin :$/,/^build\.code-changes\.end   :$/p'
+  ```
+  Scope is `*.c *.h *.cxx *.hpp *.cpp *.cu`, `Makefile` and `3x3-C/Makefile`, tracked in
+  `HEAD` only; anything excluded is counted in the payload. `rev`'s `-dirty` suffix and
+  the `dirty=` counts use the same scope.
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash

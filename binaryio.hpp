@@ -13,6 +13,13 @@
 #endif
 #include "array2d.hpp"
 
+// Revision number of the binary file format. Bump it whenever the layout
+// of the header or of the data written after it changes.
+#define BINARY_FILE_REVISION 4
+/* Revision notes:
+ * 4: Add write/read scalar for binary io
+ */
+
 void rename_to_old_backup(const char *filename);
 
 #ifndef HDF5
