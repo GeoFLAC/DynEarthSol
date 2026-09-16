@@ -342,8 +342,8 @@ make openacc=1 GPU_CC=90
   ```bash
   strings <exe> | grep '^build\.snapshot\.'
   ```
-  A run prints the same block at start as `[build][...]` lines, ahead of the `[Runtime]`
-  host and device lines; `has_runtime_info_display = no` in the cfg silences both.
+  A run prints the same block at start as `[build][...]` lines, followed by the
+  `[runtime][...]` lines; `has_runtime_info_display = no` in the cfg silences them.
   A toolchain that also emits the literal into `.debug_*` may print it more than
   once; the copies are identical.
 * **Uncommitted changes**: `make snapshot_diff=1` (off by default) also embeds the
@@ -354,6 +354,23 @@ make openacc=1 GPU_CC=90
   Scope is `*.c *.h *.cxx *.hpp *.cpp *.cu`, `Makefile` and `3x3-C/Makefile`, tracked in
   `HEAD` only; anything excluded is counted in the payload. `rev`'s `-dirty` suffix and
   the `dirty=` counts use the same scope.
+* **Choosing how many cores to use**: DES uses whatever the OpenMP runtime gives it:
+  ```bash
+  OMP_NUM_THREADS=6 ./dynearthsol2d your_input.cfg
+  ```
+  Unset, OpenMP takes every logical CPU, which on a hybrid CPU includes efficiency cores.
+* **Run provenance**: each run writes `<modelname>.manifest` -- `[runtime.model]`,
+  `[runtime.host]`, `[runtime.device]`, `[runtime.threads]` (measured, not
+  `OMP_NUM_THREADS`, and `omp_wait_policy_src` names who set the policy -- `env`,
+  `des-default` or `runtime`), `[runtime.env]` (the variables that are set, DES's own
+  macOS default included), then the executable's `build.snapshot` block as `[build.*]`
+  sections, plus `exe_mtime_utc`, the executable file's own mtime. The same sections
+  print on screen at run start, one line each as `[group][topic]`, build group first.
+  A fresh run truncates, a restart appends. Under `snapshot_diff=1` each
+  record ends with the `build.code-changes` block; built without it, a line saying so.
+  A manifest describes the binary that *wrote* it: compare its `exe_mtime_utc` and
+  `code_state_utc` with the executable you still have, to see whether it was rebuilt
+  since. A plain `cp` or a `touch` moves the mtime, so it dates the file, not the link.
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash
