@@ -1,0 +1,10 @@
+branch=feature/rsf-invariant-rate-state-step
+commit=b94e994d694e980e6a2a638fda00f6100acbd150
+base=8358316 (public-review-cleanup)
+  ef78f41  invariant continuum rate path (originally option 3)
+  236b114  PT stress-update candidate folded back into update_stress
+  b950a8e  aging-law state-update time-step limit
+  4caa213  configurable mass-scaling reference speed
+  b4bdf40  scoped validation and focused RSF control tests
+  b94e994  final two-option interface and invariant-rate default
+control.rsf_dtheta_max=0.2

@@ -1,0 +1,332 @@
+# Herrendoerfer et al. (2018, 2017JB015225) comparison geometry.
+#   domain              150 x 150 km, gravity 0, P = 5 MPa held by a constant
+#                       side traction (bc.stress_bc_x0/x1 = 1)
+#   band                250 m thick at z = -75 km, 3 cells across (83.3333 m each)
+#                       elem_band_width per cell = 79.1 m (95% of the cell)
+#   velocity weakening  x = 32 to 108 km (76 km)
+#   transitions         4 km each, 8 material steps per side
+#   host                elastic (cohesion 1e50), shells coarsening away
+# Region areas are multipliers on std_elem_size = 1.5 * resolution^2; use
+# mesh.resolution = 250 and mesh.meshing_option = 91.
+
+#### node coordinates ####
+# npoints ndims 0 0
+104 2 0 0
+0 0.000000 0.000000   # top-left
+1 0.000000 -40000.000000
+2 0.000000 -63000.000000
+3 0.000000 -71000.000000
+4 0.000000 -73500.000000
+5 0.000000 -74500.000000
+6 0.000000 -74875.000000
+7 0.000000 -74958.333333
+8 0.000000 -75041.666667
+9 0.000000 -75125.000000
+10 0.000000 -75500.000000
+11 0.000000 -76500.000000
+12 0.000000 -79000.000000
+13 0.000000 -87000.000000
+14 0.000000 -110000.000000
+15 0.000000 -150000.000000   # bottom-left
+16 150000.000000 0.000000   # top-right
+17 150000.000000 -40000.000000
+18 150000.000000 -63000.000000
+19 150000.000000 -71000.000000
+20 150000.000000 -73500.000000
+21 150000.000000 -74500.000000
+22 150000.000000 -74875.000000
+23 150000.000000 -74958.333333
+24 150000.000000 -75041.666667
+25 150000.000000 -75125.000000
+26 150000.000000 -75500.000000
+27 150000.000000 -76500.000000
+28 150000.000000 -79000.000000
+29 150000.000000 -87000.000000
+30 150000.000000 -110000.000000
+31 150000.000000 -150000.000000   # bottom-right
+32 28000.000000 -74875.000000
+33 28500.000000 -74875.000000
+34 29000.000000 -74875.000000
+35 29500.000000 -74875.000000
+36 30000.000000 -74875.000000
+37 30500.000000 -74875.000000
+38 31000.000000 -74875.000000
+39 31500.000000 -74875.000000
+40 32000.000000 -74875.000000
+41 108000.000000 -74875.000000
+42 108500.000000 -74875.000000
+43 109000.000000 -74875.000000
+44 109500.000000 -74875.000000
+45 110000.000000 -74875.000000
+46 110500.000000 -74875.000000
+47 111000.000000 -74875.000000
+48 111500.000000 -74875.000000
+49 112000.000000 -74875.000000
+50 28000.000000 -75125.000000
+51 28500.000000 -75125.000000
+52 29000.000000 -75125.000000
+53 29500.000000 -75125.000000
+54 30000.000000 -75125.000000
+55 30500.000000 -75125.000000
+56 31000.000000 -75125.000000
+57 31500.000000 -75125.000000
+58 32000.000000 -75125.000000
+59 108000.000000 -75125.000000
+60 108500.000000 -75125.000000
+61 109000.000000 -75125.000000
+62 109500.000000 -75125.000000
+63 110000.000000 -75125.000000
+64 110500.000000 -75125.000000
+65 111000.000000 -75125.000000
+66 111500.000000 -75125.000000
+67 112000.000000 -75125.000000
+68 28000.000000 -74958.333333
+69 28000.000000 -75041.666667
+70 28500.000000 -74958.333333
+71 28500.000000 -75041.666667
+72 29000.000000 -74958.333333
+73 29000.000000 -75041.666667
+74 29500.000000 -74958.333333
+75 29500.000000 -75041.666667
+76 30000.000000 -74958.333333
+77 30000.000000 -75041.666667
+78 30500.000000 -74958.333333
+79 30500.000000 -75041.666667
+80 31000.000000 -74958.333333
+81 31000.000000 -75041.666667
+82 31500.000000 -74958.333333
+83 31500.000000 -75041.666667
+84 32000.000000 -74958.333333
+85 32000.000000 -75041.666667
+86 108000.000000 -74958.333333
+87 108000.000000 -75041.666667
+88 108500.000000 -74958.333333
+89 108500.000000 -75041.666667
+90 109000.000000 -74958.333333
+91 109000.000000 -75041.666667
+92 109500.000000 -74958.333333
+93 109500.000000 -75041.666667
+94 110000.000000 -74958.333333
+95 110000.000000 -75041.666667
+96 110500.000000 -74958.333333
+97 110500.000000 -75041.666667
+98 111000.000000 -74958.333333
+99 111000.000000 -75041.666667
+100 111500.000000 -74958.333333
+101 111500.000000 -75041.666667
+102 112000.000000 -74958.333333
+103 112000.000000 -75041.666667
+
+# segments
+136 1
+0 0 1 1   # left boundary
+1 1 2 1   # left boundary
+2 2 3 1   # left boundary
+3 3 4 1   # left boundary
+4 4 5 1   # left boundary
+5 5 6 1   # left boundary
+6 6 7 1   # left boundary
+7 7 8 1   # left boundary
+8 8 9 1   # left boundary
+9 9 10 1   # left boundary
+10 10 11 1   # left boundary
+11 11 12 1   # left boundary
+12 12 13 1   # left boundary
+13 13 14 1   # left boundary
+14 14 15 1   # left boundary
+15 15 31 16   # bottom boundary
+16 17 16 2   # right boundary
+17 18 17 2   # right boundary
+18 19 18 2   # right boundary
+19 20 19 2   # right boundary
+20 21 20 2   # right boundary
+21 22 21 2   # right boundary
+22 23 22 2   # right boundary
+23 24 23 2   # right boundary
+24 25 24 2   # right boundary
+25 26 25 2   # right boundary
+26 27 26 2   # right boundary
+27 28 27 2   # right boundary
+28 29 28 2   # right boundary
+29 30 29 2   # right boundary
+30 31 30 2   # right boundary
+31 16 0 32   # top boundary
+32 1 17 0   # horizontal line z = -40000.0
+33 2 18 0   # horizontal line z = -63000.0
+34 3 19 0   # horizontal line z = -71000.0
+35 4 20 0   # horizontal line z = -73500.0
+36 5 21 0   # horizontal line z = -74500.0
+37 6 32 0   # horizontal line z = -74875.0
+38 32 33 0   # horizontal line z = -74875.0
+39 33 34 0   # horizontal line z = -74875.0
+40 34 35 0   # horizontal line z = -74875.0
+41 35 36 0   # horizontal line z = -74875.0
+42 36 37 0   # horizontal line z = -74875.0
+43 37 38 0   # horizontal line z = -74875.0
+44 38 39 0   # horizontal line z = -74875.0
+45 39 40 0   # horizontal line z = -74875.0
+46 40 41 0   # horizontal line z = -74875.0
+47 41 42 0   # horizontal line z = -74875.0
+48 42 43 0   # horizontal line z = -74875.0
+49 43 44 0   # horizontal line z = -74875.0
+50 44 45 0   # horizontal line z = -74875.0
+51 45 46 0   # horizontal line z = -74875.0
+52 46 47 0   # horizontal line z = -74875.0
+53 47 48 0   # horizontal line z = -74875.0
+54 48 49 0   # horizontal line z = -74875.0
+55 49 22 0   # horizontal line z = -74875.0
+56 7 23 0   # horizontal line z = -74958.3
+57 8 24 0   # horizontal line z = -75041.7
+58 9 50 0   # horizontal line z = -75125.0
+59 50 51 0   # horizontal line z = -75125.0
+60 51 52 0   # horizontal line z = -75125.0
+61 52 53 0   # horizontal line z = -75125.0
+62 53 54 0   # horizontal line z = -75125.0
+63 54 55 0   # horizontal line z = -75125.0
+64 55 56 0   # horizontal line z = -75125.0
+65 56 57 0   # horizontal line z = -75125.0
+66 57 58 0   # horizontal line z = -75125.0
+67 58 59 0   # horizontal line z = -75125.0
+68 59 60 0   # horizontal line z = -75125.0
+69 60 61 0   # horizontal line z = -75125.0
+70 61 62 0   # horizontal line z = -75125.0
+71 62 63 0   # horizontal line z = -75125.0
+72 63 64 0   # horizontal line z = -75125.0
+73 64 65 0   # horizontal line z = -75125.0
+74 65 66 0   # horizontal line z = -75125.0
+75 66 67 0   # horizontal line z = -75125.0
+76 67 25 0   # horizontal line z = -75125.0
+77 10 26 0   # horizontal line z = -75500.0
+78 11 27 0   # horizontal line z = -76500.0
+79 12 28 0   # horizontal line z = -79000.0
+80 13 29 0   # horizontal line z = -87000.0
+81 14 30 0   # horizontal line z = -110000.0
+82 32 68 0   # sub-region cut at x = 28000.0
+83 68 69 0   # sub-region cut at x = 28000.0
+84 69 50 0   # sub-region cut at x = 28000.0
+85 33 70 0   # sub-region cut at x = 28500.0
+86 70 71 0   # sub-region cut at x = 28500.0
+87 71 51 0   # sub-region cut at x = 28500.0
+88 34 72 0   # sub-region cut at x = 29000.0
+89 72 73 0   # sub-region cut at x = 29000.0
+90 73 52 0   # sub-region cut at x = 29000.0
+91 35 74 0   # sub-region cut at x = 29500.0
+92 74 75 0   # sub-region cut at x = 29500.0
+93 75 53 0   # sub-region cut at x = 29500.0
+94 36 76 0   # sub-region cut at x = 30000.0
+95 76 77 0   # sub-region cut at x = 30000.0
+96 77 54 0   # sub-region cut at x = 30000.0
+97 37 78 0   # sub-region cut at x = 30500.0
+98 78 79 0   # sub-region cut at x = 30500.0
+99 79 55 0   # sub-region cut at x = 30500.0
+100 38 80 0   # sub-region cut at x = 31000.0
+101 80 81 0   # sub-region cut at x = 31000.0
+102 81 56 0   # sub-region cut at x = 31000.0
+103 39 82 0   # sub-region cut at x = 31500.0
+104 82 83 0   # sub-region cut at x = 31500.0
+105 83 57 0   # sub-region cut at x = 31500.0
+106 40 84 0   # sub-region cut at x = 32000.0
+107 84 85 0   # sub-region cut at x = 32000.0
+108 85 58 0   # sub-region cut at x = 32000.0
+109 41 86 0   # sub-region cut at x = 108000.0
+110 86 87 0   # sub-region cut at x = 108000.0
+111 87 59 0   # sub-region cut at x = 108000.0
+112 42 88 0   # sub-region cut at x = 108500.0
+113 88 89 0   # sub-region cut at x = 108500.0
+114 89 60 0   # sub-region cut at x = 108500.0
+115 43 90 0   # sub-region cut at x = 109000.0
+116 90 91 0   # sub-region cut at x = 109000.0
+117 91 61 0   # sub-region cut at x = 109000.0
+118 44 92 0   # sub-region cut at x = 109500.0
+119 92 93 0   # sub-region cut at x = 109500.0
+120 93 62 0   # sub-region cut at x = 109500.0
+121 45 94 0   # sub-region cut at x = 110000.0
+122 94 95 0   # sub-region cut at x = 110000.0
+123 95 63 0   # sub-region cut at x = 110000.0
+124 46 96 0   # sub-region cut at x = 110500.0
+125 96 97 0   # sub-region cut at x = 110500.0
+126 97 64 0   # sub-region cut at x = 110500.0
+127 47 98 0   # sub-region cut at x = 111000.0
+128 98 99 0   # sub-region cut at x = 111000.0
+129 99 65 0   # sub-region cut at x = 111000.0
+130 48 100 0   # sub-region cut at x = 111500.0
+131 100 101 0   # sub-region cut at x = 111500.0
+132 101 66 0   # sub-region cut at x = 111500.0
+133 49 102 0   # sub-region cut at x = 112000.0
+134 102 103 0   # sub-region cut at x = 112000.0
+135 103 67 0   # sub-region cut at x = 112000.0
+
+# holes
+0
+
+# regions
+69
+0 75000.000000 -20000.000000 0 341.33333333  # host, |z - z_band| = 35 to 75 km
+1 75000.000000 -51500.000000 0 85.33333333  # host, |z - z_band| = 12 to 35 km
+2 75000.000000 -67000.000000 0 21.33333333  # host, |z - z_band| = 4 to 12 km
+3 75000.000000 -72250.000000 0 5.33333333  # host, |z - z_band| = 1.5 to 4 km
+4 75000.000000 -74000.000000 0 1.33333333  # host, |z - z_band| = 0.5 to 1.5 km
+5 75000.000000 -74687.500000 0 0.33333333  # host, |z - z_band| = 0.125 to 0.5 km
+6 75000.000000 -75312.500000 0 0.33333333  # host, |z - z_band| = 0.125 to 0.5 km
+7 75000.000000 -76000.000000 0 1.33333333  # host, |z - z_band| = 0.5 to 1.5 km
+8 75000.000000 -77750.000000 0 5.33333333  # host, |z - z_band| = 1.5 to 4 km
+9 75000.000000 -83000.000000 0 21.33333333  # host, |z - z_band| = 4 to 12 km
+10 75000.000000 -98500.000000 0 85.33333333  # host, |z - z_band| = 12 to 35 km
+11 75000.000000 -130000.000000 0 341.33333333  # host, |z - z_band| = 35 to 75 km
+12 14000.000000 -74916.666667 1 0.11111111  # band, strengthening, left
+13 131000.000000 -74916.666667 1 0.11111111  # band, strengthening, right
+14 14000.000000 -75000.000000 1 0.11111111  # band, strengthening, left
+15 131000.000000 -75000.000000 1 0.11111111  # band, strengthening, right
+16 14000.000000 -75083.333333 1 0.11111111  # band, strengthening, left
+17 131000.000000 -75083.333333 1 0.11111111  # band, strengthening, right
+18 28250.000000 -74916.666667 2 0.11111111  # band, transition step 1, left
+19 111750.000000 -74916.666667 2 0.11111111  # band, transition step 1, right
+20 28250.000000 -75000.000000 2 0.11111111  # band, transition step 1, left
+21 111750.000000 -75000.000000 2 0.11111111  # band, transition step 1, right
+22 28250.000000 -75083.333333 2 0.11111111  # band, transition step 1, left
+23 111750.000000 -75083.333333 2 0.11111111  # band, transition step 1, right
+24 28750.000000 -74916.666667 3 0.11111111  # band, transition step 2, left
+25 111250.000000 -74916.666667 3 0.11111111  # band, transition step 2, right
+26 28750.000000 -75000.000000 3 0.11111111  # band, transition step 2, left
+27 111250.000000 -75000.000000 3 0.11111111  # band, transition step 2, right
+28 28750.000000 -75083.333333 3 0.11111111  # band, transition step 2, left
+29 111250.000000 -75083.333333 3 0.11111111  # band, transition step 2, right
+30 29250.000000 -74916.666667 4 0.11111111  # band, transition step 3, left
+31 110750.000000 -74916.666667 4 0.11111111  # band, transition step 3, right
+32 29250.000000 -75000.000000 4 0.11111111  # band, transition step 3, left
+33 110750.000000 -75000.000000 4 0.11111111  # band, transition step 3, right
+34 29250.000000 -75083.333333 4 0.11111111  # band, transition step 3, left
+35 110750.000000 -75083.333333 4 0.11111111  # band, transition step 3, right
+36 29750.000000 -74916.666667 5 0.11111111  # band, transition step 4, left
+37 110250.000000 -74916.666667 5 0.11111111  # band, transition step 4, right
+38 29750.000000 -75000.000000 5 0.11111111  # band, transition step 4, left
+39 110250.000000 -75000.000000 5 0.11111111  # band, transition step 4, right
+40 29750.000000 -75083.333333 5 0.11111111  # band, transition step 4, left
+41 110250.000000 -75083.333333 5 0.11111111  # band, transition step 4, right
+42 30250.000000 -74916.666667 6 0.11111111  # band, transition step 5, left
+43 109750.000000 -74916.666667 6 0.11111111  # band, transition step 5, right
+44 30250.000000 -75000.000000 6 0.11111111  # band, transition step 5, left
+45 109750.000000 -75000.000000 6 0.11111111  # band, transition step 5, right
+46 30250.000000 -75083.333333 6 0.11111111  # band, transition step 5, left
+47 109750.000000 -75083.333333 6 0.11111111  # band, transition step 5, right
+48 30750.000000 -74916.666667 7 0.11111111  # band, transition step 6, left
+49 109250.000000 -74916.666667 7 0.11111111  # band, transition step 6, right
+50 30750.000000 -75000.000000 7 0.11111111  # band, transition step 6, left
+51 109250.000000 -75000.000000 7 0.11111111  # band, transition step 6, right
+52 30750.000000 -75083.333333 7 0.11111111  # band, transition step 6, left
+53 109250.000000 -75083.333333 7 0.11111111  # band, transition step 6, right
+54 31250.000000 -74916.666667 8 0.11111111  # band, transition step 7, left
+55 108750.000000 -74916.666667 8 0.11111111  # band, transition step 7, right
+56 31250.000000 -75000.000000 8 0.11111111  # band, transition step 7, left
+57 108750.000000 -75000.000000 8 0.11111111  # band, transition step 7, right
+58 31250.000000 -75083.333333 8 0.11111111  # band, transition step 7, left
+59 108750.000000 -75083.333333 8 0.11111111  # band, transition step 7, right
+60 31750.000000 -74916.666667 9 0.11111111  # band, transition step 8, left
+61 108250.000000 -74916.666667 9 0.11111111  # band, transition step 8, right
+62 31750.000000 -75000.000000 9 0.11111111  # band, transition step 8, left
+63 108250.000000 -75000.000000 9 0.11111111  # band, transition step 8, right
+64 31750.000000 -75083.333333 9 0.11111111  # band, transition step 8, left
+65 108250.000000 -75083.333333 9 0.11111111  # band, transition step 8, right
+66 70000.000000 -74916.666667 10 0.11111111  # band, weakening
+67 70000.000000 -75000.000000 10 0.11111111  # band, weakening
+68 70000.000000 -75083.333333 10 0.11111111  # band, weakening

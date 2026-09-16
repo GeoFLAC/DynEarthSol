@@ -11,6 +11,9 @@ benchmarks/simple_shear_rsf
 
 The example cases are intended for quick verification. The distributed example mesh is a low-resolution geometry and should be refined before being used for paper-level production simulations.
 
+See [PAPER_CASES.md](PAPER_CASES.md) for the configurations of the calculations
+reported in Sects. 5.3--5.4 and Appendices C and E.
+
 ---
 
 ## Quick Start

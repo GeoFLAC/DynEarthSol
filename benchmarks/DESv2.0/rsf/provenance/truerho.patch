@@ -1,0 +1,11 @@
+--- /data/slee91/rsf-truerho-20260830/source_baseline/geometry.cxx	2026-08-28 07:16:26.721560188 +0000
++++ /data/slee91/rsf-truerho-20260830/source_truerho/geometry.cxx	2026-08-30 01:51:52.785905141 +0000
+@@ -2070,7 +2070,7 @@
+ 
+             if(param.control.use_global_velocity_scaling)
+             {
+-                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
++                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->bulkm(e)/var.mat->rho(e))); // minimum speed
+ 
+                 rho = (param.control.is_quasi_static) ?
+                 (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
