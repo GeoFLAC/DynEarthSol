@@ -5,6 +5,7 @@
 *.save.*
 *.chkpt.*
 *.info
+*.manifest
 *.vt[u,p]
 *.vtkhdf
 confdefs.h
