@@ -47,6 +47,9 @@ static void declare_parameters(po::options_description &cfg,
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
          ">0: must be a multiple of mesh.quality_check_step_interval.")
+        ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
+         "Print the build identity ([build] lines) and the host, thread and device\n"
+         "status ([Runtime] lines) at run start?")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")
@@ -1637,6 +1640,31 @@ void get_input_parameters(const char* filename, Param& p)
     if (std::strncmp(filename, "-h", 3) == 0 ||
         std::strncmp(filename, "--help", 7) == 0) {
         std::cout << cfg;
+        const char* exe =
+#ifdef THREED
+            "dynearthsol3d"
+#else
+            "dynearthsol2d"
+#endif
+#ifdef ACC
+            ".gpu"
+#endif
+            ;
+        // The grep key is split across two literals: one contiguous copy in
+        // .rodata would itself surface as a stray line in the extraction.
+        std::cout << "\nBuild snapshot:\n"
+                     "  The build identity is embedded in the executable. A run\n"
+                     "  prints it at start ([build][...] lines) unless\n"
+                     "  sim.has_runtime_info_display = no; to read it from a binary\n"
+                     "  without running it:\n"
+                     "    strings " << exe << " | grep '^build"
+                  << "\\.snapshot\\.'\n"
+                     // The fence names are split so no contiguous copy of the
+                     // extraction pattern lands in .rodata as a decoy.
+                     "  make snapshot_diff=1 also embeds the uncommitted code changes;\n"
+                     "  extract them with:\n"
+                     "    strings " << exe << " | sed -n '/^build\\.code-changes\\.beg"
+                  << "in :$/,/^build\\.code-changes\\.e" << "nd   :$/p'\n";
         // Not die(): that prints an "[DES exit N] <category>" banner meant for
         // failures, and --help is a successful run with nothing to diagnose.
         std::exit(EXIT_OK);

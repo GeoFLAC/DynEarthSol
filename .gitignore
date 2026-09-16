@@ -9,6 +9,7 @@
 *.vtkhdf
 confdefs.h
 snapshot.diff
+build_revision.hpp*
 dynearthsol[23]d
 dynearthsol[23]d.*
 *.code*
