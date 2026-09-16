@@ -85,3 +85,8 @@ python3 plot_simple_shear_benchmark.py \
 
 NumPy and Matplotlib are required only for plotting; the runner and regression
 checker use the Python standard library.
+
+## Localization examples
+
+The [extensional localization examples](../DESv2.0/rsf/localization/README.md)
+provide the three EP and EP-RSF configurations used in Section 5.3.2, Figure 11.
