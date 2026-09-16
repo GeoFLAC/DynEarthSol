@@ -20,8 +20,17 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
-Output::Output(const Param& param, int64_t start_time, int start_frame) :
+Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
+               const DeviceInfo& dev, int64_t start_time, int start_frame) :
     modelname(param.sim.modelname),
+    restart_from(param.sim.is_restarting
+                 ? param.sim.restarting_from_modelname + ":"
+                   + std::to_string(param.sim.restarting_from_frame)
+                 : std::string("no")),
+    build(build),
+    cpu(cpu),
+    dev(dev),
+    peak_rss_gib(0),
     start_time(start_time),
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
@@ -131,6 +140,13 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_scalar(var.nnode, "nnode");
     bin.write_scalar(var.nelem, "nelem");
 #endif
+
+    // One rss sample for both fields, and the accumulator floored against that same
+    // value: sampling them apart let the record report a peak below its own rss when the
+    // resident set gained a page in between.
+    const double rss_gib = host_mem_rss_gib();
+    peak_rss_gib = std::max(peak_rss_gib, std::max(host_peak_rss_gib(), rss_gib));
+    bin.write_run_provenance(build, cpu, dev, restart_from, rss_gib, peak_rss_gib);
 
     bin.write_scalar(var.time, "time_sec");
     bin.write_scalar(dt, "dt_sec");
@@ -368,6 +384,10 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 #endif
+
+    const double rss_gib = host_mem_rss_gib();
+    peak_rss_gib = std::max(peak_rss_gib, std::max(host_peak_rss_gib(), rss_gib));
+    bin.write_run_provenance(build, cpu, dev, restart_from, rss_gib, peak_rss_gib);
 
     bin.write_scalar(var.time, "time");
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");
