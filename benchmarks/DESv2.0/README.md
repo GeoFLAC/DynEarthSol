@@ -6,4 +6,4 @@ This directory contains the benchmarks used to produce the results reported in t
 |---|---|---|
 | [`performance/`](performance/README.md) | Compute performance | CPU and GPU throughput across 8 problem sizes (regular and irregular mesh); CPU core-scaling test |
 | [`coupling/`](coupling/README.md) | Surface-process coupling | Two-way coupled DynEarthSol–GoSPL 3-D rifting model |
-| [`rsf/`](rsf/README.md) | Rate-and-state friction | 2-D RSF example cases and simple-shear benchmark suite |
+| [`rsf/`](rsf/README.md) | Rate-and-state friction | 108 paper inputs: simple shear, localization, decollement and strike-slip cases; compatible solver requirements and reproduction limits |
