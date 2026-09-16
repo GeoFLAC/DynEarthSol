@@ -634,8 +634,11 @@ int main(int argc, const char* argv[])
 
     // Selects the offload device, so it must precede any compute.
     init_offload_device();
-    report_host_runtime_status();
-    report_device_runtime_status();
+    if (param.sim.has_runtime_info_display) {
+        report_build_snapshot();
+        report_host_runtime_status();
+        report_device_runtime_status();
+    }
 
     //
     // run simulation

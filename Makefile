@@ -24,6 +24,7 @@
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
+##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
 ## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
@@ -38,7 +39,11 @@ usemmg = 0
 useexo = 0
 use_gospl = 0
 hdf5 = 0
+snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
+## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
+## order. The check below accepts only listed knobs, so a new one cannot be missed here.
+KNOB_VARS = openmp openacc hdf5 usemmg useexo use_gospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -46,8 +51,7 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt openacc openmp nprof gprof usemmg useexo use_gospl hdf5 \
-             nofma GPU_CC CXX \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX \
              BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
@@ -588,7 +592,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	## unit calls, and each dimension compiles the other's. --diag_suppress is nvc++'s
 	## spelling of that -Wno-unused-{variable,function}. Its set_but_not_used stays on, so
 	## that a value written and never read is still reported, as it is under g++.
-	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress declared_but_not_referenced
+	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress=declared_but_not_referenced
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -1100,8 +1104,12 @@ ifeq ($(usemmg), 1)
 		echo "   Configuring MMG..."; \
 		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
 	fi
+	@# The revision IN the archive, stamped only when it is built: the archive is reused
+	@# while the checkout drifts, and one built without a stamp claims no revision.
 	@if [ ! -f "$(MMG_LIB)" ]; then \
-		$(MAKE) -C mmg/build; \
+		rm -f mmg/build/.mmg-rev; \
+		$(MAKE) -C mmg/build && { git -C mmg describe --always --dirty \
+		  > mmg/build/.mmg-rev 2>/dev/null || rm -f mmg/build/.mmg-rev; }; \
 	fi
 endif
 
@@ -1188,6 +1196,65 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
+## The build identity: make derives the flag lists and exports them as DES_REV_*, and
+## utils/gen_build_revision.sh adds git, host and providers. Never list it in INCS.
+comma := ,
+## Flags as recorded: path- and define-free, ordered opt/codegen/language/debug/misc;
+## -Xpreprocessor -fopenmp is glued with @ so the ranking keeps the pair (undone below).
+SNAP_GLUE = $(subst -Xpreprocessor -fopenmp,-Xpreprocessor@-fopenmp,$(CXXFLAGS))
+## Keeping only -% words drops every path, absolute or relative.
+SNAP_CXX = $(filter -%,$(filter-out -I% -idirafter -D%,$(SNAP_GLUE)))
+## Codegen display order; -gpu= must rank here, not in -g%'s debug slot.
+SNAP_CODEGEN = -acc% -cuda% -gpu=% -f% -m% -M%
+SNAP_CXX_ORDERED = $(strip \
+    $(filter -O%,$(SNAP_CXX)) \
+    $(foreach p,$(SNAP_CODEGEN),$(filter $(p),$(SNAP_CXX))) \
+    $(filter -std=%,$(SNAP_CXX)) \
+    $(filter-out -gpu=%,$(filter -g%,$(SNAP_CXX))) \
+    $(filter-out -O% $(SNAP_CODEGEN) -std=% -g% -W% --diag_%,$(SNAP_CXX)))
+## -W% is gcc/clang; --diag_% is nvc++'s diagnostic control (one word via =).
+SNAP_WARN = $(strip $(filter -W% --diag_%,$(SNAP_CXX)))
+## Link flags ranked the same, libraries last; search dirs, rpaths and paths stay out.
+SNAP_LD = $(filter -%,$(filter-out -L% -Wl$(comma)-rpath%,$(LDFLAGS) $(BOOST_LDFLAGS)))
+SNAP_LD_ORDERED = $(strip \
+    $(foreach p,$(SNAP_CODEGEN),$(filter $(p),$(SNAP_LD))) \
+    $(filter-out $(SNAP_CODEGEN) -l%,$(SNAP_LD)) \
+    $(filter -l%,$(SNAP_LD)))
+
+## The knobs that are on or carry a value; opt always, 0 being a choice.
+MK_OPTS = opt=$(strip $(opt)) \
+          $(foreach k,$(KNOB_VARS),$(if $(filter-out 0,$(strip $($(k)))),$(k)=$(strip $($(k)))))
+
+## Exported, not passed as argv, so no shell quoting touches the flag lists; -DTHREED
+## stays out of the dimension-neutral header.
+export DES_REV_DEFINES   = $(strip $(filter-out -DTHREED,$(filter -D%,$(CXXFLAGS))))
+export DES_REV_CXXFLAGS  = $(subst @, ,$(SNAP_CXX_ORDERED))
+export DES_REV_WARNFLAGS = $(or $(subst @, ,$(SNAP_WARN)),none)
+export DES_REV_LDFLAGS   = $(SNAP_LD_ORDERED)
+export DES_REV_MK_OPTS   = $(strip $(MK_OPTS))
+export DES_REV_GPU_CC    = $(strip $(GPU_CC))
+export DES_REV_SNAPSHOT_DIFF = $(strip $(snapshot_diff))
+export DES_REV_KNN_DIR   = $(KNN_BVH_DIR)
+export DES_REV_ANN_DIR   = $(ANN_DIR)
+export DES_REV_MMG_DIR   = mmg
+## Dependency prefixes: paths, which the script turns into provider labels.
+export DES_REV_PREFIX_BOOST  = $(strip $(BOOST_ROOT_DIR))
+export DES_REV_PREFIX_HDF5   = $(strip $(HDF5_INCLUDE_DIR))
+export DES_REV_PREFIX_MMG    = $(strip $(MMG_INCLUDE))
+export DES_REV_PREFIX_OPENMP = $(strip $(OPENMP_LIB_DIR))
+
+## Exit 10: the header changed, so this variant's object compiled from it goes; another
+## variant's is rebuilt by that variant's own build, which regenerates the header.
+build_revision.hpp: FORCE
+	@sh utils/gen_build_revision.sh $@; \
+	case $$? in \
+	    0) ;; \
+	    10) rm -f runtime_info.$(ndims)d$(suffix).o ;; \
+	    *) echo "   build_revision.hpp could not be generated" >&2; exit 1 ;; \
+	esac
+
+runtime_info.$(ndims)d$(suffix).o: build_revision.hpp
+
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
@@ -1245,3 +1312,4 @@ endif
 
 clean:
 	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS) $(FEATURE_DEPS)
+	@rm -f build_revision.hpp build_revision.hpp.*
