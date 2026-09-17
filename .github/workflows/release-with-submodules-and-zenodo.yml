@@ -116,4 +116,5 @@ jobs:
     - name: Upload to Existing Zenodo Draft
       env:
         ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
-      run: python .github/workflows/scripts/upload_to_zenodo.py
+      # -u: the upload takes minutes, and buffered output makes it look hung.
+      run: python -u .github/workflows/scripts/upload_to_zenodo.py
