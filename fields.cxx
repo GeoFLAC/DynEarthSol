@@ -7,52 +7,6 @@
 #include "fields.hpp"
 #include "utils.hpp"
 
-#ifdef THREED
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], double shpdy[4], double shpdz[4])
-{
-    ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
-
-    double iv = 1.0 / (6.0 * (*var.volume)[e]);
-
-    double x01 = d[0][0] - d[1][0]; double x02 = d[0][0] - d[2][0]; double x03 = d[0][0] - d[3][0];
-    double x12 = d[1][0] - d[2][0]; double x13 = d[1][0] - d[3][0]; double x23 = d[2][0] - d[3][0];
-    double y01 = d[0][1] - d[1][1]; double y02 = d[0][1] - d[2][1]; double y03 = d[0][1] - d[3][1];
-    double y12 = d[1][1] - d[2][1]; double y13 = d[1][1] - d[3][1]; double y23 = d[2][1] - d[3][1];
-    double z01 = d[0][2] - d[1][2]; double z02 = d[0][2] - d[2][2]; double z03 = d[0][2] - d[3][2];
-    double z12 = d[1][2] - d[2][2]; double z13 = d[1][2] - d[3][2]; double z23 = d[2][2] - d[3][2];
-
-    shpdx[0] = iv * (y13*z12 - y12*z13);
-    shpdx[1] = iv * (y02*z23 - y23*z02);
-    shpdx[2] = iv * (y13*z03 - y03*z13);
-    shpdx[3] = iv * (y01*z02 - y02*z01);
-
-    shpdy[0] = iv * (z13*x12 - z12*x13);
-    shpdy[1] = iv * (z02*x23 - z23*x02);
-    shpdy[2] = iv * (z13*x03 - z03*x13);
-    shpdy[3] = iv * (z01*x02 - z02*x01);
-
-    shpdz[0] = iv * (x13*y12 - x12*y13);
-    shpdz[1] = iv * (x02*y23 - x23*y02);
-    shpdz[2] = iv * (x13*y03 - x03*y13);
-    shpdz[3] = iv * (x01*y02 - x02*y01);
-}
-#else
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], double shpdz[3])
-{
-    ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
-
-    double iv = 1.0 / (2.0 * (*var.volume)[e]);
-
-    shpdx[0] = iv * (d[1][1] - d[2][1]);
-    shpdx[1] = iv * (d[2][1] - d[0][1]);
-    shpdx[2] = iv * (d[0][1] - d[1][1]);
-
-    shpdz[0] = iv * (d[2][0] - d[1][0]);
-    shpdz[1] = iv * (d[0][0] - d[2][0]);
-    shpdz[2] = iv * (d[1][0] - d[0][0]);
-}
-#endif
-
 void allocate_variables(const Param &param, Variables& var)
 {
     const int n = var.nnode;

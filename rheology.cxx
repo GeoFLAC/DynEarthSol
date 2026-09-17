@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -207,6 +208,71 @@ static void compute_slip_rate3(ConstTensorAccessor s, double vx, double vy, doub
     slip_rate = std::sqrt(slip_magnitude_1 * slip_magnitude_1 + slip_magnitude_2 * slip_magnitude_2);
 }
 
+// Element width w for V = 2 w eps_II: the minimum altitude, matching compute_dt().
+#pragma acc routine seq
+static double elem_band_width(ConstArrayIndirectAccessor coord, double volume)
+{
+#ifdef THREED
+    const int facet[4][3] = {{0,1,2}, {0,1,3}, {0,2,3}, {1,2,3}};
+    double max_area = 0.0;
+    #pragma acc loop seq
+    for (int i = 0; i < 4; ++i) {
+        ConstArrayAccessor p = coord[facet[i][0]];
+        ConstArrayAccessor q = coord[facet[i][1]];
+        ConstArrayAccessor r = coord[facet[i][2]];
+        const double u0 = q[0] - p[0];
+        const double u1 = q[1] - p[1];
+        const double u2 = q[2] - p[2];
+        const double v0 = r[0] - p[0];
+        const double v1 = r[1] - p[1];
+        const double v2 = r[2] - p[2];
+        const double c0 = u1 * v2 - u2 * v1;
+        const double c1 = u2 * v0 - u0 * v2;
+        const double c2 = u0 * v1 - u1 * v0;
+        const double area = 0.5 * std::sqrt(c0*c0 + c1*c1 + c2*c2);
+        max_area = std::max(max_area, area);
+    }
+    return (max_area > 0.0) ? 3.0 * volume / max_area : 0.0;
+#else
+    double max_length2 = 0.0;
+    #pragma acc loop seq
+    for (int i = 0; i < 3; ++i) {
+        ConstArrayAccessor p = coord[i];
+        ConstArrayAccessor q = coord[(i + 1) % 3];
+        const double dx = p[0] - q[0];
+        const double dz = p[1] - q[1];
+        max_length2 = std::max(max_length2, dx*dx + dz*dz);
+    }
+    const double max_length = std::sqrt(max_length2);
+    return (max_length > 0.0) ? 2.0 * volume / max_length : 0.0;
+#endif
+}
+
+#pragma acc routine seq
+static void select_slip_rate2(int projection_option, double continuum_rate,
+                              ConstTensorAccessor stress,
+                              double& vx, double& vz, double& slip_rate)
+{
+    if (projection_option == rsf_slip_rate_projection_total_strain_rate) {
+        slip_rate = continuum_rate;
+        return;
+    }
+    compute_slip_rate2(stress, vx, vz, slip_rate);
+}
+
+#pragma acc routine seq
+static void select_slip_rate3(int projection_option, double continuum_rate,
+                              ConstTensorAccessor stress,
+                              double vx, double vy, double vz,
+                              double& slip_rate)
+{
+    if (projection_option == rsf_slip_rate_projection_total_strain_rate) {
+        slip_rate = continuum_rate;
+        return;
+    }
+    compute_slip_rate3(stress, vx, vy, vz, slip_rate);
+}
+
 void refresh_rsf_friction(const Param& param, Variables& var,
                           double_vec& dyn_fric_coeff,
                           const double_vec& state_variable)
@@ -217,27 +283,45 @@ void refresh_rsf_friction(const Param& param, Variables& var,
     #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable)
 #endif
     for (int e = 0; e < var.nelem; ++e) {
-        ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
+        const int projection_option =
+            param.control.rsf_slip_rate_projection_option;
         double vx = 0.0;
         double vy = 0.0;
-        const double weight = 1.0 / NODES_PER_ELEM;
 #ifdef THREED
         double vz = 0.0;
 #endif
 
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            vx += v[j][0] * weight;
-            vy += v[j][1] * weight;
+        if (projection_option ==
+            rsf_slip_rate_projection_maximum_shear) {
+            ConstArrayIndirectAccessor v =
+                var.vel->view_const((*var.connectivity)[e]);
+            const double weight = 1.0 / NODES_PER_ELEM;
+            for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                vx += v[j][0] * weight;
+                vy += v[j][1] * weight;
 #ifdef THREED
-            vz += v[j][2] * weight;
+                vz += v[j][2] * weight;
 #endif
+            }
+        }
+
+        double continuum_rate = 0.0;
+        if (projection_option ==
+            rsf_slip_rate_projection_total_strain_rate) {
+            const double width = elem_band_width(
+                var.coord->view_const((*var.connectivity)[e]),
+                (*var.volume)[e]);
+            continuum_rate =
+                2.0 * width * second_invariant((*var.strain_rate)[e]);
         }
 
         double slip_rate = 0.0;
 #ifdef THREED
-        compute_slip_rate3((*var.stress)[e], vx, vy, vz, slip_rate);
+        select_slip_rate3(projection_option, continuum_rate,
+                          (*var.stress)[e], vx, vy, vz, slip_rate);
 #else
-        compute_slip_rate2((*var.stress)[e], vx, vy, slip_rate);
+        select_slip_rate2(projection_option, continuum_rate,
+                          (*var.stress)[e], vx, vy, slip_rate);
 #endif
         var.mat->rsf_friction_from_state(e, (*var.plstrain)[e], slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
@@ -713,16 +797,21 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
     const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
-    // Only the two rate-and-state branches call compute_slip_rate*, which is the
-    // sole consumer of the centroid velocity.
+    // Only option 0 projects the centroid velocity; option 1 derives its rate
+    // from the strain-rate invariant.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
                               || (param.mat.rheol_type == MatProps::rh_evp_rsf);
+    const bool needs_projected_velocity =
+        needs_slip_rate &&
+        param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_maximum_shear;
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(has_hydraulic_diffusion, needs_slip_rate)
+        firstprivate(has_hydraulic_diffusion, needs_slip_rate, \
+                     needs_projected_velocity)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -748,7 +837,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #ifdef THREED
         double vz = 0.0;
 #endif
-        if (needs_slip_rate) {
+        if (needs_projected_velocity) {
             const array_t& vel = *var.vel;
             #pragma acc loop seq
             for (int j = 0; j < NODES_PER_ELEM; ++j) {
@@ -790,6 +879,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             for (int i=0; i<NDIMS; ++i) {
                 edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;  // XXX: should NDIMS -> 3 in plane strain?
             }
+        }
+
+        double continuum_rate = 0.0;
+        if (needs_slip_rate &&
+            param.control.rsf_slip_rate_projection_option ==
+                rsf_slip_rate_projection_total_strain_rate) {
+            const double width = elem_band_width(
+                var.coord->view_const(conn), (*var.volume)[e]);
+            continuum_rate = 2.0 * width * second_invariant(edot);
         }
 
         // update strain with strain rate
@@ -928,9 +1026,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double slip_rate;
                 
 #ifdef THREED
-                compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
+                select_slip_rate3(
+                    param.control.rsf_slip_rate_projection_option,
+                    continuum_rate, s, vx, vy, vz, slip_rate);
 #else
-                compute_slip_rate2(s, vx, vy, slip_rate); // Calculate slip vector magnitude in 2D
+                select_slip_rate2(
+                    param.control.rsf_slip_rate_projection_option,
+                    continuum_rate, s, vx, vy, slip_rate);
 #endif
         
                 double amc, anphi, anpsi, hardn, ten_max;
@@ -971,9 +1073,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double slip_rate;
                 
 #ifdef THREED
-                compute_slip_rate3(s, vx, vy, vz, slip_rate); // Calculate slip vector magnitude in 3D
+                select_slip_rate3(
+                    param.control.rsf_slip_rate_projection_option,
+                    continuum_rate, s, vx, vy, vz, slip_rate);
 #else
-                compute_slip_rate2(s, vx, vy, slip_rate); // Calculate slip vector magnitude in 2D
+                select_slip_rate2(
+                    param.control.rsf_slip_rate_projection_option,
+                    continuum_rate, s, vx, vy, slip_rate);
 #endif
 
                 double amc, anphi, anpsi, hardn, ten_max;

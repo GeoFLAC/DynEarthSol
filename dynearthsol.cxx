@@ -190,7 +190,9 @@ void init(const Param& param, Variables& var)
     // apply_vbcs reads for any node on two boundaries at once.
     create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
-    var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
+    // The RSF state variable is initialized below; skip its bound for this
+    // bootstrap call. main() recomputes dt after state initialization.
+    var.dt = compute_dt(param, var, false);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
@@ -421,6 +423,11 @@ void restart(const Param& param, Variables& var)
 
         if (!restored_state_variable) {
             std::cout << "  RSF restart fallback applied for missing state variable dataset.\n";
+        }
+        if (param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_total_strain_rate) {
+            update_strain_rate(var, *var.strain_rate);
+            #pragma acc wait
         }
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
@@ -870,6 +877,14 @@ int main(int argc, const char* argv[])
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
+        else if (param.control.rsf_dtheta_max > 0.0) {
+            // Select the next step from the accepted velocity. The GVS mass
+            // must follow the same current rate used by the state bound.
+            var.dt = compute_dt(param, var);
+            compute_mass(param, var, var.max_vbc_val, *var.volume_n,
+                         *var.mass, *var.tmass, *var.hmass, *var.ymass,
+                         *var.tmp_result);
+        }
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
