@@ -47,8 +47,9 @@ jobs:
         ARCHIVE_NAME="dynearthsol-${LABEL}-full"
         mkdir -p /tmp/${ARCHIVE_NAME}
 
+        # .github stays in: the archive ships .git, whose index lists those
+        # files, and excluding them made every download start dirty.
         rsync -a . /tmp/${ARCHIVE_NAME}/ \
-          --exclude='.github' \
           --exclude='output_files' \
           --exclude='*.tar.gz'
 
