@@ -388,9 +388,58 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+    // plstrain_remesh: the R2 refine baseline, checkpointed so the first post-restart remesh
+    // refines the active band like a continuous run.
+    bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
 #endif
+
+    // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
+    // run-start structure. side_prof_sizes = {nnode, nelem, support size} per restored wall,
+    // NSIDEWALL each; per-wall arrays follow (see SideProfile).
+    {
+        // side_prof_sizes = {nnode per wall, nelem per wall, support size per wall}, NSIDEWALL each
+        char aname[64];
+        int_vec psz(3 * NSIDEWALL, 0);
+        int total = 0;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+            psz[t]                 = prof.nnode();
+            psz[NSIDEWALL + t]     = prof.nelem();
+            psz[2 * NSIDEWALL + t] = (int)prof.node_support_arr.size();
+            total += prof.nnode();
+        }
+        if (total > 0) {
+            bin.write_aux_array(psz, "side_prof_sizes", psz.size());
+            // cumulative wall-restore shifts (the profile's only evolving state)
+            double_vec shifts(NSIDEWALL);
+            for (int t = 0; t < NSIDEWALL; ++t) shifts[t] = var.side_profile[SIDEWALL_IDX[t]].wall_shift;
+            bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+                if (prof.empty()) continue;
+                auto wrd = [&](const double_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                auto wri = [&](const int_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                wrd(prof.node_reldepth, "node_reldepth");
+                wrd(prof.node_coord, "node_coord");
+                wrd(prof.node_coord0, "node_coord0");
+                wrd(prof.node_temperature, "node_temperature");
+                wrd(prof.node_init_elem_size, "node_init_elem_size");
+                wri(prof.node_support_idx, "node_support_idx");
+                wri(prof.node_support_arr, "node_support_arr");
+                wrd(prof.elem_reldepth, "elem_reldepth");
+                wri(prof.elem_mattype, "elem_mattype");
+                wrd(prof.elem_radiogenic_source, "elem_radiogenic_source");
+            }
+        }
+    }
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {

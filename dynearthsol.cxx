@@ -368,6 +368,9 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // plstrain_remesh (the R2 refine baseline) is restored so the first post-restart remesh
+        // refines like a continuous run.
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -381,6 +384,55 @@ void restart(const Param& param, Variables& var)
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    // Incoming side-material profiles (remeshing_option 13): restore the RUN-START profile of every
+    // side that has one stored. The incoming side may change at a restart (a new vbc sign), so the
+    // per-side existence check is required: a side without stored data is detected by main() from
+    // its current column, and a stored profile whose wall no longer receives material is erased at
+    // the first remesh (side-profile lifecycle). No profiles at all = the checkpointed run had none.
+    if (bin_chkpt.has_array("side_prof_sizes")) {
+        // side_prof_sizes = {nnode per wall, nelem per wall, support size per wall}, NSIDEWALL each
+        int_vec psz(3 * NSIDEWALL);
+        bin_chkpt.read_array(psz, "side_prof_sizes");
+        char aname[64];
+        double_vec shifts(NSIDEWALL, 0.);   // cumulative wall-restore shifts
+        bin_chkpt.read_array(shifts, "side_prof_wall_shift");
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+            prof.clear();
+            prof.wall_shift = shifts[t];
+            const int nn = psz[t], ne = psz[NSIDEWALL + t], ns = psz[2 * NSIDEWALL + t];
+            if (nn <= 0) continue;
+            const char *sfx_t = SIDEWALL_NAME[t];
+            auto rd = [&](double_vec &a, const char *name, int size) {
+                a.resize(size);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx_t);
+                bin_chkpt.read_array(a, aname);
+            };
+            rd(prof.node_reldepth, "node_reldepth", nn);
+            rd(prof.node_coord, "node_coord", nn * NDIMS);
+            rd(prof.node_coord0, "node_coord0", nn * NDIMS);
+            rd(prof.node_temperature, "node_temperature", nn);
+            rd(prof.node_init_elem_size, "node_init_elem_size", nn);
+            prof.node_support_idx.resize(nn + 1);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_idx, aname);
+            prof.node_support_arr.resize(ns);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_arr, aname);
+            rd(prof.elem_reldepth, "elem_reldepth", ne);
+            prof.elem_mattype.resize(ne);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx_t);
+            bin_chkpt.read_array(prof.elem_mattype, aname);
+            rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+        }
+        std::cout << "  Restored incoming side profiles from checkpoint:";
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (psz[t] > 0)
+                std::cout << " " << SIDEWALL_NAME[t] << " (" << psz[t] << " nodes, "
+                          << psz[NSIDEWALL + t] << " elements, wall shift " << shifts[t] << " m)";
+        std::cout << ".\n";
     }
 
     // the following fields are not required for restarting, yet
@@ -654,6 +706,23 @@ int main(int argc, const char* argv[])
     }
     else {
         restart(param, var);
+    }
+
+    // Restored side walls (remeshing_option 13): snapshot each receiving side's initial wall
+    // column (SideProfile) after mesh + markers exist, so incoming material keeps its original
+    // structure (restore_side_fields, side-wall marker replenishment).
+    if (param.mesh.remeshing_option == 13) {
+        // Only walls that RECEIVE material get a profile (a static backstop keeps evolving): at run
+        // start read from the velocity BC sign. A restart restored the checkpointed profiles above,
+        // so only detect what it did not provide; remesh() also late-detects a wall that starts moving.
+        uint bits = 0;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const double v = side_wall_vbc(param.bc, t);
+            const bool inflow_bc = (t % 2 == 0) ? (v > 0.) : (v < 0.);
+            if (inflow_bc && var.side_profile[SIDEWALL_IDX[t]].empty()) bits |= SIDEWALL_FLAG[t];
+        }
+        if (bits)
+            detect_side_profile(param, var, bits);
     }
 
     // var.dt_PT = var.dt;

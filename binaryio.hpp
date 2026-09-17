@@ -42,6 +42,10 @@ public:
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
 
+    template <typename T>
+    void write_aux_array(const std::vector<T>& A, const char *name, std::size_t size)
+    { write_array(A, name, size); }
+
     void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len);
 };
 
@@ -98,6 +102,9 @@ public:
 
     template <typename T>
     void write_array(const std::vector<T>& A, const char *name, hsize_t len);
+
+    template <typename T>
+    void write_aux_array(const std::vector<T>& A, const char *name, hsize_t len);
 
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len, int dest_N = -1);
