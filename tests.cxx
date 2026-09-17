@@ -13,6 +13,9 @@ void test_barycentric_transformation(Variables &var)
 {
     Barycentric_transformation bary(*var.coord, *var.connectivity, *var.volume);
 
+    // drain bary's async ctor kernel before the host-side transform below
+    #pragma acc wait
+
     double p[NDIMS];
 
     // p is the mid point of element 1

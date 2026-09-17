@@ -23,20 +23,18 @@ namespace {
 #endif
 
         double eps = 1e-15;
-        int nqueries;
-
-        if (is_surface)
-            nqueries = var.bfacets[iboundz1]->size();
-        else
-            nqueries = var.nelem;
+        int nqueries = is_surface ? var.bfacets[iboundz1]->size() : var.nelem;
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
+        conn_t *connectivity = is_surface ? var.connectivity_surface : var.connectivity;
 
         array_t queries(nqueries);
 
-        if (is_surface) {
-            facet_center(*var.coord, *var.connectivity_surface, queries);
-        } else {
-            elem_center(*var.coord, *var.connectivity, queries);
-        }
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(var.coord->component_const(d), *connectivity, nqueries, queries.component(d), is_surface);
+
+        if (is_surface) queries.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
         {
             printf(is_surface ? "    Top surface:      "
@@ -350,13 +348,17 @@ namespace {
 #ifdef NPROF_DETAIL
         nvtxRangePush("create kdtree for old elements");
 #endif
+        int ncomponents = is_surface ? NDIMS-1 : NDIMS;
 
         array_t points(old_npoint);
-        if (is_surface) {
-            facet_center(old_coord, old_connectivity, points);
-        } else {
-            elem_center(old_coord, old_connectivity, points);
-        }
+
+        for (int d= 0; d < ncomponents; d++)
+            average_nodal_to_elem(old_coord.component_const(d), old_connectivity,
+                                  old_npoint, points.component(d), is_surface);
+
+        if (is_surface) points.zero_component(NDIMS-1);
+
+        #pragma acc wait
 
 #ifdef ACC
         array_t point_tmp(1);
@@ -568,25 +570,13 @@ namespace {
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
-            #pragma acc wait
-
-            tensor_t *new_stress = new tensor_t(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
-
-            double_vec *new_stressyy = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
-
-            double_vec *new_old_mean_stress = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.old_mean_stress, *new_old_mean_stress, e);
-
-            delete var.plstrain;
-            var.plstrain = new_plstrain;
-
-            delete var.delta_plstrain;
-            var.delta_plstrain = new_delta_pls;
-
-            delete var.strain;
-            var.strain = new_strain;
+            // Zero out plastic strain and accumulated strain for elements that lie
+            // fully or partially outside the old mesh (empty_vec > 0).  This prevents
+            // spurious non-zero plastic strain on freshly created elements, e.g. the
+            // gap elements introduced by remeshing_option=11 (restore_bottom).
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_plstrain, e);
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_delta_pls, e);
+            boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_strain, e);
 
             #pragma acc wait
 
@@ -599,16 +589,42 @@ namespace {
             double_vec *new_state_variable = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.state_variable, *new_state_variable, e);
 
-            delete var.stress;
-            var.stress = new_stress;
+            double_vec *new_volume_old = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.volume_old, *new_volume_old, e);
 
-            delete var.stressyy;
-            var.stressyy = new_stressyy;
+            delete var.plstrain;
+            var.plstrain = new_plstrain;
 
-            delete var.old_mean_stress;
-            var.old_mean_stress = new_old_mean_stress;
+            delete var.delta_plstrain;
+            var.delta_plstrain = new_delta_pls;
+
+            delete var.strain;
+            var.strain = new_strain;
 
             #pragma acc wait
+
+            // NN-remap the element stress alongside the other element fields;
+            // spr_node_to_elem still owns the final stress on the new mesh.
+            tensor_t *new_stress = new tensor_t(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stress, *new_stress, e);
+
+            double_vec *new_stressyy = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.stressyy, *new_stressyy, e);
+
+            // Deborah-blend weight (computed on the old mesh in spr_elem_to_node):
+            // ride it through the remesh so spr_node_to_elem can blend per new
+            // element. Null when remesh() switched the SPR chain off.
+            double_vec *new_blend_w = nullptr;
+            if (var.spr_blend_weight) {
+                new_blend_w = new double_vec(e);
+                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.spr_blend_weight, *new_blend_w, e);
+            }
+
+            // Untouched-stress carry-through: ride the centering reference through
+            // the remesh (verbatim for unchanged elements); is_changed here IS
+            // var.remesh_is_changed, which spr_node_to_elem consumes.
+            double_vec *new_p_ref_old = new double_vec(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.spr_p_ref_old, *new_p_ref_old, e);
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
@@ -618,6 +634,23 @@ namespace {
 
             delete var.state_variable;
             var.state_variable = new_state_variable;
+
+            delete var.volume_old;
+            var.volume_old = new_volume_old;
+
+            #pragma acc wait
+
+            delete var.stress;
+            var.stress = new_stress;
+
+            delete var.stressyy;
+            var.stressyy = new_stressyy;
+
+            delete var.spr_blend_weight;
+            var.spr_blend_weight = new_blend_w;
+
+            delete var.spr_p_ref_old;
+            var.spr_p_ref_old = new_p_ref_old;
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
@@ -652,8 +685,14 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         }
 
         int_vec idx(nqueries); // nearest element
-        int_vec is_changed(nqueries); // is the element changed during remeshing?
         int_vec idx_changed(nqueries);
+
+        // Is the element changed during remeshing? The element pass fills
+        // var.remesh_is_changed (allocated by remesh(), read by spr_node_to_elem
+        // to keep the stress of unchanged elements verbatim); the surface pass
+        // uses a local.
+        int_vec is_changed_surf(is_surface ? nqueries : 0);
+        int_vec &is_changed = is_surface ? is_changed_surf : *var.remesh_is_changed;
 
         nn_t elems_vec;
         ratio_t ratios_vec;

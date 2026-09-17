@@ -183,6 +183,7 @@ struct Mesh {
     double largest_size;
     double sediment_size;
     double min_angle;  // for 2D only
+    double max_steiner_factor; // cap Triangle Steiner points at factor*npoints; <=0 unlimited (2D only)
     double min_tet_angle, max_ratio; // for 3D only
     double min_quality;
     double max_boundary_distortion;
@@ -193,6 +194,10 @@ struct Mesh {
 
     bool is_discarding_internal_segments;
     int remeshing_option;
+
+    // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
+    double remesh_deborah_min;
+    double remesh_deborah_max;
 
     // Parameters for mesh optimizer MMG
     int mmg_debug;
@@ -215,7 +220,6 @@ struct Control {
     int ref_pressure_option;
 //    bool surface_pressure_correction;
     bool is_using_mixed_stress;
-    double mixed_stress_reference_viscosity;
 
     int surface_process_option;
     double surface_diffusivity;
@@ -256,6 +260,9 @@ struct Control {
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
+    int mass_scaling_reference_speed;
+    int rsf_slip_rate_projection_option;
+    double rsf_dtheta_max;
 
 };
 
@@ -270,6 +277,7 @@ struct BC {
     bool has_elastic_foundation;
 
     bool has_water_loading;
+    double sea_water_density;
 
     int vbc_x0;
     int vbc_x1;
@@ -413,6 +421,8 @@ struct IC {
 
     double excess_pore_pressure;
     bool has_body_force_adjustment;
+    int initial_stress_option;
+    double_vec initial_stress;
 };
 
 struct Mat {
@@ -497,6 +507,16 @@ struct Debug {
 //    bool has_two_layers_for;
 };
 
+enum RSFSlipRateProjectionOption {
+    rsf_slip_rate_projection_maximum_shear = 0,
+    rsf_slip_rate_projection_total_strain_rate = 1
+};
+
+enum MassScalingReferenceSpeed {
+    mass_scaling_speed_shear = 0,
+    mass_scaling_speed_bulk = 1
+};
+
 enum MonitorRebindMode {
     monitor_rebind_initial_coord = 0,
     monitor_rebind_pre_remesh_coord = 1
@@ -574,6 +594,36 @@ struct Param {
 //
 // Structures for surface processes
 //
+// Node-support graph in CSR: node n owns [idx[n], idx[n+1]) of arr and lidx.
+// Owns the arrays and caches their pointers beside them, because .data() is not
+// callable from device code -- rebind() after anything that resizes them.
+struct Support {
+    int_vec arr_data;   // element ids, one per (node, element) incidence
+    int_vec idx_data;   // row-pointers, size nnode+1
+    int_vec lidx_data;  // which local node of arr[i] the gather node is; may be
+                        // left empty when only element ids are needed, and then
+                        // local() must not be called
+
+    const int* arr  = NULL;
+    const int* idx  = NULL;
+    const int* lidx = NULL;
+
+    void rebind() {
+        arr  = arr_data.data();
+        idx  = idx_data.data();
+        lidx = lidx_data.empty() ? NULL : lidx_data.data();
+    }
+
+    #pragma acc routine seq
+    int size(int inode) const { return idx[inode+1] - idx[inode]; }
+
+    #pragma acc routine seq
+    const int* patch(int inode) const { return arr + idx[inode]; }
+
+    #pragma acc routine seq
+    const int* local(int inode) const { return lidx + idx[inode]; }
+};
+
 struct SurfaceInfo {
 
 //    const double sec_year = 31556925.2;
@@ -608,7 +658,7 @@ struct SurfaceInfo {
     double_vec *dhacc;
     // variable allocate by remesh
     double_vec *edvacc_surf;
-    int_vec2D *node_and_elems;
+    Support support_surf;  // surface node -> its top facets; no lidx needed
     segment_t *elem_and_nodes;
 
     int_map arctop_facet_elems;
@@ -626,19 +676,22 @@ struct SurfaceInfo {
 
 };
 
-//
+
 // Structures for model variables
 //
 class MatProps;
 class MarkerSet;
 struct Variables {
     double time;
+    double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
-    double dt_PT;
+    // double dt_PT;
     double l2_residual;
+    double reference_frame_time;
     int steps;
     int nremesh;
     int noutput;
+    int info_display_next_step;
     Time func_time;
     Output *output;
 
@@ -685,9 +738,13 @@ struct Variables {
     double stress_bc_values[nbdrytypes];
     double vbc_val_z1_loading_period;
 
-    std::map<std::pair<int,int>, double_vec> edge_vectors;
+    // Unit vector along the edge where two boundaries meet, NDIMS doubles per pair in
+    // edge_vec. edge_slot[i*nbdrytypes + j] with i < j indexes it, and is -1 when that
+    // pair shares no edge -- the state apply_vbcs has to test before dereferencing.
+    // A dense nbdrytypes^2 table rather than a searchable list: 100 ints is smaller than
+    // any index it could carry, so the device lookup is one load and needs no pointer.
     double_vec edge_vec;
-    int_vec edge_vec_idx;
+    int edge_slot[nbdrytypes * nbdrytypes];
     double_vec vbc_vertical_div_x0;
     double_vec vbc_vertical_div_x1;
     double_vec vbc_vertical_ratio_x0;
@@ -698,9 +755,7 @@ struct Variables {
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;
 
-    int_vec2D *support;
-    int_vec *support_arr;
-    int_vec *support_idx;
+    Support support;  // node-support graph; rebuilt by create_support()
     conn_t *neighbor; // neighboring elements for each element
     int_pair_vec *contact; // contact elements for each element
     double_vec *ctmp; // temporary array for contact elements
@@ -740,10 +795,24 @@ struct Variables {
     array_t *vel, *force, *coord0;
     array_t *force_residual;
     tensor_t *strain_rate, *strain, *stress;
-    shapefn *shpdx, *shpdy, *shpdz; // gradient of shape function
     elem_cache *tmp_result;
     double_vec *etmp;
     int_vec *etmp_int;
+
+    // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise.
+    // stress_n and spr_blend_weight double as the switch for the SPR recovery:
+    // remesh() leaves them null when the rheology has no viscous component, and each
+    // consumer skips its part of the chain on that.
+    // - stress_n, stressyy_n: SPR-recovered nodal stress
+    // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
+    // - spr_p_ref_old: reference pressure added at pressure-centering, per element
+    // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
+    //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
+    tensor_t *stress_n;
+    double_vec *stressyy_n;
+    double_vec *spr_blend_weight;
+    double_vec *spr_p_ref_old;
+    int_vec *remesh_is_changed;
 
     // tensor_t *stress_old;
 
@@ -757,6 +826,11 @@ struct Variables {
 
     Variables()
     {
+        stress_n = nullptr;
+        stressyy_n = nullptr;
+        spr_blend_weight = nullptr;
+        spr_p_ref_old = nullptr;
+        remesh_is_changed = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

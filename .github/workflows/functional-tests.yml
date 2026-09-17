@@ -1,5 +1,8 @@
 name: Functional tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "master", "bugfix*" ]
@@ -28,42 +31,53 @@ jobs:
       run:
         working-directory: ./tests/functional
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install Python dependencies
+      run: python -m pip install --upgrade pip numpy h5py
+
     - name: get boost and hdf5
       run: |
         echo Install boost-program-options and hdf5 ====================
         sudo apt-get update
         sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
-    - name: set path for hdf5
-      run: |
-        HDF5_INCLUDE_DIR=$(pkg-config --cflags hdf5-serial | sed 's/-I//g')
-        HDF5_LIB_DIR=$(pkg-config --libs hdf5-serial | tr ' ' '\n' | grep '^-L' | sed 's/^-L//')
-        echo "HDF5_INCLUDE_DIR=${HDF5_INCLUDE_DIR}" >> $GITHUB_ENV
-        echo "HDF5_LIB_DIR=${HDF5_LIB_DIR}" >> $GITHUB_ENV
-  
     - name: make 3d hdf5
       working-directory: .
-      run: make -j ndims=3 opt=2 openmp=1 hdf5=1 \
-            HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR
+      # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
+      run: make -j ndims=3 opt=2 openmp=1 hdf5=1
 
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 
+    - name: test 3d restart
+      working-directory: ./benchmarks-cores
+      run: make fresh-restart-cmp CASE=../tests/functional/3d-evp-regular.cfg && rm -rf functional-test.*
+
     - name: make 2d hdf5
       working-directory: .
-      run: make -j ndims=2 opt=2 openmp=1 hdf5=1 \
-            HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR
+      run: make -j ndims=2 opt=2 openmp=1 hdf5=1
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
+    - name: test 2d restart
+      working-directory: ./benchmarks-cores
+      run: make fresh-restart-cmp NDIMS=2 CASE=../tests/functional/2d-ep-irregular.cfg && rm -rf functional-test.*
+
     - name: test 2d RSF ATS benchmark subset
       run: bash 2d-rsf-ats.sh
 
+    - name: test 2d homogeneous initial stress
+      run: python3 initial_stress/check_initial_stress.py --exe ../../dynearthsol2d
+
     - name: make 3d hdf5 opt=-1
       working-directory: .
-      run: make cleanall && make -j ndims=3 opt=-1 openmp=1 hdf5=1 \
-            HDF5_LIB_DIR=$HDF5_LIB_DIR HDF5_INCLUDE_DIR=$HDF5_INCLUDE_DIR
+      run: make cleanall && make -j ndims=3 opt=-1 openmp=1 hdf5=1
 
     - name: test memory leak 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*

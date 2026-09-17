@@ -135,13 +135,18 @@ template <typename T>
 void Barycentric_transformation::transform(T point, int e, double *result) const
 {
     ConstCoeffAccessor cf = coeff_[e];
+    // elem_dim_ is only ever NDIMS or NDIMS-1, so the 3 case cannot arise in a 2D build
+    // -- where `result` is a double[2] that this branch would write past the end of.
+#ifdef THREED
     if (elem_dim_ == 3) {
         for (int d=0; d<3; d++) {
             result[d] = cf[index3d(0,d)];
             for (int i=0; i<3; i++)
                 result[d] += cf[index3d(i+1,d)]*point[i];
         }
-    } else if (elem_dim_ == 2) {
+    } else
+#endif
+    if (elem_dim_ == 2) {
         for (int d=0; d<2; d++) {
             result[d] = cf[index2d(0,d)];
             for (int i=0; i<2; i++)
@@ -176,6 +181,8 @@ bool Barycentric_transformation::is_inside_elem(ConstArrayAccessor point, int el
 
 bool Barycentric_transformation::is_inside(const double *r) const
 {
+    // Guarded for the same reason as transform() above: in 2D `r` is a double[2].
+#ifdef THREED
     if (elem_dim_ == 3) {
         // 3D has larger round-off error in coeff_
         // => needs greater tolerance
@@ -186,7 +193,9 @@ bool Barycentric_transformation::is_inside(const double *r) const
             r[2] >= -tolerance &&
             (r[0] + r[1] + r[2]) <= 1 + tolerance)
             return 1;
-    } else if (elem_dim_ == 2) {
+    } else
+#endif
+    if (elem_dim_ == 2) {
         const double tolerance = 1e-12;
 
         if (r[0] >= -tolerance &&

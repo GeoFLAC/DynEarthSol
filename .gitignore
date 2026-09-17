@@ -9,8 +9,8 @@
 *.vtkhdf
 confdefs.h
 snapshot.diff
-dynearthsol[2,3]d
-dynearthsol[2,3]d.gpu
+dynearthsol[23]d
+dynearthsol[23]d.*
 *.code*
 orig-*
 .vscode
@@ -38,3 +38,7 @@ dynearthsol-gospl
 *.npz
 *.pvsm
 *.vtkhdf
+.build-flags.*
+.build-flags-*
+.link-flags.*
+.feature-deps.*

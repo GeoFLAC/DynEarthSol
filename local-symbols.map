@@ -1,0 +1,28 @@
+/* Linker version script for the openacc=1 executable: keep every symbol it
+ * defines out of the dynamic symbol table.
+ *
+ * nvc++ -gpu=mem:managed does not replace malloc/free process-wide: it rewrites
+ * the new/delete call sites inside each unit it compiles, so input.2d.gpu.o
+ * references __pgi_managed_new and no _Znwm at all. Those units also emit their
+ * own copies of the libstdc++ templates they use -- _M_realloc_insert,
+ * _Rb_tree, basic_string, the stream machinery. Those copies are weak, they
+ * reach .dynsym, and an executable outranks every shared library for the whole
+ * process: 33 of them here, all called through libboost's and libstdc++'s PLT.
+ *
+ * Boost then allocates from the managed pool through our copy and releases
+ * through a path it inlined locally -- glibc free() on a pool pointer, which
+ * aborts with "free(): invalid size" or similar. The reverse direction is
+ * harmless; NVHPC's managed delete forwards a foreign pointer to free().
+ *
+ * It aborts early and silently. The first operator new in a DES unit is inside
+ * declare_parameters(), and NVHPC brings the OpenACC device up from inside that
+ * allocation, so the process can die before "Checking consistency of input
+ * parameters..." reaches the terminal.
+ *
+ * Keeping the symbols local leaves each side one consistent allocator. DES's
+ * own allocations stay managed -- the managed-new count is unchanged, the heap
+ * is still device-accessible, and numerical output is bit-identical.
+ */
+{
+    local: *;
+};

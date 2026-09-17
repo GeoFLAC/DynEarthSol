@@ -13,6 +13,8 @@
 #endif
 #include "array2d.hpp"
 
+void rename_to_old_backup(const char *filename);
+
 #ifndef HDF5
 
 class BinaryOutput
@@ -26,8 +28,11 @@ private:
     void write_header(const char *name);
 
 public:
-    BinaryOutput(const char *filename);
+    BinaryOutput(const char *filename, const bool rename_if_exists=false);
     ~BinaryOutput();
+
+    template <typename T>
+    void write_scalar(const T& A, const std::string& name);
 
     template <typename T>
     void write_array(const std::vector<T>& A, const char *name, std::size_t size);
@@ -57,6 +62,9 @@ public:
     bool has_array(const char *name) const;
 
     template <typename T>
+    void read_scalar(T& A, const std::string& name);
+
+    template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
 
     template <typename T, int N>
@@ -78,7 +86,8 @@ private:
     void write_header();
 
 public:
-    HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt=false);
+    HDF5Output(const char *filename, const int hdf5_compression_level,
+               const bool is_chkpt=false, const bool rename_if_exists=false);
     ~HDF5Output();
 
     template<typename T>
@@ -126,7 +135,7 @@ public:
     bool has_array(const char *name) const;
 
     template <typename T>
-    void read_scaler(T& A, const std::string& name);
+    void read_scalar(T& A, const std::string& name);
 
     template <typename T>
     void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);

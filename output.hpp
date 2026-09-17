@@ -12,6 +12,8 @@ private:
     const int average_interval;
     const bool has_marker_output;
     const int hdf5_compression_level;
+    const bool may_overwrite_;
+    const int start_frame_;
     int frame;
     int64_t run_time_ns;
 

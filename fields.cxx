@@ -13,7 +13,6 @@ void allocate_variables(const Param &param, Variables& var)
     const int e = var.nelem;
 
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     var.mass = new double_vec(n);
@@ -22,10 +21,13 @@ void allocate_variables(const Param &param, Variables& var)
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
 
-//    var.marker_in_elem = new int_vec2D(e);
+    var.old_mean_stress = new double_vec(e, 0);
 
     {
         // these fields are reallocated during remeshing interpolation
+        var.stress = new tensor_t(e, 0);
+        var.stressyy = new double_vec(e, 0);
+        var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
         var.ppressure = new double_vec(n);
         var.dppressure = new double_vec(n);
@@ -34,9 +36,6 @@ void allocate_variables(const Param &param, Variables& var)
         var.delta_plstrain = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
-        var.stress = new tensor_t(e, 0);
-        var.stressyy = new double_vec(e, 0);
-        var.old_mean_stress = new double_vec(e, 0);
         // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
         var.dyn_fric_coeff = new double_vec(e);
@@ -69,10 +68,6 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.strain_rate = new tensor_t(e, 0);
 
-    var.shpdx = new shapefn(e);
-    if (NDIMS == 3) var.shpdy = new shapefn(e);
-    var.shpdz = new shapefn(e);
-
     var.mat = new MatProps(param, var);
 
     var.tmp_result = new elem_cache(e);
@@ -104,10 +99,8 @@ void reallocate_variables(const Param& param, Variables& var)
     const int e = var.nelem;
 
     delete var.volume;
-    delete var.volume_old;
     delete var.volume_n;
     var.volume = new double_vec(e);
-    var.volume_old = new double_vec(e);
     var.volume_n = new double_vec(n);
 
     delete var.mass;
@@ -137,15 +130,18 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
 
-    delete var.shpdx;
-    delete var.shpdz;
-    var.shpdx = new shapefn(e);
-    if (NDIMS == 3) {
-        delete var.shpdy;
-        var.shpdy = new shapefn(e);
-    }
-    var.shpdz = new shapefn(e);
+    // var.stress and var.stressyy are NOT reallocated here: the NN interpolation
+    // already swapped in remapped copies sized to the new mesh, which
+    // spr_node_to_elem reads before overwriting with the SPR average.
 
+    if (param.control.has_hydraulic_diffusion) {
+        delete var.old_mean_stress;
+        var.old_mean_stress = new double_vec(var.nelem);
+    }
+
+    // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
+    // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
+    // Called earlier the cache is built from empty counts -- wrong means, not a crash.
     delete var.mat;
     var.mat = new MatProps(param, var);
 
@@ -173,11 +169,13 @@ void update_temperature(const Param &param, const Variables &var,
             ElemCacheAccessor tr = tmp_result[e];
             double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
@@ -204,17 +202,12 @@ void update_temperature(const Param &param, const Variables &var,
             else {
                 double tdot = 0;
 
-                for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                    ConstConnAccessor conn = (*var.connectivity)[*e];
-                    ConstElemCacheAccessor tr = tmp_result[*e];
-                    bool found = false;
-                    for (int i=0;i<NODES_PER_ELEM&&!found;i++) {
-                        if (n == conn[i]) {
-                            tdot += tr[i];
-                            found= true;
-                        }
-                    }
-                }
+                // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                const int* lpatch = var.support.local(n);
+                for (int k=0; k<npatch; ++k)
+                    tdot += tmp_result[patch[k]][lpatch[k]];
                 // Combining temperature update and bc in the same loop for efficiency,
                 // since only the top boundary has Dirichlet bc, and all the other boundaries
                 // have no heat flux bc.
@@ -260,8 +253,11 @@ void update_pore_pressure(const Param &param, const Variables &var,
     // Initialize diff_max_local for reduction
     double diff_max_local = 1.0e-38;
 
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param, diff_max_local)
-    // #pragma acc parallel loop
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
+        reduction(max:diff_max_local)
+#endif
+        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
@@ -295,12 +291,13 @@ void update_pore_pressure(const Param &param, const Variables &var,
 
         // volume term (poroelastic effect)
         double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
-       
-        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             double diffusion = 0.0;
@@ -321,22 +318,18 @@ void update_pore_pressure(const Param &param, const Variables &var,
         }
     }
 
-    // Update global hydro_diff_max after the loop
-    var.mat->hydro_diff_max = diff_max_local;
-
+#ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
-    // #pragma acc parallel loop
+#endif
+    #pragma acc parallel loop gang vector async
     for (int n = 0; n < var.nnode; n++) {
         tdot[n] = 0.0;
-        for (auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[*e];
-            ConstElemCacheAccessor tr = tmp_result[*e];
-            for (int i = 0; i < NODES_PER_ELEM; i++) {
-                if (n == conn[i]) {
-                    tdot[n] += tr[i];
-                    break;
-                }
-            }
+        {
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k = 0; k < npatch; ++k)
+                tdot[n] += tmp_result[patch[k]][lpatch[k]];
         }
 
         // Update pore pressure for non-boundary nodes
@@ -355,6 +348,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
             
     }
 
+    #pragma acc wait
+    // Update global hydro_diff_max after the loop
+    var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -371,9 +367,13 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-
-        ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-        ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+#ifdef THREED
+        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdz);
+#endif
         TensorAccessor s = strain_rate[e];
         
         ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
@@ -385,7 +385,6 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
             s[n] += v[i][0] * shpdx[i];
 
 #ifdef THREED
-        ConstShapefnAccessor shpdy = (*var.shpdy)[e];
         // YY component
         n = 1;
         s[n] = 0;
@@ -526,7 +525,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
         break;
     default:
         std::cerr << "Error: unknown damping_option: " << param.control.damping_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -576,11 +575,13 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0;e<var.nelem;e++) {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
 #ifdef THREED
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
             TensorAccessor s = (*var.stress)[e];
             double vol = (*var.volume)[e];
             ElemCacheAccessor tr = tmp_result[e];
@@ -614,18 +615,16 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             f = 0;
             ArrayAccessor f_residual = force_residual[n];
             f_residual = 0;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[*e];
-                ConstElemCacheAccessor tr = tmp_result[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        for (int j=0;j<NDIMS;j++)
-                        {
-                            f[j] -= tr[i+NODES_PER_ELEM*j];
-                            f_residual[j] = tr[i+NODES_PER_ELEM*j];
-                        }
-                        break;
-                    }
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            const int* lpatch = var.support.local(n);
+            for (int k=0;k<npatch;++k) {
+                ConstElemCacheAccessor tr = tmp_result[patch[k]];
+                const int i = lpatch[k];
+                for (int j=0;j<NDIMS;j++)
+                {
+                    f[j] -= tr[i+NODES_PER_ELEM*j];
+                    f_residual[j] = tr[i+NODES_PER_ELEM*j];
                 }
             }
         }
@@ -696,22 +695,22 @@ void update_velocity(const Variables& var, array_t& vel)
 #endif
 }
 
-void update_velocity_PT(const Variables& var, array_t& vel)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
+// void update_velocity_PT(const Variables& var, array_t& vel)
+// {
+// #ifdef NPROF_DETAIL
+//     nvtxRangePush(__FUNCTION__);
+// #endif
 
-    #pragma omp parallel for default(none) shared(var, vel)
-    // #pragma acc parallel loop
-    for (int i=0; i<var.nnode; ++i)
-        for (int j=0;j<NDIMS;j++)
-            vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
+//     #pragma omp parallel for default(none) shared(var, vel)
+//     // #pragma acc parallel loop
+//     for (int i=0; i<var.nnode; ++i)
+//         for (int j=0;j<NDIMS;j++)
+//             vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
 
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
+// #ifdef NPROF_DETAIL
+//     nvtxRangePop();
+// #endif
+// }
 
 void update_coordinate(const Variables& var, array_t& coord)
 {
@@ -811,9 +810,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
         double w3, w4, w5;
         {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-            ConstShapefnAccessor shpdy = (*var.shpdy)[e];
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+            double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
 
             ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 
@@ -837,8 +835,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
 
         double w2;
         {
-            ConstShapefnAccessor shpdx = (*var.shpdx)[e];
-            ConstShapefnAccessor shpdz = (*var.shpdz)[e];
+            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+            get_local_shape_fn(var, e, shpdx, shpdz);
 
             ConstArrayIndirectAccessor v = var.vel->view_const(conn);
 

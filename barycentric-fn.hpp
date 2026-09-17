@@ -11,6 +11,11 @@ class Barycentric_transformation {
      *
      * The derivation of the formula can be found in
      * http://en.wikipedia.org/wiki/Barycentric_coordinate_system_(mathematics)
+     *
+     * The element-loop constructors fill coeff_ in an async ACC kernel
+     * (default queue): callers need an '#pragma acc wait' (or same-queue
+     * ordering) before any host read, any non-async device consumer, and
+     * destruction of the object or its input arrays.
      */
     typedef Array2D<double,NODES_PER_ELEM*NDIMS> coeff_t;
     typedef coeff_t::Accessor CoeffAccessor;

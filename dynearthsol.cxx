@@ -36,6 +36,7 @@ namespace std { using ::snprintf; }
 void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
+    var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -43,6 +44,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.reference_frame_time = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -184,22 +186,26 @@ void init(const Param& param, Variables& var)
     #pragma acc wait
 
     *var.volume_old = *var.volume;
+    // Must precede apply_vbcs: it is the only writer of edge_vec/edge_slot, which
+    // apply_vbcs reads for any node on two boundaries at once.
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
-    var.dt = compute_dt(param, var);  // Global-velocity scaling needs dt before compute_mass.
+    // The RSF state variable is initialized below; skip its bound for this
+    // bootstrap call. main() recomputes dt after state initialization.
+    var.dt = compute_dt(param, var, false);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
     initialize_elem_size_n(var, *var.init_elem_size_n);
 #endif
 
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
-    // apply_vbcs(param, var, *var.vel); move to above compute_mass
 
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
+    // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
+    var.mat->refresh_elem_cache();
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
@@ -210,6 +216,11 @@ void init(const Param& param, Variables& var)
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
     }
+
+    // init viscosity
+    #pragma omp parallel for default(none) shared(var)
+    for (int e=0; e<var.nelem; ++e)
+        (*var.viscosity)[e] = var.mat->visc(e);
 
     report_mesh_info(var, "initial");
 
@@ -223,31 +234,6 @@ void restart(const Param& param, Variables& var)
 {
     std::cout << "Initializing mesh and field data from checkpoints...\n";
 
-    /* Reading info file */
-    {
-        char filename[256];
-        std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
-        std::FILE *f = std::fopen(filename, "r");
-        int frame, steps, nnode, nelem, nseg;
-        while (1) {
-            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
-                                &frame, &steps, &nnode, &nelem, &nseg);
-            if (n != 5) {
-                std::cerr << "Error: reading info file: " << filename << '\n';
-                std::exit(2);
-            }
-            if (frame == param.sim.restarting_from_frame)
-                break;
-        }
-
-        var.steps = steps;
-        var.nnode = nnode;
-        var.nelem = nelem;
-        var.nseg = nseg;
-
-        std::fclose(f);
-    }
-
     char filename_save[256];
 #ifdef HDF5
     std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
@@ -259,6 +245,49 @@ void restart(const Param& param, Variables& var)
     BinaryInput bin_save(filename_save);
 #endif
     std::cout << "  Reading " << filename_save << "...\n";
+
+    char filename[256];
+    std::snprintf(filename, 255, "%s.info", param.sim.restarting_from_modelname.c_str());
+    bool got_meta = false;
+    std::FILE *f = std::fopen(filename, "r");
+    if (f != NULL) {
+        int frame, steps, nnode, nelem, nseg;
+        while (1) {
+            int n = std::fscanf(f, "%d %d %*f %*f %*f %d %d %d\n",
+                                &frame, &steps, &nnode, &nelem, &nseg);
+            if (n != 5) break;   // EOF or malformed line: stop scanning, fall back
+            if (frame == param.sim.restarting_from_frame) {
+                var.steps = steps;
+                var.nnode = nnode;
+                var.nelem = nelem;
+                var.nseg = nseg;
+                got_meta = true;
+                break;
+            }
+        }
+        std::fclose(f);
+        if (!got_meta) {
+            std::cerr << "Error: frame " << param.sim.restarting_from_frame
+                    << " not found in " << filename << ".\n";
+            die(EXIT_IO_RESTART);
+        }
+    } else {
+        std::cerr << "Warning: cannot open info file " << filename
+                << "; using metadata embedded in " << filename_save << ".\n";
+    }
+
+    if (!got_meta) {
+        if (bin_save.has_array("steps") && bin_save.has_array("nseg")) {
+            bin_save.read_scalar(var.steps, "steps");
+            bin_save.read_scalar(var.nnode, "nnode");
+            bin_save.read_scalar(var.nelem, "nelem");
+            bin_save.read_scalar(var.nseg, "nseg");
+        } else {
+            std::cerr << "Error: cannot read frame metadata from " << filename
+                      << " and " << filename_save << " has none embedded.\n";
+            die(EXIT_IO_RESTART);
+        }
+    }
 
     char filename_chkpt[256];
 #ifdef HDF5
@@ -316,25 +345,37 @@ void restart(const Param& param, Variables& var)
 
     bin_save.read_array(*var.coord0, "coord0");
 
-    compute_volume(*var.coord, *var.connectivity, *var.volume);
-    bin_chkpt.read_array(*var.volume_old, "volume_old");
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
+    // Misc. items
+    {
+        bin_chkpt.read_scalar(var.time, "time");
+        bin_chkpt.read_scalar(var.info_display_next_step, "info_display_next_step");
+        bin_chkpt.read_scalar(var.compensation_pressure, "compensation_pressure");
+        bin_chkpt.read_scalar(var.bottom_temperature, "bottom_temperature");
+        bin_chkpt.read_scalar(var.dt, "dt");
+        bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
+        bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
+        bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+    }
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vectors, var.edge_vec, var.edge_vec_idx);
+    if (var.steps % param.mesh.quality_check_step_interval == 0 &&
+        var.steps >= var.info_display_next_step)
+        var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
 
     // Initializing field variables
     {
         bin_save.read_array(*var.vel, "velocity");
         bin_save.read_array(*var.temperature, "temperature");
-        bin_save.read_array(*var.strain_rate, "strain-rate");
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        // previous-step volume for volumetric strain rate.
+        bin_chkpt.read_array(*var.volume_old, "volume_old");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+        // for surface marker correction after surface processes
+        bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
 #endif
@@ -342,23 +383,23 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
 
-    // Misc. items
+    // the following fields are not required for restarting, yet
     {
-#ifdef HDF5
-        bin_chkpt.read_scaler(var.time, "time");
-        bin_chkpt.read_scaler(var.compensation_pressure, "compensation_pressure");
-        bin_chkpt.read_scaler(var.bottom_temperature, "bottom_temperature");
-#else
-        double_vec tmp(3);
-        bin_chkpt.read_array(tmp, "time compensation_pressure bottom_temperature");
-        var.time = tmp[0];
-        var.compensation_pressure = tmp[1];
-        // Set bottom temperature
-        var.bottom_temperature = tmp[2];
-#endif
-        // the following fields are not required for restarting
+        // for shear heating
+        bin_save.read_array(*var.strain_rate, "strain-rate");
+        // for tidal heating
+        bin_save.read_array(*var.viscosity, "viscosity");
         bin_save.read_array(*var.force, "force");
+        // delta_plstrain carries per-element state across steps:
+        bin_save.read_array(*var.delta_plstrain, "plastic strain-rate");
     }
+
+    compute_volume(*var.coord, *var.connectivity, *var.volume);
+    // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
+    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
+
     apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
@@ -383,6 +424,11 @@ void restart(const Param& param, Variables& var)
         if (!restored_state_variable) {
             std::cout << "  RSF restart fallback applied for missing state variable dataset.\n";
         }
+        if (param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_total_strain_rate) {
+            update_strain_rate(var, *var.strain_rate);
+            #pragma acc wait
+        }
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
@@ -391,7 +437,6 @@ void restart(const Param& param, Variables& var)
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-        compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
     }
 
     report_mesh_info(var, "restart");
@@ -437,13 +482,15 @@ void update_mesh(const Param& param, Variables& var)
 
     compute_volume(var, *var.volume);
 
+    // surface_processes() above can move elemmarkers via correct_surface_marker().
+    var.mat->refresh_elem_cache();
+
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
     }
 
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    compute_shape_fn(var, *var.shpdx, *var.shpdy, *var.shpdz);
 
     #pragma acc wait
 
@@ -577,8 +624,10 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
-    report_cpu_runtime_status();
-    report_openacc_runtime_status();
+    // Selects the offload device, so it must precede any compute.
+    init_offload_device();
+    report_host_runtime_status();
+    report_device_runtime_status();
 
     //
     // run simulation
@@ -591,18 +640,23 @@ int main(int argc, const char* argv[])
 
     if (! param.sim.is_restarting) {
         init(param, var);
-
+        var.info_display_next_step = param.sim.info_display_step_interval;
 
         if (param.ic.isostasy_adjustment_time_in_yr > 0) {
             // output.write_exact(var);
             isostasy_adjustment(param, var);
         }
+
+        var.dt = compute_dt(param, var);
+
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
     }
+
+    // var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -683,9 +737,6 @@ int main(int argc, const char* argv[])
     }
 #endif
 
-    var.dt = compute_dt(param, var);
-    var.dt_PT = compute_dt(param, var);
-
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
@@ -693,9 +744,11 @@ int main(int argc, const char* argv[])
 
     // int rheol_type_old = param.mat.rheol_type;
 
-    double starting_time = var.time; // var.time & var.steps might be set in restart()
-    double starting_step = var.steps;
+    const double starting_time = var.reference_frame_time;
+    var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
+    const double starting_step = var.steps;
     int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
@@ -718,7 +771,7 @@ int main(int argc, const char* argv[])
     std::cout << "  Showing model progress every "
               << param.sim.info_display_step_interval
               << " steps.\n";
-    int info_display_next_step = param.sim.info_display_step_interval;
+
     do {
 #ifdef NPROF_DETAIL
         nvtxRangePush("dynearthsol");
@@ -726,11 +779,15 @@ int main(int argc, const char* argv[])
 #endif
         var.steps ++;
         var.time += var.dt;
+        // Pick up what the previous step's phase changes and remeshing moved.
+        var.mat->refresh_elem_cache();
         // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
-        update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+        if (param.control.has_hydraulic_diffusion)
+            update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+
         update_strain_rate(var, *var.strain_rate);
         compute_dvoldt(var, *var.ntmp, *var.etmp);
         compute_edvoldt(var, *var.ntmp, *var.edvoldt);
@@ -740,9 +797,9 @@ int main(int argc, const char* argv[])
             *var.ppressure, *var.dppressure, *var.vel,
             *var.dyn_fric_coeff, *var.state_variable);
 
-	// Nodal Mixed Discretization For Stress
+        // Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
-            NMD_stress(param, var, *var.ntmp, *var.stress, *var.etmp);
+            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
             
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -814,15 +871,20 @@ int main(int argc, const char* argv[])
         }
 
 
-        // if(param.control.has_hydraulic_diffusion && var.steps > 1) // ignoring poroelastic effect due to inital imbalance 
-        if(param.control.has_hydraulic_diffusion) { // ignoring poroelastic effect due to inital imbalance
-            #pragma acc wait // following founction is not ACC parallelized
+        if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
-        }
 
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
+        else if (param.control.rsf_dtheta_max > 0.0) {
+            // Select the next step from the accepted velocity. The GVS mass
+            // must follow the same current rate used by the state bound.
+            var.dt = compute_dt(param, var);
+            compute_mass(param, var, var.max_vbc_val, *var.volume_n,
+                         *var.mass, *var.tmass, *var.hmass, *var.ymass,
+                         *var.tmp_result);
+        }
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
@@ -836,6 +898,8 @@ int main(int argc, const char* argv[])
             // The functions inside this if-block are expensive in computation is expensive,
             // and only changes slowly. Don't have to do it every time step
             phase_changes(param, var);
+            // phase_changes() moved elemmarkers; compute_dt() below reads them.
+            var.mat->refresh_elem_cache();
 
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,
@@ -879,6 +943,9 @@ int main(int argc, const char* argv[])
                 var.output->write(var);
 
                 next_regular_frame ++;
+                var.reference_frame_time = starting_time +
+                    next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
+
             }
         }
 
@@ -904,7 +971,7 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            if (var.steps >= info_display_next_step) {
+            if (var.steps >= var.info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
                 std::cout << "              Step = " << var.steps
                     << ", time = " << std::scientific << std::setprecision(5)
@@ -917,14 +984,17 @@ int main(int argc, const char* argv[])
                 std::cout << "\n";
 
 
-                info_display_next_step = var.steps + param.sim.info_display_step_interval;
+                var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
             }
         }
 #ifdef NPROF_DETAIL
         nvtxRangePop();
 #endif
 
-    } while (var.steps < param.sim.max_steps && var.time <= param.sim.max_time_in_yr * YEAR2SEC);
+    } while (var.steps < param.sim.max_steps &&
+             (var.time <= param.sim.max_time_in_yr * YEAR2SEC ||
+              (param.sim.is_outputting_averaged_fields &&
+               var.steps % param.mesh.quality_check_step_interval != 0)));
 
     monitor_finalize(var);
 

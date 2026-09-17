@@ -93,6 +93,27 @@ public:
     };
 
     //
+    // Component accessor — access all elements for one dimension
+    //
+    struct ComponentAccessor {
+        T*  ptr_;    // a_[d*n_] (SOA) or a_[d] (AoS)
+        int stride_; // 1 (SOA) or N (AoS)
+        int n_;
+
+        T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    struct ConstComponentAccessor {
+        const T* ptr_;
+        int stride_;
+        int n_;
+
+        const T& operator[](int i) const { return ptr_[i * stride_]; }
+        int size() const { return n_; }
+    };
+
+    //
     // View
     //
     struct ConstIndirectAccessor {
@@ -155,19 +176,22 @@ public:
     //
     // I/O and Transition Helpers
     //
-    void load_from_buffer(const T* buffer, std::size_t count) {
-        if (a_ == nullptr)
+    void load_from_buffer(const T* buffer, std::size_t count, bool should_strip = true) {
+        if (a_ == nullptr) {
             a_ = new T[N * count];
-        else
+            n_ = count;
+        } else if (count > std::size_t(n_) || should_strip) {
             this->resize(count, false);
-        n_ = count;
+            n_ = count;
+        }
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(count > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
-                (*this)[i][d] = buffer[i * N + d]; 
+                (*this)[i][d] = buffer[i * N + d];
             }
         }
     }
@@ -185,13 +209,14 @@ public:
 //     }
 
     void pack_to(std::vector<T>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
         std::size_t total_elements = count * N;
 
         buffer.resize(total_elements);
 
 #ifndef ACC
-        #pragma omp parallel for collapse(2) if(n_ > 10000)
+        #pragma omp parallel for default(none) shared(buffer, count) \
+            collapse(2) if(count > 10000)
 #endif
         #pragma acc parallel loop gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
@@ -203,7 +228,7 @@ public:
 
 #ifdef ACC
     void pack_to_xyz_float(std::vector<float3>& buffer, std::size_t limit_size = 0) const {
-        std::size_t count = (limit_size > 0 && limit_size <= n_) ? limit_size : n_;
+        std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
 
         if (buffer.size() < count)
             buffer.resize(count);
@@ -250,7 +275,8 @@ public:
             if (aos_data != nullptr) {
 #ifdef SOA
 #ifndef ACC
-                #pragma omp parallel for collapse(2) if(n_ > 10000)
+                #pragma omp parallel for default(none) shared(aos_data) \
+                    collapse(2) if(n_ > 10000)
 #endif
                 #pragma acc parallel loop gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
@@ -349,6 +375,35 @@ public:
         n_ = 0;
     }
 
+    void fill_component(int d, const T& val = T(0)) {
+        if (!a_ || n_ == 0 || d < 0 || d >= N) return;
+
+        T* ptr = a_;
+        int stride;
+        int offset;
+
+#ifdef SOA
+        stride = 1;
+        offset = d * n_;
+#else
+        stride = N;
+        offset = d;
+#endif
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
+            if(n_ > 10000)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int i = 0; i < n_; ++i) {
+            ptr[offset + i * stride] = val;
+        }
+    }
+
+    void zero_component(int d) {
+        fill_component(d, T(0));
+    }
+
     //
     // index accessing
     //
@@ -382,6 +437,22 @@ public:
         return ConstAccessor{ a_ + i, n_ };
 #else
         return ConstAccessor{ a_ + i*N, 1 };
+#endif
+    }
+
+    ComponentAccessor component(int d) {
+#ifdef SOA
+        return ComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ComponentAccessor{ a_ + d, N, n_ };
+#endif
+    }
+
+    ConstComponentAccessor component_const(int d) const {
+#ifdef SOA
+        return ConstComponentAccessor{ a_ + d * n_, 1, n_ };
+#else
+        return ConstComponentAccessor{ a_ + d, N, n_ };
 #endif
     }
 

@@ -117,6 +117,33 @@ void set_2d_quality_str(std::string &quality, double min_angle)
 }
 
 
+void set_steiner_str(std::string &steiner, double max_steiner_factor, int npoints,
+                     double max_area)
+{
+    // Triangle's -S switch caps the number of Steiner points (vertices not in the
+    // input) it may insert. Without it (steinerleft == -1), Triangle's encroached-
+    // subsegment splitting can fail to terminate when two input segments meet at a
+    // very small angle -- each split encroaches the other, forever (see the loop at
+    // triangle.c splitencsegs()). A cap set well above any healthy remesh bounds this
+    // runaway without changing the mesh in the normal case, because steinerleft never
+    // reaches 0.
+    //
+    // The cap is factor*npoints, so it is only meaningful when the output size stays
+    // close to the input size -- i.e. during remeshing (max_area < 0, no area target).
+    // When an area constraint is active (initial meshing), the legitimate point count
+    // is driven by max_area rather than npoints, so the cap must NOT be applied or it
+    // would truncate a perfectly good mesh.
+    steiner.clear();
+    if (max_steiner_factor > 0 && npoints > 0 && max_area < 0) {
+        long cap = (long)(max_steiner_factor * npoints);
+        if (cap < 1) cap = 1;
+        if (cap > 100000000L) cap = 100000000L; // keep within int, far above any real need
+        steiner += 'S';
+        steiner += std::to_string(cap);
+    }
+}
+
+
 void create_quadrilateral_cells(Variables &var, int *&cells) {
 #ifndef THREED
     cells = new int[(var.nx-1)*(var.nz-1)*4];
@@ -197,7 +224,7 @@ void divide_hexahedron_to_tetrahedra_index(ConstRegularAccessor cell, int order,
             conn[3] = cell[7];
             break;
         default:
-            exit(554);
+            die(EXIT_INTERNAL_UNREACHABLE);
             break;
         }
     } else {
@@ -234,7 +261,7 @@ void divide_hexahedron_to_tetrahedra_index(ConstRegularAccessor cell, int order,
             conn[3] = cell[6];
             break;
         default:
-            exit(555);
+            die(EXIT_INTERNAL_UNREACHABLE);
             break;
         }
     }
@@ -245,7 +272,6 @@ void create_elem_from_cell(const Variables& var, int *&connectivity) {
     connectivity = new int[var.nelem*NODES_PER_ELEM];
 #ifndef THREED
 
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx - 1; ++i) {
         for (int j = 0; j < var.nz - 1; ++j) {
             int idx = i * (var.nz - 1) + j;
@@ -300,7 +326,6 @@ void create_rect_node(const Param& param, const Variables& var, double *&points)
 #endif
 
 #ifndef THREED
-    #pragma acc parallel loop gang vector collapse(2)
     for (int i = 0; i < var.nx; ++i) {
         for (int j = 0; j < var.nz; ++j) {
             points[(j + i * var.nz)*2] = i * dx;
@@ -662,7 +687,7 @@ void new_mesh_regular_equilateral(const Param& param, Variables& var)
 
 void triangulate_polygon
 (double min_angle, double max_area,
- int meshing_verbosity,
+ int meshing_verbosity, double max_steiner_factor,
  int npoints, int nsegments,
  const double *points, const int *segments, const int *segflags,
  const int nregions, const double *regionattributes,
@@ -673,15 +698,16 @@ void triangulate_polygon
     char options[255];
     triangulateio in, out;
 
-    std::string verbosity, vol, quality;
+    std::string verbosity, vol, quality, steiner;
     set_verbosity_str(verbosity, meshing_verbosity);
     set_volume_str(vol, max_area);
     set_2d_quality_str(quality, min_angle);
+    set_steiner_str(steiner, max_steiner_factor, npoints, max_area);
 
     if( nregions > 0 )
-        std::sprintf(options, "%s%spjz%sA", verbosity.c_str(), quality.c_str(), vol.c_str());
+        std::sprintf(options, "%s%spjz%s%sA", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
     else
-        std::sprintf(options, "%s%spjz%s", verbosity.c_str(), quality.c_str(), vol.c_str());
+        std::sprintf(options, "%s%spjz%s%s", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
 
     if( meshing_verbosity >= 0 )
         std::cout << "The meshing option is: " << options << '\n';
@@ -899,25 +925,25 @@ static void mmg_refine_init_mesh_3d(
                     MMG5_ARG_end);
 
     if (MMG3D_Set_meshSize(mmgMesh, cn, ce, 0, cs, 0, 0) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Vertices: pcoord is already AoS x0,y0,z0,... as produced by TetGen
     if (MMG3D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Tetrahedra: MMG is 1-indexed
     int_vec conn1(ce * NODES_PER_ELEM);
     for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
         conn1[i] = pconn[i] + 1;
     if (MMG3D_Set_tetrahedra(mmgMesh, conn1.data(), NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Boundary triangles: MMG is 1-indexed
     int_vec seg1(cs * NODES_PER_FACET);
     for (int i = 0; i < cs * NODES_PER_FACET; ++i)
         seg1[i] = pseg[i] + 1;
     if (MMG3D_Set_triangles(mmgMesh, seg1.data(), psegflag) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Compute uniform or per-region metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
@@ -926,9 +952,9 @@ static void mmg_refine_init_mesh_3d(
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
     if (MMG3D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- MMG parameters ---
     MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0);
@@ -944,8 +970,7 @@ static void mmg_refine_init_mesh_3d(
     // --- Run ---
     const int ier = MMG3D_mmg3dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::cerr << "Error: MMG init mesh refinement failed (strong failure)\n";
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG, "MMG init mesh refinement failed (strong failure)");
     }
 
     // --- Free old coarse arrays ---
@@ -1065,25 +1090,25 @@ static void mmg_refine_init_mesh_2d(
                     MMG5_ARG_end);
 
     if (MMG2D_Set_meshSize(mmgMesh, cn, ce, 0, cs) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Vertices
     if (MMG2D_Set_vertices(mmgMesh, pcoord, NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Triangles
     int_vec conn1(ce * NODES_PER_ELEM);
     for (int i = 0; i < ce * NODES_PER_ELEM; ++i)
         conn1[i] = pconn[i] + 1;
     if (MMG2D_Set_triangles(mmgMesh, conn1.data(), NULL) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // Edges
     int_vec seg1(cs * NODES_PER_FACET);
     for (int i = 0; i < cs * NODES_PER_FACET; ++i)
         seg1[i] = pseg[i] + 1;
     if (MMG2D_Set_edges(mmgMesh, seg1.data(), psegflag) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Compute metric ---
     // cra[e] = region index when per-region (encoded by points_to_mesh), used for connectivity-based projection.
@@ -1092,9 +1117,9 @@ static void mmg_refine_init_mesh_2d(
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
     if (MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, cn, MMG5_Scalar) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
     if (MMG2D_Set_scalarSols(mmgSol, metric.data()) != 1)
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG);
 
     // --- Run ---
     MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0);
@@ -1109,8 +1134,7 @@ static void mmg_refine_init_mesh_2d(
 
     const int ier = MMG2D_mmg2dlib(mmgMesh, mmgSol);
     if (ier == MMG5_STRONGFAILURE) {
-        std::cerr << "Error: MMG2D init mesh refinement failed (strong failure)\n";
-        std::exit(EXIT_FAILURE);
+        die(EXIT_MESH_MMG, "MMG2D init mesh refinement failed (strong failure)");
     }
 
     // --- Free old coarse arrays ---
@@ -1831,12 +1855,12 @@ void my_fgets(char *buffer, std::size_t size, std::FILE *fp,
         if (! s) {
             std::cerr << "Error: reading line " << lineno
                       << " of '" << filename << "'\n";
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if (std::strlen(buffer) == size-1 && buffer[size-2] != '\n') {
             std::cerr << "Error: reading line " << lineno
                       << " of '" << filename << "', line is too long.\n";
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
 
         // check for blank lines and comments
@@ -1870,7 +1894,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     std::FILE *fp = std::fopen(param.mesh.poly_filename.c_str(), "r");
     if (! fp) {
         std::cerr << "Error: Cannot open poly_filename '" << param.mesh.poly_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     int lineno = 0;
@@ -1887,7 +1911,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 4) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (dim != NDIMS ||
@@ -1895,7 +1919,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             nbdrym != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1914,12 +1938,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NDIMS+1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (k != i) {
             std::cerr << "Error: node number is continuous from 0 at line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1933,13 +1957,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 2) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (has_bdryflag != 1) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -1956,13 +1980,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 3) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (npolygons <= 0 ||
             nholes != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (bdryflag == 0) goto flag_ok;
         for (int j=0; j<nbdrytypes; j++) {
@@ -1970,7 +1994,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         }
         std::cerr << "Error: bdry_flag has multiple bits set in line " << lineno
                   << " of '" << param.mesh.poly_filename << "'\n";
-        std::exit(1);
+        die(EXIT_CONFIG_DATA);
     flag_ok:
         init_segflags[i] = bdryflag;
 
@@ -1988,7 +2012,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             if (nvertex < NODES_PER_FACET || nvertex > 9999) {
                 std::cerr << "Error: unsupported number of polygon points in line " << lineno
                           << " of '" << param.mesh.poly_filename << "'\n";
-                std::exit(1);
+                die(EXIT_CONFIG_DATA);
             }
 
             f.polygonlist[j].vertexlist = new int[nvertex];
@@ -2000,7 +2024,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                     std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
                               <<"] in line " << lineno << " of '"
                               << param.mesh.poly_filename << "'\n";
-                    std::exit(1);
+                    die(EXIT_CONFIG_DATA);
                 }
             }
         }
@@ -2017,7 +2041,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NODES_PER_FACET+2) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (bdryflag == 0) goto flag_ok;
         for (int j=0; j<nbdrytypes; j++) {
@@ -2025,7 +2049,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         }
         std::cerr << "Error: bdry_flag has multiple bits set in line " << lineno
                   << " of '" << param.mesh.poly_filename << "'\n";
-        std::exit(1);
+        die(EXIT_CONFIG_DATA);
     flag_ok:
         init_segflags[i] = bdryflag;
     }
@@ -2036,7 +2060,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                 std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
                           <<"] in line " << lineno << " of '"
                           << param.mesh.poly_filename << "'\n";
-                std::exit(1);
+                die(EXIT_CONFIG_DATA);
             }
         }
     }
@@ -2051,13 +2075,13 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if (nholes != 0) {
             std::cerr << "Error: unsupported value in line " << lineno
                       << " of '" << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -2070,12 +2094,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != 1) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
         if (nregions <= 0) {
             std::cerr << "Error: nregions <= 0, at line " << lineno << " of '"
                       << param.mesh.poly_filename << "'\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
     }
 
@@ -2095,13 +2119,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         if (n != NDIMS+3) {
             std::cerr << "Error: parsing line " << lineno << " of '"
                       << param.mesh.poly_filename << "'. "<<NDIMS+3<<" values should be given but only "<<n<<" found.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA);
         }
 
         if ( x[NDIMS] < 0 || x[NDIMS] >= param.mat.nmat ) {
             std::cerr << "Error: "<<NDIMS+2<<"-th value in line "<<lineno<<" should be >=0 and < "<<param.mat.nmat<<" (=mat.num_materials) but is "<<x[NDIMS]<<"\n";
-            std::cerr << "Note that this parameter is directly used as the index of mat. prop. arrays.\n";
-            std::exit(1);
+            die(EXIT_CONFIG_DATA, "Note that this parameter is directly used as the index of mat. prop. arrays.");
         }
 
         if ( x[NDIMS+1] > 0 ) {
@@ -2232,8 +2255,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 {
 
 #ifndef THREED
-    std::cerr << "Error: Importing an exofile currently works in 3D only.\n";
-    std::exit(2);
+    die(EXIT_UNSUPPORTED_DIM, "Importing an exofile currently works in 3D only.");
 #endif
 
     // Open an .exo file.
@@ -2247,7 +2269,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                          &version); /* ExodusII library version */
     if (exoid < 0) {
         std::cerr << "Error: Cannot open exo_filename '" << param.mesh.exo_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     // Read database parameters.
@@ -2259,7 +2281,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                          &num_elem_blk, &num_node_sets, &num_side_sets);
     if( error != 0 ) {
         std::cerr << "Error: Unable to read database parameters from '" << param.mesh.exo_filename << std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
     var.nnode = num_nodes;
     var.nelem = num_elem;
@@ -2271,7 +2293,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     if( param.mat.nmat != num_elem_blk) {
         std::cerr <<"param.mat.nmat is not equal to # of element blocks in this exo file!"<<std::endl;
         std::cerr <<"Check if your material parameters are properly set!!"<<std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
 
     // Assign node coordinates.
@@ -2282,7 +2304,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_coord (exoid, x, y, z);
     if( error != 0 ) {
         std::cerr << "Error: Unable to read coordinates from '" << param.mesh.exo_filename << "'\n";
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
 
     // assign node coordinates to var.coord.
@@ -2313,7 +2335,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_ids (exoid, EX_ELEM_BLOCK, ids);
     if( error != 0 ) {
         std::cerr << "Error: Unable to get element block ids." << std::endl;
-        std::exit(2);
+        die(EXIT_IO_RW);
     }
     // - Read element block parameters.
     for (int i=0; i<num_elem_blk; i++) {
@@ -2324,11 +2346,11 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         if( error != 0 ) {
             std::cerr << "Error: Unable to element block " << ids[i] ;
             std::cerr << " out of " << num_elem_blk << " blocks." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if( NODES_PER_ELEM != num_nodes_per_elem[i] ) {
             std::cerr << "Error: Element has " << num_nodes_per_elem[i] << " nodes per element but should have "<<NODES_PER_ELEM<<" because element type should be uniformly tetrahedral."<< std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
     }
 
@@ -2358,7 +2380,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         if( error != 0 ) {
             std::cerr << "Error: Unable to connectivity for element block " << ids[i] ;
             std::cerr << " out of " << num_elem_blk << " blocks." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
     }
 
@@ -2396,7 +2418,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     error = ex_get_ids (exoid, EX_SIDE_SET, ids);
     if( error != 0 ) {
             std::cerr << "Error: Unable to get side set ids." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
     }
     var.nseg = 0;
     for(int i=0; i<num_side_sets; i++) {
@@ -2404,7 +2426,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
                                        &(num_df_in_set[i]));
         if( error != 0 ) {
             std::cerr << "Error: Unable to read "<<i<<"-th side set parameters." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         var.nseg += num_sides_in_set[i];
     }
@@ -2433,14 +2455,14 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
         error = ex_get_set (exoid, EX_SIDE_SET, ids[i], elem_list[i], side_list[i]);
         if( error != 0 ) {
             std::cerr << "Error: Unable to read "<< i <<"-th side set." << std::endl;
-            std::exit(2);
+            die(EXIT_IO_RW);
         }
         if (num_df_in_set != NULL) {
             error = ex_get_set_dist_fact (exoid, EX_SIDE_SET, ids[i], dist_fact[i]);
             if( error != 0 ) {
                 std::cerr << "Error: Unable to read "<< i;
                 std::cerr <<"-th side set's distribution factor list." << std::endl;
-                std::exit(2);
+                die(EXIT_IO_RW);
             }
         }
     }
@@ -2599,7 +2621,7 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
 #else
 
     triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity,
+                        mesh.meshing_verbosity, mesh.max_steiner_factor,
                         npoints, n_init_segments, points,
                         init_segments, init_segflags,
                         n_regions, regattr,
@@ -2615,7 +2637,7 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
 #else
         std::cerr << "Error: triangulation failed\n";
 #endif
-        std::exit(10);
+        die(EXIT_MESH_TETGEN);
     }
 
 }
@@ -2632,7 +2654,7 @@ void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
     /* For triangulation of boundary surfaces in 3D */
 
     triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity,
+                        mesh.meshing_verbosity, mesh.max_steiner_factor,
                         npoints, n_init_segments, points,
                         init_segments, init_segflags,
                         n_regions, regattr,
@@ -2641,8 +2663,7 @@ void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
                         &psegment, &psegflag, &pregattr);
 
     if (nelem <= 0) {
-        std::cerr << "Error: surface triangulation failed\n";
-        std::exit(10);
+        die(EXIT_MESH_TETGEN, "surface triangulation failed");
     }
 #endif
 }
@@ -2695,19 +2716,24 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                           param.mesh.zlength};
     size_t_vec idx(NDIMS);
     sortindex(lengths, idx);
-    int dmin, dmid, dmax;
+    int dmin, dmax;
+#ifdef THREED
+    int dmid;   // the middle axis only enters the 3D sort weight below
+#endif
 
     if (param.mesh.meshing_elem_shape == 0) {
         dmin = idx[0];
+#ifdef THREED
         dmid = idx[1];
+#endif
         dmax = idx[NDIMS-1];
     } else {
 #ifdef THREED
         dmax = 0;
+        dmid = NDIMS-2;
 #else
         dmax = NDIMS-2;
 #endif
-        dmid = NDIMS-2;
         dmin = NDIMS-1;
     }
     //
@@ -2885,9 +2911,11 @@ void create_top_elems(Variables& var)
     {
         int n = top_nodes[i];
         // grep the element connected surface
-        for (std::size_t j=0; j<(*var.support)[n].size(); j++)
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        for (int j=0; j<npatch; j++)
             //use set to avoid duplicated elements.
-            elem_set.insert((*var.support)[n][j]);
+            elem_set.insert(patch[j]);
     }
     // turn set to vector
     for (auto it = elem_set.begin(); it != elem_set.end();it++)
@@ -2896,13 +2924,43 @@ void create_top_elems(Variables& var)
     var.ntop_elems = telems.size();
 
     var.top_elems = new int_vec(var.ntop_elems);
-    for (std::size_t i=0; i<var.ntop_elems; i++)
+    for (int i=0; i<var.ntop_elems; i++)
         (*var.top_elems)[i] = telems[i];
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
+
+// Inverse of elem_and_nodes, which the caller must have filled. Same two passes
+// as create_support(); lidx is left empty because only facet ids are read.
+static void create_support_surf(SurfaceInfo& surfinfo, int ntop, size_t etop)
+{
+    Support& sup = surfinfo.support_surf;
+    // assign, not resize: pass 1 accumulates, so idx must start zeroed.
+    sup.idx_data.assign(ntop + 1, 0);
+
+    // Pass 1: count the facets touching each surface node.
+    for (size_t i=0; i<etop; i++)
+        for (int k=0; k<NDIMS; k++)
+            sup.idx_data[(*surfinfo.elem_and_nodes)[i][k] + 1]++;
+    // prefix-sum counts into start offsets
+    for (int n=1; n<=ntop; ++n)
+        sup.idx_data[n] += sup.idx_data[n-1];
+
+    sup.arr_data.resize(sup.idx_data[ntop]);
+
+    // Pass 2: fill, in the same facet order as pass 1, so each node's patch comes
+    // out ascending in facet id -- the order the total_dx gather sums in.
+    {
+        int_vec cursor(sup.idx_data.begin(), sup.idx_data.end() - 1);
+        for (size_t i=0; i<etop; i++)
+            for (int k=0; k<NDIMS; k++)
+                sup.arr_data[cursor[(*surfinfo.elem_and_nodes)[i][k]]++] = i;
+    }
+    sup.rebind();
+}
+
 
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
 {
@@ -2956,23 +3014,17 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
 
-    delete surfinfo.node_and_elems;
-    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
-        auto j = (*(var.bfacets[iboundz1]))[i];
-        int e = j.first;
-        int f = j.second;
+        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
 
-        (*surfinfo.top_facet_elems)[i] = e;
-
-        // the nodes of element
-        for (int k=0; k<NDIMS; k++) {
-            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n;
-            // store the elements connect to node
-            (*surfinfo.node_and_elems)[n].push_back(i);
-        }
+        // Same facets in the same order, so connectivity_surface has already gathered
+        // this facet's global node ids: elem_and_nodes is just those mapped into the
+        // surface numbering -- one contiguous read, not a second random gather.
+        for (int k=0; k<NDIMS; k++)
+            (*surfinfo.elem_and_nodes)[i][k] =
+                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
+    create_support_surf(surfinfo, ntop, etop);
 
 }
 
@@ -3033,22 +3085,17 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
-    surfinfo.node_and_elems = new int_vec2D(ntop,int_vec(0));
     for (size_t i=0; i<etop; i++) {
-        auto j = (*(var.bfacets[iboundz1]))[i];
-        int e = j.first;
-        int f = j.second;
+        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
 
-        (*surfinfo.top_facet_elems)[i] = e;
-
-        // the nodes of element
-        for (int k=0; k<NDIMS; k++) {
-            int n = surfinfo.arctop_nodes[(*var.connectivity)[e][NODE_OF_FACET[f][k]]];
-            (*surfinfo.elem_and_nodes)[i][k] = n;
-            // store the elements connect to node
-            (*surfinfo.node_and_elems)[n].push_back(i);
-        }
+        // Same facets in the same order, so connectivity_surface has already gathered
+        // this facet's global node ids: elem_and_nodes is just those mapped into the
+        // surface numbering -- one contiguous read, not a second random gather.
+        for (int k=0; k<NDIMS; k++)
+            (*surfinfo.elem_and_nodes)[i][k] =
+                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
+    create_support_surf(surfinfo, ntop, etop);
 
     //***** to do *****
 //    surface_edhacc_geometry_interpolation(var,info);
@@ -3172,7 +3219,7 @@ void create_boundary_facets(Variables& var)
                 #pragma omp critical
                 {
                     std::cerr << "Error: " << i << "-th segment is not on any element\n";
-                    std::exit(12);
+                    die(EXIT_INTERNAL_UNREACHABLE);
                 }
             }
         }
@@ -3236,60 +3283,53 @@ void create_boundary_facets(Variables& var)
 }
 
 
-int get_support(const Variables& var, const int inode, const int isup)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    return (*var.support_arr)[start + isup];
-}
-
-int get_sup_size(const Variables& var, const int inode)
-{
-    const int start = (inode == 0) ? 0 : (*var.support_idx)[inode-1];
-    const int end = (*var.support_idx)[inode];
-    return end - start;
-}
-
 
 void create_support(Variables& var)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    var.support = new int_vec2D(var.nnode);
-    var.support_idx = new int_vec(var.nnode, 0);
+    // assign, not resize: pass 1 accumulates, so idx must start zeroed.
+    var.support.idx_data.assign(var.nnode + 1, 0);
 
-    // create the inverse mapping of connectivity
+    // Pass 1: count the elements supporting each node.
     for (int e=0; e<var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
-        for (int i=0; i<NODES_PER_ELEM; ++i) {
-            (*var.support)[conn[i]].push_back(e);
-            (*var.support_idx)[conn[i]]++;
+        for (int i=0; i<NODES_PER_ELEM; ++i)
+            var.support.idx_data[conn[i] + 1]++;
+    }
+    // prefix-sum counts into start offsets
+    for (int n=1; n<=var.nnode; ++n)
+        var.support.idx_data[n] += var.support.idx_data[n-1];
+
+    int nsup = var.support.idx_data[var.nnode];
+
+    var.support.arr_data.resize(nsup);
+    var.support.lidx_data.resize(nsup);
+
+    // Pass 2: fill, in the same element order as pass 1, so each node's patch
+    // comes out ascending in element id -- the order every gather sums in.
+    {
+        int_vec cursor(var.support.idx_data.begin(), var.support.idx_data.end() - 1);
+        for (int e=0; e<var.nelem; ++e) {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            for (int i=0; i<NODES_PER_ELEM; ++i) {
+                const int n = conn[i];
+                const int slot = cursor[n]++;
+                var.support.arr_data[slot] = e;
+                var.support.lidx_data[slot] = i;   // free here: it is the loop counter
+            }
         }
     }
-    // create suppert 1D for ACC
-    for (int n=1; n<var.nnode; ++n)
-        (*var.support_idx)[n] = (*var.support_idx)[n-1] + (*var.support_idx)[n];
+    var.support.rebind();
 
-    int nsup = (*var.support_idx)[var.nnode-1];
-
-    var.support_arr = new int_vec((*var.support_idx)[var.nnode-1]);
-
-    // fill support_arr
-    for (int n=0; n<var.nnode; ++n) {
-        int start = (n == 0) ? 0 : (*var.support_idx)[n-1];
-        int end = (*var.support_idx)[n];
-        for (int i=start; i<end; ++i) {
-            (*var.support_arr)[i] = (*var.support)[n][i-start];
-        }
-    }
-    // std::cout << "support:\n";
-    // print(std::cout, *var.support);
-    // std::cout << "\n";
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
 
+// Currently unused: all three call sites are commented out, so var.neighbor /
+// var.contact / var.ctmp are written and read by nobody.
 void create_neighbor(Variables& var)
 {
 #ifdef NPROF_DETAIL
@@ -3315,7 +3355,8 @@ void create_neighbor(Variables& var)
     #pragma acc parallel loop collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
         for (int i=0; i<NODES_PER_ELEM; ++i) {
-            if ((*var.neighbor)[e][i] != -1) continue; // already set
+            // No "already set" early-exit: it would race the cross-row write below, and the
+            // `neigh > e` filter already registers each internal facet exactly once.
             int n[NDIMS], n2[NDIMS];
             for (int j=0; j<NDIMS; ++j)
                 n[j] = (*var.connectivity)[e][NODE_OF_FACET[i][j]];
@@ -3328,9 +3369,11 @@ void create_neighbor(Variables& var)
                 }
             }
 
-            const int_vec sup = (*var.support)[n[0]];
+            // CSR row, not a copy of it: copying the patch heap-allocated per iteration.
+            const int nsup = var.support.size(n[0]);
+            const int* sup = var.support.patch(n[0]);
             bool found = false;
-            for (int j=0; j<sup.size() && !found; ++j) {
+            for (int j=0; j<nsup && !found; ++j) {
                 int neigh = sup[j];
                 if (neigh > e) {
                     ConstConnAccessor conn2 = (*var.connectivity)[neigh];
@@ -3426,7 +3469,7 @@ void create_new_mesh(const Param& param, Variables& var)
             new_mesh_regular_equilateral(param, var);
         } else {
             std::cout << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
-            std::exit(10);
+            die(EXIT_CONFIG_VALUE);
         }
         break;
     case 2:
@@ -3441,12 +3484,12 @@ void create_new_mesh(const Param& param, Variables& var)
         new_mesh_from_exofile(param, var);
 #else
         std::cout << "Error: Install Exodus library and rebuild with 'useexo' turned on in Makefile." << std::endl;
-        std::exit(1);
+        die(EXIT_UNSUPPORTED_LIB);
 #endif
         break;
     default:
         std::cout << "Error: unknown meshing option: " << param.mesh.meshing_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     if (param.mesh.is_discarding_internal_segments)
@@ -3462,69 +3505,42 @@ void create_new_mesh(const Param& param, Variables& var)
     // std::cout << '\n';
 }
 
-
-void elem_center(const array_t &coord, const conn_t &connectivity, array_t& center)
+// Average per-node scalar values to element centroids (simple arithmetic mean over vertices).
+template<typename T_in, typename T_out>
+void average_nodal_to_elem(T_in nodal, const conn_t &connectivity,
+                                   int nelem, T_out elem, bool is_surface)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    int nelem = connectivity.size();
+
+    int nnodes_per_elem = is_surface ? NODES_PER_FACET : NODES_PER_ELEM;
 
 #ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        // const int* conn = connectivity[e];
-        for(int d=0; d<NDIMS; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_ELEM; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_ELEM;
-        }
-    }
-
-    #pragma acc wait
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
-void facet_center(const array_t &coord, const conn_t &connectivity, array_t& center)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    int nelem = connectivity.size();
-
-#ifndef ACC
-    #pragma omp parallel for default(none)          \
-        shared(nelem, coord, connectivity, center)
-#endif
-    #pragma acc parallel loop gang vector collapse(2) async
-    for(int e=0; e<nelem; e++) {
-        for(int d=0; d<NDIMS-1; d++) {
-            double sum = 0;
-            for(int k=0; k<NODES_PER_FACET; k++) {
-                sum += coord[connectivity[e][k]][d];
-            }
-            center[e][d] = sum / NODES_PER_FACET;
-        }
-    }
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(nelem, center)
+    #pragma omp parallel for default(none) \
+            shared(nodal, connectivity, nelem, elem, nnodes_per_elem)
 #endif
     #pragma acc parallel loop gang vector async
-    for(int e=0; e<nelem; e++)
-        center[e][NDIMS-1] = 0.;
-
-    #pragma acc wait
-
+    for (int e = 0; e < nelem; ++e) {
+        ConstConnAccessor conn = connectivity[e];
+        double avg = 0.0;
+        for (int k = 0; k < nnodes_per_elem; ++k)
+            avg += nodal[conn[k]];
+        elem[e] = avg / nnodes_per_elem;
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
 }
+
+template
+void average_nodal_to_elem<array_t::ConstComponentAccessor, array_t::ComponentAccessor>(
+    array_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, array_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<tensor_t::ConstComponentAccessor, tensor_t::ComponentAccessor>(
+    tensor_t::ConstComponentAccessor nodal, 
+    const conn_t &connectivity, int nelem, tensor_t::ComponentAccessor elem, bool);
+template
+void average_nodal_to_elem<const double*, double*>(const double* nodal, 
+    const conn_t &connectivity, int nelem, double* elem, bool);

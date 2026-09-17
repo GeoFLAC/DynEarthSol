@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <iostream>
@@ -7,9 +8,59 @@
 #include "matprops.hpp"
 #include "utils.hpp"
 #include "geometry.hpp"
+#include "fields.hpp"
 #include "bc.hpp"
 #include "mesh.hpp"
 #include "output.hpp"
+
+#pragma acc routine seq
+static inline double current_strain_rate_invariant(
+    const Variables &var, int e)
+{
+#ifdef THREED
+    double shpdx[NODES_PER_ELEM];
+    double shpdy[NODES_PER_ELEM];
+    double shpdz[NODES_PER_ELEM];
+    get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+    double shpdx[NODES_PER_ELEM];
+    double shpdz[NODES_PER_ELEM];
+    get_local_shape_fn(var, e, shpdx, shpdz);
+#endif
+    ConstArrayIndirectAccessor v =
+        var.vel->view_const((*var.connectivity)[e]);
+    double strain_rate[NSTR] = {0.0};
+
+    #pragma acc loop seq
+    for (int i = 0; i < NODES_PER_ELEM; ++i) {
+        strain_rate[0] += v[i][0] * shpdx[i];
+#ifdef THREED
+        strain_rate[1] += v[i][1] * shpdy[i];
+        strain_rate[2] += v[i][2] * shpdz[i];
+        strain_rate[3] +=
+            0.5 * (v[i][0] * shpdy[i] + v[i][1] * shpdx[i]);
+        strain_rate[4] +=
+            0.5 * (v[i][0] * shpdz[i] + v[i][2] * shpdx[i]);
+        strain_rate[5] +=
+            0.5 * (v[i][1] * shpdz[i] + v[i][2] * shpdy[i]);
+#else
+        strain_rate[1] += v[i][1] * shpdz[i];
+        strain_rate[2] +=
+            0.5 * (v[i][0] * shpdz[i] + v[i][1] * shpdx[i]);
+#endif
+    }
+
+    return second_invariant(strain_rate);
+}
+
+#pragma acc routine seq
+static inline double mass_scaling_modulus(
+    const Param& param, const MatProps& mat, int e)
+{
+    return (param.control.mass_scaling_reference_speed ==
+            mass_scaling_speed_bulk) ?
+        mat.bulkm(e) : mat.shearm(e);
+}
 
 /* Given two points, returns the distance^2 */
 template <typename T>
@@ -144,7 +195,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
         shared(coord, connectivity, volume)
 #endif
     #pragma acc parallel loop gang vector async
-    for (int e=0; e<volume.size(); ++e) {
+    for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
         int n2 = connectivity[e][2];
@@ -228,10 +279,12 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dvoldt[n] = 0.;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-	        dvoldt[n] += etmp[*e];
-        dvoldt[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0.;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dvoldt[n] = acc / (*var.volume_n)[n];
     }
 
     // std::cout << "dvoldt:\n";
@@ -276,48 +329,13 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 }
 
 
-void NMD_stress(const Param& param, const Variables &var,
-    double_vec &dp_nd, tensor_t& stress, double_vec &etmp)
+void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
     // dp_nd is the pressure change, weighted by the element volume,
     // lumped onto the nodes.
-
-//    double **centroid = elem_center(*var.coord, *var.connectivity); // centroid of elements
-/*
-    // weight with inverse distance
-    if(false) {
-        #pragma omp parallel for default(none) shared(var,centroid,tmp_result)
-        for (int e=0;e<var.nelem;e++) {
-            const auto conn = (*var.connectivity)[e];
-            for (int i=0; i<NODES_PER_ELEM; ++i) {
-                const double *d = (*var.coord)[conn[i]];
-                tmp_result[i][e] = 1. / sqrt( dist2(d, centroid[e])  );
-                tmp_result[i + NODES_PER_ELEM][e] = tmp_result[i][e] * (*var.dpressure)[e];
-            }
-        }
-
-        #pragma omp parallel for default(none) shared(var,dp_nd,tmp_result)
-        for (int n=0;n<var.nnode;n++) {
-            double dist_inv_sum = 0.;
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                const auto conn = (*var.connectivity)[*e];
-                for (int i=0;i<NODES_PER_ELEM;i++) {
-                    if (n == conn[i]) {
-                        dist_inv_sum += tmp_result[ i ][*e];
-                        dp_nd[n] += tmp_result[i + NODES_PER_ELEM][*e];
-                        break;
-                    }
-                }
-            }
-            dp_nd[n] /= dist_inv_sum;
-        }
-
-    // weight with volumn
-    } else {
-        */
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp)
@@ -332,35 +350,20 @@ void NMD_stress(const Param& param, const Variables &var,
 #endif
     #pragma acc parallel loop gang vector async
     for (int n=0;n<var.nnode;n++) {
-        dp_nd[n] = 0;
-        for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e)
-            dp_nd[n] += etmp[*e];
-        dp_nd[n] /= (*var.volume_n)[n];
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        dp_nd[n] = acc / (*var.volume_n)[n];
     }
-//    }
 
-    /* dp_el is the averaged (i.e. smoothed) dp_nd on the element.
-     */
+    // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dp_nd, stress)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
-
-        double factor;
-        switch (param.mat.rheol_type) {
-        case MatProps::rh_viscous:
-        case MatProps::rh_maxwell:
-        case MatProps::rh_evp:
-            if ((*var.viscosity)[e] < param.control.mixed_stress_reference_viscosity)
-                factor = 0.;
-            else
-                factor = std::min((*var.viscosity)[e] / (param.control.mixed_stress_reference_viscosity * 10.), 1.);
-            break;
-        default:
-            factor = 1;
-        }
-
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -371,21 +374,1161 @@ void NMD_stress(const Param& param, const Variables &var,
 
     	TensorAccessor s = stress[e];
 
-
 	    double dp_orig = (*var.dpressure)[e];
-        double ddp = ( - dp_orig + dp_el ) / NDIMS * factor;
+        double ddp = ( - dp_orig + dp_el ) / NDIMS;
 	    for (int i=0; i<NDIMS; ++i)
             s[i] += ddp;
     }
 
-//    delete [] centroid[0];
-//    delete [] centroid;
 #ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
-double compute_dt(const Param& param, Variables& var)
+// ============================================================
+// SPR (Superconvergent Patch Recovery) stress computation
+// ============================================================
+
+// Fit a linear polynomial sigma*(dx, dy) = a0 + a1*dx + a2*dy to the stress
+// values at element centroids in a node's patch, using RELATIVE coordinates
+// (centroid of the patch's element centroids as origin).  Evaluate at the
+// node's relative coordinates.
+//
+// Use relative coordinates to lower the matrix condition number
+// and prevent numerical precision loss in double precision.
+//
+// Returns true if the Cramer solve succeeded; false if degenerate (fallback).
+#pragma acc routine seq
+static bool spr_solve_centered(const double A[3][3], const double b[3],
+                               const double dxi, const double dyi,
+                               double &result)
+{
+    const double M00 = A[1][1]*A[2][2] - A[1][2]*A[1][2];
+    const double M01 = A[0][1]*A[2][2] - A[1][2]*A[0][2];
+    const double M02 = A[0][1]*A[1][2] - A[1][1]*A[0][2];
+    const double det = A[0][0]*M00 - A[0][1]*M01 + A[0][2]*M02;
+
+    // Scale-adaptive singularity threshold: A[1][1] ~ Σdx², A[2][2] ~ Σdz²
+    // both O(h²) with patch-relative coords — well-conditioned.
+    const double scale = A[0][0] * (A[1][1] > A[2][2] ? A[1][1] : A[2][2]);
+    if (scale == 0.0 || fabs(det) < 1e-6 * scale)
+        return false;
+
+    const double inv_det = 1.0 / det;
+
+    const double a0 = inv_det * (
+          b[0]    * M00
+        - A[0][1] * (b[1]*A[2][2] - A[1][2]*b[2])
+        + A[0][2] * (b[1]*A[1][2] - A[1][1]*b[2]));
+
+    const double a1 = inv_det * (
+          A[0][0] * (b[1]*A[2][2] - A[1][2]*b[2])
+        - b[0]    * M01
+        + A[0][2] * (A[0][1]*b[2] - b[1]*A[0][2]));
+
+    const double a2 = inv_det * (
+          A[0][0] * (A[1][1]*b[2] - b[1]*A[1][2])
+        - A[0][1] * (A[0][1]*b[2] - b[1]*A[0][2])
+        + b[0]    * M02);
+
+    result = a0 + a1*dxi + a2*dyi;
+    return true;
+}
+
+#ifdef THREED
+// Fit linear polynomial sigma*(dx,dy,dz) = a0 + a1*dx + a2*dy + a3*dz to element
+// centroid values in the patch.  Uses Gaussian elimination with partial pivoting
+// on the 4×4 normal system.  Returns true on success; false if the patch is
+// degenerate (fewer than 4 independent directions → fallback).
+#pragma acc routine seq
+static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
+                                   const double dxi, const double dyi, const double dzi,
+                                   double &result)
+{
+    // Per-column ∞-norms of the original A, used as per-step singularity thresholds.
+    // Column 0 scale ~ n (count); columns 1–3 scale ~ n·h² (patch-relative coords).
+    double col_scale[4] = {};
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) {
+            const double v = fabs(A[i][j]);
+            if (v > col_scale[j]) col_scale[j] = v;
+        }
+    if (col_scale[0] == 0.0) return false;
+
+    // Augmented system [A | b]
+    double M[4][5];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) M[i][j] = A[i][j];
+        M[i][4] = b[i];
+    }
+
+    for (int col = 0; col < 4; ++col) {
+        int pivot_row = col;
+        double pval = fabs(M[col][col]);
+        for (int row = col+1; row < 4; ++row) {
+            const double v = fabs(M[row][col]);
+            if (v > pval) { pval = v; pivot_row = row; }
+        }
+        // col_scale[col]==0 means that entire column of A was zero (degenerate patch,
+        // e.g. all centroids at the same depth) → rank-deficient → fall back.
+        if (col_scale[col] == 0.0 || pval < 1e-6 * col_scale[col]) return false;
+
+        if (pivot_row != col)
+            for (int j = 0; j <= 4; ++j) {
+                double tmp = M[col][j]; M[col][j] = M[pivot_row][j]; M[pivot_row][j] = tmp;
+            }
+
+        const double inv_pivot = 1.0 / M[col][col];
+        for (int row = col+1; row < 4; ++row) {
+            const double factor = M[row][col] * inv_pivot;
+            for (int j = col; j <= 4; ++j) M[row][j] -= factor * M[col][j];
+        }
+    }
+
+    double x[4];
+    for (int i = 3; i >= 0; --i) {
+        double s = M[i][4];
+        for (int j = i+1; j < 4; ++j) s -= M[i][j] * x[j];
+        x[i] = s / M[i][i];
+    }
+
+    result = x[0] + x[1]*dxi + x[2]*dyi + x[3]*dzi;
+    return true;
+}
+#endif // THREED
+
+// Volume-weighted average of element stress values in the patch.
+// Used as fallback when the SPR normal matrix is near-singular, and as a
+// clamp range for the polynomial result to prevent out-of-range extrapolation.
+#pragma acc routine seq
+static double spr_volume_weighted_avg_strided(const int npatch, const int* patch, 
+                                              const double_vec &elem_volume, 
+                                              const double* ptr, 
+                                              int stride) 
+{
+    double sum_w = 0.0, sum_ws = 0.0;
+    for (int jp = 0; jp < npatch; ++jp) {
+        int e = patch[jp];
+        double w = elem_volume[e];
+        sum_ws += w * ptr[e * stride]; 
+        sum_w  += w;
+    }
+    return (sum_w > 0.0) ? sum_ws / sum_w : 0.0;
+}
+
+// # of max spr fields, 4 for 2D, 6 for 3D
+#define MAX_SPR_FIELDS (NDIMS*2)
+
+// Compute SPR nodal values
+static void spr_fused_fields(const Variables &var, 
+                             const double* const in_ptrs[], const int in_strides[],
+                             double* const out_ptrs[], const int out_strides[], 
+                             int num_fields)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, in_ptrs, in_strides, out_ptrs, \
+                out_strides, num_fields)
+#endif
+    #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
+                in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
+    for (int i = 0; i < var.nnode; ++i) {
+        const int npatch = var.support.size(i);
+
+        double smin[MAX_SPR_FIELDS], smax[MAX_SPR_FIELDS];
+        const int* patch = var.support.patch(i);
+        const int e0 = patch[0];
+        
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            smin[f] = smax[f] = in_ptrs[f][e0 * in_strides[f]];
+        }
+
+        double x0 = 0.0, y0 = 0.0;
+#ifdef THREED
+        double z0 = 0.0;
+#endif
+
+        // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
+        #pragma acc loop seq
+        for (int jp = 0; jp < npatch; ++jp) {
+            const int e = patch[jp];
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
+            double cx = 0.0, cy = 0.0;
+#ifdef THREED
+            double cz = 0.0;
+#endif
+            #pragma acc loop seq
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                cx += ck[k][0];
+                cy += ck[k][1];
+#ifdef THREED
+                cz += ck[k][2];
+#endif
+            }
+            cx /= NODES_PER_ELEM;
+            cy /= NODES_PER_ELEM;
+            x0 += cx;
+            y0 += cy;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+            z0 += cz;
+#endif
+
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                if (s < smin[f]) smin[f] = s;
+                if (s > smax[f]) smax[f] = s;
+            }
+        }
+        x0 /= npatch; y0 /= npatch;
+#ifdef THREED
+        z0 /= npatch;
+#endif
+        double A[NODES_PER_ELEM][NODES_PER_ELEM] = {};
+        double b_vec[MAX_SPR_FIELDS][NODES_PER_ELEM] = {};
+
+        // build A and b_vec for all fields in the patch, 
+        // with shared loops and Stride-aware access
+        #pragma acc loop seq
+        for (int jp = 0; jp < npatch; ++jp) {
+            const int e = patch[jp];
+            ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
+            double cx = 0.0, cy = 0.0;
+#ifdef THREED
+            double cz = 0.0;
+#endif
+            #pragma acc loop seq
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                cx += ck[k][0];
+                cy += ck[k][1];
+#ifdef THREED
+                cz += ck[k][2];
+#endif
+            }
+            cx /= NODES_PER_ELEM;
+            cy /= NODES_PER_ELEM;
+#ifdef THREED
+            cz /= NODES_PER_ELEM;
+#endif
+
+            const double dx = cx - x0;
+            const double dy = cy - y0;
+#ifdef THREED
+            const double dz = cz - z0;
+#endif
+
+            A[0][0] += 1.0;
+            A[0][1] += dx;    A[1][0] = A[0][1];
+            A[0][2] += dy;    A[2][0] = A[0][2];
+            A[1][1] += dx*dx;
+            A[1][2] += dx*dy; A[2][1] = A[1][2];
+            A[2][2] += dy*dy;
+#ifdef THREED
+            A[0][3] += dz;    A[3][0] = A[0][3];
+            A[1][3] += dx*dz; A[3][1] = A[1][3];
+            A[2][3] += dy*dz; A[3][2] = A[2][3];
+            A[3][3] += dz*dz;
+#endif
+
+            #pragma acc loop seq
+            for (int f = 0; f < num_fields; ++f) {
+                double s = in_ptrs[f][e * in_strides[f]]; // use Stride
+                b_vec[f][0] += s;
+                b_vec[f][1] += dx * s;
+                b_vec[f][2] += dy * s;
+#ifdef THREED
+                b_vec[f][3] += dz * s;
+#endif
+            }
+        }
+
+        const ConstArrayAccessor ci = (*var.coord)[i];
+        const double dxi = ci[0] - x0;
+        const double dyi = ci[1] - y0;
+#ifdef THREED
+        const double dzi = ci[2] - z0;
+#endif
+
+        // solve A for all fields in the patch, with fallback and clamping
+        #pragma acc loop seq
+        for (int f = 0; f < num_fields; ++f) {
+            double temp_val;
+
+#ifdef THREED
+            bool solve_success = spr_solve_centered_3d(A, b_vec[f], dxi, dyi, dzi, temp_val);
+#else
+            bool solve_success = spr_solve_centered(A, b_vec[f], dxi, dyi, temp_val);
+#endif
+
+            temp_val = solve_success ?
+                fmax(smin[f], fmin(smax[f], temp_val)) :
+                // if the matrix is degenerate, the polynomial fit is unreliable. 
+                // Fall back to volume-weighted average, which is stable but less accurate. 
+                // The clamping range is still valid since it's based on the patch values.
+                spr_volume_weighted_avg_strided(var.support.size(i), var.support.patch(i),
+                                                *var.volume, in_ptrs[f], in_strides[f]);
+
+            out_ptrs[f][i * out_strides[f]] = temp_val;
+        }
+    }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+void SurfaceTopo::build(const Param& param, const Variables& var)
+{
+    on = false;
+    atten = false;
+    x.clear();
+    z.clear();
+    heff.clear();
+    mg = ndg = 0;
+#ifdef THREED
+    mgy = 0;
+    gh.clear();
+#endif
+#ifndef THREED
+    // Source the top nodes from var.bnodes[iboundz1] (valid in the init, restart
+    // AND remesh flows -- surfinfo.top_nodes' x-sort is only refreshed at remesh).
+    // Sort a local copy by x: nodes move with the Lagrangian mesh between remeshes.
+    const int_vec& top = *var.bnodes[iboundz1];
+    const int ntop = top.size();
+    if (ntop < 2) return;
+    int_vec order(top);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return (*var.coord)[a][0] < (*var.coord)[b][0];
+    });
+    x.resize(ntop);
+    z.resize(ntop);
+    for (int i = 0; i < ntop; ++i) {
+        x[i] = (*var.coord)[order[i]][0];
+        z[i] = (*var.coord)[order[i]][NDIMS-1];
+    }
+    on = true;
+
+    // Attenuation table: resample z_surf onto a uniform grid (Nyquist for the
+    // surface nodes, capped), take its DCT-I cosine series, and tabulate
+    //     h_eff(x_i, d_j) = sum_m w_m a_m e^{-k_m d_j} cos(k_m (x_i - x0))
+    // (w halves the end modes -- the DCT-I inverse convention). Cost ~ mg^2*ndg
+    // multiply-adds once per build; queries are O(1) bilinear lookups.
+    //
+    // Grid count M: the DCT-I is evaluated directly (no FFT), so M carries no
+    // radix or power-of-two constraint -- it only trades surface resolution
+    // against the O(M^2 * ND) build cost, and the two bounds below are that
+    // trade, not properties of the transform:
+    //   NG_MIN -- floor for the bilinearly-queried grid. A surface with few nodes
+    //     needs no modes beyond its own Nyquist count, but the floor costs < 1 %
+    //     of the cap and keeps queries off a coarse staircase.
+    //   NG_MAX -- cost bound. At Nyquist a 10^4-node surface would ask for
+    //     M ~ 2*10^4, i.e. O(10^10) flops at every remesh. Truncating the series
+    //     there is benign at depth: a dropped mode m > M-1 carries
+    //     e^{-pi m d / Lg}, so it only survives in a boundary layer of order
+    //     Lg/(pi*M) below the surface, and at or above the surface (d <= 0)
+    //     zeff() bypasses the table for the exact profile, keeping the
+    //     free-surface pin exact. Aliasing is the part that is NOT benign --
+    //     point-sampling relief finer than the grid folds it onto low-k modes,
+    //     which never attenuate, so the h_eff error stops decaying with depth --
+    //     hence the cell average once the cap bites. Against a 4x-Nyquist
+    //     reference on a +-10 km sawtooth at ntop = 193 (M_nyquist 385, capped to
+    //     257) it removes a 0.4 m (13 kPa) floor below 10 km depth, and costs a
+    //     ~3x smoother h_eff for d under one grid spacing -- shallower than the
+    //     first element centroid, and d <= 0 does not use the table at all.
+    //     That floor is in the REFERENCE, not directly in the stress: an element
+    //     the remesh leaves unchanged cancels it either way, because Step C' of
+    //     spr_node_to_elem subtracts the reference it recorded rather than
+    //     re-evaluating it, so only remeshed elements see the difference.
+    if (ntop < 3) return;                       // no meaningful profile: stay columnar
+    x0g = x.front();
+    Lg  = x.back() - x.front();
+    if (Lg <= 0.0) return;
+    const int NG_MIN = 65;                      // ~0.3 Mflop with ND below
+    const int NG_MAX = 257;                     // ~4.3 Mflop with ND below
+    // Depth rows, sqrt-spaced so they crowd the surface where the high-k modes
+    // die. Cost is only linear in ND, so this one is untuned -- cheap to raise.
+    const int ND = 65;
+    int M = 2 * (ntop - 1) + 1;                 // >= Nyquist for the node spacing
+    const int M_nyquist = M;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
+    double_vec s(M);
+    double hmax = 0.0;
+    // Cell-average only where the cap made the grid coarser than the nodes:
+    // at or above Nyquist there is nothing to alias, and point sampling keeps
+    // the reference field of every such mesh unchanged. Where it does average,
+    // hmax -- and so dmax, the table's depth extent -- follows the resampled
+    // profile rather than the node maximum.
+    const bool antialias = (M_nyquist > M);
+    const double dxg = Lg / (M - 1);
+    // The members and member calls this loop needs, reached through locals instead of the
+    // implicit this. nvc++ answers a class member inside default(none) by ignoring the
+    // clause outright ("ignoring default(none): class member has been declared SHARED"),
+    // which silently stops it checking the whole region; g++ accepts it and says nothing.
+    // Naming everything keeps the clause doing its job on both.
+    const double x0 = x0g, L = Lg;
+    const SurfaceTopo& topo = *this;
+    #pragma omp parallel for default(none) \
+        shared(s, M, topo) firstprivate(dxg, antialias, x0, L) reduction(max:hmax)
+    for (int i = 0; i < M; ++i) {
+        const double xi = x0 + L * i / (M - 1);
+        if (antialias) {
+            // The DCT-I samples include both endpoints, so the end cells are half
+            // as wide as the interior ones.
+            s[i] = topo.elev_avg(std::max(xi - 0.5 * dxg, x0),
+                                 std::min(xi + 0.5 * dxg, x0 + L));
+        }
+        else {
+            const double q[NDIMS] = {xi, 0.0};
+            s[i] = topo.elev(q);
+        }
+        hmax = std::max(hmax, std::abs(s[i]));
+    }
+    dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
+    mg = M;
+    ndg = ND;
+    heff.assign((size_t)M * ND, 0.0);
+    const double pn = M_PI / (M - 1);
+    double_vec a(M);
+    // cos(pi m i/(M-1)) for every (point, mode), stored point-major: the table below
+    // walks the modes of one point, and the cosines are not symmetric to the last
+    // bit ((pn*m)*i vs (pn*i)*m), so the layout has to match the traversal rather
+    // than transposing the indices at the read.
+    double_vec cmiT((size_t)M * M);
+    double_vec am((size_t)M * ND);              // mode amplitude at each depth
+    // Threaded per point: a point owns a contiguous row of the table, and the sum
+    // over modes keeps serial order, so the table is bit-identical to a serial build
+    // at the default opt=2. Only there: opt=3 adds -ffast-math, which lets the
+    // compiler reassociate that sum, and this traversal then lands ~3 ulp from the
+    // serial one. Same reason there is no `#ifndef ACC` as in the 3-D branch.
+    // Only locals are listed: members (heff, dmax, Lg, ...) reach the region through
+    // `this`, which default(none) does not police, so naming them would not check
+    // anything.
+    #pragma omp parallel default(none) \
+        shared(s, a, am, cmiT, M) firstprivate(ND, pn)
+    {
+        // DCT-I forward: a_m = 2/(M-1) * sum''_i s_i cos(pi m i/(M-1))  (half ends)
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            double sum = 0.5 * (s[0] + ((m % 2) ? -s[M-1] : s[M-1]));
+            for (int i = 1; i < M - 1; ++i)
+                sum += s[i] * std::cos(pn * m * i);
+            a[m] = 2.0 * sum / (M - 1);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            for (int m = 0; m < M; ++m)
+                cmiT[(size_t)i * M + m] = std::cos(pn * m * i);
+        }
+        // e^{-k_m d_j}, folded together with the DCT-I end weights
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            const double w = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+            for (int j = 0; j < ND; ++j) {
+                const double u = double(j) / (ND - 1);
+                const double d = dmax * u * u;
+                am[(size_t)m * ND + j] = w * a[m] * std::exp(-(M_PI * m / Lg) * d);
+            }
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            double* row = &heff[(size_t)i * ND];
+            const double* crow = &cmiT[(size_t)i * M];
+            for (int m = 0; m < M; ++m) {
+                const double c = crow[m];
+                const double* amr = &am[(size_t)m * ND];
+                for (int j = 0; j < ND; ++j) {
+                    if (std::abs(amr[j]) < 1e-30) continue;  // mode decayed at this depth
+                    row[j] += amr[j] * c;
+                }
+            }
+        }
+    }
+    atten = true;
+#else  // THREED
+    // ----------------------------------------------------------------
+    // 3-D: rasterize the triangulated top boundary onto a uniform (x,y)
+    // grid, then tabulate the attenuated load via a separable 2-D DCT-I
+    // with kernel e^{-|k| d}, |k| = pi*sqrt((m/Lx)^2 + (n/Ly)^2). Same
+    // lifecycle as 2-D: derived data, rebuilt from the current mesh on
+    // every build.
+    // ----------------------------------------------------------------
+    const int_vec& top = *var.bnodes[iboundz1];
+    if (top.size() < 3) return;
+    const std::vector< std::pair<int,int> >& facets = *var.bfacets[iboundz1];
+    const int nfacet = facets.size();
+    if (nfacet < 1) return;
+
+    double xmin = std::numeric_limits<double>::max(), xmax = -xmin;
+    double ymin = xmin, ymax = -xmin;
+    for (std::size_t i = 0; i < top.size(); ++i) {
+        const double xi = (*var.coord)[top[i]][0];
+        const double yi = (*var.coord)[top[i]][1];
+        xmin = std::min(xmin, xi); xmax = std::max(xmax, xi);
+        ymin = std::min(ymin, yi); ymax = std::max(ymax, yi);
+    }
+    x0g = xmin; Lg  = xmax - xmin;
+    y0g = ymin; Lyg = ymax - ymin;
+    if (Lg <= 0.0 || Lyg <= 0.0) return;
+
+    // Grid count ~ Nyquist for the surface-node spacing (ntop ~ nside^2), capped.
+    // Same trade as in 2-D above -- the separable DCT-I needs no particular M, the
+    // bounds are a cost window -- but here the table costs O(M^3 * ND), so the cap
+    // is much tighter: 97^3 * 65 ~ 6e7 multiply-adds per remesh (2-D: ~4e6). The
+    // caveat at the cap is also the same, minus the cure: a surface finer than the
+    // grid is point-sampled by the rasterization below, so its short-wavelength
+    // relief aliases onto low-k modes. The 2-D cell average has no cheap
+    // triangle-rasterizing analogue, so 3-D keeps point sampling; if this ever
+    // matters, accumulate area-weighted facet means per cell instead.
+    const int NG_MIN = 33;                      // ~2 Mflop with ND below
+    const int NG_MAX = 97;                      // ~6e7 flop with ND below
+    int M = 2 * (int)std::ceil(std::sqrt((double)top.size())) + 1;
+    if (M < NG_MIN) M = NG_MIN;
+    if (M > NG_MAX) M = NG_MAX;
+    mg = M; mgy = M;
+    const double dxg = Lg / (M - 1), dyg = Lyg / (M - 1);
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+    gh.assign((size_t)M * M, qnan);
+    // Facets sharing an edge can both cover a grid point, since the barycentric test
+    // carries a tolerance, so the value left there is whichever facet wrote it last:
+    // an order-dependent result, and the reason this rasterization stays serial.
+    for (int fi = 0; fi < nfacet; ++fi) {
+        const int e = facets[fi].first;
+        const int f = facets[fi].second;
+        double px[NODES_PER_FACET], py[NODES_PER_FACET], pz[NODES_PER_FACET];
+        for (int k = 0; k < NODES_PER_FACET; ++k) {
+            const int n = (*var.connectivity)[e][NODE_OF_FACET[f][k]];
+            px[k] = (*var.coord)[n][0];
+            py[k] = (*var.coord)[n][1];
+            pz[k] = (*var.coord)[n][2];
+        }
+        const double det = (px[1]-px[0])*(py[2]-py[0]) - (px[2]-px[0])*(py[1]-py[0]);
+        if (std::abs(det) < 1e-12 * dxg * dyg) continue;    // degenerate in xy projection
+        int i0 = (int)std::ceil ((std::min(px[0], std::min(px[1], px[2])) - x0g) / dxg - 1e-9);
+        int i1 = (int)std::floor((std::max(px[0], std::max(px[1], px[2])) - x0g) / dxg + 1e-9);
+        int j0 = (int)std::ceil ((std::min(py[0], std::min(py[1], py[2])) - y0g) / dyg - 1e-9);
+        int j1 = (int)std::floor((std::max(py[0], std::max(py[1], py[2])) - y0g) / dyg + 1e-9);
+        i0 = std::max(i0, 0); i1 = std::min(i1, M - 1);
+        j0 = std::max(j0, 0); j1 = std::min(j1, M - 1);
+        const double inv_det = 1.0 / det;
+        for (int gi = i0; gi <= i1; ++gi) {
+            for (int gj = j0; gj <= j1; ++gj) {
+                const double qx = x0g + gi * dxg - px[0];
+                const double qy = y0g + gj * dyg - py[0];
+                const double l1 = (qx*(py[2]-py[0]) - qy*(px[2]-px[0])) * inv_det;
+                const double l2 = (qy*(px[1]-px[0]) - qx*(py[1]-py[0])) * inv_det;
+                const double l0 = 1.0 - l1 - l2;
+                if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
+                gh[(size_t)gi * M + gj] = l0*pz[0] + l1*pz[1] + l2*pz[2];
+            }
+        }
+    }
+    // Fill grid points the rasterization missed (hull-edge roundoff): nearest valid
+    // value along each row, then along each column for fully-missed rows.
+    for (int gi = 0; gi < M; ++gi) {
+        double last = qnan;
+        for (int gj = 0; gj < M; ++gj) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+        last = qnan;
+        for (int gj = M - 1; gj >= 0; --gj) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+    }
+    for (int gj = 0; gj < M; ++gj) {
+        double last = qnan;
+        for (int gi = 0; gi < M; ++gi) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+        last = qnan;
+        for (int gi = M - 1; gi >= 0; --gi) {
+            double& v = gh[(size_t)gi * M + gj];
+            if (v == v) last = v; else if (last == last) v = last;
+        }
+    }
+    double hmax = 0.0;
+    for (std::size_t i = 0; i < gh.size(); ++i) {
+        if (gh[i] != gh[i]) { gh.clear(); return; }   // no surface data at all: stay off
+        hmax = std::max(hmax, std::abs(gh[i]));
+    }
+    on = true;
+
+    // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
+    // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
+    // (sum'' = half-weight end samples; square grid so one cos table serves both axes)
+    // Then, at each tabulated depth, attenuate every mode by e^{-|k| d} and run the
+    // inverse back to (x, y) as two cosine passes: over n into U, then over m into
+    // the table. Cost is O(M^3) for the forward pair, O(M^3 * ND) for the inverse.
+    //
+    // Threaded as one region: each loop splits the axis that owns its output and the
+    // inner sums keep serial order, so the table is bit-identical to a serial build.
+    // No `#ifndef ACC` -- that guard belongs where a paired `acc parallel loop`
+    // takes over on the device, and this is host-only STL called from serial code.
+    const double pn = M_PI / (M - 1);
+    dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
+    const int ND = 65;                          // depth rows, as in the 2-D branch
+    ndg = ND;
+    double_vec cmi((size_t)M * M);
+    double_vec T((size_t)M * M, 0.0), A((size_t)M * M, 0.0);
+    heff.assign((size_t)M * M * ND, 0.0);
+    #pragma omp parallel default(none) \
+        shared(cmi, T, A, M) firstprivate(ND, pn)
+    {
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int i = 0; i < M; ++i)
+                cmi[(size_t)m * M + i] = std::cos(pn * m * i);
+        }
+        #pragma omp for
+        for (int i = 0; i < M; ++i) {
+            for (int n = 0; n < M; ++n) {
+                double s = 0.0;
+                for (int j = 0; j < M; ++j) {
+                    const double w = (j == 0 || j == M - 1) ? 0.5 : 1.0;
+                    s += w * gh[(size_t)i * M + j] * cmi[(size_t)n * M + j];
+                }
+                T[(size_t)i * M + n] = 2.0 * s / (M - 1);
+            }
+        }
+        #pragma omp for
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < M; ++n) {
+                double s = 0.0;
+                for (int i = 0; i < M; ++i) {
+                    const double w = (i == 0 || i == M - 1) ? 0.5 : 1.0;
+                    s += w * T[(size_t)i * M + n] * cmi[(size_t)m * M + i];
+                }
+                A[(size_t)m * M + n] = 2.0 * s / (M - 1);
+            }
+        }
+        // The depths share nothing once A is built, so each is done start to finish
+        // by one thread -- hence a B/U scratch pair per thread, declared here and
+        // built once on entry. dynamic: the pass over n skips modes that have already
+        // decayed, so the deeper the tabulated depth the cheaper it is.
+        double_vec B((size_t)M * M), U((size_t)M * M);
+        #pragma omp for schedule(dynamic)
+        for (int l = 0; l < ND; ++l) {
+            const double u = double(l) / (ND - 1);
+            const double d = dmax * u * u;
+            for (int m = 0; m < M; ++m) {
+                for (int n = 0; n < M; ++n) {
+                    const double km = M_PI * m / Lg, kn = M_PI * n / Lyg;
+                    const double wm = (m == 0 || m == M - 1) ? 0.5 : 1.0;
+                    const double wn = (n == 0 || n == M - 1) ? 0.5 : 1.0;
+                    B[(size_t)m * M + n] = wm * wn * A[(size_t)m * M + n]
+                                         * std::exp(-std::sqrt(km*km + kn*kn) * d);
+                }
+            }
+            // inverse, pass over n: U[m][j] = sum_n B[m][n] cos(pn n j)
+            for (int m = 0; m < M; ++m) {
+                for (int j = 0; j < M; ++j) {
+                    double s = 0.0;
+                    for (int n = 0; n < M; ++n) {
+                        const double b = B[(size_t)m * M + n];
+                        if (std::abs(b) < 1e-30) continue;   // mode fully decayed at this depth
+                        s += b * cmi[(size_t)n * M + j];
+                    }
+                    U[(size_t)m * M + j] = s;
+                }
+            }
+            // inverse, pass over m into the table
+            for (int gi = 0; gi < M; ++gi) {
+                for (int gj = 0; gj < M; ++gj) {
+                    double s = 0.0;
+                    for (int m = 0; m < M; ++m)
+                        s += U[(size_t)m * M + gj] * cmi[(size_t)m * M + gi];
+                    heff[((size_t)gi * M + gj) * ND + l] = s;
+                }
+            }
+        }
+    }   // end of the single parallel region
+    atten = true;
+#endif
+}
+
+double SurfaceTopo::elev(const double* p) const
+{
+    if (!on) return 0.0;
+#ifndef THREED
+    const double xq = p[0];
+    if (xq <= x.front()) return z.front();
+    if (xq >= x.back())  return z.back();
+    const std::size_t i = std::upper_bound(x.begin(), x.end(), xq) - x.begin();
+    const double dx = x[i] - x[i-1];
+    if (dx <= 0.0) return z[i];   // coincident nodes (degenerate surface): no interpolation
+    return z[i-1] + (z[i] - z[i-1]) * (xq - x[i-1]) / dx;
+#else
+    double tx = (p[0] - x0g) / Lg * (mg - 1);
+    if (tx < 0.0) tx = 0.0;
+    if (tx > mg - 1) tx = mg - 1;
+    int i = (int)tx;
+    if (i > mg - 2) i = mg - 2;
+    const double fx = tx - i;
+    double ty = (p[1] - y0g) / Lyg * (mgy - 1);
+    if (ty < 0.0) ty = 0.0;
+    if (ty > mgy - 1) ty = mgy - 1;
+    int j = (int)ty;
+    if (j > mgy - 2) j = mgy - 2;
+    const double fy = ty - j;
+    const double* r0 = &gh[(size_t)i * mgy + j];
+    const double* r1 = r0 + mgy;
+    return (1.0 - fx) * ((1.0 - fy) * r0[0] + fy * r0[1])
+         + fx         * ((1.0 - fy) * r1[0] + fy * r1[1]);
+#endif
+}
+
+#ifndef THREED
+double SurfaceTopo::elev_avg(double xa, double xb) const
+{
+    if (!on) return 0.0;
+    const double len = xb - xa;
+    if (len <= 0.0) {
+        const double q[NDIMS] = {xa, 0.0};
+        return elev(q);
+    }
+    // Trapezoid over every profile segment clipped to [xa, xb]: exact, because
+    // elev() is linear between surface nodes and clamped constant outside them.
+    double area = 0.0;
+    if (xa < x.front()) area += z.front() * (std::min(xb, x.front()) - xa);
+    if (xb > x.back())  area += z.back()  * (xb - std::max(xa, x.back()));
+    std::size_t k = std::upper_bound(x.begin(), x.end(), xa) - x.begin();
+    if (k == 0) k = 1;                        // segment (0,1) is the first one
+    for (; k < x.size() && x[k-1] < xb; ++k) {
+        const double xl = x[k-1], xr = x[k];
+        const double dx = xr - xl;
+        if (dx <= 0.0) continue;              // coincident nodes: zero-width segment
+        const double a = std::max(xa, xl), b = std::min(xb, xr);
+        if (b <= a) continue;
+        const double slope = (z[k] - z[k-1]) / dx;
+        area += 0.5 * ((z[k-1] + slope * (a - xl)) + (z[k-1] + slope * (b - xl)))
+                    * (b - a);
+    }
+    return area / len;
+}
+#endif
+
+double SurfaceTopo::heff_at(const double* p, double d) const
+{
+    // 2-D: bilinear on (x, depth); 3-D: trilinear on (x, y, depth). Depth is sqrt-spaced.
+    double tx = (p[0] - x0g) / Lg * (mg - 1);
+    if (tx < 0.0) tx = 0.0;
+    if (tx > mg - 1) tx = mg - 1;
+    int i = (int)tx;
+    if (i > mg - 2) i = mg - 2;
+    const double fx = tx - i;
+    if (d < 0.0) d = 0.0;
+    if (d > dmax) d = dmax;
+    double tu = std::sqrt(d / dmax) * (ndg - 1);
+    int l = (int)tu;
+    if (l > ndg - 2) l = ndg - 2;
+    const double fu = tu - l;
+#ifndef THREED
+    const double* r0 = &heff[(size_t)i * ndg + l];
+    const double* r1 = r0 + ndg;
+    return (1.0 - fx) * ((1.0 - fu) * r0[0] + fu * r0[1])
+         + fx         * ((1.0 - fu) * r1[0] + fu * r1[1]);
+#else
+    double ty = (p[1] - y0g) / Lyg * (mgy - 1);
+    if (ty < 0.0) ty = 0.0;
+    if (ty > mgy - 1) ty = mgy - 1;
+    int j = (int)ty;
+    if (j > mgy - 2) j = mgy - 2;
+    const double fy = ty - j;
+    const double* r00 = &heff[((size_t)i * mgy + j) * ndg + l];
+    const double* r01 = r00 + ndg;
+    const double* r10 = r00 + (size_t)mgy * ndg;
+    const double* r11 = r10 + ndg;
+    const double v00 = (1.0 - fu) * r00[0] + fu * r00[1];
+    const double v01 = (1.0 - fu) * r01[0] + fu * r01[1];
+    const double v10 = (1.0 - fu) * r10[0] + fu * r10[1];
+    const double v11 = (1.0 - fu) * r11[0] + fu * r11[1];
+    return (1.0 - fx) * ((1.0 - fy) * v00 + fy * v01)
+         + fx         * ((1.0 - fy) * v10 + fy * v11);
+#endif
+}
+
+double SurfaceTopo::zeff(const double* p) const
+{
+    const double zq = p[NDIMS-1];
+    if (!on) return zq;                 // fixed-datum behavior, bit-exact
+    const double h = elev(p);
+    if (!atten) return zq - h;          // columnar (rigid-support end-member)
+    const double d = h - zq;            // depth below the LOCAL surface
+    if (d <= 0.0) return zq - h;        // at/above the surface: full load (kernel -> 1)
+    return zq - heff_at(p, d);
+}
+
+// Strided array_t rows are not contiguous doubles: copy to a local coordinate first.
+double SurfaceTopo::elev(ConstArrayAccessor p) const
+{
+    double c[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) c[d] = p[d];
+    return elev(c);
+}
+
+double SurfaceTopo::zeff(ConstArrayAccessor p) const
+{
+    double c[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) c[d] = p[d];
+    return zeff(c);
+}
+
+double SurfaceTopo::heff_at(ConstArrayAccessor p, double d) const
+{
+    double c[NDIMS];
+    for (int dd = 0; dd < NDIMS; ++dd) c[dd] = p[dd];
+    return heff_at(c, d);
+}
+
+void compute_spr_blend_weight(const Param &param, const Variables &var)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Deborah-number blend weight toward the NN-remapped stress: w = 1 keeps NN
+    // (high De, elastic stress memory), w = 0 takes the SPR average (low De,
+    // smoothing). Evaluated on the OLD mesh, and BEFORE center_stress_to_ref:
+    // visc() reads the stress trace, so centering would change its answer. The
+    // weight rides through the remesh with the other element fields and is
+    // consumed in spr_node_to_elem.
+    {
+        // De is measured against the time the stress evolved since the last remesh.
+        const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
+        const double lde0 = std::log10(param.mesh.remesh_deborah_min);
+        const double lde1 = std::log10(param.mesh.remesh_deborah_max);
+        // Host loop: visc()/shearm() read the host-side MatProps.
+        #pragma acc wait
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(param, var) \
+                firstprivate(dt_remesh, lde0, lde1)
+#endif
+        for (int e = 0; e < var.nelem; ++e) {
+            const double t_maxwell = var.mat->visc(e) / var.mat->shearm(e);
+            // t: position within [De_min, De_max], linear in log10(De) because De
+            // spans decades and neither bound is a physical threshold -- only the
+            // decade between them is meaningful.
+            double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
+            t = std::min(std::max(t, 0.0), 1.0);
+            // smoothstep: the cubic 3t^2 - 2t^3, i.e. the Hermite interpolant of
+            // (0,0) and (1,1) with w'(0) = w'(1) = 0, so an element
+            // drifting across either bound between remeshes sees the weight change
+            // continuously in value AND rate. A linear ramp kinks at the bounds,
+            // switching remap operator abruptly for elements sitting on one; a
+            // steeper S-curve (e.g. quintic) would need a wider De window to keep
+            // the same mid-range sensitivity. Monotone, and w(t=1/2) = 1/2.
+            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
+        }
+    }
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void center_stress_to_ref(const Param &param, const Variables &var,
+                          const SurfaceTopo &topo)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // ----------------------------------------------------------------
+    // Reference the stress to the lithostat on the OLD mesh: add ref_pressure to
+    // each element's diagonal components, and record what was added.
+    //
+    // This serves the whole remap, not just the SPR fit that follows it:
+    //  - for the SPR fit, the polynomial then fits the small deviatoric residual
+    //    instead of the steep lithostatic background. Independent fits for σxx and
+    //    σzz on a one-sided surface-node patch differ by the deviatoric stress, and
+    //    a large pressure background amplifies any extrapolation error at boundary
+    //    nodes. Cold surface ice (η≈visc_max) has a Maxwell time of ~250 Myr, so
+    //    even a tiny artifact persists for the whole simulation.
+    //  - for the NN remap, which is the entire stress remap when the SPR chain is
+    //    off, it is what makes the copy depth-aware: a CHANGED element takes stress
+    //    from a source at another depth, and restore_stress_from_ref subtracting
+    //    p_ref at the DESTINATION centroid supplies the lithostat difference.
+    //    Without it the copy carries the source's lithostat and lands ~rho*g*dz
+    //    wrong.
+    //
+    // Must run before prepare_interpolation (reads old var.stress, var.support,
+    // old_coord, old_connectivity — all still old here). Undone by
+    // restore_stress_from_ref on the new mesh.
+    // ----------------------------------------------------------------
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, topo)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double c[NDIMS] = {0.0};
+        for (int k = 0; k < NODES_PER_ELEM; ++k)
+            for (int d = 0; d < NDIMS; ++d)
+                c[d] += (*var.coord)[conn[k]][d];
+        for (int d = 0; d < NDIMS; ++d)
+            c[d] /= NODES_PER_ELEM;
+        double p_ref_old = ref_pressure(param, topo.zeff(c));
+        TensorAccessor s = (*var.stress)[e];
+        // Shift diagonal components: add p_ref so stress becomes small deviatoric
+        for (int d = 0; d < NDIMS; ++d) s[d] += p_ref_old;
+
+        if (param.mat.is_plane_strain)
+            (*var.stressyy)[e] += p_ref_old;
+
+        // Record the reference ADDED here so an unchanged element can subtract the
+        // identical value in restore_stress_from_ref (the new-mesh topo table
+        // differs globally).
+        (*var.spr_p_ref_old)[e] = p_ref_old;
+    }
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void spr_elem_to_node(const Param &param, const Variables &var,
+                      tensor_t *stress_n, double_vec *stressyy_n)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Step A: recover smooth NODAL stresses from the element-centroid stresses of
+    // the OLD mesh, which center_stress_to_ref has already referenced to the
+    // lithostat. Same old-mesh preconditions as that function.
+
+    // dynamic registration of all fields involved in SPR
+    const double* in_ptrs[MAX_SPR_FIELDS];
+    int in_strides[MAX_SPR_FIELDS];
+    double* out_ptrs[MAX_SPR_FIELDS];
+    int out_strides[MAX_SPR_FIELDS];
+    int num_fields = 0;
+
+    auto add_field_acc = [&](tensor_t::ConstComponentAccessor in_acc, tensor_t::ComponentAccessor out_acc) {
+        in_ptrs[num_fields]     = in_acc.ptr_;
+        in_strides[num_fields]  = in_acc.stride_;
+        out_ptrs[num_fields]    = out_acc.ptr_;
+        out_strides[num_fields] = out_acc.stride_;
+        num_fields++;
+    };
+
+    auto add_field_ptr = [&](const double* in_p, double* out_p) {
+        in_ptrs[num_fields]     = in_p;
+        in_strides[num_fields]  = 1;
+        out_ptrs[num_fields]    = out_p;
+        out_strides[num_fields] = 1;
+        num_fields++;
+    };
+
+    for (int d = 0; d < NSTR; ++d)
+        add_field_acc(var.stress->component_const(d), stress_n->component(d));
+
+    if (param.mat.is_plane_strain)
+        add_field_ptr(var.stressyy->data(), stressyy_n->data());
+
+    // Compute SPR-recovered nodal stresses from element-centroid stresses on the old mesh.
+    // Uses Zienkiewicz-Zhu superconvergent patch recovery with linear polynomial basis [1, x, y].
+    // call the fused SPR kernel for all registered fields
+    spr_fused_fields(var, in_ptrs, in_strides, out_ptrs, out_strides, num_fields);
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+void spr_node_to_elem(const Param &param, const Variables &var,
+                      const SurfaceTopo &topo,
+                      tensor_t *stress, double_vec *stressyy)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Step B: nodal SPR stresses -> new element stresses, then reconcile with the
+    // NN remap. topo is the NEW-mesh surface, built by the caller and shared with
+    // restore_stress_from_ref (rasterising it twice would cost ~14 ms in 3-D).
+
+    // Pin the top-boundary nodal stress before averaging back to elements: the SPR
+    // patch fit is one-sided at surface nodes, its least reliable spot, while the
+    // traction there is known exactly -- sigma.n = -p_water n, mirroring the load
+    // apply_stress_bcs puts on this boundary. Centered that is p_ref - p_water,
+    // with p_ref exact because z_eff = 0 at a top node.
+    const double sea_level = param.control.surf_base_level;
+    const double rho_w_g = param.bc.has_water_loading
+                         ? param.bc.sea_water_density * param.control.gravity : 0.0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, topo) \
+            firstprivate(sea_level, rho_w_g)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < var.surfinfo.ntop; ++i) {
+        int n = (*var.surfinfo.top_nodes)[i];
+        double z = (*var.coord)[n][NDIMS-1];
+        double p_water = (z < sea_level) ? rho_w_g * (sea_level - z) : 0.0;
+
+        double p_ref_node = ref_pressure(param, topo.zeff((*var.coord)[n]));
+
+        (*var.stress_n)[n][NDIMS-1] = p_ref_node - p_water;
+        (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
+#ifdef THREED
+        (*var.stress_n)[n][5] = 0.0;
+#endif
+    }
+
+    // Snapshot the NN-remapped stress before the SPR average overwrites it. On
+    // entry *stress holds the NN-remapped copy (nn_interpolate_elem_fields),
+    // already pressure-centered on the old mesh, so the snapshot, the SPR average
+    // and the p_ref restore (Step C') all live in the same centered variable.
+    // Consumers: the surface fallback, the Deborah blend and the untouched-element
+    // carry-through below.
+    tensor_t stress_nn(var.nelem);
+    double_vec stressyy_nn(param.mat.is_plane_strain ? var.nelem : 0);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstTensorAccessor s = (*stress)[e];
+        TensorAccessor s_nn = stress_nn[e];
+        for (int d = 0; d < NSTR; ++d)
+            s_nn[d] = s[d];
+        if (param.mat.is_plane_strain)
+            stressyy_nn[e] = (*stressyy)[e];
+    }
+
+    // ----------------------------------------------------------------
+    // Step C: Average SPR nodal stresses -> new element stresses.
+    // In plane strain the out-of-plane sigma_yy is part of the mean stress and
+    // enters the compressiveness test below, so it is averaged here too.
+    // ----------------------------------------------------------------
+    for (int d = 0; d < NSTR; ++d)
+        average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
+                              var.nelem, stress->component(d));
+
+    if (param.mat.is_plane_strain)
+        average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
+                              var.nelem, stressyy->data());
+
+    // Fallback: where the SPR average left a surface element LESS compressive
+    // (spurious tension) than before the remesh, restore the pre-remesh stress.
+    // The measure is the mean stress (trace); sigma_yy is reverted atomically
+    // with the in-plane tensor so the element is never left in a mixed state.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int i = 0; i < var.ntop_elems; ++i) {
+        int e = (*var.top_elems)[i];
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        double p = 0.0, p_spr = 0.0;
+        for (int d = 0; d < NDIMS; ++d) {
+            p_spr += s[d];
+            p += s_nn[d];
+        }
+        if (param.mat.is_plane_strain) {
+            p_spr += (*stressyy)[e];
+            p += stressyy_nn[e];
+        }
+        if (p < p_spr) {
+            for (int d = 0; d < NSTR; ++d) s[d] = s_nn[d];
+            if (param.mat.is_plane_strain) (*stressyy)[e] = stressyy_nn[e];
+        }
+    }
+
+    // Untouched elements (STRICTLY is_changed == 0: -1 = ACM-failed nearest-copy
+    // is NOT an identity map) keep the pre-remesh stress verbatim (bit-exact), the
+    // same treatment every other element field gets from inject_field; the remaining
+    // elements take the Deborah blend of NN (w: elastic stress memory) vs the SPR
+    // average (1 - w: smooths element-scale noise in low-viscosity regions).
+    // Runs after the surface fallback: where the fallback restored the NN stress
+    // the blend is a no-op, never making a surface element less compressive again.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        TensorAccessor s = (*stress)[e];
+        ConstTensorAccessor s_nn = stress_nn[e];
+        if ((*var.remesh_is_changed)[e] == 0) {
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = s_nn[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = stressyy_nn[e];
+        }
+        else {
+            const double w = (*var.spr_blend_weight)[e];
+            for (int d = 0; d < NSTR; ++d)
+                s[d] = w * s_nn[d] + (1.0 - w) * s[d];
+            if (param.mat.is_plane_strain)
+                (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
+        }
+    }
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+
+void restore_stress_from_ref(const Param &param, const Variables &var,
+                             const SurfaceTopo &topo,
+                             tensor_t *stress, double_vec *stressyy)
+{
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+    // Undo center_stress_to_ref on the NEW mesh, whatever produced the centered
+    // stress that arrives here: the Deborah blend of NN and SPR, or -- when the SPR
+    // chain is off -- the NN remap alone. Runs last either way.
+    //
+    // Restore reference pressure at new element centroids.
+    // The SPR operated on pressure-centered stress; add back p_ref at each
+    // new element's depth (below the NEW surface) to recover the total stress.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e = 0; e < var.nelem; ++e) {
+        double p_ref;
+        if ((*var.remesh_is_changed)[e] == 0) {
+            // Untouched element: subtract exactly what spr_elem_to_node added, so
+            // the round trip is a bit-exact no-op (the new topo table differs).
+            p_ref = (*var.spr_p_ref_old)[e];
+        } else {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            double c[NDIMS] = {0.0};
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                for (int d = 0; d < NDIMS; ++d)
+                    c[d] += (*var.coord)[conn[k]][d];
+            for (int d = 0; d < NDIMS; ++d)
+                c[d] /= NODES_PER_ELEM;
+            p_ref = ref_pressure(param, topo.zeff(c));
+        }
+        TensorAccessor s = (*stress)[e];
+        for (int d = 0; d < NDIMS; ++d) s[d] -= p_ref;
+
+        if (param.mat.is_plane_strain)
+            (*stressyy)[e] -= p_ref;
+    }
+
+    #pragma acc wait
+
+#ifdef NPROF_DETAIL
+    nvtxRangePop();
+#endif
+}
+
+double compute_dt(const Param& param, Variables& var,
+                  bool include_rsf_state_limit)
 
 {
 #ifdef NPROF
@@ -396,9 +1539,18 @@ double compute_dt(const Param& param, Variables& var)
 
     // dynamic dt
     double dt_maxwell = std::numeric_limits<double>::max();
+    double dt_rsf = std::numeric_limits<double>::max();
     double dt_diffusion = std::numeric_limits<double>::max();
     double dt_hydro_diffusion = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
+    const bool uses_rsf_state_step_limit =
+        include_rsf_state_limit &&
+        (param.mat.rheol_type & MatProps::rh_rsf) &&
+        param.mat.state_var_model == 1 &&
+        param.control.rsf_slip_rate_projection_option ==
+            rsf_slip_rate_projection_total_strain_rate;
+    const double rsf_dtheta_max = uses_rsf_state_step_limit ?
+        param.control.rsf_dtheta_max : 0.0;
 
     // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
@@ -411,12 +1563,12 @@ double compute_dt(const Param& param, Variables& var)
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) \
-        default(none) shared(param, var) //, velocity_x_element, velocity_y_element, velocity_z_element) \
-        private(vx_element, vy_element, vz_element)
+        default(none) shared(param, var) firstprivate(rsf_dtheta_max)
+    // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) async
     for (int e=0; e<var.nelem; ++e) {
 
@@ -484,6 +1636,18 @@ double compute_dt(const Param& param, Variables& var)
 #endif
         dt_maxwell = std::min(dt_maxwell,
                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
+        if (rsf_dtheta_max > 0) {
+            const double rate =
+                2.0 * minh * current_strain_rate_invariant(var, e);
+            const double dc = var.mat->d_c(e);
+            if (rate > 0 && dc > 0)
+                dt_rsf = std::min(
+                    dt_rsf, rsf_dtheta_max * dc / rate);
+            const double theta = (*var.state_variable)[e];
+            if (theta > 0)
+                dt_rsf = std::min(
+                    dt_rsf, rsf_dtheta_max * theta);
+        }
         if (param.control.has_thermal_diffusion)
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
@@ -497,7 +1661,11 @@ double compute_dt(const Param& param, Variables& var)
         minl = std::min(minl, minh);
 
         // Find global min delta t to meet CFL condition
-        global_dt_min = std::min(global_dt_min, minl/std::sqrt(var.mat->shearm(e)/var.mat->rho(e)) /5.0);
+        global_dt_min = std::min(
+            global_dt_min,
+            minh / std::sqrt(
+                mass_scaling_modulus(param, *var.mat, e) /
+                var.mat->rho(e)) / 5.0);
     }
 
     #pragma acc wait
@@ -535,17 +1703,21 @@ double compute_dt(const Param& param, Variables& var)
     }
 
     // Combine dt calculations and incorporate dt_hydro_diffusion
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion}) * param.control.dt_fraction;
+    double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
+                          dt_diffusion, dt_hydro_diffusion}) *
+                param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
     if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_diffusion << " " 
+        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
+                  << dt_rsf << " " << dt_diffusion << " "
                   << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << " sec\n";
     }
     if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_diffusion
+        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
+                  << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
         var.output->write_exact_error(var);
-        std::exit(11);
+        die(EXIT_RUNTIME_NAN);
     }
     
 #ifdef NPROF
@@ -554,100 +1726,99 @@ double compute_dt(const Param& param, Variables& var)
     return dt;
 }
 
-double compute_dt_PT(const Param& param, const Variables& var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    // constant dt
-    if (param.control.fixed_dt != 0) return param.control.fixed_dt;
+// double compute_dt_PT(const Param& param, const Variables& var)
+// {
+// #ifdef NPROF_DETAIL
+//     nvtxRangePush(__FUNCTION__);
+// #endif
+//     // constant dt
+//     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
 
-    // dynamic dt
-    double dt_maxwell = std::numeric_limits<double>::max();
-    double dt_diffusion = std::numeric_limits<double>::max();
-    double dt_hydro_diffusion = std::numeric_limits<double>::max();
-    double minl = std::numeric_limits<double>::max();
+//     // dynamic dt
+//     double dt_maxwell = std::numeric_limits<double>::max();
+//     double dt_diffusion = std::numeric_limits<double>::max();
+//     double dt_hydro_diffusion = std::numeric_limits<double>::max();
+//     double minl = std::numeric_limits<double>::max();
 
-    #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion)    \
-        default(none) shared(param,var)
-    // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
-    for (int e=0; e<var.nelem; ++e) {
-        int n0 = (*var.connectivity)[e][0];
-        int n1 = (*var.connectivity)[e][1];
-        int n2 = (*var.connectivity)[e][2];
+//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) default(none) shared(param,var)
+//     // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
+//     for (int e=0; e<var.nelem; ++e) {
+//         int n0 = (*var.connectivity)[e][0];
+//         int n1 = (*var.connectivity)[e][1];
+//         int n2 = (*var.connectivity)[e][2];
 
-        ConstArrayAccessor a = (*var.coord)[n0];
-        ConstArrayAccessor b = (*var.coord)[n1];
-        ConstArrayAccessor c = (*var.coord)[n2];
+//         ConstArrayAccessor a = (*var.coord)[n0];
+//         ConstArrayAccessor b = (*var.coord)[n1];
+//         ConstArrayAccessor c = (*var.coord)[n2];
 
-        // min height of this element
-        double minh;
-#ifdef THREED
-        {
-            int n3 = (*var.connectivity)[e][3];
-            ConstArrayAccessor d = (*var.coord)[n3];
+//         // min height of this element
+//         double minh;
+// #ifdef THREED
+//         {
+//             int n3 = (*var.connectivity)[e][3];
+//             ConstArrayAccessor d = (*var.coord)[n3];
 
-            // max facet area of this tet
-            double maxa = std::max(std::max(triangle_area(a, b, c),
-                                            triangle_area(a, b, d)),
-                                   std::max(triangle_area(c, d, a),
-                                            triangle_area(c, d, b)));
-            minh = 3 * (*var.volume)[e] / maxa;
-        }
-#else
-        {
-            // max edge length of this triangle
-            double maxl = std::sqrt(std::max(std::max(dist2(a, b),
-                                                      dist2(b, c)),
-                                             dist2(a, c)));
-            minh = 2 * (*var.volume)[e] / maxl;
-        }
-#endif
-        dt_maxwell = std::min(dt_maxwell,
-                              0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
-        // if (param.control.has_thermal_diffusion)
-        //     dt_diffusion = std::min(dt_diffusion,
-        //                             0.5 * minh * minh / var.mat->therm_diff_max);
+//             // max facet area of this tet
+//             double maxa = std::max(std::max(triangle_area(a, b, c),
+//                                             triangle_area(a, b, d)),
+//                                    std::max(triangle_area(c, d, a),
+//                                             triangle_area(c, d, b)));
+//             minh = 3 * (*var.volume)[e] / maxa;
+//         }
+// #else
+//         {
+//             // max edge length of this triangle
+//             double maxl = std::sqrt(std::max(std::max(dist2(a, b),
+//                                                       dist2(b, c)),
+//                                              dist2(a, c)));
+//             minh = 2 * (*var.volume)[e] / maxl;
+//         }
+// #endif
+//         dt_maxwell = std::min(dt_maxwell,
+//                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
+//         // if (param.control.has_thermal_diffusion)
+//         //     dt_diffusion = std::min(dt_diffusion,
+//         //                             0.5 * minh * minh / var.mat->therm_diff_max);
         
-        // // Compute dt_hydro_diffusion (hydraulic)
-        // if (var.mat->hydro_diff_max > 0) {
-        //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-        //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-        // }
-        minl = std::min(minl, minh);
-    }
+//         // // Compute dt_hydro_diffusion (hydraulic)
+//         // if (var.mat->hydro_diff_max > 0) {
+//         //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
+//         //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
+//         // }
+//         minl = std::min(minl, minh);
+//     }
 
 
-    // max_vbc_val is maximum boundary velocity
-    double max_vbc_val;
-    if (param.control.characteristic_speed == 0) {
-        max_vbc_val = var.max_vbc_val; 
+//     // max_vbc_val is maximum boundary velocity
+//     double max_vbc_val;
+//     if (param.control.characteristic_speed == 0) {
+//         max_vbc_val = var.max_vbc_val; 
 
-        if (param.control.surface_process_option > 0)
-            max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
-    }
-    else
-        max_vbc_val = param.control.characteristic_speed;
+//         if (param.control.surface_process_option > 0)
+//             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
+//     }
+//     else
+//         max_vbc_val = param.control.characteristic_speed;
 
-    double dt_advection = 0.5 * minl / max_vbc_val;
-    double dt_elastic = (param.control.is_quasi_static) ?
-        0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-        0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
+//     double dt_advection = 0.5 * minl / max_vbc_val;
+//     double dt_elastic = (param.control.is_quasi_static) ?
+//         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
+//         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
 
-    double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
-    if (param.debug.dt) {
-        std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
-    }
-    if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
-        std::exit(11);
-    }
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-    return dt;
-}
+//     double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
+//     if (param.debug.dt) {
+//         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
+//     }
+//     if (dt <= 0) {
+//         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
+//         var.output->write_exact_error(var);
+//         std::exit(11);
+//     }
+// #ifdef NPROF_DETAIL
+//     nvtxRangePop();
+// #endif
+//     return dt;
+// }
 
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
@@ -665,37 +1836,28 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    double diff_e;
+    if (param.control.has_hydraulic_diffusion) {
+        // Index the per-material arrays: the MatProps accessors take an ELEMENT index.
+        // LIMITATION: compares m/s against m^2/s (wants a length, diff/minl) and covers
+        // only mattype_ref, not the domain-wide max that dt_hydro_diffusion uses.
+        const int mt = param.mat.mattype_ref;
+        const double perm_m = param.mat.hydraulic_perm[mt];               // Intrinsic permeability
+        const double mu_m = param.mat.fluid_visc[mt];                     // Fluid dynamic viscosity
+        const double alpha_b = param.mat.biot_coeff[mt];                  // Biot coefficient
+        const double phi_m = param.mat.porosity[mt];                      // Porosity
+        const double comp_fluid = 1.0 / param.mat.fluid_bulk_modulus[mt]; // Fluid compressibility
+        const double matrix_comp = 1.0 / (param.mat.bulk_modulus[mt] + 4.0*param.mat.shear_modulus[mt]/3.0);
 
-    #pragma acc serial async
-    {
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(param.mat.mattype_ref);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(param.mat.mattype_ref);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(param.mat.mattype_ref);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(param.mat.mattype_ref);            // Fluid density
-        double phi_e = var.mat->phi(param.mat.mattype_ref);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(param.mat.mattype_ref);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(param.mat.mattype_ref);
-        double shearm = var.mat->shearm(param.mat.mattype_ref);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
+        // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
+        // weight cancels between conductivity and storage, so it is not carried.
+        const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
 
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        
-        // Compute element diffusivity and update max using reduction
-        diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
-    }
-
-    #pragma acc wait
-
-    if (pseudo_speed < diff_e && param.control.has_hydraulic_diffusion)
-    {
-        std::cout << "pseudo speed is too slow, increase mass scaling" << std::endl;
-        std::exit(11);
+        if (pseudo_speed < diff_ref) {
+            std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
+                      << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
+                      << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
+            die(EXIT_CONFIG_VALUE);
+        }
     }
 
 #ifndef ACC
@@ -716,7 +1878,11 @@ void compute_mass(const Param &param, const Variables &var,
 
             if(param.control.use_global_velocity_scaling)
             {
-                double apprent_speed = std::min(pseudo_speed_ATP, std::sqrt(var.mat->shearm(e)/var.mat->rho(e))); // minimum speed
+                double apprent_speed = std::min(
+                    pseudo_speed_ATP,
+                    std::sqrt(
+                        mass_scaling_modulus(param, *var.mat, e) /
+                        var.mat->rho(e)));
 
                 rho = (param.control.is_quasi_static) ?
                 (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
@@ -768,8 +1934,10 @@ void compute_mass(const Param &param, const Variables &var,
             hmass[n]=0;
             ymass[n]=0;
         
-            for( auto e = (*var.support)[n].begin(); e < (*var.support)[n].end(); ++e) {
-                ConstElemCacheAccessor tr = tmp_result[*e];
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            for (int i=0; i<npatch; ++i) {
+                ConstElemCacheAccessor tr = tmp_result[patch[i]];
                 volume_n[n] += tr[0];
                 mass[n] += tr[1];
                 if (param.control.has_thermal_diffusion)
@@ -785,89 +1953,6 @@ void compute_mass(const Param &param, const Variables &var,
 #endif
 }
 
-void compute_shape_fn(const Variables &var, shapefn &shpdx, shapefn &shpdy, shapefn &shpdz)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-#ifndef ACC
-    #pragma omp parallel for default(none)      \
-        shared(var, shpdx, shpdy, shpdz)
-#endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0;e<var.nelem;e++) {
-
-        int n0 = (*var.connectivity)[e][0];
-        int n1 = (*var.connectivity)[e][1];
-        int n2 = (*var.connectivity)[e][2];
-
-        ConstArrayAccessor d0 = (*var.coord)[n0];
-        ConstArrayAccessor d1 = (*var.coord)[n1];
-        ConstArrayAccessor d2 = (*var.coord)[n2];
-
-#ifdef THREED
-        {
-            int n3 = (*var.connectivity)[e][3];
-            ConstArrayAccessor d3 = (*var.coord)[n3];
-
-            double iv = 1 / (6 * (*var.volume)[e]);
-
-            double x01 = d0[0] - d1[0];
-            double x02 = d0[0] - d2[0];
-            double x03 = d0[0] - d3[0];
-            double x12 = d1[0] - d2[0];
-            double x13 = d1[0] - d3[0];
-            double x23 = d2[0] - d3[0];
-
-            double y01 = d0[1] - d1[1];
-            double y02 = d0[1] - d2[1];
-            double y03 = d0[1] - d3[1];
-            double y12 = d1[1] - d2[1];
-            double y13 = d1[1] - d3[1];
-            double y23 = d2[1] - d3[1];
-
-            double z01 = d0[2] - d1[2];
-            double z02 = d0[2] - d2[2];
-            double z03 = d0[2] - d3[2];
-            double z12 = d1[2] - d2[2];
-            double z13 = d1[2] - d3[2];
-            double z23 = d2[2] - d3[2];
-
-            shpdx[e][0] = iv * (y13*z12 - y12*z13);
-            shpdx[e][1] = iv * (y02*z23 - y23*z02);
-            shpdx[e][2] = iv * (y13*z03 - y03*z13);
-            shpdx[e][3] = iv * (y01*z02 - y02*z01);
-
-            shpdy[e][0] = iv * (z13*x12 - z12*x13);
-            shpdy[e][1] = iv * (z02*x23 - z23*x02);
-            shpdy[e][2] = iv * (z13*x03 - z03*x13);
-            shpdy[e][3] = iv * (z01*x02 - z02*x01);
-
-            shpdz[e][0] = iv * (x13*y12 - x12*y13);
-            shpdz[e][1] = iv * (x02*y23 - x23*y02);
-            shpdz[e][2] = iv * (x13*y03 - x03*y13);
-            shpdz[e][3] = iv * (x01*y02 - x02*y01);
-        }
-#else
-        {
-            double iv = 1 / (2 * (*var.volume)[e]);
-
-            shpdx[e][0] = iv * (d1[1] - d2[1]);
-            shpdx[e][1] = iv * (d2[1] - d0[1]);
-            shpdx[e][2] = iv * (d0[1] - d1[1]);
-
-            shpdz[e][0] = iv * (d2[0] - d1[0]);
-            shpdz[e][1] = iv * (d0[0] - d2[0]);
-            shpdz[e][2] = iv * (d1[0] - d0[0]);
-        }
-#endif
-    }
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
 
 double elem_quality(const array_t &coord, const conn_t &connectivity,
                     const double_vec &volume, int e)
@@ -924,4 +2009,3 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
-

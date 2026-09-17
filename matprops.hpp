@@ -74,6 +74,10 @@ public:
                                  double state_variable, double& dyn_fric_coeff,
                                  int state_model) const;
 
+    // Rebuild the per-element property means if elemmarkers changed since the last call.
+    // Must be called after ANYTHING that mutates elemmarkers, before the next read.
+    void refresh_elem_cache();
+
     const bool is_plane_strain;
     const double visc_min;
     const double visc_max;
@@ -107,6 +111,22 @@ private:
     double_vec bulk_modulus, shear_modulus;
     double_vec visc_exponent, visc_coefficient, visc_activation_energy;
     double_vec visc_activation_volume;
+
+    // Material-only terms of the Chen & Morgan creep law, built by the constructor.
+    // Pure function of visc_exponent / visc_coefficient, never mutated.
+    double_vec visc_pow_edot, visc_coef_term, visc_nR;
+
+    // The hot means, rebuilt by refresh_elem_cache(): pure functions of elemmarkers.
+    // Not exhaustive -- rho/visc CANNOT be cached (T, stress, edot). Stride 8 keeps one
+    // element's slots in a 64 B line; seven separate arrays measured 1.6x slower.
+    static const int MP_STRIDE = 8;
+    enum { MPC_BULKM = 0, MPC_SHEARM, MPC_PHI, MPC_ALPHA_BIOT,
+           MPC_CP, MPC_K, MPC_BETA_FLUID };
+    double_vec cache_props;
+
+    // Flat copy of elemmarkers, kept ONLY to detect that it moved. A version counter
+    // bumped by each mutation site would go stale the first time one is added.
+    int_vec cache_markers;
     double_vec heat_capacity, therm_cond;
     double_vec pls0, pls1;
     double_vec cohesion0, cohesion1;

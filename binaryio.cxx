@@ -5,6 +5,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "binaryio.hpp"
+#include "utils.hpp"
 #include "markerset.hpp"
 
 #ifdef WIN32
@@ -26,32 +27,55 @@ namespace std { using ::snprintf; }
  * 2  The rests are binary data.
  ****************************************************************************/
 
+// Revision number of the binary file format. Bump it whenever the layout
+// of the header or of the data written after it changes.
+#define BINARY_FILE_REVISION 4
+/* Revision notes:
+ * 4: Add write/read scalar for binary io
+ */
+
 namespace {
     const std::size_t headerlen = 4096;
-    const char revision_str[] = "# DynEarthSol ndims="
-#ifdef THREED
-        "3"
-#else
-        "2"
-#endif
-        " revision=3\n";
+    const std::string revision_str = "# DynEarthSol ndims=" + std::to_string(NDIMS)
+                                   + " revision=" + std::to_string(BINARY_FILE_REVISION) + "\n";
 }
 
 
 /* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
 
+void rename_to_old_backup(const char *filename) {
+    // Find the highest-numbered existing backup (.old, .old2, .old3, ...) and
+    // rename filename to max+1, so new backups always append after the largest
+    // rather than filling gaps left by manual deletions.
+    // fopen on a nonexistent file returns NULL immediately (ENOENT, no disk IO),
+    // so probing 200 past the last found is effectively free.
+    std::string fpath(filename);
+    int max_n = 0;
+    for (int n = 1; n <= max_n + 200; ++n) {
+        std::string candidate = fpath + ".old" + (n == 1 ? "" : std::to_string(n));
+        std::FILE *f = std::fopen(candidate.c_str(), "r");
+        if (f) { std::fclose(f); max_n = n; }
+    }
+    int next_n = max_n + 1;
+    std::string backup = fpath + ".old" + (next_n == 1 ? "" : std::to_string(next_n));
+    if (std::rename(filename, backup.c_str()) == 0)
+        std::cerr << "[Runtime][IO] Renamed '" << filename << "' -> '" << backup
+                  << "' (preserving previous output)\n";
+}
+
 #ifndef HDF5
 
-BinaryOutput::BinaryOutput(const char *filename)
+BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
 {
+    if (rename_if_exists) rename_to_old_backup(filename);
     f = std::fopen(filename, "wb");
     if (f == NULL) {
         std::cerr << "Error: cannot open file: " << filename << '\n';
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
 
     header = new char[headerlen]();
-    hd_pos = std::strcat(header, revision_str);
+    hd_pos = std::strcat(header, revision_str.c_str());
     eof_pos = headerlen;
 
     std::fseek(f, eof_pos, SEEK_SET);
@@ -88,15 +112,30 @@ void BinaryOutput::write_header(const char *name)
     if (len >= bsize) {
         std::cerr << "Error: exceeding buffer length at Output::write_array, name=" << name
                   << " eof_position=" << eof_pos << '\n';
-        std::exit(12);
+        die(EXIT_INTERNAL_ASSERT);
     }
     if (len >= headerlen - (hd_pos - header)*sizeof(char)) {
         std::cerr << "Error: exceeding header length at Output::write_array, name=" << name
                   << " eof_position=" << eof_pos << '\n';
-        std::exit(12);
+        die(EXIT_INTERNAL_ASSERT);
     }
     hd_pos = std::strncat(hd_pos, buffer, len);
 }
+
+template <typename T>
+void BinaryOutput::write_scalar(const T& A, const std::string& name)
+{
+    write_header(name.c_str());
+    std::size_t n = std::fwrite(&A, sizeof(T), 1, f);
+    eof_pos += n * sizeof(T);
+}
+
+
+// explicit instantiation
+template
+void BinaryOutput::write_scalar<int>(const int& A, const std::string& name);
+template
+void BinaryOutput::write_scalar<double>(const double& A, const std::string& name);
 
 // XXX: when A is *var.bcflag, i.e. T is uint, g++ cannot instantiate the template
 template <typename T>
@@ -171,7 +210,7 @@ BinaryInput::BinaryInput(const char *filename)
     f = std::fopen(filename, "r");
     if (f == NULL) {
         std::cerr << "Error: cannot open file: " << filename << '\n';
-        std::exit(2);
+        die(EXIT_IO_OPEN);
     }
     read_header();
 }
@@ -196,8 +235,7 @@ void BinaryInput::read_header()
     char *header = new char[headerlen]();
     std::size_t n = std::fread(header, sizeof(char), headerlen, f);
     if (n != headerlen) {
-        std::cerr << "Error: error reading file header\n";
-        std::exit(2);
+        die(EXIT_IO_RW, "error reading file header");
     }
 
     /* Parse the content of header buffer */
@@ -205,11 +243,11 @@ void BinaryInput::read_header()
 
     // Compare revision string (excluding the trailing new line)
     line = std::strtok(header, "\n");
-    if (strncmp(line, revision_str, strlen(revision_str)-1) != 0) {
+    if (strncmp(line, revision_str.c_str(), revision_str.size()-1) != 0) {
         std::cerr << "Error: mismatching revision string in header\n"
                   << "  Expect: " << revision_str
                   << "  Got: "<< line << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 
     line = std::strtok(NULL, "\n");
@@ -219,7 +257,7 @@ void BinaryInput::read_header()
         if (tab == NULL) {
             std::cerr << "Error: error parsing file header\n"
                       << " Line is:" << line << '\n';
-            std::exit(1);
+            die(EXIT_IO_RW);
         }
         std::string name(line, tab-line);
         std::size_t loc;
@@ -239,12 +277,31 @@ void BinaryInput::seek_to_array(const char *name)
     auto it = offset.find(name);
     if (it == offset.end()) {
         std::cerr << "Error: no array with a name: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     std::size_t loc = it->second;
     //std::cout << name << ' ' << loc << '\n';
     std::fseek(f, loc, SEEK_SET);
 }
+
+
+template <typename T>
+void BinaryInput::read_scalar(T& A, const std::string& name)
+{
+    seek_to_array(name.c_str());
+    std::size_t n = std::fread(&A, sizeof(T), 1, f);
+    if (n != 1) {
+        std::cerr << "Error: cannot read scalar: " << name << '\n';
+        die(EXIT_IO_RW);
+    }
+}
+
+
+// explicit instantiation
+template
+void BinaryInput::read_scalar<int>(int& A, const std::string& name);
+template
+void BinaryInput::read_scalar<double>(double& A, const std::string& name);
 
 
 template <typename T>
@@ -255,15 +312,15 @@ void BinaryInput::read_array(std::vector<T>& A, const char *name, std::size_t si
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     seek_to_array(name);
-    int n = std::fread(A.data(), sizeof(T), size, f);
+    const std::size_t n = std::fread(A.data(), sizeof(T), size, f);
 
     if (n != size) {
         std::cerr << "Error: cannot read array: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 }
 
@@ -276,7 +333,7 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     seek_to_array(name);
@@ -286,13 +343,13 @@ void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size
     if (buffer.size() < total_elements)
         buffer.resize(total_elements);
 
-    int n = std::fread(buffer.data(), sizeof(T), size * N, f);
+    const std::size_t n = std::fread(buffer.data(), sizeof(T), size * N, f);
     if (n != N * size) {
         std::cerr << "Error: cannot read array (buffered path): " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 }
 
 
@@ -320,9 +377,12 @@ void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::si
 
 #else
 
-HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level, const bool is_chkpt)
+HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
+                       const bool is_chkpt, const bool rename_if_exists)
     : compression_level(hdf5_compression_level), is_checkpoint(is_chkpt)
 {
+    if (rename_if_exists) rename_to_old_backup(filename);
+
     hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
     file_id = H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, fapl_id);
     H5Pclose(fapl_id);
@@ -380,7 +440,7 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
 void HDF5Output::write_header()
 {
     write_attribute(NDIMS, "ndims", file_id);
-    write_attribute(3, "revision", file_id);
+    write_attribute(BINARY_FILE_REVISION, "revision", file_id);
 
     hid_t gid = create_group_with_order("/VTKHDF");
 
@@ -635,7 +695,7 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
         } else if (len == nseg || len == etop) {
         } else {
             printf("name = %s\n", name);
-            std::exit(13);
+            die(EXIT_INTERNAL_ASSERT);
         }
     }
     std::string full_name = "/VTKHDF/" + block_base + "/" + mid + name;
@@ -683,7 +743,7 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
         } else if (len == nseg || len == etop) {
         } else {
             printf("name = %s\n", name);
-            std::exit(13);
+            die(EXIT_INTERNAL_ASSERT);
         }
     }
 
@@ -857,7 +917,7 @@ HDF5Input::HDF5Input(const char *filename)
     file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
     if (file_id < 0) {
         std::cerr << "Error: cannot open HDF5 file for reading: " << filename << "\n";
-        std::exit(1);
+        die(EXIT_IO_OPEN);
     }
 
     read_header();
@@ -866,8 +926,7 @@ HDF5Input::HDF5Input(const char *filename)
 void HDF5Input::read_header()
 {
     if (H5Aexists(file_id, "ndims") <= 0) {
-        std::cerr << "Error: missing attribute ndims in HDF5 file\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART, "missing attribute ndims in HDF5 file");
     }
 
     hid_t attr = H5Aopen(file_id, "ndims", H5P_DEFAULT);
@@ -878,9 +937,14 @@ void HDF5Input::read_header()
     H5Tclose(atype);
     H5Aclose(attr);
 
+    if (ndims != NDIMS) {
+        std::cerr << "Error: mismatching ndims in HDF5 file\n"
+                  << "  Expect: " << NDIMS << "  Got: " << ndims << '\n';
+        die(EXIT_IO_RESTART);
+    }
+
     if (H5Aexists(file_id, "revision") <= 0) {
-        std::cerr << "Error: missing attribute revision in HDF5 file\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART, "missing attribute revision in HDF5 file");
     }
 
     attr = H5Aopen(file_id, "revision", H5P_DEFAULT);
@@ -890,6 +954,12 @@ void HDF5Input::read_header()
     H5Aread(attr, atype, &revision);
     H5Tclose(atype);
     H5Aclose(attr);
+
+    if (revision != BINARY_FILE_REVISION) {
+        std::cerr << "Error: mismatching revision in HDF5 file\n"
+                  << "  Expect: " << BINARY_FILE_REVISION << "  Got: " << revision << '\n';
+        die(EXIT_IO_RESTART);
+    }
 }
 
 HDF5Input::~HDF5Input()
@@ -907,30 +977,30 @@ bool HDF5Input::has_array(const char *name) const
 }
 
 template <typename T>
-void HDF5Input::read_scaler(T& A, const std::string& name)
+void HDF5Input::read_scalar(T& A, const std::string& name)
 {
     hid_t dset_id = H5Dopen2(file_id, name.c_str(), H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank < 0) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: cannot get rank for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     if (rank == 0 || rank > 1) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
                   << ", expected rank 1, got " << rank << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t mspace_id =  H5Screate(H5S_SCALAR);
@@ -938,7 +1008,7 @@ void HDF5Input::read_scaler(T& A, const std::string& name)
     if (mspace_id < 0) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: cannot create memspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dtype_id = H5Native<T>::id();
@@ -946,7 +1016,7 @@ void HDF5Input::read_scaler(T& A, const std::string& name)
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, &A) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     H5Sclose(mspace_id);
@@ -955,9 +1025,9 @@ void HDF5Input::read_scaler(T& A, const std::string& name)
 }
 
 template
-void HDF5Input::read_scaler<int>(int& A, const std::string& name);
+void HDF5Input::read_scalar<int>(int& A, const std::string& name);
 template
-void HDF5Input::read_scaler<double>(double& A, const std::string& name);
+void HDF5Input::read_scalar<double>(double& A, const std::string& name);
 
 template <typename T>
 void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size)
@@ -965,33 +1035,33 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size
     size = size > 0 ? size : A.size();
     if (size == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 1) {
         H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: dataset rank mismatch for " << name
                   << ", expected rank 0 or 1, got " << rank << "\n";
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
     hsize_t dims[1];
     H5Sget_simple_extent_dims(space_id, dims, nullptr);
     if (dims[0] != size) {
         std::cerr << "Error: array size is not matched: " << name
                   << " (file dim = " << dims[0] << ", expected = " << size << ")\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t mspace_id = H5Screate_simple(1, dims, nullptr);
@@ -1000,7 +1070,7 @@ void HDF5Input::read_array(std::vector<T>& A, const char *name, std::size_t size
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, A.data()) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     H5Sclose(mspace_id);
@@ -1017,25 +1087,25 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
     size = size > 0 ? size : A.size();
     if (A.size() == 0) {
         std::cerr << "Error: array size is 0: " << name << '\n';
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
     hid_t dset_id = H5Dopen2(file_id, name, H5P_DEFAULT);
     if (dset_id < 0) {
         std::cerr << "Error: cannot open dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t space_id = H5Dget_space(dset_id);
     if (space_id < 0) {
         H5Dclose(dset_id);
         std::cerr << "Error: cannot get dataspace for " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     int rank = H5Sget_simple_extent_ndims(space_id);
     if (rank != 2) {
         std::cerr << "Error: dataset rank mismatch for " << name 
                   << ", expected 2 dims, got " << rank << '\n';
-        std::exit(1);
+        die(EXIT_IO_RESTART);
     }
 
     hsize_t dims[2];
@@ -1044,7 +1114,7 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
         std::cerr << "Error: dataset dimensions mismatch for " << name
                   << ": file dims = (" << dims[0] << ", " << dims[1]
                   << "), expected (" << size << ", " << N << ")\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
     hid_t mspace_id = H5Screate_simple(2, dims, nullptr);
     hid_t dtype_id = H5Native<T>::id();
@@ -1057,10 +1127,10 @@ void HDF5Input::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
     if (H5Dread(dset_id, dtype_id, mspace_id, space_id, H5P_DEFAULT, buffer.data()) < 0) {
         H5Sclose(mspace_id); H5Sclose(space_id); H5Dclose(dset_id);
         std::cerr << "Error: failed to read dataset: " << name << "\n";
-        std::exit(1);
+        die(EXIT_IO_RW);
     }
 
-    A.load_from_buffer(buffer.data(), size);
+    A.load_from_buffer(buffer.data(), size, false);
 
     H5Sclose(mspace_id);
     H5Sclose(space_id);

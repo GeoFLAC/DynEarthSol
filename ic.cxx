@@ -316,6 +316,32 @@ namespace {
     };
 
 
+void set_homogeneous_initial_stress(const Param &param, const Variables &var,
+                                    tensor_t &stress, double_vec &stressyy,
+                                    double_vec &old_mean_stress,
+                                    tensor_t &strain)
+{
+    double imposed[NSTR];
+    for (int i = 0; i < NSTR; ++i)
+        imposed[i] = param.ic.initial_stress[i];
+    const bool is_plane_strain = param.mat.is_plane_strain;
+
+    #pragma acc parallel loop gang vector copyin(imposed[0:NSTR]) async
+    for (int e = 0; e < var.nelem; ++e) {
+        TensorAccessor s = stress[e];
+        TensorAccessor eps = strain[e];
+        for (int i = 0; i < NSTR; ++i) {
+            s[i] = imposed[i];
+            eps[i] = 0.0;
+        }
+        old_mean_stress[e] = trace(s) / NDIMS;
+        if (is_plane_strain)
+            stressyy[e] = old_mean_stress[e];
+    }
+    #pragma acc wait
+}
+
+
 } // anonymous namespace
 
 
@@ -325,6 +351,9 @@ void initial_stress_state(const Param &param, const Variables &var,
 {
     if (param.control.gravity == 0) {
         compensation_pressure = 0;
+        if (param.ic.initial_stress_option == 1)
+            set_homogeneous_initial_stress(
+                param, var, stress, stressyy, old_mean_stress, strain);
         return;
     }
 
@@ -367,16 +396,16 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
 {
     if (param.control.gravity == 0) {
         compensation_pressure = 0;
+        if (param.ic.initial_stress_option == 1)
+            set_homogeneous_initial_stress(
+                param, var, stress, stressyy, old_mean_stress, strain);
         return;
     }
 
-    // lithostatic condition for stress and strain
-    double rho = var.mat->rho(0);
-    if (param.control.has_hydraulic_diffusion) {
-        // Modified density considering porosity for hydraulic diffusion
-        rho = var.mat->rho(0) * (1 - var.mat->phi(0)) + 1000.0 * var.mat->phi(0);
-    }
-
+    // Lithostatic stress and strain. loading_zz below -- the 1D surface load this variant
+    // exists to add -- is still held at zero, so what this writes is the plain lithostatic
+    // state, the same as initial_stress_state(). The load term's density would be
+    // var.mat->rho(0), porosity-weighted with water under has_hydraulic_diffusion.
     double ks = var.mat->bulkm(0);
     double mu = var.mat->shearm(0);
     double lame = ks - (2.0 / 3.0) * mu;
@@ -628,7 +657,7 @@ void initial_weak_zone(const Param &param, const Variables &var,
     }
     default:
         std::cerr << "Error: unknown weakzone_option: " << param.ic.weakzone_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     #pragma acc parallel loop gang vector
@@ -806,9 +835,10 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
                 if ( z >= layer_bdy[i])
                     rs = hp[i];
 
-            int_vec &sup = (*var.support)[n];
-            for (int i=0;i<sup.size();i++)
-                radiogenic_source[sup[i]] += rs/NODES_PER_ELEM;
+            const int npatch = var.support.size(n);
+            const int* patch = var.support.patch(n);
+            for (int i=0;i<npatch;i++)
+                radiogenic_source[patch[i]] += rs/NODES_PER_ELEM;
         }
 
         temperature[n] = t;
@@ -1015,7 +1045,7 @@ void initial_temperature(const Param &param, const Variables &var,
         break;
     default:
         std::cout << "Error: unknown ic.temperature option: " << param.ic.temperature_option << '\n';
-        std::exit(1);
+        die(EXIT_CONFIG_VALUE);
     }
 
     double max_temp = 0.0;
