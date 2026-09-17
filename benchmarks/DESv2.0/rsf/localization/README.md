@@ -25,9 +25,9 @@ V0 = 1e-9 m/s, and the total deviatoric strain-rate invariant
 
 ## Run
 
-Use the compatible 2D executable specified in the [main guide](../README.md);
-the solver retained on this benchmark branch predates the required RSF controls.
-Run from this directory with that executable. Each case has a distinct output prefix.
+Build the 2D executable from this source tree, which supplies the invariant RSF
+rate and adaptive aging-law state-step controls. Run from this directory with that
+executable. Each case has a distinct output prefix.
 
 ```bash
 mkdir -p output
@@ -44,17 +44,21 @@ at the seed center; the other two points lie near the side boundaries.
 
 Compare the accumulated plastic strain with its initial field to identify the
 shear bands developing from the weak seed. Use the same color scale for all
-three models. If estimating band dips, use the same depth interval in each model.
-The Arthur angle for the initial friction and dilation angles is 52.5 degrees.
+three models. Band dips fitted over depths 2-8 km in the completed 12 kyr
+calculations are 52.4, 54.5, and 51.2 degrees for EP, strengthening EP-RSF, and
+weakening EP-RSF, respectively. If estimating band dips, use that same depth
+interval in each model. The Arthur angle for the initial friction and dilation
+angles is 52.5 degrees.
 
 The monitor CSVs provide coordinates, velocity, stress, friction, and state
 outputs. Seed displacement is the magnitude of the monitored seed node's change
 in position from its initial location. The second invariant of deviatoric stress
 in the monitored seed element is
 `sqrt(0.25 * (stress_0 - stress_1)^2 + stress_2^2)`; divide by `1e6` for MPa.
-Use these histories to compare smooth deformation with episodic displacement
-and stress drops.
+Use these histories to compare smooth deformation with episodic displacement and
+stress drops; the weakening case has stepwise displacement and repeated stress
+drops.
 
-The inputs passed three-step startup checks on their original meshes with the
-source revision linked in the main guide. Those checks do not establish the
-final shear-band geometry or the full 12000-year response.
+The inputs passed three-step startup checks on their original meshes. Those
+checks do not establish the final shear-band geometry, the band dips quoted
+above, or the full 12000-year response.
