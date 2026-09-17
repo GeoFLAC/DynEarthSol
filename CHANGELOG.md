@@ -14,6 +14,25 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 Nothing yet.
 
+## [benchmarks-v2.0.2] - 2026-09-17
+
+DOI: [10.5281/zenodo.22818801](https://doi.org/10.5281/zenodo.22818801).
+The benchmark dataset, released from the `benchmarks/DESv2.0` branch by a
+`benchmarks-v*` tag rather than from master.
+
+### Added
+
+- The rate-and-state friction collection: 108 configurations and three meshes,
+  covering simple-shear verification, extensional localization, a decollement
+  parameter study and a strike-slip comparison. `CASES.md` indexes them and
+  records each group's input requirements.
+
+### Changed
+
+- The benchmark guides are organized around model problems, each giving its
+  setup, run commands and reproduction limits. `benchmarks-v2.0.0` shipped the
+  performance and coupling benchmarks with the dataset's top-level guides.
+
 ## [2.0.2] - 2026-09-17
 
 DOI: [10.5281/zenodo.20330979](https://doi.org/10.5281/zenodo.20330979).
@@ -123,6 +142,7 @@ First tagged release. It predates the changelog and the GitHub release notes; se
 the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 
 [Unreleased]: https://github.com/GeoFLAC/DynEarthSol/compare/v2.0.2...master
+[benchmarks-v2.0.2]: https://github.com/GeoFLAC/DynEarthSol/compare/benchmarks-v2.0.0...benchmarks-v2.0.2
 [2.0.2]: https://github.com/GeoFLAC/DynEarthSol/compare/v2.0.0...v2.0.2
 [2.0.0]: https://github.com/GeoFLAC/DynEarthSol/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0

@@ -18,8 +18,8 @@ authors:
   orcid: "https://orcid.org/0000-0001-5287-9959"
 
 title: "DynEarthSol"
-version: 2.0.2
-doi: 10.5281/zenodo.20330979
+version: benchmarks-v2.0.2
+doi: 10.5281/zenodo.22818801
 date-released: 2026-09-17
 url: "https://geoflac.github.io/DynEarthSol/"
 repository-code: "https://github.com/GeoFLAC/DynEarthSol"
