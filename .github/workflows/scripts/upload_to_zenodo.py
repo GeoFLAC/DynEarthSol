@@ -108,7 +108,22 @@ def main():
 
     # Force synchronizing version name with GitHub Release Tag
     metadata_payload["version"] = TAG_NAME
-    
+
+    # Point the deposit at the tag it was built from, the way Zenodo's own
+    # GitHub integration does.
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if repository:
+        tree_url = f"https://github.com/{repository}/tree/{TAG_NAME}"
+        metadata_payload.setdefault("related_identifiers", []).append({
+            "relation": "isSupplementTo",
+            "identifier": tree_url,
+            "resource_type": "software",
+        })
+        print(f"-> Linked as a supplement to {tree_url}")
+    else:
+        print("WARNING: GITHUB_REPOSITORY is unset, so the deposit will not "
+              "name the tag it came from.")
+
     meta_res = requests.put(
         f"{ZENODO_API_URL}/{draft_id}", 
         json={"metadata": metadata_payload}, 
