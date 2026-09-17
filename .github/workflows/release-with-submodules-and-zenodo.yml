@@ -4,10 +4,8 @@ name: Release with submodules and Zenodo
 # is published, and draft releases fire no events to hook. So the tarball is
 # attached while the release is still a draft (push a tag, or dispatch this
 # workflow with an existing tag), and the maintainer publishes that draft.
-# Publishing then sends the very asset that was attached on to Zenodo. Both the
-# tag push and the release event run this file from the tagged commit, so the
-# tag has to carry it. A benchmarks-v* tag is packaged the same way, minus the
-# Zenodo step.
+# Publishing sends that same asset to Zenodo. Both events run this file from the
+# tagged commit, so the tag has to carry it.
 
 on:
   push:
@@ -84,9 +82,7 @@ jobs:
   # 4. Send the asset the draft carried to the manually opened Zenodo draft, so
   #    the deposit is byte-identical to the GitHub asset rather than a rebuild.
   zenodo:
-    # A benchmarks-v* tag names no reserved DOI in its CITATION.cff, so there is
-    # no deposit to fill; it gets the draft release and its tarball only.
-    if: github.event_name == 'release' && !startsWith(github.ref_name, 'benchmarks-')
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
