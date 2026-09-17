@@ -18,9 +18,9 @@ authors:
   orcid: "https://orcid.org/0000-0001-5287-9959"
 
 title: "DynEarthSol"
-version: 2.0.0
-doi: 10.5281/zenodo.20293558
-date-released: 2026-05-19
+version: 2.0.2
+doi: 10.5281/zenodo.20330979
+date-released: 2026-09-17
 url: "https://geoflac.github.io/DynEarthSol/"
 repository-code: "https://github.com/GeoFLAC/DynEarthSol"
 license: "MIT"
