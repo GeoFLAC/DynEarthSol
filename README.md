@@ -14,12 +14,12 @@
 
 # Overview
 
-DynEarthSol3D, DES3D in short, is a finite element code that solves the momentum balance and 
-the heat transfer in Lagrangian form using unstructured meshes. It can be
-used to study the long-term deformation of Earth's lithosphere and problems
-alike.
+DynEarthSol, DES in short, is a finite element code that solves the momentum
+balance and the heat transfer in Lagrangian form using unstructured meshes, in
+two or three dimensions. It can be used to study the long-term deformation of
+Earth's lithosphere and problems alike.
 
-# Building DES3D
+# Building DES
 
 ## Getting the Source Code
 This repository uses Git submodules for three libraries: `nanoflann` (always),
@@ -128,7 +128,7 @@ defaults are not what you want.
 ### Optional packages
 * [Exodus](https://github.com/sandialabs/seacas/), `useexo=1`, for importing a
   mesh in the ExodusII format. 3D only.
-  * Suggested building procedure, run in the root directory of DES3D; it
+  * Suggested building procedure, run in the root directory of DES; it
     downloads and builds NetCDF and HDF5, then Exodus, with headers and libraries
     landing in `./seacas/include` and `./seacas/lib`:
     ```BASH
@@ -231,7 +231,7 @@ Nothing else to configure: `make` locates the header and the library itself.
   hybrid-CPU detection for all Apple Silicon, setting thread *blocktime* to
   **0 µs**: threads yield immediately after each parallel region instead of
   spin-waiting, which cuts CPU utilisation to ~250 % on a 6-core Mac against
-  ~600 % on Linux. DES3D therefore sets `OMP_WAIT_POLICY=active` at startup on
+  ~600 % on Linux. DES therefore sets `OMP_WAIT_POLICY=active` at startup on
   macOS unless `OMP_WAIT_POLICY` or `KMP_BLOCKTIME` is already set, and prints a
   notice saying so. To override:
   ```bash
@@ -322,7 +322,7 @@ make openacc=1
 make openacc=1 GPU_CC=90
 ```
 
-# Running DES3D
+# Running DES
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.
 * The input format is documented in `examples/defaults.cfg`, and working cases
@@ -342,7 +342,7 @@ make openacc=1 GPU_CC=90
   ```
   See `gospl_driver/README.md` and `gospl_driver/examples/` for the details.
 
-# Visualizing DES3D outputs
+# Visualizing DES outputs
 * Run `2vtk.py modelname` to convert the binary output to VTK files; `2vtk.py -h`
   lists the options, among them markers (`-m`), principal stresses (`-p`) and
   full tensors (`-t`).
@@ -365,9 +365,10 @@ tests, commit messages, pull requests, releases -- are in
 
 # Citing
 
-Cite the version you used. [CITATION.cff](CITATION.cff) carries its DOI, and
-GitHub renders it under *Cite this repository*; the badge above is the concept
-DOI that always resolves to the latest release.
+Cite the [DynEarthSol v2.0 paper](https://doi.org/10.5194/egusphere-2026-2922)
+and the version you used. [CITATION.cff](CITATION.cff) carries the version DOI,
+and GitHub renders it under *Cite this repository*; the badge above is the
+concept DOI that always resolves to the latest release.
 
 # License
 

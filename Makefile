@@ -1,6 +1,6 @@
 # -*- Makefile -*-
 #
-# Makefile for DynEarthSol3D
+# Makefile for DynEarthSol
 #
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
