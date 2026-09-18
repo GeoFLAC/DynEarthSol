@@ -18,8 +18,11 @@ Fixes #
 
 ## What
 
-<!-- One bullet per change. If tests, cfgs or docs dominate the diff, say how
-     large the production-code change is. -->
+<!-- One bullet per change, one or two lines each: what a user notices, not
+     how. Prefix one a user must react to -- a renamed parameter, a new exit
+     code, a new output file -- with **Breaking.** as the changelog does. If
+     tests, cfgs or docs dominate the diff, say how large the production-code
+     change is. -->
 
 -
 
