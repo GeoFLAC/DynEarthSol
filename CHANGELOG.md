@@ -5,8 +5,11 @@ All notable changes to DynEarthSol are documented here. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries are grouped by theme rather than by pull request; each references the
-pull request that carries the detail. Changes with no effect on users of the
-code -- CI workflows, repository metadata, release plumbing -- are not listed.
+pull request that carries the detail. An entry is one or two sentences on what
+a user of the code notices -- a parameter, a result that moved, a build that
+now works -- not on how; mechanism and evidence stay in the pull request.
+Changes with no effect on users of the code -- CI workflows, repository
+metadata, release plumbing -- are not listed.
 For a release, the full auto-generated list of merged pull requests is in its
 [GitHub release notes](https://github.com/GeoFLAC/DynEarthSol/releases).
 
