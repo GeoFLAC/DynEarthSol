@@ -59,6 +59,44 @@ field and exits 1 if any field exceeds 1e-8 or contains NaN/Inf. Run
 `python compare.py --help` (or read its module docstring) for manual usage and
 restart-troubleshooting instructions.
 
+## Commit messages
+
+The message records what the code cannot: what was wrong before, why this fix
+and not another, and what it was measured to do. Conventions follow the Git and
+Linux kernel patch guides and Chris Beams' seven rules; the split with code
+comments follows Hutterer's "On commit messages".
+
+```
+type(scope): imperative summary, 72 characters or fewer, no period
+
+The problem, in the present tense, and its user-visible effect. Whether this is
+a one-line fix or a new feature, there is a problem that motivated it -- state
+it first, so a reader knows whether to read on.
+
+The approach, only where the diff does not make it obvious, and any alternative
+considered and rejected. Numbers for every claim: a mesh that changed, a field
+that moved, a timing -- give the case and the value.
+
+Co-Authored-By: Name <email>
+```
+
+* `type` is one of `fix`, `feat`, `refactor`, `test`, `docs`, `ci`, `build`,
+  `cleanup`; `scope` is optional and names the subsystem (`rsf`, `mmg`, `tpf`).
+  Lowercase after the colon.
+* **Comment versus commit.** A code comment states the invariant the code must
+  hold *now* and what breaks if it is violated; it is bound to the code and rots
+  when it carries history. The commit body holds the history: the wrong
+  behaviour it replaced, the reasoning, the measurements. Write each fact in one
+  place. When a fact must live in the code -- an ordering contract, a guard's
+  reason -- put it in the comment or an assertion, and let the body say so
+  ("asserted at the consumer") rather than repeat it.
+* Refer to earlier work by its subject line or pull request number, never by
+  hash alone: branches here are rebased and replayed, so hashes go stale.
+* Trailers: `Co-Authored-By` for every AI tool or person who wrote part of the
+  change; `Fixes #N` when the commit closes an issue.
+* Length is set by the problem, not by habit. Most fixes fit three short
+  paragraphs; if the body restates the diff's comments, cut one of the two.
+
 ## Development and release workflow
 
 1. **Prepare feature branch**: Develop your feature and ensure all local tests pass.
