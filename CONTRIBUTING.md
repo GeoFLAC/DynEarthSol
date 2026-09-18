@@ -97,6 +97,23 @@ Co-Authored-By: Name <email>
 * Length is set by the problem, not by habit. Most fixes fit three short
   paragraphs; if the body restates the diff's comments, cut one of the two.
 
+## Issues and pull requests
+
+Templates under [`.github/`](.github/) fill in when you open an issue or a pull
+request; each says in its comments what it asks for and why, so that is not
+repeated here.
+
+* **Bugs**: one issue per symptom, with the version, the exact build and run
+  lines, the smallest failing cfg, and the output as text. A diagnosis is
+  welcome, labelled as one.
+* **Enhancements**: the problem as it stands today, a concrete proposal, the
+  alternatives you rejected, and the state that closes the issue.
+* **Pull requests**: one topic per PR, commits that each build and pass
+  `benchmarks-cores`. The template's one DES-specific question is whether the
+  change altered results -- CI cannot tell -- so run the comparison above and
+  report it. Open as a draft until CI is green, then request review from at
+  least one other developer.
+
 ## Development and release workflow
 
 1. **Prepare feature branch**: Develop your feature and ensure all local tests pass.
