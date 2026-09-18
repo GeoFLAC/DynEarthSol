@@ -863,7 +863,7 @@ static void compute_init_metric(
 
     if (max_elem_size > 0) {
         // Uniform target: convert volume constraint to edge length
-        // Convention in DES3D: max_elem_size ≈ sizefactor * resolution^NDIMS
+        // Convention in DES: max_elem_size ≈ sizefactor * resolution^NDIMS
         double target = std::pow(max_elem_size / sizefactor, 1.0 / NDIMS);
         std::fill(metric.begin(), metric.end(), target);
     }
@@ -2436,7 +2436,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     int *elem_list[num_side_sets];
     // list of facets (sides) of a corresponding element in the side set
     int *side_list[num_side_sets];
-    // list of the number of nodes of a facet. Uniformly 3 in DES3D.
+    // list of the number of nodes of a facet. Uniformly 3 in DES.
     int *node_cnt_list[num_side_sets];
     // list of node IDs of the facet-composing nodes
     int *node_list[num_side_sets];
