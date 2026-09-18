@@ -16,7 +16,7 @@
 
 // Process exit codes: first digit the category, second the cause, so a bare status
 // says where to look -- 1x the user to fix, 2x the environment, 3x-6x ours. Keep in
-// step with DEVELOPING.md. Nothing above 99; the shell reserves 126+.
+// step with CONTRIBUTING.md. Nothing above 99; the shell reserves 126+.
 enum ExitCode {
     EXIT_OK                   =  0,
 
