@@ -63,8 +63,8 @@ RUN adduser --disabled-password --gecos '' --uid $USER_ID $USER \
 
 # Set $HOME
 USER $USER
-ENV HOME /home/$USER
-ENV USER $USER
+ENV HOME=/home/$USER
+ENV USER=$USER
 
 # pip install requirements
 RUN pip install numpy scipy
