@@ -193,11 +193,8 @@ void init(const Param& param, Variables& var)
     // The RSF state variable is initialized below; skip its bound for this
     // bootstrap call. main() recomputes dt after state initialization.
     var.dt = compute_dt(param, var, false);
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-
-#ifdef USEMMG
-    initialize_elem_size_n(var, *var.init_elem_size_n);
-#endif
+    // compute_mass runs at the END of init(): it reads rho(e), a function of var.temperature
+    // and elemmarkers, which the initial_* calls below are the first to write.
 
 
 
@@ -221,6 +218,17 @@ void init(const Param& param, Variables& var)
     #pragma omp parallel for default(none) shared(var)
     for (int e=0; e<var.nelem; ++e)
         (*var.viscosity)[e] = var.mat->visc(e);
+
+    // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
+    // and elemmarkers, which those calls are the first to write -- before them tmass was built at
+    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). This is also the
+    // LAST mass build on a static mesh: update_mesh and remesh are both gated on has_moving_mesh.
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
+#ifdef USEMMG
+    // After compute_mass: it is the only writer of var.volume_n, which this divides by.
+    initialize_elem_size_n(var, *var.init_elem_size_n);
+#endif
 
     report_mesh_info(var, "initial");
 
