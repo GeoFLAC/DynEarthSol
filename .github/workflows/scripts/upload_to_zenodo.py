@@ -16,6 +16,8 @@ CFF_FILE = "CITATION.cff"
 ZENODO_API_URL = "https://zenodo.org/api/deposit/depositions"
 HEADERS = {"Content-Type": "application/json"}
 PARAMS = {"access_token": TOKEN}
+TIMEOUT = 60         # seconds, for the JSON calls
+UPLOAD_TIMEOUT = 600 # seconds, for the file upload
 
 def extract_zenodo_id_from_cff(filepath):
     """
@@ -46,12 +48,23 @@ def main():
     # 1. Dynamically extract the Target ID from CITATION.cff
     TARGET_ID = extract_zenodo_id_from_cff(CFF_FILE)
 
-    # 2. Fetch the metadata of this ID from Zenodo
-    res = requests.get(f"{ZENODO_API_URL}/{TARGET_ID}", params=PARAMS)
+    # 2. Collect what to upload. This precedes the delete in step 5, which
+    # would otherwise clear the draft and leave it with no files at all.
+    upload_dir = "output_files"
+    files_to_upload = sorted(
+        f for f in glob.glob(f"{upload_dir}/*") if os.path.isfile(f))
+    if not files_to_upload:
+        print(f"Error: no file to upload in '{upload_dir}/'.")
+        sys.exit(1)
+    print("-> Staged: " + ", ".join(os.path.basename(f) for f in files_to_upload))
+
+    # 3. Fetch the metadata of this ID from Zenodo
+    res = requests.get(f"{ZENODO_API_URL}/{TARGET_ID}", params=PARAMS,
+                       timeout=TIMEOUT)
     res.raise_for_status()
     draft_data = res.json()
     
-    # 3. Double-check the status to enforce workflow integrity
+    # 4. Double-check the status to enforce workflow integrity
     is_submitted = draft_data.get("submitted", False)
     links = draft_data.get("links", {})
 
@@ -71,28 +84,24 @@ def main():
 
     print(f"Successfully verified target as an active Draft (ID: {draft_id})")
 
-    # 4. Clear old files that Zenodo automatically inherited from the previous version
+    # 5. Clear old files that Zenodo automatically inherited from the previous version
     existing_files = draft_data.get("files", [])
     for f in existing_files:
-        requests.delete(f"{ZENODO_API_URL}/{draft_id}/files/{f['id']}", params=PARAMS).raise_for_status()
+        requests.delete(f"{ZENODO_API_URL}/{draft_id}/files/{f['id']}",
+                        params=PARAMS, timeout=TIMEOUT).raise_for_status()
     if existing_files:
         print("-> Cleared inherited old files from the draft.")
 
-    # 5. Upload all files from the output_files directory
-    upload_dir = "output_files"
-    files_to_upload = glob.glob(f"{upload_dir}/*")
-    
-    if not files_to_upload:
-        print(f"Warning: No files found in '{upload_dir}/' to upload.")
-    
+    # 6. Upload the files staged in step 2
     for filepath in files_to_upload:
         filename = os.path.basename(filepath)
         with open(filepath, "rb") as fp:
-            r = requests.put(f"{bucket_url}/{filename}", data=fp, params=PARAMS)
+            r = requests.put(f"{bucket_url}/{filename}", data=fp, params=PARAMS,
+                             timeout=UPLOAD_TIMEOUT)
             r.raise_for_status()
             print(f"-> Uploaded: {filename}")
 
-    # 6. Read .zenodo.json (if exists) and forcefully overwrite the version with GitHub Tag
+    # 7. Read .zenodo.json (if exists) and forcefully overwrite the version with GitHub Tag
     metadata_payload = {}
     if os.path.exists(".zenodo.json"):
         with open(".zenodo.json", "r", encoding="utf-8") as f:
@@ -108,12 +117,28 @@ def main():
 
     # Force synchronizing version name with GitHub Release Tag
     metadata_payload["version"] = TAG_NAME
-    
+
+    # Point the deposit at the tag it was built from, the way Zenodo's own
+    # GitHub integration does.
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if repository:
+        tree_url = f"https://github.com/{repository}/tree/{TAG_NAME}"
+        metadata_payload.setdefault("related_identifiers", []).append({
+            "relation": "isSupplementTo",
+            "identifier": tree_url,
+            "resource_type": "software",
+        })
+        print(f"-> Linked as a supplement to {tree_url}")
+    else:
+        print("WARNING: GITHUB_REPOSITORY is unset, so the deposit will not "
+              "name the tag it came from.")
+
     meta_res = requests.put(
         f"{ZENODO_API_URL}/{draft_id}", 
         json={"metadata": metadata_payload}, 
         params=PARAMS, 
-        headers=HEADERS
+        headers=HEADERS,
+        timeout=TIMEOUT
     )
     meta_res.raise_for_status()
     
