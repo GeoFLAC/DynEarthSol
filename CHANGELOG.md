@@ -21,12 +21,30 @@ For a release, the full auto-generated list of merged pull requests is in its
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
   with commit-message guidelines, plus pull request and issue templates ([#96]).
+- Every executable embeds a `build.snapshot` block naming its source revision,
+  make options, dependency versions and toolchain; `strings <exe>` reads it, and
+  `make snapshot_diff=1` also embeds the uncommitted diff ([#97]).
+- **Breaking.** Every run writes `<modelname>.manifest` beside its frames,
+  recording the build, host, device, measured thread count and environment; a
+  restart appends to it ([#97]).
+- `has_runtime_info_display` (default yes) prints the `.manifest` sections on
+  screen at run start, one line each; `no` silences them ([#97]).
+- Every frame and checkpoint carries a `provenance` record (an HDF5
+  `/provenance` group) with the build, host, device, thread count and resource
+  use at that write; the file revision is unchanged, so existing readers ignore
+  it ([#97]).
 
 ### Changed
 
 - The DOI badge is served from shields.io and shows the concept DOI ([#96]).
 - `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
   run instead of 12047 ([#96]).
+- The `[Runtime][Host]` and `[Runtime][Device]` start-up lines are replaced by
+  one line per `.manifest` section, `[build][code]` to `[build][link]` and then
+  `[runtime][model]` to `[runtime][env]`, with the manifest's field names
+  ([#97]).
+- A GPU build that finds no usable device exits 52 after writing the manifest,
+  instead of NVHPC's bare exit 1 ([#97]).
 
 ### Fixed
 
@@ -205,3 +223,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
+[#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97

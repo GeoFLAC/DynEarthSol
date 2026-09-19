@@ -607,13 +607,23 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 
 int main(int argc, const char* argv[])
 {
+    // Recorded in the manifest as omp_wait_policy_src: once the setenv below has run,
+    // nothing downstream can tell our own default from the operator's export.
+    bool wait_policy_from_des = false;
 #if defined(__APPLE__) && defined(_OPENMP)
     // macOS/LLVM libomp sets blocktime=0 on Apple Silicon (hybrid CPU detection),
     // causing threads to immediately yield between parallel regions. This hurts
     // throughput in tight time loops with many short parallel regions.
     // OMP_WAIT_POLICY=active restores spin-wait behavior. No-op if already set.
-    if (!getenv("OMP_WAIT_POLICY") && !getenv("KMP_BLOCKTIME")) {
-        setenv("OMP_WAIT_POLICY", "active", 0);
+    // Non-empty, not merely present: `export OMP_WAIT_POLICY=` governs nothing, so
+    // skipping our default for it silently dropped the very behaviour this exists for.
+    const char* const wp_env = getenv("OMP_WAIT_POLICY");
+    const char* const bt_env = getenv("KMP_BLOCKTIME");
+    if (!(wp_env && *wp_env) && !(bt_env && *bt_env)) {
+        // overwrite: the branch is only reached when nothing non-empty is set, and an
+        // empty value left in place would read back as "no policy" downstream.
+        setenv("OMP_WAIT_POLICY", "active", 1);
+        wait_policy_from_des = true;
         std::cout << "[OpenMP] macOS: OMP_WAIT_POLICY=active set to avoid libomp "
                      "zero-blocktime regression on Apple Silicon.\n"
                      "         Override: export OMP_WAIT_POLICY=passive | KMP_BLOCKTIME=<ms>\n";
@@ -632,10 +642,28 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
-    // Selects the offload device, so it must precede any compute.
-    init_offload_device();
-    report_host_runtime_status();
-    report_device_runtime_status();
+    const BuildInfo build = probe_build_info();
+    const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
+    // Selects the offload device as well as describing it, so it must precede any compute.
+    const DeviceInfo dev = init_offload_device();
+    const Manifest manifest = compose_manifest(param, build, cpu, dev);
+    // The cfg decides, so this follows the cfg read and is the first thing a run
+    // prints about itself.
+    if (param.sim.has_runtime_info_display)
+        report_build_and_runtime_info(manifest);
+    // An -acc=gpu binary cannot compute on the host -- its managed allocations need a
+    // device -- and without this it dies in the first Array2D with an NVHPC message and a
+    // bare exit 1. The manifest records the failure, but appended: this run writes no
+    // frames, so it must not truncate the record of the run whose frames are on disk.
+    if (dev.acc_build && !dev.using_gpu) {
+        std::cerr << "Error: this is an OpenACC (GPU) build and no usable device was "
+                     "found; check CUDA_VISIBLE_DEVICES and ACC_DEVICE_TYPE, or run a "
+                     "CPU build\n";
+        write_manifest(param, manifest, true);
+        die(EXIT_RUNTIME_RESOURCE);
+    }
+
+    write_manifest(param, manifest);
 
     //
     // run simulation
@@ -643,7 +671,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-    var.output = new Output(param, var.func_time.start_time,
+    var.output = new Output(param, build, cpu, dev, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
