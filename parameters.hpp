@@ -155,6 +155,7 @@ struct Sim {
     int restarting_from_frame;
     int hdf5_compression_level;
     int info_display_step_interval;
+    bool has_runtime_info_display;
     bool is_outputting_averaged_fields;
     bool is_restarting;
     bool has_initial_checkpoint;
@@ -195,6 +196,14 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // Conservative MMG remeshing (always on): freeze (mark "required") elements that have neither
+    // plastic strain nor distortion, so MMG only remeshes the active region (like the triangle path,
+    // which leaves quiet elements undisturbed). mmg_remesh_active_plstrain is the refine threshold.
+    double mmg_remesh_active_plstrain;
+    double remesh_tiny_margin;   // tiny-element remesh trigger fires at smallest_vol/margin (>=1); hysteresis vs the floor
+    double mmg_remesh_defensive_quality_ratio;   // unfreeze (REPAIR) elements below min_quality*ratio (>=1); 1 = only below the trigger
+    double mmg_remesh_size_recovery_ratio;   // free fossil-fine elements finer than the gradation envelope by this factor (>1); 0 = off
+
     // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
     double remesh_deborah_min;
     double remesh_deborah_max;
@@ -202,11 +211,15 @@ struct Mesh {
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
-    double mmg_hmax_factor;
-    double mmg_hmin_factor;
     double mmg_hausd_factor;
     double mmg_init_coarsening_factor;
+    double mmg_metric_refine_coeff;
     bool use_mmg_init;
+    // Anisotropic metric at INFLOW restored side walls (remeshing_option 13). 0 = off (isotropic
+    // scalar metric, unchanged). > 0 = aspect ratio: wall elements are coarsened by this factor in
+    // the inflow-perpendicular direction (fine tangentially, so the incoming column is carried by
+    // thin wide elements). Enables a tensor MMG metric.
+    double mmg_aniso_wall_ratio;
 };
 
 struct Control {
@@ -218,7 +231,6 @@ struct Control {
     double damping_factor;
     int damping_option;
     int ref_pressure_option;
-//    bool surface_pressure_correction;
     bool is_using_mixed_stress;
 
     int surface_process_option;
@@ -504,7 +516,6 @@ struct Markers {
 
 struct Debug {
     bool dt;
-//    bool has_two_layers_for;
 };
 
 enum RSFSlipRateProjectionOption {
@@ -590,6 +601,77 @@ struct Param {
     Markers markers;
     Debug debug;
 };
+
+//
+// Snapshot of the initial wall column at a restored side (mesh.remeshing_option 13), recorded at
+// run start by detect_side_profile() and re-imposed after every remesh on the material that
+// entered through the wall: restore_side_fields() restores nodal temperature and coord0, zeroes
+// the incoming elements' strain and restores their radiogenic source; the marker replenishment
+// assigns new side-wall markers the elem_mattype of their depth. Depths are RELATIVE to the side's
+// top point; node_coord keeps the absolute run-start locations. Node -> element connectivity is
+// CSR (node i: node_support_arr[node_support_idx[i] .. node_support_idx[i+1])). Tensor fields
+// are flattened NSTR per element. Lookups: side_profile_node_value / side_profile_elems_at.
+// Checkpointed, so a restart keeps the RUN-START profile.
+//
+struct SideProfile {
+    // wall nodes, sorted top -> bottom
+    double_vec node_reldepth;      // depth below the side's top point (ascending)
+    double_vec node_coord;         // run-start coordinates, NDIMS per node
+    double_vec node_coord0;        // run-start REFERENCE coordinates (var.coord0), NDIMS per node
+    double_vec node_temperature;   // nodal temperature at run start
+    double_vec node_init_elem_size; // run-start frozen metric base (var.init_elem_size_n) at the
+                                    // wall; re-pinned on the inflow wall/band after every remesh
+                                    // (restore_side_fields).
+    int_vec    node_support_idx;   // CSR row pointer, size nnode()+1
+    int_vec    node_support_arr;   // CSR column data: local element indices
+    // elements with at least one node on the wall. Only the material and the radiogenic
+    // source are recorded: incoming elements get plstrain/delta_plstrain/strain reset to
+    // ZERO (pristine material), and stress/stressyy/RSF fields are left to the regular
+    // NN/SPR remap (restore_side_fields).
+    double_vec elem_reldepth;      // centroid depth below the side's top point
+    int_vec    elem_mattype;       // dominant marker material (replenishment lookup)
+    double_vec elem_radiogenic_source;
+
+    // Cumulative signed shift of the restored wall (the only EVOLVING member): every remesh
+    // displaces the drifted wall back to its initial plane, and those displacements sum here
+    // (lower wall inflow: negative; upper wall inflow: positive). Incoming nodes get the reference
+    // coordinate coord0[axis] = plane + wall_shift -- a material (Lagrangian) entry coordinate outside the
+    // domain, so coord - coord0 stays a consistent displacement across inflow generations.
+    double wall_shift = 0.;
+
+    int nnode() const { return static_cast<int>(node_reldepth.size()); }
+    int nelem() const { return static_cast<int>(elem_reldepth.size()); }
+    bool empty() const { return node_reldepth.empty(); }
+    void clear() { *this = SideProfile(); }
+};
+
+// Restored side walls of remeshing_option 13: x0, x1 in 2D; x0, x1, y0, y1 in 3D. Even entries are
+// the lower plane (coordinate 0), odd entries the upper plane (xlength / ylength) of their axis.
+#ifdef THREED
+const int NSIDEWALL = 4;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1 };
+const int   SIDEWALL_IDX [NSIDEWALL] = { iboundx0, iboundx1, iboundy0, iboundy1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0, 1, 1 };
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1", "y0", "y1" };
+#else
+const int NSIDEWALL = 2;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1 };
+const int   SIDEWALL_IDX [NSIDEWALL] = { iboundx0, iboundx1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0 };
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1" };
+#endif
+inline double side_wall_plane(const Mesh &mesh, int t)   // restored plane coordinate of wall t
+{
+    if (t % 2 == 0) return 0.0;
+    return SIDEWALL_AXIS[t] == 0 ? mesh.xlength : mesh.ylength;
+}
+inline double side_wall_vbc(const BC &bc, int t)   // prescribed normal velocity of wall t (constant part)
+{
+#ifdef THREED
+    if (SIDEWALL_AXIS[t] == 1) return (t % 2 == 0) ? bc.vbc_val_y0 : bc.vbc_val_y1;
+#endif
+    return (t % 2 == 0) ? bc.vbc_val_x0 : bc.vbc_val_x1;
+}
 
 //
 // Structures for surface processes
@@ -731,6 +813,11 @@ struct Variables {
     int_vec *bnodes[nbdrytypes];
     std::vector< std::pair<int,int> > *bfacets[nbdrytypes];
     array_t *bnormals;
+
+    // Incoming-material profile per side wall (SideProfile), detected once at run start and
+    // re-applied after every remesh to the material that entered through a restored side wall
+    // (restore_side_fields; side-wall marker replenishment).
+    SideProfile side_profile[nbdrytypes];
     int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
     int stress_bc_types[nbdrytypes_hydro];
@@ -766,6 +853,9 @@ struct Variables {
     double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
     double_vec *temperature, *plstrain, *delta_plstrain;
+    // plstrain at the last remesh: the R2 baseline (mark_quiet_required), so the fossil band
+    // (high strain, no longer growing) is frozen and preserved instead of re-interpolated.
+    double_vec *plstrain_remesh;
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
     double_vec *ntmp;
@@ -813,6 +903,28 @@ struct Variables {
     double_vec *spr_blend_weight;
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
+
+    // Per-remesh scratch: 1 for each ORIGINAL-mesh node that boundary remeshing MOVED
+    // (flatten_*), DELETED, or COLLAPSED. Sized to the old node count in remesh() and
+    // filled by the Triangle/MMG remesh paths; barycentric_node_interpolation consults it
+    // to skip the "interior node not found" warning near a legitimately reshaped boundary.
+    // Empty outside remeshing.
+    std::vector<char> remesh_affected_old_node;
+
+    // Per-remesh scratch: 1 for each NEW-mesh node whose position fell OUTSIDE the old mesh
+    // during barycentric_node_interpolation (nearest-node fallback used). At a restored side
+    // wall these are exactly the nodes of the material that entered since the last remesh;
+    // remesh() consults it to re-impose the recorded side profile (var.side_profile) on the
+    // incoming band, nodes and elements (restore_side_fields). Empty outside remeshing.
+    std::vector<char> remesh_node_outside;
+
+    // Per-remesh scratch: for each NEW-mesh element, the mattype to give replenished markers
+    // when the element was SPLIT from (or is an unmoved copy of) exactly ONE old element
+    // whose markers were all one mattype; -1 otherwise. Built from the ancestor-cover map in
+    // nearest_neighbor_interpolation (while var.elemmarkers still describes the OLD mesh),
+    // consumed by the marker replenishment ahead of replenishment_option (markerset.cxx),
+    // cleared right after remap_markers. Empty outside remeshing.
+    std::vector<int> remesh_elem_split_mat;
 
     // tensor_t *stress_old;
 

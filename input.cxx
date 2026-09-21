@@ -47,6 +47,10 @@ static void declare_parameters(po::options_description &cfg,
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
          ">0: must be a multiple of mesh.quality_check_step_interval.")
+        ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
+         "Print the .manifest sections on screen at run start, one line each: the\n"
+         "[build] identity of the executable, then the [runtime] host, device,\n"
+         "threads and environment. The .manifest is written regardless.")
 
         ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")
@@ -231,7 +235,50 @@ static void declare_parameters(po::options_description &cfg,
          "10: no modification on any boundary, except small boundary segments might get merged.\n"
          "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions.\n")
+         "13: move all bottom, left, and right nodes to initial dimensions. A side wall that receives "
+         "material (inflow vbc) keeps its run-start column: the incoming material gets the wall's "
+         "temperature, layering, coord0 reference and pristine strain (side profile), and with MMG the "
+         "material interfaces in the inflow band are required edges. REQUIRES MMG when "
+         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG can "
+         "collapse.\n")
+
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
+         "Plastic-strain-INCREMENT threshold for the (always-on) conservative-freeze REFINE condition: "
+         "an element is REFINED -- MMG may SPLIT it to add resolution to the active band, "
+         "but its existing nodes are held fixed so the band's plastic strain is carried verbatim (only "
+         "newly-inserted nodes are interpolated) -- when its plastic strain has grown by more than this "
+         "since the last remesh. Distorted (quality < mesh.min_quality) or tiny (< smallest_vol) elements "
+         "are always remeshed with node motion; boundary nodes are always movable (flattening). "
+         "Must be > 0 in practice: at 0, every element that yielded incidentally since the last "
+         "remesh (milli-strain numerical noise: measured, half of all SPLIT elements sat at a median "
+         "plastic strain of 0.003) is handed to MMG as splittable/"
+         "swappable, letting it re-tessellate quiet far-field and corner elements for no reason. "
+         "Default 0.01: two orders below a real shear band (~1), three above the noise floor.")
+        ("mesh.remesh_tiny_margin", po::value<double>(&p.mesh.remesh_tiny_margin)->default_value(1.5),
+         "Hysteresis for the tiny-element remesh trigger (both remeshers). A remesh fires when an element "
+         "measure drops below smallest_vol / remesh_tiny_margin, where smallest_vol = smallest_size*"
+         "sizefactor*resolution^NDIMS is also the size the remesher floors elements at. margin=1: the "
+         "trigger sits exactly on the floor, so a just-remeshed element re-triggers under any compression "
+         "(remesh thrash). margin>1: the element must shrink to 1/margin of the floor measure (=1/margin"
+         "^(1/NDIMS) in edge length) before triggering -- fewer remeshes, but smaller min elements (hence "
+         "smaller dt) between remeshes. Default 1.5: a 2/3 measure gap, heuristic. Must be >= 1.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
+         "Defensive band for the conservative-freeze REPAIR criterion (USEMMG). During remeshing, "
+         "elements with quality below mesh.min_quality * this ratio are unfrozen (nodes movable) so MMG "
+         "repairs marginal elements BEFORE they drift across the min_quality remesh trigger, instead of "
+         "freezing them at e.g. quality 0.21 and remeshing again a few steps later. ratio=1: only "
+         "below-trigger elements are repaired. Default 1.5: repair with headroom up to 1.5x min_quality, "
+         "heuristic. The remesh trigger itself always fires at min_quality. Must be >= 1.")
+        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+         "Fossil-fine mesh recovery (USEMMG). During remeshing, a quiet element is unfrozen when its "
+         "size times this ratio is below the GRADATION ENVELOPE -- the smallest size MMG's gradation "
+         "(hgrad) could legally assign there given every intentionally-fine metric target (side-wall "
+         "clamp, plastic-strain refinement, size floors). Recovers e.g. the ~resolution elements that "
+         "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
+         "wall size forever as they advect inland. Elements within the envelope (the legal size "
+         "transition around fine regions, the refined shear band) are never touched. "
+         "0 disables; otherwise must be > 1 (hysteresis against re-freeing the legal transition). "
+         "Default 1.4 ~ sqrt(2): one edge-halving level in 2D measure, heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -259,10 +306,6 @@ static void declare_parameters(po::options_description &cfg,
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
-         "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
-         "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
@@ -272,6 +315,20 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
+        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+         "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
+         "is scaled by 1/(1 + coeff*plastic_strain) (Triangle max_area convention), so the "
+         "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
+         "(elements keep their frozen initial size everywhere). Default 5: the sweet spot of the "
+         "Triangle-vs-MMG core-complex comparison (band sharpness without element-count growth).")
+        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+         "Anisotropic MMG metric at INFLOW restored side walls (remeshing_option 13). 0 (default) "
+         "= off: isotropic scalar metric, unchanged. >= 1 = aspect ratio; the inflow-wall elements "
+         "are coarsened by this factor in the inflow-perpendicular direction (kept fine tangentially) "
+         "so the incoming thermal/compositional column is carried by thin, wide elements. The "
+         "achievable aspect is capped by MMG's hmax truncation at largest_size^(1/NDIMS) (~5.5 in 2D "
+         "/ ~3.1 in 3D with the default largest_size), so ratios beyond that are clamped. "
+         "A value in (0,1) is rejected (it would refine, not coarsen). Requires USEMMG. Default: 0.")
         ;
 
     cfg.add_options()
@@ -289,7 +346,13 @@ static void declare_parameters(po::options_description &cfg,
          "How to determine the mattype of replenished markers?\n"
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
-         "2: same as the mattype of the nearest marker (slowest option).")
+         "2: same as the mattype of the nearest marker (slowest option).\n"
+         "12: if the element's surviving markers are all one mattype, use that mattype directly "
+         "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
+         "to option 2 (nearest marker). Faster than 2 in single-material elements, exact there.\n"
+         "(Independently of this option, when a remeshing_option restores the side walls (e.g. 13) "
+         "material returning at a restored side always keeps the layering auto-detected at run start "
+         "for that side, pinned to the side's top mesh point.)")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;
@@ -330,10 +393,6 @@ static void declare_parameters(po::options_description &cfg,
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
          "Any other value is rejected at startup.\n")
-//        ("control.surface_pressure_correction", po::value<bool>(&p.control.surface_pressure_correction)->default_value(false),
-//         "Correct the pressure of surface elements"
-//         "which has positive stress 1st invariant"
-//         "and force the 1st invariant to zero.")
         ("control.is_using_mixed_stress", po::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
 
@@ -936,8 +995,6 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("debug.dt", po::value<bool>(&p.debug.dt)->default_value(false),
          "Print all dt criteria")
-//        ("debug.has_two_layers_for", po::value<bool>(&p.debug.has_two_layers_for)->default_value(true),
-//         "Use two layers of for elem to avoid race condition.")
         ;
 }
 
@@ -1044,6 +1101,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_steps = std::numeric_limits<int>::max();
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
+
+    // mmg_aniso_wall_ratio is an aspect ratio: 0 = off, >= 1 = coarsen the inflow-wall-perpendicular
+    // axis by this factor. A value in (0,1) would REFINE that axis (hx = h*ratio < h), the opposite
+    // of the intent -- reject it rather than silently invert the anisotropy.
+    if ( p.mesh.mmg_aniso_wall_ratio > 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
+        std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
+                     "a value in (0,1) would refine the wall instead of coarsening it.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
@@ -1170,6 +1236,35 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
     }
 
+    if (p.mesh.mmg_metric_refine_coeff < 0) {
+        // A negative coeff makes the MMG metric denominator (1 + coeff*plstrain) reach
+        // zero or go negative, producing a NaN/negative target element size.
+        std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
+                     "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.remesh_tiny_margin < 1.0) {
+        // margin<1 would RAISE the trigger above the remesher's floor -> a just-remeshed element is
+        // already tiny -> immediate re-trigger / possible non-termination. margin>=1 lowers the trigger.
+        std::cerr << "Error: mesh.remesh_tiny_margin must be >= 1 (1 = trigger at the floor; larger = more hysteresis).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.mmg_remesh_defensive_quality_ratio < 1.0) {
+        // ratio<1 would repair FEWER elements than the remesh trigger flags -- a below-trigger
+        // element could stay frozen and re-trigger forever.
+        std::cerr << "Error: mesh.mmg_remesh_defensive_quality_ratio must be >= 1 (1 = repair only below the trigger).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
+        // ratio <= 1 would free elements sitting ON the gradation envelope -- the legal size
+        // transition around every fine region -- and re-adapt it at every remesh forever.
+        std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
         die(EXIT_CONFIG_VALUE, "mesh.remesh_deborah_min must be positive and less than mesh.remesh_deborah_max.");
@@ -1273,6 +1368,28 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // The remaining mesh.mmg_* knobs are consumed only inside remeshing.cxx's USEMMG block or in
+    // mmg_utils.cxx, which is not linked here, so setting one is a silent no-op. Name the ones the
+    // cfg actually set; a defaulted value is not the user's doing and stays quiet.
+    {
+        const char *mmg_only[] = {
+            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
+            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
+            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_aniso_wall_ratio",
+        };
+        for (const char *name : mmg_only)
+            if (vm.count(name) && ! vm[name].defaulted())
+                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
+                          << " has no effect.\n";
+    }
+    // Option 13 re-flattens the side walls every remesh, which breeds sub-hmin elements pinned to
+    // the wall. Only MMG collapses those: decimate_below_hmin never thins a boundary node and the
+    // tiny-element repair excludes corners, so the Triangle/TetGen path remesh-storms instead.
+    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
+            "Without it the restored side wall accumulates sub-hmin elements that the "
+            "Triangle/TetGen path cannot collapse. mesh.meshing_elem_shape = 1 is unaffected.");
 #endif
 
     //
@@ -1637,6 +1754,31 @@ void get_input_parameters(const char* filename, Param& p)
     if (std::strncmp(filename, "-h", 3) == 0 ||
         std::strncmp(filename, "--help", 7) == 0) {
         std::cout << cfg;
+        const char* exe =
+#ifdef THREED
+            "dynearthsol3d"
+#else
+            "dynearthsol2d"
+#endif
+#ifdef ACC
+            ".gpu"
+#endif
+            ;
+        // The grep key is split across two literals: one contiguous copy in
+        // .rodata would itself surface as a stray line in the extraction.
+        std::cout << "\nBuild snapshot:\n"
+                     "  The build identity is embedded in the executable. A run\n"
+                     "  prints it at start ([build][...] lines) unless\n"
+                     "  sim.has_runtime_info_display = no; to read it from a binary\n"
+                     "  without running it:\n"
+                     "    strings " << exe << " | grep '^build"
+                  << "\\.snapshot\\.'\n"
+                     // The fence names are split so no contiguous copy of the
+                     // extraction pattern lands in .rodata as a decoy.
+                     "  make snapshot_diff=1 also embeds the uncommitted code changes;\n"
+                     "  extract them with:\n"
+                     "    strings " << exe << " | sed -n '/^build\\.code-changes\\.beg"
+                  << "in :$/,/^build\\.code-changes\\.e" << "nd   :$/p'\n";
         // Not die(): that prints an "[DES exit N] <category>" banner meant for
         // failures, and --help is a successful run with nothing to diagnose.
         std::exit(EXIT_OK);

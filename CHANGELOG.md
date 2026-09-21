@@ -5,14 +5,62 @@ All notable changes to DynEarthSol are documented here. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries are grouped by theme rather than by pull request; each references the
-pull request that carries the detail. Changes with no effect on users of the
-code -- CI workflows, repository metadata, release plumbing -- are not listed.
+pull request that carries the detail. An entry is one or two sentences on what
+a user of the code notices -- a parameter, a result that moved, a build that
+now works -- not on how; mechanism and evidence stay in the pull request.
+Changes with no effect on users of the code -- CI workflows, repository
+metadata, release plumbing -- are not listed.
 For a release, the full auto-generated list of merged pull requests is in its
 [GitHub release notes](https://github.com/GeoFLAC/DynEarthSol/releases).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
+  environment, gospl_extensions and a 3D executable ready to run ([#96]).
+- Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
+  with commit-message guidelines and an AI-usage policy, pull request and issue
+  templates, and `AGENTS.md` for coding assistants ([#96]).
+- Every executable embeds a `build.snapshot` block naming its source revision,
+  make options, dependency versions and toolchain; `strings <exe>` reads it, and
+  `make snapshot_diff=1` also embeds the uncommitted diff ([#97]).
+- **Breaking.** Every run writes `<modelname>.manifest` beside its frames,
+  recording the build, host, device, measured thread count and environment; a
+  restart appends to it ([#97]).
+- `has_runtime_info_display` (default yes) prints the `.manifest` sections on
+  screen at run start, one line each; `no` silences them ([#97]).
+- Every frame and checkpoint carries a `provenance` record (an HDF5
+  `/provenance` group) with the build, host, device, thread count and resource
+  use at that write; the file revision is unchanged, so existing readers ignore
+  it ([#97]).
+
+### Changed
+
+- The DOI badge is served from shields.io and shows the concept DOI ([#96]).
+- `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
+  run instead of 12047 ([#96]).
+- The `[Runtime][Host]` and `[Runtime][Device]` start-up lines are replaced by
+  one line per `.manifest` section, `[build][code]` to `[build][link]` and then
+  `[runtime][model]` to `[runtime][env]`, with the manifest's field names
+  ([#97]).
+- A GPU build that finds no usable device exits 52 after writing the manifest,
+  instead of NVHPC's bare exit 1 ([#97]).
+
+### Fixed
+
+- The thermal mass was built before the initial temperature was set, so thermal
+  diffusion ran 5.4 % slow on hot silicate ([#96]).
+- A NaN velocity stops the run with exit code 50 instead of writing frames until
+  the mesh dies ([#96]).
+- Ctrl-C stops a GoSPL-coupled run; Python's SIGINT handler had swallowed it
+  ([#96]).
+- `openmp=0` links on glibc ([#96]).
+- The MMG build ignores an exported `CFLAGS`, which could change the remeshed
+  mesh ([#96]).
+- HDF5 file locking is off, so ParaView can open a frame while a run writes it.
+  Two runs sharing a `modelname` are no longer refused ([#96]).
+- `./build.sh` is executable, so the README's Docker build command runs ([#96]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -175,3 +223,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#91]: https://github.com/GeoFLAC/DynEarthSol/pull/91
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
+[#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
+[#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97

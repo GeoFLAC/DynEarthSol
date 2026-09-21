@@ -193,11 +193,8 @@ void init(const Param& param, Variables& var)
     // The RSF state variable is initialized below; skip its bound for this
     // bootstrap call. main() recomputes dt after state initialization.
     var.dt = compute_dt(param, var, false);
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-
-#ifdef USEMMG
-    initialize_elem_size_n(var, *var.init_elem_size_n);
-#endif
+    // compute_mass runs at the END of init(): it reads rho(e), a function of var.temperature
+    // and elemmarkers, which the initial_* calls below are the first to write.
 
 
 
@@ -221,6 +218,17 @@ void init(const Param& param, Variables& var)
     #pragma omp parallel for default(none) shared(var)
     for (int e=0; e<var.nelem; ++e)
         (*var.viscosity)[e] = var.mat->visc(e);
+
+    // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
+    // and elemmarkers, which those calls are the first to write -- before them tmass was built at
+    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). This is also the
+    // LAST mass build on a static mesh: update_mesh and remesh are both gated on has_moving_mesh.
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+
+#ifdef USEMMG
+    // After compute_mass: it is the only writer of var.volume_n, which this divides by.
+    initialize_elem_size_n(var, *var.init_elem_size_n);
+#endif
 
     report_mesh_info(var, "initial");
 
@@ -368,6 +376,9 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // plstrain_remesh (the R2 refine baseline) is restored so the first post-restart remesh
+        // refines like a continuous run.
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -381,6 +392,60 @@ void restart(const Param& param, Variables& var)
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    // Incoming side-material profiles (remeshing_option 13): restore the RUN-START profile of every
+    // side that has one stored. The incoming side may change at a restart (a new vbc sign), so the
+    // per-side existence check is required: a side without stored data is detected by main() from
+    // its current column, and a stored profile whose wall no longer receives material is erased at
+    // the first remesh (side-profile lifecycle). No profiles at all = the checkpointed run had none.
+    if (bin_chkpt.has_array("side_prof_sizes")) {
+        // side_prof_sizes = {nnode per wall, nelem per wall, support size per wall}, NSIDEWALL each
+        int_vec psz(3 * NSIDEWALL);
+        bin_chkpt.read_array(psz, "side_prof_sizes");
+        char aname[64];
+        double_vec shifts(NSIDEWALL, 0.);   // cumulative wall-restore shifts
+        bin_chkpt.read_array(shifts, "side_prof_wall_shift");
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+            prof.clear();
+            prof.wall_shift = shifts[t];
+            const int nn = psz[t], ne = psz[NSIDEWALL + t], ns = psz[2 * NSIDEWALL + t];
+            if (nn <= 0) continue;
+            const char *sfx_t = SIDEWALL_NAME[t];
+            auto rd = [&](double_vec &a, const char *name, int size) {
+                a.resize(size);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx_t);
+                bin_chkpt.read_array(a, aname);
+            };
+            rd(prof.node_reldepth, "node_reldepth", nn);
+            rd(prof.node_coord, "node_coord", nn * NDIMS);
+            rd(prof.node_coord0, "node_coord0", nn * NDIMS);
+            rd(prof.node_temperature, "node_temperature", nn);
+#ifdef USEMMG
+            // Mirrors the USEMMG-only write in Output::write_checkpoint. Without MMG the vector
+            // must stay EMPTY -- that is what restore_side_fields tests before it indexes
+            // var.init_elem_size_n, which is itself empty in a non-USEMMG build.
+            rd(prof.node_init_elem_size, "node_init_elem_size", nn);
+#endif
+            prof.node_support_idx.resize(nn + 1);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_idx, aname);
+            prof.node_support_arr.resize(ns);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_arr, aname);
+            rd(prof.elem_reldepth, "elem_reldepth", ne);
+            prof.elem_mattype.resize(ne);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx_t);
+            bin_chkpt.read_array(prof.elem_mattype, aname);
+            rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+        }
+        std::cout << "  Restored incoming side profiles from checkpoint:";
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (psz[t] > 0)
+                std::cout << " " << SIDEWALL_NAME[t] << " (" << psz[t] << " nodes, "
+                          << psz[NSIDEWALL + t] << " elements, wall shift " << shifts[t] << " m)";
+        std::cout << ".\n";
     }
 
     // the following fields are not required for restarting, yet
@@ -599,13 +664,23 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
 
 int main(int argc, const char* argv[])
 {
+    // Recorded in the manifest as omp_wait_policy_src: once the setenv below has run,
+    // nothing downstream can tell our own default from the operator's export.
+    bool wait_policy_from_des = false;
 #if defined(__APPLE__) && defined(_OPENMP)
     // macOS/LLVM libomp sets blocktime=0 on Apple Silicon (hybrid CPU detection),
     // causing threads to immediately yield between parallel regions. This hurts
     // throughput in tight time loops with many short parallel regions.
     // OMP_WAIT_POLICY=active restores spin-wait behavior. No-op if already set.
-    if (!getenv("OMP_WAIT_POLICY") && !getenv("KMP_BLOCKTIME")) {
-        setenv("OMP_WAIT_POLICY", "active", 0);
+    // Non-empty, not merely present: `export OMP_WAIT_POLICY=` governs nothing, so
+    // skipping our default for it silently dropped the very behaviour this exists for.
+    const char* const wp_env = getenv("OMP_WAIT_POLICY");
+    const char* const bt_env = getenv("KMP_BLOCKTIME");
+    if (!(wp_env && *wp_env) && !(bt_env && *bt_env)) {
+        // overwrite: the branch is only reached when nothing non-empty is set, and an
+        // empty value left in place would read back as "no policy" downstream.
+        setenv("OMP_WAIT_POLICY", "active", 1);
+        wait_policy_from_des = true;
         std::cout << "[OpenMP] macOS: OMP_WAIT_POLICY=active set to avoid libomp "
                      "zero-blocktime regression on Apple Silicon.\n"
                      "         Override: export OMP_WAIT_POLICY=passive | KMP_BLOCKTIME=<ms>\n";
@@ -624,10 +699,28 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
-    // Selects the offload device, so it must precede any compute.
-    init_offload_device();
-    report_host_runtime_status();
-    report_device_runtime_status();
+    const BuildInfo build = probe_build_info();
+    const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
+    // Selects the offload device as well as describing it, so it must precede any compute.
+    const DeviceInfo dev = init_offload_device();
+    const Manifest manifest = compose_manifest(param, build, cpu, dev);
+    // The cfg decides, so this follows the cfg read and is the first thing a run
+    // prints about itself.
+    if (param.sim.has_runtime_info_display)
+        report_build_and_runtime_info(manifest);
+    // An -acc=gpu binary cannot compute on the host -- its managed allocations need a
+    // device -- and without this it dies in the first Array2D with an NVHPC message and a
+    // bare exit 1. The manifest records the failure, but appended: this run writes no
+    // frames, so it must not truncate the record of the run whose frames are on disk.
+    if (dev.acc_build && !dev.using_gpu) {
+        std::cerr << "Error: this is an OpenACC (GPU) build and no usable device was "
+                     "found; check CUDA_VISIBLE_DEVICES and ACC_DEVICE_TYPE, or run a "
+                     "CPU build\n";
+        write_manifest(param, manifest, true);
+        die(EXIT_RUNTIME_RESOURCE);
+    }
+
+    write_manifest(param, manifest);
 
     //
     // run simulation
@@ -635,7 +728,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-    var.output = new Output(param, var.func_time.start_time,
+    var.output = new Output(param, build, cpu, dev, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
@@ -654,6 +747,23 @@ int main(int argc, const char* argv[])
     }
     else {
         restart(param, var);
+    }
+
+    // Restored side walls (remeshing_option 13): snapshot each receiving side's initial wall
+    // column (SideProfile) after mesh + markers exist, so incoming material keeps its original
+    // structure (restore_side_fields, side-wall marker replenishment).
+    if (param.mesh.remeshing_option == 13) {
+        // Only walls that RECEIVE material get a profile (a static backstop keeps evolving): at run
+        // start read from the velocity BC sign. A restart restored the checkpointed profiles above,
+        // so only detect what it did not provide; remesh() also late-detects a wall that starts moving.
+        uint bits = 0;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const double v = side_wall_vbc(param.bc, t);
+            const bool inflow_bc = (t % 2 == 0) ? (v > 0.) : (v < 0.);
+            if (inflow_bc && var.side_profile[SIDEWALL_IDX[t]].empty()) bits |= SIDEWALL_FLAG[t];
+        }
+        if (bits)
+            detect_side_profile(param, var, bits);
     }
 
     // var.dt_PT = var.dt;

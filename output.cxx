@@ -20,8 +20,17 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
-Output::Output(const Param& param, int64_t start_time, int start_frame) :
+Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
+               const DeviceInfo& dev, int64_t start_time, int start_frame) :
     modelname(param.sim.modelname),
+    restart_from(param.sim.is_restarting
+                 ? param.sim.restarting_from_modelname + ":"
+                   + std::to_string(param.sim.restarting_from_frame)
+                 : std::string("no")),
+    build(build),
+    cpu(cpu),
+    dev(dev),
+    peak_rss_gib(0),
     start_time(start_time),
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
@@ -131,6 +140,13 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_scalar(var.nnode, "nnode");
     bin.write_scalar(var.nelem, "nelem");
 #endif
+
+    // One rss sample for both fields, and the accumulator floored against that same
+    // value: sampling them apart let the record report a peak below its own rss when the
+    // resident set gained a page in between.
+    const double rss_gib = host_mem_rss_gib();
+    peak_rss_gib = std::max(peak_rss_gib, std::max(host_peak_rss_gib(), rss_gib));
+    bin.write_run_provenance(build, cpu, dev, restart_from, rss_gib, peak_rss_gib);
 
     bin.write_scalar(var.time, "time_sec");
     bin.write_scalar(dt, "dt_sec");
@@ -369,6 +385,10 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 #endif
 
+    const double rss_gib = host_mem_rss_gib();
+    peak_rss_gib = std::max(peak_rss_gib, std::max(host_peak_rss_gib(), rss_gib));
+    bin.write_run_provenance(build, cpu, dev, restart_from, rss_gib, peak_rss_gib);
+
     bin.write_scalar(var.time, "time");
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
@@ -388,9 +408,63 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+    // plstrain_remesh: the R2 refine baseline, checkpointed so the first post-restart remesh
+    // refines the active band like a continuous run.
+    bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
 #endif
+
+    // Incoming side-material profiles (remeshing_option 13), checkpointed so a restart keeps the
+    // run-start structure. side_prof_sizes = {nnode, nelem, support size} per restored wall,
+    // NSIDEWALL each; per-wall arrays follow (see SideProfile).
+    {
+        // side_prof_sizes = {nnode per wall, nelem per wall, support size per wall}, NSIDEWALL each
+        char aname[64];
+        int_vec psz(3 * NSIDEWALL, 0);
+        int total = 0;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+            psz[t]                 = prof.nnode();
+            psz[NSIDEWALL + t]     = prof.nelem();
+            psz[2 * NSIDEWALL + t] = (int)prof.node_support_arr.size();
+            total += prof.nnode();
+        }
+        if (total > 0) {
+            bin.write_aux_array(psz, "side_prof_sizes", psz.size());
+            // cumulative wall-restore shifts (the profile's only evolving state)
+            double_vec shifts(NSIDEWALL);
+            for (int t = 0; t < NSIDEWALL; ++t) shifts[t] = var.side_profile[SIDEWALL_IDX[t]].wall_shift;
+            bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                const SideProfile &prof = var.side_profile[SIDEWALL_IDX[t]];
+                if (prof.empty()) continue;
+                auto wrd = [&](const double_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                auto wri = [&](const int_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                wrd(prof.node_reldepth, "node_reldepth");
+                wrd(prof.node_coord, "node_coord");
+                wrd(prof.node_coord0, "node_coord0");
+                wrd(prof.node_temperature, "node_temperature");
+#ifdef USEMMG
+                // Only a USEMMG build fills this (the frozen metric base is MMG-only); writing it
+                // unconditionally stored a zero-length record, which HDF5 refuses to chunk and the
+                // des-binary restart read back at nn from the NEXT record's bytes.
+                wrd(prof.node_init_elem_size, "node_init_elem_size");
+#endif
+                wri(prof.node_support_idx, "node_support_idx");
+                wri(prof.node_support_arr, "node_support_arr");
+                wrd(prof.elem_reldepth, "elem_reldepth");
+                wri(prof.elem_mattype, "elem_mattype");
+                wrd(prof.elem_radiogenic_source, "elem_radiogenic_source");
+            }
+        }
+    }
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {

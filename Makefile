@@ -1,6 +1,6 @@
 # -*- Makefile -*-
 #
-# Makefile for DynEarthSol3D
+# Makefile for DynEarthSol
 #
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
@@ -24,6 +24,7 @@
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
+##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
 ## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
@@ -38,6 +39,7 @@ usemmg = 0
 useexo = 0
 use_gospl = 0
 hdf5 = 0
+snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 
 ifeq ($(ndims), 2)
@@ -47,6 +49,7 @@ endif
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
 KNOWN_VARS = ndims opt openacc openmp nprof gprof usemmg useexo use_gospl hdf5 \
+             snapshot_diff \
              nofma GPU_CC CXX \
              BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
@@ -588,7 +591,8 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	## unit calls, and each dimension compiles the other's. --diag_suppress is nvc++'s
 	## spelling of that -Wno-unused-{variable,function}. Its set_but_not_used stays on, so
 	## that a value written and never read is still reported, as it is under g++.
-	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress declared_but_not_referenced
+	## One-word =, so the snapshot's --diag_% pattern routes it to the warnings line.
+	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress=declared_but_not_referenced
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -714,6 +718,7 @@ SRCS =	\
 	input.cxx \
 	matprops.cxx \
 	mesh.cxx \
+	mmg_utils.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -747,6 +752,7 @@ INCS =	\
 	markerset.hpp \
 	matprops.hpp \
 	mesh.hpp \
+	mmg_utils.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
@@ -832,6 +838,14 @@ endif
 
 # Enable Array2D structure of Array
 CXXFLAGS += -DSOA
+
+## nanoflann uses std::thread, which needs pthread on glibc. openmp=1 gets it for
+## free from -fopenmp; openmp=0 linked nothing and failed with an undefined
+## pthread_create. Harmless where libc already provides it.
+ifneq ($(strip $(openmp)), 1)
+	CXXFLAGS += -pthread
+	LDFLAGS += -pthread
+endif
 
 ## Action
 
@@ -1086,12 +1100,20 @@ ifeq ($(usemmg), 1)
 	fi
 
 	@mkdir -p mmg/build
+	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
+	@# from the environment on the FIRST configure, so an exported one is baked in.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
 	fi
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		$(MAKE) -C mmg/build; \
+	fi
+	@# Which mmg revision is IN the archive: the guards above build it once and reuse
+	@# it, so the checkout can drift from what is linked. The sentinel reads this.
+	@if [ -f "$(MMG_LIB)" ]; then \
+		git -C mmg describe --always --dirty > mmg/build/.mmg-rev 2>/dev/null \
+		  || rm -f mmg/build/.mmg-rev; \
 	fi
 endif
 
@@ -1178,6 +1200,74 @@ else
 	@echo "'git' is not in path, cannot take code snapshot." >> snapshot.diff
 endif
 
+## Code identity for the sentinel; never list it in INCS. utils/gen_build_revision.sh
+## gathers the facts (git, host, provider labels, the payload); make derives what its
+## text functions can and exports it as DES_REV_*.
+comma := ,
+## Sentinel flags: path- and define-free, ordered opt/codegen/language/debug/misc.
+## Display only. A flag whose argument is a separate word is glued before ranking,
+## which would otherwise strand -Xpreprocessor from its -fopenmp; undone below.
+SNAP_GLUE = $(subst -Xpreprocessor -fopenmp,-Xpreprocessor@-fopenmp,$(CXXFLAGS))
+## Keeping only -% words drops every path, absolute or relative.
+SNAP_CXX = $(filter -%,$(filter-out -I% -idirafter -D%,$(SNAP_GLUE)))
+## Codegen display order; -gpu= must rank here, not in -g%'s debug slot.
+SNAP_CODEGEN = -acc% -cuda% -gpu=% -f% -m% -M%
+SNAP_CXX_ORDERED = $(strip \
+    $(filter -O%,$(SNAP_CXX)) \
+    $(foreach p,$(SNAP_CODEGEN),$(filter $(p),$(SNAP_CXX))) \
+    $(filter -std=%,$(SNAP_CXX)) \
+    $(filter-out -gpu=%,$(filter -g%,$(SNAP_CXX))) \
+    $(filter-out -O% $(SNAP_CODEGEN) -std=% -g% -W% --diag_%,$(SNAP_CXX)))
+## -W% is gcc/clang; --diag_% is nvc++'s diagnostic control (one word via =).
+SNAP_WARN = $(strip $(filter -W% --diag_%,$(SNAP_CXX)))
+## Sentinel link flags: codegen ranked as above, then misc, libraries last; search
+## dirs, rpaths and by-path inputs stay out. BOOST_LDFLAGS is part of the link line.
+SNAP_LD = $(filter -%,$(filter-out -L% -Wl$(comma)-rpath%,$(LDFLAGS) $(BOOST_LDFLAGS)))
+SNAP_LD_ORDERED = $(strip \
+    $(foreach p,$(SNAP_CODEGEN),$(filter $(p),$(SNAP_LD))) \
+    $(filter-out $(SNAP_CODEGEN) -l%,$(SNAP_LD)) \
+    $(filter -l%,$(SNAP_LD)))
+
+## Only the make knobs that are on or carry a value; opt always, since 0 is a
+## choice. Derived from KNOB_VARS so a new knob cannot be silently unrecorded.
+KNOB_VARS = openmp openacc hdf5 usemmg useexo use_gospl nprof gprof nofma \
+            snapshot_diff
+MK_OPTS = opt=$(strip $(opt)) \
+          $(foreach k,$(KNOB_VARS),$(if $(filter-out 0,$(strip $($(k)))),$(k)=$(strip $($(k)))))
+
+## The generator's input, exported rather than argv: execve passes opaque bytes, so
+## no shell quoting sees the flag lists. -DTHREED stays out -- one header, both dims.
+export DES_REV_DEFINES   = $(strip $(filter-out -DTHREED,$(filter -D%,$(CXXFLAGS))))
+export DES_REV_CXXFLAGS  = $(subst @, ,$(SNAP_CXX_ORDERED))
+export DES_REV_WARNFLAGS = $(or $(subst @, ,$(SNAP_WARN)),none)
+export DES_REV_LDFLAGS   = $(SNAP_LD_ORDERED)
+export DES_REV_MK_OPTS   = $(strip $(MK_OPTS))
+export DES_REV_GPU_CC    = $(strip $(GPU_CC))
+export DES_REV_SNAPSHOT_DIFF = $(strip $(snapshot_diff))
+export DES_REV_KNN_DIR   = $(KNN_BVH_DIR)
+export DES_REV_ANN_DIR   = $(ANN_DIR)
+export DES_REV_MMG_DIR   = mmg
+## Resolved dependency prefixes. These are PATHS, so they stop at the script: only
+## its provider label (brew/conda/user/submodule/vendored/nvhpc/macports/system, or
+## toolchain when empty) reaches the binary.
+export DES_REV_PREFIX_BOOST  = $(strip $(BOOST_ROOT_DIR))
+export DES_REV_PREFIX_HDF5   = $(strip $(HDF5_INCLUDE_DIR))
+export DES_REV_PREFIX_MMG    = $(strip $(MMG_INCLUDE))
+export DES_REV_PREFIX_OPENMP = $(strip $(OPENMP_LIB_DIR))
+
+## Exit 10 = header replaced, so every object embedding its macros must go: a macro
+## appearing or disappearing must recompile its readers, and make 3.81 compares mtimes
+## per whole second. ALL variants -- the header is dimension- and suffix-neutral.
+build_revision.hpp: FORCE
+	@sh utils/gen_build_revision.sh $@; \
+	case $$? in \
+	    0) ;; \
+	    10) rm -f runtime_info.*.o ;; \
+	    *) echo "   build_revision.hpp could not be generated" >&2; exit 1 ;; \
+	esac
+
+runtime_info.$(ndims)d$(suffix).o: build_revision.hpp
+
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
@@ -1235,3 +1325,4 @@ endif
 
 clean:
 	@rm -f $(OBJS) $(EXE) $(BUILD_STAMP) $(LINK_STAMP) $(FEATURE_STAMPS) $(FEATURE_DEPS)
+	@rm -f build_revision.hpp build_revision.hpp.*

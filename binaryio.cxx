@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 
@@ -7,6 +8,7 @@
 #include "binaryio.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
+#include "runtime_info.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -27,12 +29,6 @@ namespace std { using ::snprintf; }
  * 2  The rests are binary data.
  ****************************************************************************/
 
-// Revision number of the binary file format. Bump it whenever the layout
-// of the header or of the data written after it changes.
-#define BINARY_FILE_REVISION 4
-/* Revision notes:
- * 4: Add write/read scalar for binary io
- */
 
 namespace {
     const std::size_t headerlen = 4096;
@@ -197,6 +193,101 @@ template
 void BinaryOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, std::size_t);
 template
 void BinaryOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
+
+namespace {
+
+void kv(std::string& p, const char* name, const std::string& value)
+{
+    p += name; p += '='; p += value; p += '\n';
+}
+
+void kv(std::string& p, const char* name, int value)
+{
+    char b[32];
+    std::snprintf(b, sizeof(b), "%d", value);
+    kv(p, name, std::string(b));
+}
+
+// %.9g: 6 digits quantize mem_rss_gib to ~107 KiB at 10 GiB, coarser than the pages a
+// footprint is counted in. %g strips trailing zeros at any precision, so "64" for a whole
+// number is not precision loss.
+void kv(std::string& p, const char* name, double value)
+{
+    char b[32];
+    std::snprintf(b, sizeof(b), "%.9g", value);
+    kv(p, name, std::string(b));
+}
+
+} // anonymous namespace
+
+// The identity an HDF5 frame carries in its /provenance group, as one text record so a
+// des-binary frame explains itself too -- readable with strings(1). Keep the field set
+// in step with HDF5Output::write_run_provenance.
+// No revision bump: records are looked up by name, so one more is ignored by a
+// reader that does not know it, and bumping would refuse every existing checkpoint.
+void BinaryOutput::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                                        const DeviceInfo& dev, const std::string& restart_from,
+                                        double rss_gib, double peak_rss_gib)
+{
+    const std::string unknown("unknown");
+    std::string p;
+
+    kv(p, "code_rev", build.rev);
+    kv(p, "code_branch", build.branch);
+    kv(p, "code_dirty", build.dirty);
+    kv(p, "code_origin", build.origin);
+    kv(p, "code_state_utc", build.state_utc);
+    kv(p, "build_os", build.build_os);
+    kv(p, "builder", build.builder);
+    kv(p, "exe_mtime_utc", build.exe_mtime_utc);
+
+    kv(p, "os", cpu.os);
+    kv(p, "runner", cpu.runner);
+    kv(p, "cpu_model", cpu.model);
+    // Machine context, not a denominator: the cpu_time ratio below divides by
+    // omp_threads, and logical_cores is blind to affinity and cgroup limits.
+    kv(p, "logical_cores", cpu.logical_cores);
+    kv(p, "mem_total_gib", cpu.mem_total_gib);
+    // The parallel width, not the machine's core counts: the PT loop exits on an
+    // OpenMP reduction whose summation order depends on the team size. Sampled here
+    // rather than at startup, since a dynamic team drifts between frames.
+    kv(p, "omp_threads", omp_team_size_now());
+
+    kv(p, "kernel", dev.kernel);
+    // The filter reads "0/1" on a filtered 8-GPU node, so gpu_device alone cannot name the
+    // physical card. Guarded on acc_build rather than using_gpu, which an ACC build that
+    // reaches a frame now implies -- a build that could fall back to the host would not.
+    if (dev.acc_build)
+        kv(p, "gpu_visible_devices", dev.visible_devices);
+    if (dev.using_gpu) {
+        kv(p, "gpu_model", dev.name.empty() ? unknown : dev.name);
+        kv(p, "gpu_device", std::to_string(dev.active_dev) + "/"
+                          + std::to_string(dev.num_devices));
+        kv(p, "gpu_cuda_driver", dev.cuda_driver.empty() ? unknown : dev.cuda_driver);
+        kv(p, "gpu_mem_total_gib", dev.mem_total_gib);
+        kv(p, "gpu_mem_free_at_start_gib", dev.mem_free_gib);
+        kv(p, "gpu_mem_used_dev_gib", device_mem_used_dev_gib(dev));
+    }
+
+    // Without this a lone frame from a restarted run credits the whole state to the
+    // last leg's binary and host -- a wrong claim, not a missing one.
+    kv(p, "restart_from", restart_from);
+
+    // Machine health and resource use AT THIS FRAME. Sampled every frame, so a run's
+    // frames form a time series: rss against frame number shows a leak, the
+    // cpu_time/(walltime x omp_threads) ratio a stalling region, and free/load
+    // whether the machine itself went bad.
+    kv(p, "mem_rss_gib", rss_gib);
+    kv(p, "mem_peak_rss_gib", peak_rss_gib);
+    kv(p, "mem_avail_gib", host_mem_avail_gib_now());
+    kv(p, "cpu_time_sec", process_cpu_time_sec());
+    kv(p, "load_avg_1m", host_load_avg_1m());
+    kv(p, "write_utc", utc_now());
+
+    write_header("provenance");
+    eof_pos += std::fwrite(p.data(), sizeof(char), p.size(), f) * sizeof(char);
+}
+
 
 void BinaryOutput::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len)
 {
@@ -384,6 +475,13 @@ HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
     if (rename_if_exists) rename_to_old_backup(filename);
 
     hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+    // Locking off (use_file_locking = false) so ParaView can read a frame while the run
+    // still holds it; ignore_when_disabled = true tolerates builds that already disabled
+    // it. HDF5 then no longer refuses a second writer, so two runs sharing a modelname
+    // corrupt the file silently. H5Pset_file_locking needs HDF5 >= 1.10.7.
+#if H5_VERSION_GE(1, 10, 7)
+    H5Pset_file_locking(fapl_id, false, true);
+#endif
     file_id = H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, fapl_id);
     H5Pclose(fapl_id);
 
@@ -454,6 +552,85 @@ void HDF5Output::write_header()
     gid = create_group_with_order("/VTKHDF/Assembly");
     H5Gclose(gid);
 }
+
+// Host, build and device provenance in a /provenance group, outside /VTKHDF where it
+// cannot collide with the schema. Per frame on purpose, so a lone frame explains itself
+// without the .manifest. Integer counts use -1 = unknown and the _gib doubles use 0, so
+// consumers must reject non-positives rather than computing with them.
+void HDF5Output::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
+                                      const DeviceInfo& dev, const std::string& restart_from,
+                                      double rss_gib, double peak_rss_gib)
+{
+    // Its own group, not the file root: the root is the container's namespace, and a
+    // frame's identity is not part of it. Same name as the des-binary record.
+    hid_t g = H5Gcreate2(file_id, "/provenance", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    if (g < 0) return;   // metadata must never abort a run
+
+    // The build's code and host groups: which source state, built where and when.
+    write_attribute(build.rev, "code_rev", g);
+    write_attribute(build.branch, "code_branch", g);
+    write_attribute(build.dirty, "code_dirty", g);
+    write_attribute(build.origin, "code_origin", g);
+    write_attribute(build.state_utc, "code_state_utc", g);
+    write_attribute(build.build_os, "build_os", g);
+    write_attribute(build.builder, "builder", g);
+    write_attribute(build.exe_mtime_utc, "exe_mtime_utc", g);
+
+    // The run's host: a g++ and an nvc++ build, and a GPU run and its host
+    // fallback, do not agree bit for bit -- and neither do two hosts.
+    write_attribute(cpu.os, "os", g);
+    write_attribute(cpu.runner, "runner", g);
+    write_attribute(cpu.model, "cpu_model", g);
+    // Machine context, not a denominator: the cpu_time ratio below divides by
+    // omp_threads, and logical_cores is blind to affinity and cgroup limits.
+    write_attribute(cpu.logical_cores, "logical_cores", g);
+    write_attribute(cpu.mem_total_gib, "mem_total_gib", g);
+    // The parallel width, not the machine's core counts: the PT loop exits on an
+    // OpenMP reduction whose summation order depends on the team size. Sampled at this
+    // write, since a dynamic team drifts.
+    write_attribute(omp_team_size_now(), "omp_threads", g);
+
+    write_attribute(dev.kernel, "kernel", g);
+    // Guarded on acc_build rather than using_gpu, which an ACC build that reaches a frame
+    // now implies -- a build that could fall back to the host would not.
+    if (dev.acc_build)
+        write_attribute(dev.visible_devices, "gpu_visible_devices", g);
+    if (dev.using_gpu) {
+        // The contract for a frame is that an unknown string reads "unknown"; the
+        // probes leave a field they could not read empty.
+        const std::string unknown("unknown");
+        write_attribute(dev.name.empty() ? unknown : dev.name, "gpu_model", g);
+        // Same N/M form as the manifest's selected=, so a grep for either finds both.
+        const std::string selected(std::to_string(dev.active_dev) + "/"
+                                   + std::to_string(dev.num_devices));
+        write_attribute(selected, "gpu_device", g);
+        write_attribute(dev.cuda_driver.empty() ? unknown : dev.cuda_driver,
+                        "gpu_cuda_driver", g);
+        write_attribute(dev.mem_total_gib, "gpu_mem_total_gib", g);
+        write_attribute(dev.mem_free_gib, "gpu_mem_free_at_start_gib", g);
+    }
+
+    // Status at write time: how the run was doing when this frame was written.
+    // Without this a lone frame from a restarted run credits the whole state to the
+    // last leg's binary and host -- a wrong claim, not a missing one.
+    write_attribute(restart_from, "restart_from", g);
+
+    // Machine health and resource use AT THIS FRAME. Sampled every frame, so a run's
+    // frames form a time series: rss against frame number shows a leak, the
+    // cpu_time/(walltime x omp_threads) ratio a stalling region, and free/load
+    // whether the machine itself went bad.
+    write_attribute(rss_gib, "mem_rss_gib", g);
+    write_attribute(peak_rss_gib, "mem_peak_rss_gib", g);
+    write_attribute(host_mem_avail_gib_now(), "mem_avail_gib", g);
+    write_attribute(process_cpu_time_sec(), "cpu_time_sec", g);
+    write_attribute(host_load_avg_1m(), "load_avg_1m", g);
+    if (dev.using_gpu)
+        write_attribute(device_mem_used_dev_gib(dev), "gpu_mem_used_dev_gib", g);
+    write_attribute(utc_now(), "write_utc", g);
+
+    H5Gclose(g);
+}
+
 
 void HDF5Output::write_block_metadata(const Variables& var, const std::string& base, MarkerSet* ms)
 {
@@ -730,6 +907,41 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
     H5Sclose(space_id);
 }
 
+// Auxiliary (non-mesh-sized) checkpoint array: write_array above classifies by length
+// (PointData/CellData) and exits on anything that is not nnode/nelem/nseg/etop, which a
+// small state array (e.g. the incoming side profiles) legitimately is not. Store it under
+// the block base without visualization metadata, plus the root-level alias that
+// HDF5Input::read_array / has_array resolve.
+template<typename T>
+void HDF5Output::write_aux_array(const std::vector<T> &A, const char *name, hsize_t len)
+{
+    std::string full_name = "/VTKHDF/" + block_base + "/" + name;
+
+    hid_t space_id = H5Screate_simple(1, &len, nullptr);
+    hid_t dtype_id = H5Native<T>::id();
+
+    hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
+    hsize_t chunk_dim = (len < 1024 ? len : 1024);
+    H5Pset_chunk(dcpl_id, 1, &chunk_dim);
+    H5Pset_shuffle(dcpl_id);
+    H5Pset_deflate(dcpl_id, compression_level);
+
+    hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
+                        H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
+    H5Dwrite(dset_id, dtype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, A.data());
+
+    create_virtual_dataset(full_name, name, space_id, dtype_id, len);
+
+    H5Dclose(dset_id);
+    H5Pclose(dcpl_id);
+    H5Sclose(space_id);
+}
+
+template
+void HDF5Output::write_aux_array<int>(const int_vec& A, const char *name, hsize_t);
+template
+void HDF5Output::write_aux_array<double>(const double_vec& A, const char *name, hsize_t);
+
 // 2D array
 template<typename T, int N>
 void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t len, int dest_N)
@@ -914,7 +1126,14 @@ void HDF5Output::create_virtual_dataset(const std::string& src_name, const std::
 
 HDF5Input::HDF5Input(const char *filename)
 {
-    file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
+    hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+    // Locking off so a restart can read a file ParaView holds open; the trade-off is
+    // spelled out in the HDF5Output constructor above.
+#if H5_VERSION_GE(1, 10, 7)
+    H5Pset_file_locking(fapl_id, false, true);
+#endif
+    file_id = H5Fopen(filename, H5F_ACC_RDONLY, fapl_id);
+    H5Pclose(fapl_id);
     if (file_id < 0) {
         std::cerr << "Error: cannot open HDF5 file for reading: " << filename << "\n";
         die(EXIT_IO_OPEN);

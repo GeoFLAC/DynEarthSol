@@ -94,6 +94,18 @@ If you prefer manual control or the wrapper doesn't work:
    ../../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg
    ```
 
+### Run Method 3: Docker
+
+`GOSPL=1 ./build.sh` in the repository root builds `dynearthsol/gcc-11-gospl`
+with the gospl conda environment, gospl_extensions and a 3D `dynearthsol3d`
+already inside, and the environment activated in every login shell. Mount the
+directory holding your cfg and GoSPL YAML and run from it:
+
+```bash
+docker run --rm -it -v /path/to/case:/home/human/case dynearthsol/gcc-11-gospl \
+  bash -lc 'cd ~/case && ~/DynEarthSol/dynearthsol-gospl your_input.cfg'
+```
+
 ## Coupling Details
 
 1. **Initialization**: GoSPL is initialized once from the YAML config file. At the first coupling event, GoSPL's elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
