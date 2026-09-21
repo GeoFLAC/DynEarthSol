@@ -331,7 +331,7 @@ void refresh_rsf_friction(const Param& param, Variables& var,
 
 #pragma acc routine seq
 template <typename T>
-static double elastic(double bulkm, double shearm, const double* de, T s)
+static void elastic(double bulkm, double shearm, const double* de, T s, double& syy)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
@@ -343,12 +343,22 @@ static double elastic(double bulkm, double shearm, const double* de, T s)
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] += 2 * shearm * de[i];
 
-    return volumetric_normal_increment;
+    // Plane strain has zero out-of-plane strain.
+    syy += volumetric_normal_increment;
 }
 
 #pragma acc routine seq
 template <typename T>
-static double elastic_effective(double bulkm, double shearm, const double* de, T s,  double &dpp)
+static void elastic(double bulkm, double shearm, const double* de, T s)
+{
+    double unused_syy = 0;
+    elastic(bulkm, shearm, de, s, unused_syy);
+}
+
+#pragma acc routine seq
+template <typename T>
+static void elastic_effective(double bulkm, double shearm, const double* de, T s,
+                              double& dpp, double& syy)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
@@ -361,7 +371,16 @@ static double elastic_effective(double bulkm, double shearm, const double* de, T
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] += 2 * shearm * de[i];
 
-    return volumetric_normal_increment + dpp;
+    syy += volumetric_normal_increment + dpp;
+}
+
+#pragma acc routine seq
+template <typename T>
+static void elastic_effective(double bulkm, double shearm, const double* de, T s,
+                              double& dpp)
+{
+    double unused_syy = 0;
+    elastic_effective(bulkm, shearm, de, s, dpp, unused_syy);
 }
 
 #pragma acc routine seq
@@ -417,16 +436,14 @@ static void elasto_plastic(double bulkm, double shearm,
      *  10: shear failure
      */
 
-    // elastic trial stress. The returned out-of-plane increment is only used
-    // by the plane-strain elastic path; this elasto-plastic helper is called
-    // only for non-plane-strain updates.
+    // elastic trial stress
     if (has_hydraulic_diffusion)
     {
-        (void) elastic_effective(bulkm, shearm, de, s, dpp);
+        elastic_effective(bulkm, shearm, de, s, dpp);
     }
     else
     {
-        (void) elastic(bulkm, shearm, de, s);
+        elastic(bulkm, shearm, de, s);
     }
     depls = 0;
     failure_mode = 0;
@@ -925,20 +942,20 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             {
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                double out_of_plane_increment;
                 if (has_hydraulic_diffusion)
                 {
-                    out_of_plane_increment = elastic_effective(
-                        bulkm, shearm, de, s, dpp);
+                    if (var.mat->is_plane_strain)
+                        elastic_effective(bulkm, shearm, de, s, dpp, syy);
+                    else
+                        elastic_effective(bulkm, shearm, de, s, dpp);
                 }
                 else
                 {
-                    out_of_plane_increment = elastic(bulkm, shearm, de, s);
+                    if (var.mat->is_plane_strain)
+                        elastic(bulkm, shearm, de, s, syy);
+                    else
+                        elastic(bulkm, shearm, de, s);
                 }
-                // Plane strain has zero out-of-plane strain, so the elastic
-                // helper's common normal increment is the full syy increment.
-                if (var.mat->is_plane_strain)
-                    syy += out_of_plane_increment;
             }
             break;
         case MatProps::rh_viscous:
