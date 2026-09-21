@@ -218,7 +218,6 @@ struct Control {
     double damping_factor;
     int damping_option;
     int ref_pressure_option;
-//    bool surface_pressure_correction;
     bool is_using_mixed_stress;
 
     int surface_process_option;
@@ -504,7 +503,6 @@ struct Markers {
 
 struct Debug {
     bool dt;
-//    bool has_two_layers_for;
 };
 
 enum RSFSlipRateProjectionOption {
