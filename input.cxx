@@ -330,10 +330,6 @@ static void declare_parameters(po::options_description &cfg,
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
          "Any other value is rejected at startup.\n")
-//        ("control.surface_pressure_correction", po::value<bool>(&p.control.surface_pressure_correction)->default_value(false),
-//         "Correct the pressure of surface elements"
-//         "which has positive stress 1st invariant"
-//         "and force the 1st invariant to zero.")
         ("control.is_using_mixed_stress", po::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
 
@@ -936,8 +932,6 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("debug.dt", po::value<bool>(&p.debug.dt)->default_value(false),
          "Print all dt criteria")
-//        ("debug.has_two_layers_for", po::value<bool>(&p.debug.has_two_layers_for)->default_value(true),
-//         "Use two layers of for elem to avoid race condition.")
         ;
 }
 
