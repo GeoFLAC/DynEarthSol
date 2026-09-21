@@ -452,7 +452,7 @@ void end(Variables& var) {
 }
 
 
-double update_mesh(const Param& param, Variables& var)
+void update_mesh(const Param& param, Variables& var)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -485,10 +485,9 @@ double update_mesh(const Param& param, Variables& var)
     // surface_processes() above can move elemmarkers via correct_surface_marker().
     var.mat->refresh_elem_cache();
 
-    // Keep var.dt on the current step; GVS selects the next step here.
-    double next_dt = var.dt;
-    if (param.control.use_global_velocity_scaling)
-        next_dt = compute_dt(param, var);
+    if (param.control.use_global_velocity_scaling) {
+        var.dt = compute_dt(param, var);
+    }
 
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
@@ -498,7 +497,6 @@ double update_mesh(const Param& param, Variables& var)
 #ifdef NPROF
     nvtxRangePop();
 #endif
-    return next_dt;
 }
 
 
@@ -543,7 +541,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
             }
         }
 
-        var.dt = update_mesh(param, var);
+        update_mesh(param, var);
 
     }
     std::cout << "Adjusted isostasy for " << iso_steps << " steps.\n";
@@ -572,7 +570,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
         {
             apply_vbcs(param, var, *var.vel);
             if (param.control.has_moving_mesh)
-                var.dt = update_mesh(param, var);
+                update_mesh(param, var);
             update_strain_rate(var, *var.strain_rate);
             compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
@@ -822,7 +820,7 @@ int main(int argc, const char* argv[])
             {
                 apply_vbcs(param, var, *var.vel);
                 if (param.control.has_moving_mesh)
-                    var.dt = update_mesh(param, var);
+                    update_mesh(param, var);
                 update_strain_rate(var, *var.strain_rate);
                 compute_dvoldt(var, *var.ntmp, *var.etmp);
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
@@ -876,15 +874,16 @@ int main(int argc, const char* argv[])
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
-        // Objective rotation still belongs to the current physical step.
-        double next_dt = var.dt;
+        // Objective rotation still belongs to the current physical step, even
+        // if the update below selects var.dt for the next step.
+        const double rotation_dt = var.dt;
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
-            next_dt = update_mesh(param, var);
+            update_mesh(param, var);
         else if (param.control.rsf_dtheta_max > 0.0) {
             // Select the next step from the accepted velocity. The GVS mass
             // must follow the same current rate used by the state bound.
-            next_dt = compute_dt(param, var);
+            var.dt = compute_dt(param, var);
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
@@ -892,9 +891,7 @@ int main(int argc, const char* argv[])
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
-            rotate_stress(var, *var.stress, *var.strain);
-
-        var.dt = next_dt;
+            rotate_stress(var, *var.stress, *var.strain, rotation_dt);
 
         monitor_write_if_due(param, var);
 
