@@ -417,14 +417,16 @@ static void elasto_plastic(double bulkm, double shearm,
      *  10: shear failure
      */
 
-    // elastic trial stress
+    // elastic trial stress. The returned out-of-plane increment is only used
+    // by the plane-strain elastic path; this elasto-plastic helper is called
+    // only for non-plane-strain updates.
     if (has_hydraulic_diffusion)
     {
-        elastic_effective(bulkm, shearm, de, s, dpp);
+        (void) elastic_effective(bulkm, shearm, de, s, dpp);
     }
     else
     {
-        elastic(bulkm, shearm, de, s);
+        (void) elastic(bulkm, shearm, de, s);
     }
     depls = 0;
     failure_mode = 0;
