@@ -361,7 +361,10 @@ Bug reports, comments and suggestions are welcome on the
 asks for what a fix needs. Development conventions -- building, regression
 tests, commit messages, pull requests, releases -- are in
 [CONTRIBUTING.md](CONTRIBUTING.md), and user-visible changes per release in
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](CHANGELOG.md). AI-assisted contributions are welcome under the
+policy there; you remain responsible for what your assistant produces. An
+assistant working in a checkout reads [AGENTS.md](AGENTS.md), which points it at
+the parameter reference, the templates and the conventions.
 
 # Citing
 

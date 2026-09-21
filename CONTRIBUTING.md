@@ -27,6 +27,14 @@ Low priority:
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
 * Avoid creating/destroying objects in inner for-loops.
 * Avoid static variables and global variables.
+* The same sources build `dynearthsol2d` and `dynearthsol3d`, so every change
+  must compile with both `make ndims=2` and `make ndims=3`; use `NDIMS`,
+  `NODES_PER_ELEM` and `NSTR`, never a literal 2, 3, 4 or 6.
+* Parallel loops use `#pragma omp parallel for default(none)` and declare every
+  variable in `shared`/`private`/`firstprivate`, so nothing is shared by
+  accident. What a clause list may contain changed between g++ 8 and 9, so CI
+  compiles with g++ 8 to 15 to keep the pragmas portable. Keep the paired
+  `#pragma acc parallel loop` clauses in step.
 * Meaning of error codes. First digit is the category, second the specific
   cause; 1x is the user's to fix, 2x the environment, 3x-6x ours. Exit via
   `die(EXIT_...)` in `utils.hpp`, which prints the code and its category, so
@@ -114,6 +122,20 @@ repeated here.
   question is whether the change altered results -- CI cannot tell -- so run
   the comparison above and report it. Open as a draft until CI is green, then
   request review from at least one other developer.
+
+## AI-assisted contributions
+
+AI-assisted contributions are welcome. You are responsible for the output of
+the AI tools you use, as you are for anything else you submit: review it before
+you ask anyone else to, and be able to explain every line. Have your assistant
+read this file and the templates under [`.github/`](.github/) before it drafts
+an issue or a pull request; [`AGENTS.md`](AGENTS.md) at the repository root
+tells it to. Disclose the tools used and what they produced in the pull
+request's AI disclosure section, and name them in `Co-Authored-By` trailers as
+the commit guideline asks. Review is a conversation between people: you may use
+AI to improve your wording, but the reply to a review comment is yours, and a
+pull request opened by an agent without a person behind it will not be
+reviewed.
 
 ## Development and release workflow
 
