@@ -66,4 +66,5 @@ Fixes #
 
 ## AI disclosure
 
-<!-- Name any AI tools used and what they produced, or write "No AI tools used". -->
+<!-- Name any AI tools used and what they produced, or write "No AI tools used".
+     See "AI-assisted contributions" in CONTRIBUTING.md. -->

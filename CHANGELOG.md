@@ -20,7 +20,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
-  with commit-message guidelines, plus pull request and issue templates ([#96]).
+  with commit-message guidelines and an AI-usage policy, pull request and issue
+  templates, and `AGENTS.md` for coding assistants ([#96]).
 
 ### Changed
 
