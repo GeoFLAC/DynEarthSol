@@ -38,6 +38,13 @@
 # ----------------------------------------
 #   0  No serious differences (bit-exact or round-off only).
 #   1  At least one field has relative diff >= 1e-8, or contains NaN/Inf.
+#
+# Citing a timing result
+# ----------------------
+#   Every run writes <modelname>.manifest with the build block and the host and thread count it got.
+#   Quote it -- a wall-clock number is meaningless without them. The cmp and restart
+#   targets archive it beside the .info; the next run in this directory overwrites the
+#   live copy.
 
 CASE := test-3d-equ-tiny.cfg
 #CASE := test-tiny-long.cfg
@@ -152,6 +159,7 @@ cmp: detect-orig
 	${VTKFLAG}
 	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
+	-cp ${MODELNAME}.manifest ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.manifest
 
 restart: detect-orig
 	${RESTART_TEST}
@@ -159,6 +167,7 @@ restart: detect-orig
 	${VTKFLAG}
 	python ./compare.py ${ORIG}/${MODELNAME} ${MODELNAME} ${FRAME}
 	cp ${MODELNAME}.info ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.info
+	-cp ${MODELNAME}.manifest ${MODELNAME}.${GITID}.${CASENAME}.${OMP}.manifest
 
 # restart reproducibility test; config file with restart information is needed
 IS_RESTART_EXISTS := $(shell grep -i "^[[:space:]\#]*is_restarting[[:space:]]*=" $(CASE))

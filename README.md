@@ -315,6 +315,9 @@ make use_gospl=1
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
 
+# embed the uncommitted code changes in the executable (off by default)
+make snapshot_diff=1
+
 # OpenACC build (NVHPC compiler)
 make openacc=1
 
@@ -334,6 +337,61 @@ make openacc=1 GPU_CC=90
   cfg from a web form.
 * Benchmark cases with analytical solutions are under `benchmarks/`; the
   regression cases the developers compare against are under `benchmarks-cores/`.
+* **Build provenance**: every executable embeds a `build.snapshot` block -- revision,
+  make options, dependency versions and providers, toolchain, compile and link flags:
+  ```bash
+  strings <exe> | grep '^build\.snapshot\.'
+  ```
+  A run prints the same block at start as `[build][...]` lines, followed by the
+  `[runtime][...]` lines; `has_runtime_info_display = no` in the cfg silences them.
+  A toolchain that also emits the literal into `.debug_*` may print it more than
+  once; the copies are identical.
+* **Uncommitted changes**: `make snapshot_diff=1` (off by default) also embeds the
+  working-tree diff:
+  ```bash
+  strings <exe> | sed -n '/^build\.code-changes\.begin :$/,/^build\.code-changes\.end   :$/p'
+  ```
+  Scope is `*.c *.h *.cxx *.hpp *.cpp *.cu`, `Makefile` and `3x3-C/Makefile`, tracked in
+  `HEAD` only; anything excluded is counted in the payload. `rev`'s `-dirty` suffix and
+  the `dirty=` counts use the same scope.
+* **Choosing how many cores to use**: DES uses whatever the OpenMP runtime gives it:
+  ```bash
+  OMP_NUM_THREADS=6 ./dynearthsol2d your_input.cfg
+  ```
+  Unset, OpenMP takes every logical CPU, which on a hybrid CPU includes efficiency cores.
+* **Run provenance**: each run writes `<modelname>.manifest` -- `[runtime.model]`,
+  `[runtime.host]`, `[runtime.device]`, `[runtime.threads]` (measured, not
+  `OMP_NUM_THREADS`, and `omp_wait_policy_src` names who set the policy -- `env`,
+  `des-default` or `runtime`), `[runtime.env]` (the variables that are set, DES's own
+  macOS default included), then the executable's `build.snapshot` block as `[build.*]`
+  sections, plus `exe_mtime_utc`, the executable file's own mtime. The same sections
+  print on screen at run start, one line each as `[group][topic]`, build group first.
+  A fresh run truncates, a restart appends. Under `snapshot_diff=1` each
+  record ends with the `build.code-changes` block; built without it, a line saying so.
+  A manifest describes the binary that *wrote* it: compare its `exe_mtime_utc` and
+  `code_state_utc` with the executable you still have, to see whether it was rebuilt
+  since. A plain `cp` or a `touch` moves the mtime, so it dates the file, not the link.
+* **Frame provenance**: every frame and checkpoint names its own origin -- `code_*`
+  and `build_*`, the run's `os`/`runner`/`cpu_model`/`logical_cores`/`mem_total_gib`,
+  `kernel` and `omp_threads` (measured at that write, `-1` in an `openmp=0` build),
+  `restart_from`, and on a GPU run `gpu_model`/`gpu_device`/`gpu_visible_devices` and
+  `gpu_cuda_driver` with the device's memory (`gpu_mem_free_at_start_gib` is genuinely free device
+  memory, unlike the host's MemAvailable estimate). Then machine health and resource use
+  **at that frame**:
+  `mem_rss_gib`, `mem_peak_rss_gib`, `mem_avail_gib`, `cpu_time_sec`, `load_avg_1m`,
+  `gpu_mem_used_dev_gib` (the whole device, not this run) and `write_utc`, so a run's
+  frames are a time series. Read the
+  series with its caveats: `mem_rss_gib` and `cpu_time_sec` restart from zero on a
+  restart leg, `mem_rss_gib` also falls when the kernel reclaims pages under external
+  pressure (macOS), and `cpu_time_sec / (walltime_sec x omp_threads)` cannot see a
+  stall while workers spin -- which is the macOS default, since DES sets
+  `OMP_WAIT_POLICY=active` there. `mem_avail_gib` / `load_avg_1m` say whether the
+  machine itself went bad rather than the model, and include this run's own load.
+  Static host inventory (physical/perf/eff cores, free memory at start) stays in the
+  `.manifest`. HDF5 builds keep it in a `/provenance` group
+  (`h5dump -A -g /provenance <model>.save.000000.vtkhdf`), des-binary builds in a
+  `provenance` record (`strings <model>.save.000000`). Unknowns are `"unknown"`,
+  `-1` and `0`.
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash
