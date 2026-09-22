@@ -13,6 +13,7 @@
 #include "matprops.hpp"
 #include "output.hpp"
 #include "utils.hpp"
+#include "mesh.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -526,6 +527,31 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
+    // Serialize the cached marker-cell index (mat.phase_change_option 3, see
+    // VirtualTopology in mesh.hpp) so a restart carries forward the EXACT lagged
+    // binning the continuous run had at this step, instead of a fresher rebuild
+    // against current marker positions -- serpentinization reads this index
+    // every phase_changes() step, so a mismatch here can change which markers
+    // convert and make the restarted run diverge. This includes the
+    // mark_removed() ids recorded since the last rebuild, not just the
+    // frozen bucket -- skipping those would let a restart trust labels the
+    // continuous run had already dropped. vtopo_int is variable length,
+    // so vtopo_len records its size for read_array() to pre-size the buffer
+    // on restart. (var.vtopo is null when phase_change_option != 3 -> nothing
+    // written.)
+    if (var.vtopo) {
+        int_vec vt_i;
+        double_vec vt_d;
+        var.vtopo->serialize(vt_i, vt_d);
+        int_vec vt_len(1, static_cast<int>(vt_i.size()));
+        bin.write_aux_array(vt_len, "vtopo_len", vt_len.size());
+        bin.write_aux_array(vt_i, "vtopo_int", vt_i.size());
+        bin.write_aux_array(vt_d, "vtopo_dbl", vt_d.size());
+        // vtopo_dbl is variable length too (VirtualTopology::serialize()), so
+        // its length is recorded alongside vtopo_len for the restart reader.
+        int_vec vt_dlen(1, static_cast<int>(vt_d.size()));
+        bin.write_aux_array(vt_dlen, "vtopo_dbl_len", vt_dlen.size());
     }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {

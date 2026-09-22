@@ -792,6 +792,7 @@ struct SurfaceInfo {
 //
 class MatProps;
 class MarkerSet;
+class VirtualTopology;
 struct Variables {
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
@@ -964,6 +965,16 @@ struct Variables {
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
 
+    // Cached marker-cell index (mat.phase_change_option 3, see VirtualTopology
+    // in mesh.hpp). Owned; rebuilt eagerly after init() and at the end of
+    // remeshing, and lazily by subduction_phase_changes() when a restart left
+    // none it can use (see phasechanges.hpp). Between rebuilds, marker
+    // deletion (remove_markers() in markerset.cxx) only flags the ids it
+    // touches via mark_removed() rather than a full re-scan. Checkpointed (serialize()/deserialize(), including the
+    // flagged ids) so a restart carries the identical lagged state the
+    // continuous run had at that step.
+    VirtualTopology *vtopo;
+
     Variables()
     {
         stress_n = nullptr;
@@ -971,6 +982,7 @@ struct Variables {
         spr_blend_weight = nullptr;
         spr_p_ref_old = nullptr;
         remesh_is_changed = nullptr;
+        vtopo = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);
         vbc_vertical_ratio_x0.resize(4);

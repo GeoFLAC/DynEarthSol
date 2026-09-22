@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <string>
@@ -3953,5 +3955,310 @@ void average_nodal_to_elem<tensor_t::ConstComponentAccessor, tensor_t::Component
     tensor_t::ConstComponentAccessor nodal, 
     const conn_t &connectivity, int nelem, tensor_t::ComponentAccessor elem, bool);
 template
-void average_nodal_to_elem<const double*, double*>(const double* nodal, 
+void average_nodal_to_elem<const double*, double*>(const double* nodal,
     const conn_t &connectivity, int nelem, double* elem, bool);
+
+
+//
+// VirtualTopology -- background Cartesian grid of per-cell marker-id
+// buckets.  See mesh.hpp for the interface and the algorithm's contract.
+//
+
+VirtualTopology::VirtualTopology(const double* domain_lo, const double* domain_hi,
+                                 double resolution)
+    : dx_(resolution)
+{
+    for (int d=0; d<NDIMS; d++) {
+        lo_[d] = domain_lo[d];
+        dims_[d] = std::max(1, static_cast<int>(std::ceil((domain_hi[d] - domain_lo[d]) / dx_)));
+    }
+    nz_ = dims_[NDIMS-1];
+    ncol_ = 1;
+    for (int d=0; d<NDIMS-1; d++)
+        ncol_ *= dims_[d];
+
+    bucket_.assign(static_cast<std::size_t>(ncol_) * nz_, int_vec());
+}
+
+
+void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
+
+    ints.clear();
+    ints.push_back(layout_tag);
+    for (int d=0; d<NDIMS; d++) ints.push_back(dims_[d]);
+    for (std::size_t c=0; c<ncells; c++)
+        ints.push_back(static_cast<int>(bucket_[c].size()));
+    for (std::size_t c=0; c<ncells; c++)
+        ints.insert(ints.end(), bucket_[c].begin(), bucket_[c].end());
+
+    ints.push_back(static_cast<int>(removed_since_rebuild_.size()));
+    for (int id : removed_since_rebuild_)
+        ints.push_back(id);
+
+    ints.push_back(xext_built_ ? 1 : 0);
+    ints.push_back(static_cast<int>(dominant_cells_.size()));
+
+    dbls.clear();
+    for (int d=0; d<NDIMS; d++) dbls.push_back(lo_[d]);
+    dbls.push_back(dx_);
+
+    // One loop for ids AND extents so the two streams stay aligned by
+    // position. With xext_built_ every dominant cell has an extent:
+    // build_serpentinization_grid() records one for each, and
+    // invalidate_dominant_cell() erases id and extent together.
+    if (xext_built_ && dominant_xext_.size() != dominant_cells_.size())
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
+    for (int c : dominant_cells_) {
+        ints.push_back(c);
+        if (xext_built_) {
+            const XExt& e = dominant_xext_.at(c);
+            for (int d=0; d<NDIMS-1; d++) dbls.push_back(e.lo[d]);
+            for (int d=0; d<NDIMS-1; d++) dbls.push_back(e.hi[d]);
+        }
+    }
+}
+
+
+VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_vec& dbls)
+{
+    // Not locked: this constructs a brand-new object that is not yet
+    // reachable from any other thread.
+    if (ints.empty() || ints[0] != layout_tag)
+        die(EXIT_IO_RESTART, "vtopo_int has another VirtualTopology layout: restart from a checkpoint this build wrote");
+    VirtualTopology* vt = new VirtualTopology();   // private default ctor
+    // Every count and id below comes from the file, so every read is bounded:
+    // a corrupt checkpoint dies here instead of reading past either array.
+    std::size_t p = 1;
+    auto next = [&]() {
+        if (p >= ints.size())
+            die(EXIT_IO_RESTART, "vtopo_int ends before its counts do");
+        return ints[p++];
+    };
+    auto check = [](bool ok) {
+        if (!ok)
+            die(EXIT_IO_RESTART, "vtopo_int holds a count or id outside its range");
+    };
+    std::size_t ncells = 1;
+    for (int d=0; d<NDIMS; d++) {
+        vt->dims_[d] = next();
+        check(vt->dims_[d] > 0);
+        ncells *= vt->dims_[d];
+        check(ncells <= ints.size());   // one size entry per cell follows
+    }
+    vt->nz_ = vt->dims_[NDIMS-1];
+    vt->ncol_ = 1;
+    for (int d=0; d<NDIMS-1; d++) vt->ncol_ *= vt->dims_[d];
+
+    vt->bucket_.assign(ncells, int_vec());
+    std::size_t q = p + ncells;   // bucket contents start after the size block
+    check(q <= ints.size());
+    const std::size_t first = q;
+    for (std::size_t c=0; c<ncells; c++) {
+        const int cnt = next();
+        check(cnt >= 0 && q + cnt <= ints.size());
+        vt->bucket_[c].assign(ints.begin()+q, ints.begin()+q+cnt);
+        q += cnt;
+    }
+    const std::size_t nentries = q - first;
+    p = q;
+
+    const int nremoved = next();
+    check(nremoved >= 0);
+    for (int i=0; i<nremoved; i++)
+        vt->removed_since_rebuild_.insert(next());
+
+    // Crust extents ride in dbls, one XExt per dominant id in the same order
+    // (see serialize()), exactly when the stored xext_built_ says so.
+    std::size_t r = NDIMS + 1;   // dbls cursor: lo_ and dx_ come first
+    if (dbls.size() < r)
+        die(EXIT_IO_RESTART, "vtopo_dbl ends before its counts do");
+    auto next_dbl = [&]() {
+        if (r >= dbls.size())
+            die(EXIT_IO_RESTART, "vtopo_dbl ends before its counts do");
+        return dbls[r++];
+    };
+    {
+        vt->xext_built_ = (next() != 0);
+        const int ndominant = next();
+        check(ndominant >= 0);
+        for (int i=0; i<ndominant; i++) {
+            const int c = next();
+            check(c >= 0 && static_cast<std::size_t>(c) < ncells);
+            vt->dominant_cells_.insert(c);
+            if (vt->xext_built_) {
+                XExt& e = vt->dominant_xext_[c];
+                for (int d=0; d<NDIMS-1; d++) e.lo[d] = next_dbl();
+                for (int d=0; d<NDIMS-1; d++) e.hi[d] = next_dbl();
+            }
+        }
+    }
+
+    // Rebuild the per-marker labels (label_cell()) from the bucket just
+    // restored -- derived data, not checkpointed. build_index() bins every id
+    // 0..npoints-1 exactly once, so the buckets hold each id below their entry
+    // count once.
+    {
+        vt->label_.assign(nentries, -1);
+        for (std::size_t c=0; c<ncells; c++)
+            for (int m : vt->bucket_[c]) {
+                check(m >= 0 && static_cast<std::size_t>(m) < nentries);
+                if (vt->label_[m] != -1)
+                    die(EXIT_IO_RESTART, "vtopo_int holds a marker id more than once");
+                vt->label_[m] = static_cast<int>(c);
+            }
+    }
+
+    // The reads stop at either array's end; an array longer than its counts
+    // is caught here.
+    if (p != ints.size() || r != dbls.size())
+        die(EXIT_IO_RESTART, "vtopo_int / vtopo_dbl do not decode to their end");
+
+    for (int d=0; d<NDIMS; d++) vt->lo_[d] = dbls[d];
+    vt->dx_ = dbls[NDIMS];
+    bool finite = std::isfinite(vt->dx_) && vt->dx_ > 0;
+    for (int d=0; d<NDIMS; d++) finite = finite && std::isfinite(vt->lo_[d]);
+    if (!finite)
+        die(EXIT_IO_RESTART, "vtopo_dbl holds a grid origin or cell size that is not finite and positive");
+    return vt;
+}
+
+
+int VirtualTopology::column_index(const double* p) const
+{
+    // Fold the NDIMS-1 horizontal axes: i in 2D, i*dims_[1]+j in 3D.
+    int col = 0;
+    for (int d=0; d<NDIMS-1; d++) {
+        int i = static_cast<int>((p[d] - lo_[d]) / dx_);
+        i = std::min(std::max(i, 0), dims_[d] - 1);
+        col = col * dims_[d] + i;
+    }
+    return col;
+}
+
+
+int VirtualTopology::vertical_index(const double* p) const
+{
+    int k = static_cast<int>((p[NDIMS-1] - lo_[NDIMS-1]) / dx_);
+    return std::min(std::max(k, 0), nz_ - 1);
+}
+
+
+void VirtualTopology::build_index(const array_t& coords, int npoints)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
+    bucket_.assign(ncells, int_vec());
+    removed_since_rebuild_.clear();
+    label_.assign(npoints, -1);
+
+    // Serial: push_back into shared buckets would race under OpenMP, and
+    // it runs once per rebuild, not per phase_changes() call.
+    for (int m=0; m<npoints; m++) {
+        double p[NDIMS];
+        for (int d=0; d<NDIMS; d++)
+            p[d] = coords[m][d];
+        const int c = cell_of(p);
+        bucket_[c].push_back(m);
+        label_[m] = c;
+    }
+}
+
+
+int VirtualTopology::neighbor_cell(int cell, int axis, int dir) const
+{
+    int idx[NDIMS];
+    int rem = cell;
+    for (int d=NDIMS-1; d>=0; d--) {
+        idx[d] = rem % dims_[d];
+        rem /= dims_[d];
+    }
+    idx[axis] += dir;
+    if (idx[axis] < 0 || idx[axis] >= dims_[axis])
+        return -1;
+    int flat = 0;
+    for (int d=0; d<NDIMS; d++)
+        flat = flat * dims_[d] + idx[d];
+    return flat;
+}
+
+
+void VirtualTopology::cell_markers(int cell, int_vec& ids) const
+{
+    // Not locked: see the class doc's thread-safety section in mesh.hpp.
+    if (cell < 0 || cell >= static_cast<int>(bucket_.size()))
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology::cell_markers: cell outside [0, num_cells())");
+    ids.clear();
+    for (int id : bucket_[cell])
+        if (removed_since_rebuild_.find(id) == removed_since_rebuild_.end())
+            ids.push_back(id);
+}
+
+
+void VirtualTopology::mark_removed(int id)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    removed_since_rebuild_.insert(id);
+}
+
+
+void VirtualTopology::clear_dominant()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    dominant_cells_.clear();
+    dominant_xext_.clear();
+    xext_built_ = false;
+}
+
+
+void VirtualTopology::set_dominant(int cell)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    dominant_cells_.insert(cell);
+}
+
+
+void VirtualTopology::set_dominant_xext(int cell, const double* xlo, const double* xhi)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    XExt& e = dominant_xext_[cell];
+    for (int d=0; d<NDIMS-1; d++) {
+        e.lo[d] = xlo[d];
+        e.hi[d] = xhi[d];
+    }
+}
+
+
+void VirtualTopology::mark_xext_built()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    xext_built_ = true;
+}
+
+
+bool VirtualTopology::dominant_xext_ok(int cell, const double* p, double margin) const
+{
+    // Called only with the margin on, when xext_built_ holds and so every
+    // dominant cell has an extent (see serialize()).
+    const auto it = dominant_xext_.find(cell);
+    if (it == dominant_xext_.end())
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
+    for (int d=0; d<NDIMS-1; d++)
+        if (p[d] < it->second.lo[d] - margin || p[d] > it->second.hi[d] + margin)
+            return false;
+    return true;
+}
+
+
+void VirtualTopology::invalidate_dominant_cell(int cell)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    dominant_cells_.erase(cell);
+    dominant_xext_.erase(cell);
+}
+
+

@@ -379,6 +379,37 @@ void restart(const Param& param, Variables& var)
         var.steps >= var.info_display_next_step)
         var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
 
+    // Restore the cached marker-cell index (mat.phase_change_option 3, see
+    // VirtualTopology in mesh.hpp) so the restart carries forward the EXACT
+    // lagged binning the checkpoint captured, instead of a fresher rebuild.
+    // Only under option 3, the one option that builds it: a checkpoint
+    // written by an option-3 run and restarted with another option leaves
+    // var.vtopo null, so the hooks and checkpoints do not carry a dead index.
+    // has_array-gated: a checkpoint written by a run with
+    // phase_change_option != 3 has no vtopo arrays -> var.vtopo stays null
+    // and the first phase_changes rebuilds it lazily.
+    if (param.mat.phase_change_option == 3 && bin_chkpt.has_array("vtopo_int")) {
+        // read_array does not auto-resize; pre-size from the known layout.
+        // vtopo_int is variable length (VirtualTopology::serialize()), so
+        // vtopo_len records that length up front.
+        int_vec vt_len(1);
+        bin_chkpt.read_array(vt_len, "vtopo_len");
+        if (vt_len[0] < 1)
+            die(EXIT_IO_RESTART, "vtopo_len is not a length");
+        int_vec vt_i(vt_len[0]);
+        bin_chkpt.read_array(vt_i, "vtopo_int");
+        // vtopo_dbl is variable length too (VirtualTopology::serialize()),
+        // recorded in vtopo_dbl_len like vtopo_len.
+        int_vec vt_dlen(1);
+        bin_chkpt.read_array(vt_dlen, "vtopo_dbl_len");
+        if (vt_dlen[0] < 1)
+            die(EXIT_IO_RESTART, "vtopo_dbl_len is not a length");
+        double_vec vt_d(vt_dlen[0]);
+        bin_chkpt.read_array(vt_d, "vtopo_dbl");
+        delete var.vtopo;
+        var.vtopo = VirtualTopology::deserialize(vt_i, vt_d);
+    }
+
     // Initializing field variables
     {
         bin_save.read_array(*var.vel, "velocity");
