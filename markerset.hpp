@@ -33,7 +33,7 @@ public:
     void check_marker_elem_consistency(const Variables &var) const;
     void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
     void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
-                        const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
+                        const int mattype_sediment, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt, int genesis, int seed);
     void append_random_marker_in_elem( int el, int mt, double time, int genesis);
@@ -123,7 +123,7 @@ private:
     int_vec *_id;
     // Deposition time [yr]; 0 when none is set: run start, a hydrous marker, a homogeneous fill
     // of a non-sediment element, replenishment_option 0 or 1, and the side-profile fill outside
-    // the deposit (even in a recorded mattype_sed layer), so a sediment marker can carry 0
+    // the deposit (even in a recorded mattype_sediment layer), so a sediment marker can carry 0
     double_vec *_time;
     // Sedimentation: Depth
     double_vec *_z;

@@ -1884,7 +1884,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
             // set marker of sediment.
-            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sediment, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
     }
 

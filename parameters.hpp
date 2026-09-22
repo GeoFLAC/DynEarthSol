@@ -446,8 +446,8 @@ struct Mat {
     int mattype_mantle;
     int mattype_depleted_mantle;
     int mattype_partial_melting_mantle;
-    int mattype_crust;
-    int mattype_sed;
+    int mattype_continental_crust;
+    int mattype_sediment;
     int mattype_oceanic_crust;
     int mattype_mor_extrusion;
     int mattype_asthenosphere;

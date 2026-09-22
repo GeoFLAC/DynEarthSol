@@ -268,7 +268,7 @@ static void declare_parameters(po::options_description &cfg,
          "processes gave it, and in 3D at its along-strike position (a point off the recorded face "
          "takes the values of the face's nearest point). A deposit on the wall top gets the profile "
          "top's values. Markers a remesh creates in an element at the wall take the layering at the "
-         "element's centroid and time 0; in an element centred in the deposit, mattype_sed and the "
+         "element's centroid and time 0; in an element centred in the deposit, mattype_sediment and the "
          "time of a sediment marker of the element, else the remesh time. Temperatures are not "
          "re-conducted under a risen surface, so they can differ from the domain beside the wall by "
          "up to the near-surface temperature gradient times the rise. Requires MMG when "
@@ -438,7 +438,7 @@ static void declare_parameters(po::options_description &cfg,
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
          "2: same as the mattype of the nearest marker (slowest option).\n"
          "12: if the element's surviving markers are all one mattype, use that mattype directly "
-         "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
+         "(deposit-time interpolated for mattype_sediment, as in option 2); otherwise fall back "
          "to option 2 (nearest marker). Exact in single-material elements.\n"
          "At a remesh, independently of this option, an element whose part inside the old mesh lies "
          "in one old element whose markers were all one mattype gets that mattype, and with "
@@ -986,12 +986,12 @@ static void declare_parameters(po::options_description &cfg,
          "Index of depleted mantle material. Unused: no phase change reads it.")
         ("mat.mattype_partial_melting_mantle", po::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
          "Index of partial melting mantle material. Unused: no phase change reads it.")
-        ("mat.mattype_crust", po::value<int>(&p.mat.mattype_crust)->default_value(0),
+        ("mat.mattype_continental_crust", po::value<int>(&p.mat.mattype_continental_crust)->default_value(0),
          "Index of crust material.  For continental thermal gradient")
         ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
          "Index of oceanic crust. A top element where it is the most abundant marker material keeps its plastic "
          "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx).")
-        ("mat.mattype_sed", po::value<int>(&p.mat.mattype_sed)->default_value(0),
+        ("mat.mattype_sediment", po::value<int>(&p.mat.mattype_sediment)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
         ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
          "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
@@ -1787,8 +1787,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             {"mattype_mantle", p.mat.mattype_mantle},
             {"mattype_depleted_mantle", p.mat.mattype_depleted_mantle},
             {"mattype_partial_melting_mantle", p.mat.mattype_partial_melting_mantle},
-            {"mattype_crust", p.mat.mattype_crust},
-            {"mattype_sed", p.mat.mattype_sed},
+            {"mattype_continental_crust", p.mat.mattype_continental_crust},
+            {"mattype_sediment", p.mat.mattype_sediment},
             {"mattype_oceanic_crust", p.mat.mattype_oceanic_crust},
             {"mattype_mor_extrusion", p.mat.mattype_mor_extrusion},
             {"mattype_asthenosphere", p.mat.mattype_asthenosphere},

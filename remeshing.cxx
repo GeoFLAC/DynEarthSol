@@ -1082,9 +1082,9 @@ void refine_surface_elem(const Param &param, const Variables &var,
         int e = (*var.surfinfo.top_facet_elems)[i];
 
         int_vec &a = (*var.elemmarkers)[e];
-        if (a[param.mat.mattype_sed] == 0) continue;
+        if (a[param.mat.mattype_sediment] == 0) continue;
 //        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-//        if (mat != param.mat.mattype_sed) continue;
+//        if (mat != param.mat.mattype_sediment) continue;
 
         if (old_volume[e] < surface_vol) continue;
 
