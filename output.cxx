@@ -53,7 +53,11 @@ Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
     manifest(manifest),
     peak_rss_gib(0),
     start_time(start_time),
-    is_averaged(param.sim.is_outputting_averaged_fields),
+    // A one-step window IS the instantaneous field, and average_fields() opens a
+    // window on steps % interval == 1, which never happens for an interval of 1:
+    // the averaged buffers would stay empty and be written as zero-length arrays.
+    is_averaged(param.sim.is_outputting_averaged_fields &&
+                param.mesh.quality_check_step_interval > 1),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
