@@ -10,6 +10,7 @@ namespace po = boost::program_options;
 
 #include "parameters.hpp"
 #include "matprops.hpp"
+#include "phasechanges.hpp"
 #include "utils.hpp"
 
 
@@ -417,6 +418,16 @@ static void declare_parameters(po::options_description &cfg,
          "elements. MMG's hmax (see largest_size) caps the aspect (~5.5 in 2D, "
          "~3.1 in 3D at the default largest_size). Other values below 1 are rejected. Requires "
          "USEMMG.")
+
+        // for virtual topology
+        ("mesh.vt_size", po::value<double>(&p.mesh.vt_size)->default_value(0.5),
+         "Cell size of the virtual-topology marker grid (in unit of mesh.resolution), used by the "
+         "serpentinization grid (mat.phase_change_option 3 with mat.has_serpentinization). 0.5 = half an "
+         "element edge: the one-element-thick slab crust "
+         "gets its own crust-dominant cell row instead of averaging with the mantle above, while a "
+         "cell nominally (elements of edge mesh.resolution) holds ~2.3 markers in 2D (~4.2 in 3D) at the "
+         "default 4 per element; a refined mesh puts more in each cell. Heuristic, untuned. With serpentinization "
+         "on it must be > 0, and mesh.resolution * mesh.vt_size must not exceed mat.serpentinization_thickness.")
         ;
 
     cfg.add_options()
@@ -975,13 +986,27 @@ static void declare_parameters(po::options_description &cfg,
          "What kind of phase changes?\n"
          "0: no phase changes.\n"
          "1: simple rules of subduction-related phase changes. See simple_subduction() in phasechanges.cxx for more details.\n"
+         "3: subduction phase-change rule engine (see subduction_phase_changes() in phasechanges.cxx). A marker "
+         "converts to a metamorphic product when it crosses a pressure-temperature reaction boundary (pressure: the "
+         "mean stress of its element, compression positive, in 2D the in-plane mean; depth: below the local "
+         "surface; chlorite-out and the first two sediment steps read depth only); each transition "
+         "activates only when its target mat.mattype_* is set to a distinct material and its switch is on "
+         "(mat.has_eclogitization and mat.has_serpentinization default on, mat.has_hydrous_mantle_dehydration "
+         "and mat.has_sediment_metamorphism off). Transitions: oceanic crust->"
+         "eclogite (Hacker 2003), mantle<->serpentinite (Ulmer & Trommsdorff 1995; serpentinization also needs "
+         "crust, oceanic crust or sediment, within mat.serpentinization_thickness below the marker), "
+         "hydrous mantle->mantle (Grove 2009), and "
+         "sediment->sedimentary rock->metasediment->schist (compaction uses geoflac's unsourced thresholds, "
+         "the next step Montanez & Crossey 2017, the last Wei 2004).\n"
          "101: custom phase changes (custom_phase_change() in phasechanges.cxx).")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
          "Index of reference material. For compute_dt(), compute_mass() and ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
-         "Index of mantle material. For continental thermal gradient")
+         "Index of mantle material. For continental thermal gradient. With mat.phase_change_option 3: what "
+         "serpentinizes above the slab and what serpentinite and hydrous mantle dehydrate to; no rule may "
+         "start from it, and it must be set in the cfg when option 3 reads it.")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
          "Index of depleted mantle material. Unused: no phase change reads it.")
         ("mat.mattype_partial_melting_mantle", po::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
@@ -990,9 +1015,35 @@ static void declare_parameters(po::options_description &cfg,
          "Index of crust material.  For continental thermal gradient")
         ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
          "Index of oceanic crust. A top element where it is the most abundant marker material keeps its plastic "
-         "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx).")
+         "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx). With mat.phase_change_option 3: the source of the eclogite "
+         "rule and crust for the serpentinization grid; then it must be set in the cfg.")
+        ("mat.mattype_serpentinite", po::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
+         "Index of serpentinite material, for mat.phase_change_option 3 with mat.has_serpentinization: what "
+         "mantle above the slab turns into, and the source of serpentinite->mantle dehydration. Default -1 "
+         "(unset); with serpentinization on it must be in [0, mat.num_materials) and distinct from "
+         "mattype_mantle and the crust materials (mattype_oceanic_crust, mattype_sediment, and "
+         "mattype_sediment_rock when set).")
+        ("mat.mattype_eclogite", po::value<int>(&p.mat.mattype_eclogite)->default_value(-1),
+         "Index of eclogite material. For the mat.phase_change_option 3 rule engine: oceanic-crust markers past the "
+         "basalt->eclogite P-T boundary (Hacker 2003) convert to this. Unset (-1, the default) disables the transition.")
+        ("mat.mattype_hydrous_mantle", po::value<int>(&p.mat.mattype_hydrous_mantle)->default_value(-1),
+         "Index of hydrous (chlorite-bearing) mantle material. For mat.phase_change_option 3: dehydrates to "
+         "mattype_mantle above the chlorite-out boundary (Grove et al. 2009). Unset (-1, the default) disables it.")
+        ("mat.mattype_sediment_rock", po::value<int>(&p.mat.mattype_sediment_rock)->default_value(-1),
+         "Index of consolidated sedimentary-rock material. For mat.phase_change_option 3: mattype_sediment compacts to "
+         "this, which then metamorphoses to mattype_metasediment; when set, it is also crust for the "
+         "serpentinization grid. Unset (-1, the default) disables it.")
+        ("mat.mattype_metasediment", po::value<int>(&p.mat.mattype_metasediment)->default_value(-1),
+         "Index of metamorphic-sediment material. For mat.phase_change_option 3: mattype_sediment_rock -> this -> "
+         "mattype_schist. Unset (-1, the default) disables it.")
+        ("mat.mattype_schist", po::value<int>(&p.mat.mattype_schist)->default_value(-1),
+         "Index of schist material. For mat.phase_change_option 3: mattype_metasediment dehydrates to this "
+         "(Wei et al. 2004). Unset (-1, the default) disables it.")
         ("mat.mattype_sediment", po::value<int>(&p.mat.mattype_sediment)->default_value(0),
-         "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
+         "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion. "
+         "With mat.phase_change_option 3: crust for the serpentinization grid (with mat.has_serpentinization) "
+         "and the source of the sediment chain (with mat.has_sediment_metamorphism); with either it must be "
+         "set in the cfg.")
         ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
          "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
         ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
@@ -1007,6 +1058,42 @@ static void declare_parameters(po::options_description &cfg,
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
          "Converting rate from melting to oceanic crust. Unused: no phase change reads it.")
+        ("mat.serpentinization_thickness", po::value<double>(&p.mat.serpentinization_thickness)->default_value(10e3),
+         "Thickness (in m) of the mantle layer above crust (oceanic crust or sediment) that turns into serpentinite "
+         "(mat.phase_change_option is 3 with mat.has_serpentinization). Counted in whole background-grid "
+         "cells below the marker's own "
+         "cell (cell size mesh.resolution * mesh.vt_size), down to a cell more than half crust, so the effective "
+         "reach differs from it by up to two cells, and the thickness must be positive and at least one cell. "
+         "Default 10e3: heuristic, untuned.")
+        ("mat.serpentinization_crust_margin", po::value<double>(&p.mat.serpentinization_crust_margin)->default_value(-1.0),
+         "Horizontal margin (in m) for the serpentinization crust-below test. When >= 0, a crust-dominant "
+         "grid cell triggers conversion only if the marker's horizontal position lies within the cell's "
+         "crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
+         "column-quantization false positive at a slab bend, where a cell is crust-dominant from crust "
+         "up to a whole cell size away horizontally. < 0 (default) disables: whole-column behavior.")
+        ("mat.has_serpentinization", po::value<bool>(&p.mat.has_serpentinization)->default_value(true),
+         "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
+         "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
+         "Needs mattype_serpentinite, and mattype_sediment set in the cfg. "
+         "Off: no serpentinization grid is built, and the checks on its inputs are skipped: mattype_mantle, "
+         "mattype_serpentinite and the crust materials distinct, mattype_serpentinite in range and set, "
+         "mattype_sediment set, serpentinization_thickness positive and at least one grid cell, mesh.vt_size positive. "
+         "mattype_mantle, mattype_oceanic_crust and mattype_sediment stay range-checked with the other base material "
+         "indices, and the rule "
+         "checks still run: no two active rules may start from one material, and none from mattype_mantle, "
+         "so while the eclogite rule is active (has_eclogitization on and mattype_eclogite set) "
+         "mattype_oceanic_crust must still differ from mattype_mantle; every key an active rule reads must be "
+         "set in the cfg.")
+        ("mat.has_eclogitization", po::value<bool>(&p.mat.has_eclogitization)->default_value(true),
+         "mat.phase_change_option 3: enable oceanic crust->eclogite (Hacker 2003). Default on. Needs mattype_eclogite.")
+        ("mat.has_hydrous_mantle_dehydration", po::value<bool>(&p.mat.has_hydrous_mantle_dehydration)->default_value(false),
+         "mat.phase_change_option 3: enable hydrous (chlorite) mantle->mantle dehydration (Grove 2009). "
+         "Default off. Needs mattype_hydrous_mantle.")
+        ("mat.has_sediment_metamorphism", po::value<bool>(&p.mat.has_sediment_metamorphism)->default_value(false),
+         "mat.phase_change_option 3: enable the sediment chain sediment->sedimentary rock->metasediment->schist "
+         "(compaction uses geoflac's unsourced thresholds, the next step Montanez & Crossey 2017, the last "
+         "Wei 2004). Default off. "
+         "Needs mattype_sediment_rock / mattype_metasediment / mattype_schist.")
 
         // these parameters need to parsed later
         ("mat.rho0", po::value<std::string>()->default_value("[3210]"),
@@ -1764,10 +1851,10 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         // phase_changes() implements only these; any other value would run to its first
         // phase-change step and die there.
         switch (p.mat.phase_change_option) {
-        case 0: case 1: case 101:
+        case 0: case 1: case 3: case 101:
             break;
         default:
-            die(EXIT_CONFIG_VALUE, "mat.phase_change_option must be 0, 1 or 101 (see --help).");
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_option must be 0, 1, 3 or 101 (see --help).");
         }
         if (p.mat.phase_change_option != 0 && p.mat.nmat == 1) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is chosen, but mat.num_materials is 1.");
@@ -1775,13 +1862,87 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (p.mat.phase_change_option == 1 && p.mat.nmat < 8) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 1, but mat.num_materials is less than 8.");
         }
+        // A base key left out of the cfg keeps its default 0, which names a real
+        // material, so a rule that reads it would convert material 0. Every key
+        // option 3 reads must be set. Checked before the alias checks below, which
+        // would blame the symptom; a key whose default -1 is unset is left to the
+        // range checks, which name it.
+        if (p.mat.phase_change_option == 3)
+            for (const char* key : phase_change_keys(p)) {
+                const po::variable_value& v = vm[std::string("mat.") + key];
+                if (v.defaulted() && v.as<int>() >= 0) {
+                    const std::string msg = std::string("mat.phase_change_option 3 reads mat.") + key
+                        + ", but the cfg does not set it, and its default " + std::to_string(v.as<int>())
+                        + " would name material " + std::to_string(v.as<int>()) + ".";
+                    die(EXIT_CONFIG_VALUE, msg.c_str());
+                }
+            }
+        // The serpentinization grid's inputs, checked only where it is built.
+        if (uses_serpentinization_grid(p)) {
+            const std::pair<const char*, int> serp_types[] = {
+                {"mattype_mantle", p.mat.mattype_mantle},
+                {"mattype_serpentinite", p.mat.mattype_serpentinite},
+                {"mattype_oceanic_crust", p.mat.mattype_oceanic_crust},
+                {"mattype_sediment", p.mat.mattype_sediment},
+            };
+            for (const auto& t : serp_types)
+                if (t.second < 0 || t.second >= p.mat.nmat) {
+                    const std::string msg = std::string("mat.phase_change_option 3 with "
+                        "mat.has_serpentinization needs mat.") + t.first + " in [0, mat.num_materials).";
+                    die(EXIT_CONFIG_VALUE, msg.c_str());
+                }
+            // The grid counts these as crust (counts_as_crust() in phasechanges.cxx);
+            // the mantle or serpentinite among them would trigger itself.
+            const int crust_types[] = { p.mat.mattype_oceanic_crust, p.mat.mattype_sediment,
+                                        p.mat.mattype_sediment_rock };
+            bool aliased = p.mat.mattype_mantle == p.mat.mattype_serpentinite;
+            for (int t : crust_types)
+                aliased = aliased || t == p.mat.mattype_mantle || t == p.mat.mattype_serpentinite;
+            if (aliased) {
+                die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 3, but mattype_mantle, mattype_serpentinite "
+                    "and the crust materials (mattype_oceanic_crust, mattype_sediment, and "
+                    "mattype_sediment_rock when set) are not distinct.");
+            }
+            if (p.mat.serpentinization_thickness <= 0) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness must be positive.");
+            }
+            if (p.mesh.vt_size <= 0) {
+                die(EXIT_CONFIG_VALUE, "mesh.vt_size must be positive.");
+            }
+            // The crust-below search steps down in whole grid cells; a thickness
+            // under one cell examines no cell at all and serpentinization never fires.
+            if (p.mat.serpentinization_thickness < p.mesh.resolution * p.mesh.vt_size) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness is smaller than one virtual-topology "
+                    "cell (mesh.resolution * mesh.vt_size); the crust-below search would examine no cell. "
+                    "Raise the thickness or lower mesh.vt_size.");
+            }
+        }
+        if (p.mat.phase_change_option == 3) {
+            // Metamorphic products for the phase-change rule engine
+            // (subduction_phase_changes). Each is optional: -1 (the default)
+            // disables its transition; otherwise it must be an in-range
+            // material index. The rule engine additionally drops any rule whose
+            // source or target is out of range, so -1 keeps a transition off.
+            const int metamorphic_types[] = {
+                p.mat.mattype_eclogite, p.mat.mattype_hydrous_mantle,
+                p.mat.mattype_sediment_rock, p.mat.mattype_metasediment,
+                p.mat.mattype_schist };
+            for (int t : metamorphic_types)
+                if (t != -1 && (t < 0 || t >= p.mat.nmat)) {
+                    die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 3, but a metamorphic "
+                        "mat.mattype_* index is neither -1 (disabled) nor in [0, mat.num_materials).");
+                }
+            check_phase_transition_rules(p);
+        }
 
         if (p.mat.nmat < 1) {
             die(EXIT_CONFIG_VALUE, "mat.num_materials must be greater than 0.");
         }
 
-        // Every mat.mattype_* indexes the per-material arrays (rho0, therm_cond,
-        // elemmarkers[e], ...) unchecked, so each must name an existing material.
+        // Each base mat.mattype_* below indexes the per-material arrays (rho0,
+        // therm_cond, elemmarkers[e], ...) unchecked, so each must name an existing
+        // material. The rule engine's products, which -1 disables, are checked with
+        // mat.phase_change_option 3 above.
         const std::pair<const char*, int> mattypes[] = {
             {"mattype_ref", p.mat.mattype_ref},
             {"mattype_mantle", p.mat.mattype_mantle},

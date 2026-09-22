@@ -51,8 +51,8 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  *
  * Used by serpentinization: a mantle marker converts when a cell within
  * mat.serpentinization_thickness below it is more than some threshold
- * fraction oceanic crust (see build_serpentinization_grid() in
- * phasechanges.cxx, which computes the fraction from cell_markers() +
+ * fraction crust, oceanic crust or sediment (see build_serpentinization_grid()
+ * in phasechanges.cxx, which computes the fraction from cell_markers() +
  * MarkerSet::get_mattype() at each build, and subduction_phase_changes(),
  * which reads the resulting crust-dominant cells).
  *
@@ -121,8 +121,9 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * `dominant_cells_` (managed by clear_dominant()/set_dominant()/is_dominant()/
  * invalidate_dominant_cell()) is a precomputed set of cells whose indexed-
  * marker composition exceeds some threshold fraction of a designated material
- * (for serpentinization: > 30% oceanic crust). The caller computes it once
- * per build_index() call (in build_serpentinization_grid()) rather than
+ * (for serpentinization: see build_serpentinization_grid()). The caller
+ * computes it once per build_index() call (in build_serpentinization_grid())
+ * rather than
  * recomputing cell composition on every subduction_phase_changes() step:
  * between remeshes the slab advances only ~dx per tens-of-thousands of steps,
  * so which cells are dominant changes far more slowly than phase_changes() is
@@ -216,7 +217,7 @@ public:
 
     // Remove `cell` from dominant_cells_ (conservative: treated as non-
     // dominant until the next build). Called from pass 1 of
-    // subduction_phase_changes() when a crust marker eclogitizes, so the
+    // subduction_phase_changes() when a crust marker turns non-crust, so the
     // cell's dominance is immediately invalidated rather than staying stale
     // until the next remesh. Takes mutex_ (see the class doc's thread-safety
     // section on dominant_cells_). Also drops the cell's crust extent
@@ -324,10 +325,10 @@ private:
     // Marker ids mark_removed() has flagged since the last build_index().
     std::unordered_set<int> removed_since_rebuild_;
     // Cells whose indexed-marker population exceeds the caller's dominance
-    // threshold (e.g. > 30% oceanic crust for serpentinization). Populated
+    // threshold (build_serpentinization_grid() for serpentinization). Populated
     // once per build_index() by the caller via clear_dominant()/set_dominant();
     // partially invalidated between rebuilds via
-    // invalidate_dominant_cell() when a crust marker eclogitizes. See the
+    // invalidate_dominant_cell() when a crust marker turns non-crust. See the
     // class doc above.
     std::unordered_set<int> dominant_cells_;
 

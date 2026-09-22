@@ -22,6 +22,7 @@
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
 #include "nn-interpolation.hpp"
+#include "phasechanges.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
@@ -6335,6 +6336,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing finished.\n";
 
+    // Marker positions and population changed wholesale; rebuild the
+    // serpentinization grid (mat.phase_change_option 3 with
+    // mat.has_serpentinization) from the new mesh.
+    build_serpentinization_grid(param, var);
 
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;

@@ -215,6 +215,9 @@ struct Mesh {
     bool mmg_metric_refine_recover;
     bool use_mmg_init;
     double mmg_aniso_wall_ratio;
+
+    // virtual topology
+    double vt_size;
 };
 
 struct Control {
@@ -449,9 +452,23 @@ struct Mat {
     int mattype_continental_crust;
     int mattype_sediment;
     int mattype_oceanic_crust;
+    int mattype_serpentinite;
+    int mattype_eclogite;
+    int mattype_hydrous_mantle;
+    int mattype_sediment_rock;
+    int mattype_metasediment;
+    int mattype_schist;
     int mattype_mor_extrusion;
     int mattype_asthenosphere;
     double convert_rate_oceanic_crust;
+    double serpentinization_thickness;
+    double serpentinization_crust_margin;
+
+    // phase_change_option 3 process switches (subduction_phase_changes)
+    bool has_serpentinization;
+    bool has_eclogitization;
+    bool has_hydrous_mantle_dehydration;
+    bool has_sediment_metamorphism;
 
     bool is_plane_strain;
     double visc_min;
@@ -504,6 +521,7 @@ struct Time {
     int64_t remesh_time;
     int64_t output_time;
     int64_t start_time;
+    int64_t phase_change_time;   // subduction_phase_changes() (mat.phase_change_option 3 only)
 };
 
 struct Markers {
@@ -805,6 +823,7 @@ struct Variables {
     int nremesh_prior;  // remeshes before this run (the checkpoint's "nremesh"), so the log's
                         // remesh #N continues across a restart
     int noutput;
+    int nphasechange;
     int info_display_next_step;
     Time func_time;
     Output *output;
@@ -965,14 +984,14 @@ struct Variables {
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
 
-    // Cached marker-cell index (mat.phase_change_option 3, see VirtualTopology
-    // in mesh.hpp). Owned; rebuilt eagerly after init() and at the end of
-    // remeshing, and lazily by subduction_phase_changes() when a restart left
-    // none it can use (see phasechanges.hpp). Between rebuilds, marker
-    // deletion (remove_markers() in markerset.cxx) only flags the ids it
-    // touches via mark_removed() rather than a full re-scan. Checkpointed (serialize()/deserialize(), including the
-    // flagged ids) so a restart carries the identical lagged state the
-    // continuous run had at that step.
+    // Cached marker-cell index (when uses_serpentinization_grid(), see
+    // VirtualTopology in mesh.hpp). Owned; rebuilt eagerly after init() and
+    // at the end of remeshing, and lazily by subduction_phase_changes() when a
+    // restart left none it can use (see phasechanges.hpp). Between rebuilds,
+    // marker deletion (remove_markers() in markerset.cxx) only flags the ids
+    // it touches via mark_removed() rather than a full re-scan. Checkpointed
+    // (serialize()/deserialize(), including the flagged ids) so a restart
+    // carries the identical lagged state the continuous run had at that step.
     VirtualTopology *vtopo;
 
     Variables()

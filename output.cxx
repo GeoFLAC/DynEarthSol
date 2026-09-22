@@ -538,8 +538,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     // frozen bucket -- skipping those would let a restart trust labels the
     // continuous run had already dropped. vtopo_int is variable length,
     // so vtopo_len records its size for read_array() to pre-size the buffer
-    // on restart. (var.vtopo is null when phase_change_option != 3 -> nothing
-    // written.)
+    // on restart. (var.vtopo is null unless uses_serpentinization_grid() ->
+    // nothing written.)
     if (var.vtopo) {
         int_vec vt_i;
         double_vec vt_d;

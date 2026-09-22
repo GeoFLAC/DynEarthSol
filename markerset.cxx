@@ -1022,6 +1022,25 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 }
 
 
+void MarkerSet::get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
+                        double &Z, double &P, double &T) const {
+        T = 0;
+        double p[NDIMS] = {0};
+        ConstShapefnAccessor eta = (*_eta)[m];
+        ConstConnAccessor conn = (*var.connectivity)[(*_elem)[m]];
+        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            for (int d=0; d<NDIMS; ++d)
+                p[d] += (*var.coord)[conn[i]][d] * eta[i];
+            T += (*var.temperature)[conn[i]] * eta[i];
+        }
+        Z = topo.zeff(p);
+        // The element's mean stress, compression positive. In 2D this is the
+        // in-plane mean DES itself uses: plane strain's sigma_yy is not kept
+        // current by the viscous and Maxwell updates.
+        P = -trace((*var.stress)[(*_elem)[m]]) / NDIMS;
+}
+
+
 void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) const {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);

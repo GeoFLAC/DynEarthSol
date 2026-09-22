@@ -49,9 +49,9 @@ struct SurfaceTopo {
     double_vec gh;                // 3-D: rasterized surface elevation grid [i*mgy + j]
 #endif
     // elev_only: stop after the surface profile, without the attenuation table, so
-    // zeff() is columnar, z - z_surf(x): the depth below the local surface. The SPR
-    // remap needs the attenuated zeff for its mean-stress reference and builds the
-    // full table.
+    // zeff() is columnar, z - z_surf(x): the depth below the local surface that the
+    // phase-change rules and the serpentinization grid use. The SPR remap needs the
+    // attenuated zeff for its mean-stress reference and builds the full table.
     void build(const Param& param, const Variables& var, bool elev_only = false);
     // p is the full coordinate: double[NDIMS] or an array_t row (accessor overloads).
     // The 2-D/3-D branch is compile-time, so call sites are dimension-agnostic.

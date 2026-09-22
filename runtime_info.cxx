@@ -971,8 +971,9 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     // %.3g, not gib_or_unknown's %.1f: a small run's peak would read 0.0.
     if (peak_rss_gib > 0) add(end, "mem_peak_rss_gib", format_double("%.3g", peak_rss_gib));
 
-    // The screen's time summary: wall = init + compute + remesh + output, compute being the
-    // remainder. Per step divides by this run's steps, not the resumed count the screen uses.
+    // The screen's time summary: wall = init + compute + remesh + output + phase changes,
+    // compute being the remainder. Per step divides by this run's steps, not the resumed count
+    // the screen uses.
     add_duration(end, "init_time", init_ns * 1e-9);
     add_duration(end, "compute_time", compute_ns * 1e-9);
     add(end, "compute_sec_per_step", format_double("%.6g", compute_ns * 1e-9 / steps_this_run));
@@ -987,6 +988,13 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     add(end, "outputs", std::to_string(var.noutput));
     add(end, "output_sec_per_output",
         format_double("%.6g", var.func_time.output_time * 1e-9 / var.noutput));
+    // Absent when no phase change was timed (only mat.phase_change_option 3 is), as on screen.
+    if (var.nphasechange > 0) {
+        add_duration(end, "phase_change_time", var.func_time.phase_change_time * 1e-9);
+        add(end, "phase_changes", std::to_string(var.nphasechange));
+        add(end, "phase_change_sec_per_call",
+            format_double("%.6g", var.func_time.phase_change_time * 1e-9 / var.nphasechange));
+    }
 
     // Appended to this run's record: after its start sections, before any restart's seam.
     const std::string filename(param.sim.modelname + ".manifest");

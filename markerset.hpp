@@ -4,6 +4,8 @@
 #include <string>
 #include "barycentric-fn.hpp"
 
+struct SurfaceTopo;   // geometry.hpp -- surface-relative reference depth for get_ZPT()
+
 class MarkerSet
 {
 
@@ -102,6 +104,11 @@ public:
 
     #pragma acc routine seq
     void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
+    // Host only (phase_change_option 3): Z = topo.zeff(x), below the CURRENT free surface, so a
+    // rigid vertical motion of the whole mesh does not change it, and P is the mean stress of
+    // the marker's element, compression positive.
+    void get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
+                 double &Z, double &P, double &T) const;
 
 private:
     const std::string _name;

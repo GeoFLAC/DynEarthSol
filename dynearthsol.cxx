@@ -41,8 +41,10 @@ void init_var(const Param& param, Variables& var)
     var.nremesh = 0;
     var.nremesh_prior = 0;
     var.noutput = 0;
+    var.nphasechange = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
+    var.func_time.phase_change_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
     var.refined_elem_size_n = new double_vec(0);
@@ -382,13 +384,13 @@ void restart(const Param& param, Variables& var)
     // Restore the cached marker-cell index (mat.phase_change_option 3, see
     // VirtualTopology in mesh.hpp) so the restart carries forward the EXACT
     // lagged binning the checkpoint captured, instead of a fresher rebuild.
-    // Only under option 3, the one option that builds it: a checkpoint
-    // written by an option-3 run and restarted with another option leaves
-    // var.vtopo null, so the hooks and checkpoints do not carry a dead index.
-    // has_array-gated: a checkpoint written by a run with
-    // phase_change_option != 3 has no vtopo arrays -> var.vtopo stays null
-    // and the first phase_changes rebuilds it lazily.
-    if (param.mat.phase_change_option == 3 && bin_chkpt.has_array("vtopo_int")) {
+    // Only when uses_serpentinization_grid(), the one case that builds it: a
+    // checkpoint restarted with another option, or with serpentinization off,
+    // leaves var.vtopo null, so the hooks and checkpoints do not carry a dead
+    // index. has_array-gated: a checkpoint written by a run without the grid
+    // has no vtopo arrays -> var.vtopo stays null and the first
+    // phase_changes rebuilds it lazily.
+    if (uses_serpentinization_grid(param) && bin_chkpt.has_array("vtopo_int")) {
         // read_array does not auto-resize; pre-size from the known layout.
         // vtopo_int is variable length (VirtualTopology::serialize()), so
         // vtopo_len records that length up front.
@@ -817,10 +819,18 @@ int main(int argc, const char* argv[])
                 detect_side_profile(param, var, bits);
         }
 
+        // Build the serpentinization grid (mat.phase_change_option 3 with
+        // mat.has_serpentinization) up front rather than at the first
+        // phase_changes step.  Built after isostasy adjustment so the
+        // bounding box sees the settled mesh.
+        build_serpentinization_grid(param, var);
+
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);
     }
     else {
+        // The serpentinization grid is not built here: restart() restores it
+        // or leaves var.vtopo null (see the gate there).
         restart(param, var);
     }
 
@@ -1193,7 +1203,8 @@ int main(int argc, const char* argv[])
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
-    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time - init_time;
+    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time
+        - var.func_time.phase_change_time - init_time;
     double computation_time_avg = computation_time * 1.e-9 / var.steps;
 
     std::cout << "Time summary...\n  Execute : ";
@@ -1214,6 +1225,14 @@ int main(int argc, const char* argv[])
         std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
             << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
             << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
+    }
+    if (var.nphasechange > 0) {
+        double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+        std::cout << "  PhaseChg: ";
+        print_time_ns(var.func_time.phase_change_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.phase_change_time/duration_ns << "%)/ " << var.nphasechange
+            << " = " << std::setprecision(6) << phase_change_time_avg << " s/call\n";
     }
     if (var.noutput > 0) {
         double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;
