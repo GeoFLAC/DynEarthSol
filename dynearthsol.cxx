@@ -224,8 +224,10 @@ void init(const Param& param, Variables& var)
 
     // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
     // and elemmarkers, which those calls are the first to write -- before them tmass was built at
-    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). This is also the
-    // LAST mass build on a static mesh: update_mesh and remesh are both gated on has_moving_mesh.
+    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). On a static mesh
+    // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
+    // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
+    // update_mesh() ungated before the loop.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
@@ -1038,6 +1040,12 @@ int main(int argc, const char* argv[])
             phase_changes(param, var);
             // phase_changes() moved elemmarkers; compute_dt() below reads them.
             var.mat->refresh_elem_cache();
+            // The lumped masses in use were built BEFORE the conversions above;
+            // rebuild them so the next step -- and a restart from this step, which
+            // rebuilds them from the checkpoint -- see one composition.
+            if (param.mat.phase_change_option != 0)
+                compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass,
+                             *var.hmass, *var.ymass, *var.tmp_result);
 
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,
