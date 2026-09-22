@@ -683,7 +683,7 @@ static void spr_fused_fields(const Variables &var,
 #endif
 }
 
-void SurfaceTopo::build(const Param& param, const Variables& var)
+void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only)
 {
     on = false;
     atten = false;
@@ -713,6 +713,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         z[i] = (*var.coord)[order[i]][NDIMS-1];
     }
     on = true;
+
+    if (elev_only) return;
 
     // Attenuation table: resample z_surf onto a uniform grid (Nyquist for the
     // surface nodes, capped), take its DCT-I cosine series, and tabulate
@@ -961,6 +963,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         hmax = std::max(hmax, std::abs(gh[i]));
     }
     on = true;
+
+    if (elev_only) return;
 
     // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
     // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
