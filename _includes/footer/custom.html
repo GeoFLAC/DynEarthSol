@@ -1,3 +1,14 @@
 <!-- start custom footer snippets -->
-
+<script>
+  // Open every link in a new tab, except links that stay on the current page
+  // (in-page anchors such as "Quick start", the site title, the logo).
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('a[href]').forEach(function (a) {
+      if (a.protocol !== 'http:' && a.protocol !== 'https:') return;
+      if (a.origin === location.origin && a.pathname === location.pathname) return;
+      a.target = '_blank';
+      a.rel = 'noopener';
+    });
+  });
+</script>
 <!-- end custom footer snippets -->
