@@ -48,34 +48,66 @@ header:
   });
   </script>
 
-# Get Started
+# Start here
 
-For full instruction on how to install DynEarthSol, please visit the [online user manual](https://geoflac.github.io/des3d/docs/usage).
+{% include feature_row feature_row=site.data.features.start_row %}
 
-## Step 1: Check prerequisites
+# Quick start
 
-- A recent C++ compiler supporting C++11 (g++ 4.4+)
-- Boost::Program_options library (1.42+)
-- Python 2.6+ or 3.2+ with Numpy
+Build the 2D executable and run a worked example. The
+[user manual](https://geoflac.github.io/des3d/docs/usage) carries the complete
+build guide: every build option, the optional libraries, and the platform notes.
 
-## Step 2: Get DynEarthSol
+**1. Install the dependencies.** Pick the line for your platform; the build
+finds everything on its own, with no paths to edit.
 
 ```sh
-git clone https://github.com/GeoFLAC/DynEarthSol
+brew install boost libomp                               # macOS (Homebrew)
+sudo apt install g++ make libboost-program-options-dev  # Debian / Ubuntu
+sudo dnf install gcc-c++ make boost-devel               # Fedora / RHEL
 ```
 
-## Step 3: Build
+**2. Get the source**, including the bundled submodules.
 
 ```sh
+git clone --recurse-submodules https://github.com/GeoFLAC/DynEarthSol.git
 cd DynEarthSol
-make
 ```
 
-## Step 4: Run
+**3. Build.** `make` on its own builds the 3D executable, `dynearthsol3d`.
+Pass `ndims=2` for the 2D executable used below.
+
+```sh
+make ndims=2
+```
+
+**4. Run an example.**
 
 ```sh
 cd examples
 ../dynearthsol2d ./core-complex.cfg
 ```
+
+More example configurations live in `examples/`, and `examples/defaults.cfg`
+documents every input parameter. `dynearthsol2d -h` lists them too. If a build
+picks up an unexpected library, `make config` prints the compiler and every
+dependency path it resolved to, which is also the most useful thing to include
+in a bug report.
+
+# Citing DES3D
+
+Please cite the method paper:
+
+> Choi, E., Tan, E., Lavier, L. L., & Calo, V. M. (2013). DynEarthSol2D: An
+> efficient unstructured finite element method to study long-term tectonic
+> deformation. *Journal of Geophysical Research: Solid Earth*, 118(5),
+> 2429–2444. [doi:10.1002/jgrb.50148](https://doi.org/10.1002/jgrb.50148)
+
+To cite the software itself, use
+[doi:10.5281/zenodo.20293557](https://doi.org/10.5281/zenodo.20293557), which
+always resolves to the latest archived release. To cite one specific version
+instead, take its DOI from the
+[releases page](https://github.com/GeoFLAC/DynEarthSol/releases) or from the
+`CITATION.cff` file shipped with that release.
 
 

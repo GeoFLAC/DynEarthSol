@@ -11,3 +11,38 @@ feature_row:
     excerpt: "DynEarthSol provides linear elasticity, poro-elasticity, Mohr-Coulomb plasticity with strain or rate-and-state weakening, and Maxwell viscoelasticity. DynEarthSol make it  easy to implement new material models."
     # image_path: /assets/images/Globe.svg
     # alt: "Globe"
+
+# Task-oriented entry points. Each card hands off to the site that owns that
+# topic -- the user manual, the input generator, or the source repository --
+# so this page never carries a second copy of documentation kept elsewhere.
+start_row:
+  - title: "Install DES3D"
+    excerpt: "Dependencies, the full build-option matrix, and platform notes for Linux, macOS, and GPU builds."
+    url: "https://geoflac.github.io/des3d/docs/usage"
+    btn_label: "Build guide"
+    btn_class: "btn--primary"
+  - title: "Run your first model"
+    excerpt: "Set velocity boundary conditions, insert a weak zone, and define model geometry with a .poly file."
+    url: "https://geoflac.github.io/des3d/docs/category/tutorial"
+    btn_label: "Tutorials"
+    btn_class: "btn--primary"
+  - title: "Generate an input file"
+    excerpt: "A browser-based form that writes a ready-to-run .cfg configuration file. No installation required."
+    url: "https://geoflac.github.io/des-inputgen/"
+    btn_label: "Input generator"
+    btn_class: "btn--primary"
+  - title: "Visualize results"
+    excerpt: "Convert output with 2vtk.py, or write the compressed VTKHDF format and open it directly in ParaView."
+    url: "https://geoflac.github.io/des3d/docs/usage/visualize"
+    btn_label: "Visualization"
+    btn_class: "btn--primary"
+  - title: "Understand the physics"
+    excerpt: "Constitutive models, dynamic relaxation, mass scaling, remeshing, and the time-integration scheme."
+    url: "https://geoflac.github.io/des3d/docs/theory"
+    btn_label: "Theory"
+    btn_class: "btn--primary"
+  - title: "Couple with surface processes"
+    excerpt: "Two-way coupling with goSPL: DES3D supplies tectonic velocities, goSPL returns erosion and deposition."
+    url: "https://geoflac.github.io/des3d/docs/tutorial/couplinggospl"
+    btn_label: "goSPL coupling"
+    btn_class: "btn--primary"

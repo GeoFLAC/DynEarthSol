@@ -2,8 +2,8 @@ main:
   # - title: "Home"
   #   url: /
   #   target: _blank
-  - title: "Quickstart"
-    url: /#get-started
+  - title: "Quick start"
+    url: /#quick-start
   - title: "User Manual"
     url: https://geoflac.github.io/des3d/
     target: _blank
