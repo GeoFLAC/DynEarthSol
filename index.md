@@ -96,7 +96,14 @@ in a bug report.
 
 # Citing DES3D
 
-Please cite the method paper:
+Please cite the DES3D v2.0 paper (preprint):
+
+> Shyu, C. J., Lee, S., Ding, X., Keum, J., Tan, E., Lavier, L. L., & Choi, E.
+> (2026). DynEarthSol v2.0: An efficient explicit Lagrangian solver for
+> geodynamics, surface processes, and earthquake-cycle dynamics. *EGUsphere*
+> [preprint]. [doi:10.5194/egusphere-2026-2922](https://doi.org/10.5194/egusphere-2026-2922)
+
+and the original method paper:
 
 > Choi, E., Tan, E., Lavier, L. L., & Calo, V. M. (2013). DynEarthSol2D: An
 > efficient unstructured finite element method to study long-term tectonic
