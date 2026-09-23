@@ -89,7 +89,10 @@ cd examples
 ```
 
 More example configurations live in `examples/`, and `examples/defaults.cfg`
-documents every input parameter. `dynearthsol2d -h` lists them too. If a build
+documents every input parameter. `dynearthsol2d -h` lists them too. To write
+your own input file without editing one by hand, use the web-based
+[input generator](https://geoflac.github.io/des-inputgen/), which builds a
+ready-to-run `.cfg` file from a form. If a build
 picks up an unexpected library, `make config` prints the compiler and every
 dependency path it resolved to, which is also the most useful thing to include
 in a bug report.
