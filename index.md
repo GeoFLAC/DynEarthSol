@@ -25,6 +25,10 @@ header:
   </a>
 </div>
 
+<p style="text-align: center;">
+  <a href="https://www.youtube.com/playlist?list=PLLxHSgtMeGthxjsfFTv4aPTzCfcOqNCYD">More simulation videos on YouTube &rarr;</a>
+</p>
+
 <script>
   document.addEventListener('DOMContentLoaded', function () {
     var thumbs = document.querySelectorAll('.video-grid .video-thumb');
