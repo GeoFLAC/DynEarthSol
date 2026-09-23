@@ -8,7 +8,12 @@
 # FastScape K_d : 1e-2  -> diffusion.hillslopeKa
 # FastScape flow: multi-direction (p=-1) -> flowdir: 6
 # FastScape bc  : Left=1, Right=1 (i.e., open) -> bc: '1010' (SN: closed, EW: open)
-#                 In gospl, the order is SENW and 0 for and 1 for closed.) 
+#                 gospl's domain.bc digit order is VERSION-DEPENDENT (0=open, 1=closed):
+#                   - gospl v2024.XX.XX (currently installed: 2024.9.1): South,East,North,West (SENW)
+#                   - gospl v2026.XX.XX: North,East,South,West (NESW)
+#                 This file is written for the SENW convention (v2024.XX.XX). If you upgrade
+#                 gospl to v2026.XX.XX, re-derive the bc string per-edge under NESW -- do not
+#                 assume the same digit string still means the same edges.
 # Output        : every 20,000 yr (matching ASPECT visualization output interval)
 
 name: Gaussian weakzone 3D rift (DES-GoSPL)
@@ -17,7 +22,8 @@ domain:
     npdata: ['./gospl_mesh','v','c','z']
     flowdir: 6          # multi-flow direction (matches FastScape p=-1)
     seadepo: True       # True because G=1 in FastScape?
-    bc: '1010'          # SENW, 0 open, 1 closed. W and E boundaries open (base level)
+    bc: '1010'          # SENW order (gospl v2024.XX.XX), 0 open, 1 closed: S,N closed; E,W open.
+                        # gospl v2026.XX.XX uses NESW order instead -- see note above before reusing this string.
 
 output:
     dir: 'output_gaussian_weakzone_3D'
