@@ -114,9 +114,11 @@ and the original method paper:
 > 2429–2444. [doi:10.1002/jgrb.50148](https://doi.org/10.1002/jgrb.50148)
 
 To cite the software itself, use
-[doi:10.5281/zenodo.20293557](https://doi.org/10.5281/zenodo.20293557), which
-always resolves to the latest archived release. To cite one specific version
-instead, take its DOI from the
+[doi:10.5281/zenodo.20293557](https://doi.org/10.5281/zenodo.20293557). This
+DOI covers every archived release, both the software (`v2.x.x`) and the
+benchmark datasets (`benchmarks-v2.x.x`), and it opens the list of all
+versions. To cite the exact version you used, pick the matching software
+release from that list, or take its DOI from the
 [releases page](https://github.com/GeoFLAC/DynEarthSol/releases) or from the
 `CITATION.cff` file shipped with that release.
 
