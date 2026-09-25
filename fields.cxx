@@ -69,6 +69,7 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.PT_dtau_rho = new double_vec(n, 0);
     var.PT_Gdtau_e = new double_vec(e, 0);
+    var.PT_winkler_B = new double_vec(n, 0);
     var.PT_vel_prev = new array_t(n, 0);
     var.PT_force_prev = new array_t(n, 0);
     var.PT_Re_adaptive = 0;  // initialized from param.control.PT_Re before each PT loop

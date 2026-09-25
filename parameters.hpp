@@ -699,6 +699,12 @@ struct Variables {
     // Local pseudo-time stepping factors (recomputed by update_pt_params()):
     double_vec *PT_dtau_rho;  // per-node dtau/(rho~*V_node) for update_velocity_PT()
     double_vec *PT_Gdtau_e;   // per-element numerical G~*dtau for update_stress_PT()
+    // Per-node d(force_z)/d(vel_z) self-coupling from the Winkler foundation's
+    // predicted-position term (bc.cxx apply_stress_bcs()), PT mode only. Lets
+    // the PT loop correct the one-iteration lag in that term (dynearthsol.cxx)
+    // and lets update_pt_params() cap dtau_rho so the explicit step size
+    // matches this boundary stiffness (see doc/pt-boundary-pluck.md).
+    double_vec *PT_winkler_B;
     // Snapshot arrays for Rayleigh-quotient Re adaptation (Phase 2):
     array_t *PT_vel_prev;     // velocity snapshot at last retune checkpoint
     array_t *PT_force_prev;   // force snapshot at last retune checkpoint

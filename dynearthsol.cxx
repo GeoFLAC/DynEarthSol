@@ -567,6 +567,34 @@ static int pt_stagnation_window(const Param& param, const Variables& var)
     return w;
 }
 
+// The Winkler foundation's predicted-position term (bc.cxx apply_stress_bcs())
+// is evaluated from THIS iteration's pre-update velocity, then baked into the
+// force that update_velocity_PT() just used to produce vel[n][z] -- i.e. it is
+// a one-iteration-lagged (Jacobi-style), not a same-iteration implicit,
+// coupling, despite damping the term. Correct it here to the true backward-
+// Euler fixed point using PT_winkler_B (bc.cxx), the term's own
+// d(force_z)/d(vel_z): since update_velocity_PT()'s step is
+// vel_after = vel_before + dtau_rho*force_z, the pre-update vel_before can be
+// recovered from what's already available (no snapshot needed), then solved
+// implicitly for vel_after -- see doc/pt-boundary-pluck.md.
+static void correct_winkler_lag_PT(const Param& param, Variables& var)
+{
+    if (!param.bc.has_winkler_foundation || !param.control.has_PT) return;
+    if ((int)var.PT_winkler_B->size() != var.nnode) return;  // not yet sized for this mesh (post-remesh); skip this call
+    const auto& bnodes_z0 = *var.bnodes[iboundz0];
+    for (size_t k = 0; k < bnodes_z0.size(); ++k) {
+        int n = bnodes_z0[k];
+        double B = (*var.PT_winkler_B)[n];
+        if (B <= 0.0) continue;
+        double dtau_rho = (*var.PT_dtau_rho)[n];
+        double vel_after = (*var.vel)[n][NDIMS-1];
+        double force_z = (*var.force)[n][NDIMS-1];
+        double vel_before = vel_after - dtau_rho * force_z;
+        (*var.vel)[n][NDIMS-1] = (vel_after + dtau_rho * B * vel_before)
+                                 / (1.0 + dtau_rho * B);
+    }
+}
+
 void initial_body_force_adjustment(const Param &param, Variables &var)
 {
 #ifdef NPROF_DETAIL
@@ -632,6 +660,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
             }
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             update_velocity_PT(param, var, *var.vel);
+            correct_winkler_lag_PT(param, var);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
             double rel_residual = var.l2_residual / residual_scale;
             if (param.control.PT_info_interval > 0 &&
@@ -924,6 +953,8 @@ int main(int argc, const char* argv[])
 #endif
         var.steps ++;
         var.time += var.dt;
+        std::cout << "  [debug] step " << var.steps << ": dt = " << var.dt / YEAR2SEC
+                  << " yr, time = " << var.time / YEAR2SEC << " yr\n";
         // Pick up what the previous step's phase changes and remeshing moved.
         var.mat->refresh_elem_cache();
         // dt_copy = 0.0; dt_copy += var.dt;
@@ -986,6 +1017,15 @@ int main(int argc, const char* argv[])
                           << " Pa*s, Gdtau=" << var.PT_Gdtau << " Pa*s\n";
             // Phase 2: snapshot initial vel/force for Rayleigh quotient
             if (param.control.PT_retune_interval > 0) {
+                // Unlike PT_Gdtau_e/PT_dtau_rho (resized inside
+                // update_pt_params() above), these are never touched by
+                // remesh() -- resize them here to the current node count,
+                // mirroring that same pattern, or a remesh that grew nnode
+                // leaves this loop writing past the old allocation.
+                if ((int) var.PT_vel_prev->size() != var.nnode)
+                    var.PT_vel_prev->resize(var.nnode, 0.0);
+                if ((int) var.PT_force_prev->size() != var.nnode)
+                    var.PT_force_prev->resize(var.nnode, 0.0);
                 for (int i = 0; i < var.nnode; ++i)
                     for (int j = 0; j < NDIMS; ++j) {
                         (*var.PT_vel_prev)[i][j]   = (*var.vel)[i][j];
@@ -1033,6 +1073,7 @@ int main(int argc, const char* argv[])
                     }
                     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                     update_velocity_PT(param, var, *var.vel);
+                    correct_winkler_lag_PT(param, var);
                     var.l2_residual = calculate_residual_force(var, *var.force_residual);
                     double rel_residual = var.l2_residual / residual_scale;
                     if (param.control.PT_info_interval > 0 &&
@@ -1136,6 +1177,40 @@ int main(int argc, const char* argv[])
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
+
+        // PT can take much larger per-step displacements than DR (whose dt is
+        // CFL-bounded, keeping single-step advection small).  The periodic
+        // quality checks below (gated by pt_step/var.steps % interval) only
+        // examine the mesh as it stood BEFORE this step's own advection --
+        // there is no check between update_mesh() above and the dt computed
+        // for the NEXT step from this step's fresh geometry.  If this one
+        // advection alone inverts an element (e.g. from an under-converged,
+        // loose-PT-tolerance velocity spike), compute_dt_PT()/compute_dt()
+        // sees a negative volume and dies before any interval-gated check
+        // ever runs.  So for PT, check every step, unconditionally.
+        if (param.control.has_PT && param.control.has_moving_mesh) {
+            int bad_quality_index;
+            double min_quality;
+            int quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
+            if (quality_is_bad) {
+                if (param.sim.has_output_during_remeshing)
+                    var.output->write_exact(var);
+                monitor_before_remesh(param, var);
+                remesh(param, var, quality_is_bad);
+                monitor_remesh_update(param, var);
+
+                // Mesh (and element count) changed: refresh the PT constants
+                // and re-anchor tau_old to the interpolated stress -- same
+                // follow-up the in-loop remesh call above performs, needed
+                // here since PT's auxiliary arrays are otherwise still sized
+                // for the pre-remesh mesh.
+                update_pt_params(param, var);
+                copy_stress_PT(*var.stress, *var.stress_old);
+
+                if (param.sim.has_output_during_remeshing)
+                    var.output->write_exact(var);
+            }
+        }
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)

@@ -1185,3 +1185,234 @@ the broader PT-vs-DR cost picture (PT is currently ~2× slower than DR in
 wall-clock on this CPU build, dominated by per-step iteration count that grows
 with localization — the main lever there is running the GPU/`ACC` build, which
 is where accelerated PT's advantage actually lives).
+
+## Follow-up investigation: anomalous nodal velocity spikes at loosened tolerance
+
+A separate DR-vs-PT performance comparison (`gaussian-weakzone-3d` 3D
+core-complex-style config, `ylength=20e3`, `mmg_hmin_factor=1.0`) surfaced a
+new class of symptom while probing whether `PT_relative_tolerance` could be
+loosened below `1e-6` for speed: PT_relative_tolerance = 1e-3/1e-4/1e-5 all
+produced anomalously large nodal velocities that don't appear in DR, at
+`1e-6` too once inspected closely enough. Three independent bugs were found
+and fixed, two in this section and a third (a separate stiffness-sampling gap)
+in the next section.
+
+### Bug A: the mesh-quality/remesh check never runs at the moment it's needed
+
+**Symptom.** At `PT_relative_tolerance` in {1e-3, 1e-4}, the run died with
+`Error: dt <= 0!` (`geometry.cxx:1636`) within the first 5-7 steps — traced to
+a negative element volume (an inverted, tangled element).
+
+**Root cause.** The existing quality/remesh checks are gated by
+`pt_step % quality_check_step_interval == 0` (inside the PT inner loop) and
+`var.steps % quality_check_step_interval == 0` (at the bottom of the outer
+loop). Both examine the mesh as it stood *before* the current step's own
+advection. The single `update_mesh()` call that actually moves the mesh each
+outer step (`dynearthsol.cxx`, right after the PT block) is followed
+immediately by the *next* step's `dt` computation, with no check in between —
+so if that one advection (driven by an under-converged, loose-tolerance
+velocity) inverts an element, `compute_dt_PT()`/`compute_dt()` sees the
+negative volume and dies before any interval-gated check ever runs. This
+blind spot exists for every tolerance, but tight tolerance (`1e-6`) rarely
+exercises it because a step degenerate enough to invert an element usually
+also drives the inner loop to `PT_max_iter`, which happens to also cross a
+`quality_check_step_interval` boundary along the way.
+
+**Fix** (`dynearthsol.cxx`, right after the `update_mesh()` call, ~line 1140):
+an unconditional mesh-quality check + remesh, gated on `has_PT` only (not on
+any step-count modulus), so it runs every single outer step regardless of
+tolerance:
+```cpp
+if (param.control.has_PT && param.control.has_moving_mesh) {
+    int bad_quality_index; double min_quality;
+    int quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
+    if (quality_is_bad) { remesh(param, var, quality_is_bad); ... }
+}
+```
+Followed immediately by `update_pt_params(param, var)` and
+`copy_stress_PT(*var.stress, *var.stress_old)` — the same post-remesh
+housekeeping the pre-existing in-loop call site already does, needed here too
+since remeshing changes the node/element count.
+
+**A second bug found while testing this fix.** With the quality check now
+actually running (and triggering a real remesh) in PT mode for what may be
+the first time, the run immediately segfaulted afterward. gdb (a fresh launch
+under `gdb -batch`, since `ptrace_scope=1` blocks attaching to an
+already-running process) pointed to `dynearthsol.cxx:994`, the
+Phase-2-retune snapshot loop writing into `PT_force_prev`/`PT_vel_prev` at
+the new (post-remesh) `var.nnode`. `PT_dtau_rho`/`PT_Gdtau_e` are resized
+inside `update_pt_params()` on a size mismatch, but `PT_vel_prev`/
+`PT_force_prev` (`fields.cxx`, allocated once at startup) were never touched
+by `remesh()` or resized anywhere. Fixed by resizing them in-place right
+before that snapshot loop (`dynearthsol.cxx`, mirroring the existing
+`PT_dtau_rho`/`PT_Gdtau_e` pattern):
+```cpp
+if ((int) var.PT_vel_prev->size() != var.nnode)
+    var.PT_vel_prev->resize(var.nnode, 0.0);
+if ((int) var.PT_force_prev->size() != var.nnode)
+    var.PT_force_prev->resize(var.nnode, 0.0);
+```
+(`Array2D::resize(int, const T&)` needed the explicit `0.0` — `0` alone is
+ambiguous against the `resize(int, bool)` overload.)
+
+### Bug B: the "semi-implicit" Winkler fix is actually one-iteration-lagged
+
+**Symptom.** With bug A fixed, loosened tolerance no longer crashed, but
+per-step wall time became dominated by repeated remesh/quality-collapse
+cycles, and inspecting node-level output showed a specific pattern: a
+bottom-boundary node (`bcflag & BOUNDZ0`) with `vz` dominating its velocity,
+growing over many steps rather than settling — e.g. one node's `vz` climbed
+`1.9e-10 → 2.6e-10 → 2.8e-10 → 3.9e-10` over 40 steps at `1e-6` tolerance,
+reaching ~82% of the imposed boundary velocity at depth, where only a small
+isostatic response is physically expected.
+
+**Root cause.** The existing semi-implicit Winkler treatment
+(`bc.cxx apply_stress_bcs()`, documented above under "Winkler-driven
+vertical instability") evaluates the predicted end-of-step position
+`zc = zcenter + vz·dt` using `var.vel` *before* `update_velocity_PT()` runs
+in that same PT iteration:
+```cpp
+update_force(...);          // apply_stress_bcs() reads var.vel here (call it vel_before)
+update_velocity_PT(...);    // THEN updates var.vel using that force
+```
+So despite the "backward-Euler in the vertical" comment, it is a
+one-iteration-lagged (Jacobi-style) coupling, not a same-iteration implicit
+one. That converts the original zero-stiffness rigid-body mode into a
+*weakly, delayed-feedback-damped* mode rather than the intended cleanly
+damped one — consistent with a persistent, slowly-growing residual rather
+than the mode being fully eliminated.
+
+**Fix, part 1 (`bc.cxx`, `apply_stress_bcs()`):** compute and accumulate a
+new per-node coefficient `PT_winkler_B[n]` = d(force_z)/d(vel_z) self-coupling
+from this term, alongside the existing per-facet force assembly. Since `p` on
+a facet depends only on that facet's *average* `vz` (`zc = zcenter + (Σvz/N)·dt`),
+and each node's own force contribution is `p·normal_z/N`, every node on a
+facet gets the same self-coupling contribution from it:
+```cpp
+double k_winkler = (rho_effective + winkler_delta_rho) * gravity;
+facet_winklerB[n] = -k_winkler * var.dt * normal[NDIMS-1] / (NODES_PER_FACET * NODES_PER_FACET);
+```
+accumulated per node in the existing node-aggregation loop, gated on
+`i==iboundz0 && has_winkler_foundation && has_PT` (`track_winklerB`). New
+`Variables` field `PT_winkler_B` (`parameters.hpp`), allocated in `fields.cxx`
+alongside `PT_dtau_rho`.
+
+**Fix, part 2 (`dynearthsol.cxx`, new `correct_winkler_lag_PT()`, called
+right after both `update_velocity_PT()` call sites):** solve for the true
+backward-Euler fixed point instead of accepting the lagged explicit step.
+Since `update_velocity_PT()`'s step is `vel_after = vel_before + dtau_rho·force_z`,
+`vel_before` is recovered algebraically from what's already available — no
+snapshot needed:
+```cpp
+double vel_before = vel_after - dtau_rho * force_z;
+vel[n][z] = (vel_after + dtau_rho * B * vel_before) / (1.0 + dtau_rho * B);
+```
+This is the exact solution of `vel_after_implicit = vel_before + dtau_rho·(F_other + A − B·vel_after_implicit)`,
+derived by eliminating `F_other + A` between the (known) explicit-step
+equation and the (wanted) implicit one. Unconditionally stable for any
+`dtau_rho·B ≥ 0`, regardless of how mismatched the two are — which is also
+why this alone does not fully explain the residual behavior chased in the
+next section.
+
+**Fix, part 3, complementary (`geometry.cxx`, `update_pt_params()`):** cap
+`PT_dtau_rho` at Winkler nodes so the *explicit* step itself doesn't wildly
+overshoot the boundary's own stiffness, using the previous call's
+`PT_winkler_B` (guarded against a post-remesh size mismatch, in which case
+the cap is simply skipped for that one call):
+```cpp
+if (B > 0.0)
+    PT_dtau_rho[i] = std::min(PT_dtau_rho[i], 1.0 / B);
+```
+
+**Result.** Re-running the same `1e-3` config after both fixes: the mesh
+inversion at step 5 (element #2847) now correctly triggers a remesh instead
+of crashing — confirmed by the first successful in-PT-mode remesh log this
+investigation produced (`26,837 → 33,999` elements, clean MMG3D run,
+`update_pt_params()` + `copy_stress_PT()` re-anchoring afterward, no
+segfault). At `1e-6`, `vz` at the previously-growing Winkler boundary node
+no longer trends upward.
+
+## Bug C: a stiffness-sampling blind spot at small-patch (mostly boundary) nodes
+
+**Symptom.** After bugs A and B were fixed, a *different* component —
+`vy`, not `vz` — spiked at a single node (id 2519, `bcflag=0x10`, bottom-only,
+no kinematic constraint in any direction) at `1e-6` tolerance: visually, a
+single node lit up in ParaView surrounded immediately by normal-looking
+neighbors (a spatial signature — an isolated point, not a coherent band —
+that argues against "real bounded shear-band slip" and for a numerical
+artifact). Quantitatively: local contrast (this node's `|v|` vs. the mean of
+its direct neighbors') reached **14.09×**, `vy` alone reaching ~`3.2e-10 m/s`
+(comparable to the full imposed boundary velocity, `4.756e-10 m/s`), while
+the accumulated `plastic strain` at every element touching the node stayed
+*exactly* at the initial-condition value (`0.5`) throughout — ruling out
+"real, ongoing yielding" as the cause of the large velocity.
+
+**Root cause.** `update_pt_params()`'s per-node pseudo-timestep
+(`PT_dtau_rho[i] = CFL·h_i·L·NODES_PER_ELEM / (Re·mu_i·volume_n[i])`) computes
+`mu_i` as the *maximum* visco-elastic modulus over node `i`'s own 1-ring
+element patch (`var.support.patch(i)`) — a deliberately conservative choice
+(a stiffer neighbor anywhere in the patch forces a smaller, safer `dtau_rho`
+for the whole node). But this breaks down when a node's *entire* 1-ring
+patch happens to sit inside a region already softened by the yield-aware
+`mu_ve_e` mechanism ("solution 3" above): with no stiffer element anywhere in
+that small sample, `max` just returns the same uniformly-soft value, silently
+under-damping that one node while nodes one hop further out (whose patch
+happens to include a still-elastic element) get properly damped.
+
+Confirmed directly on node 2519's output: all 6 elements touching it had
+`yield_ratio` (`tau_eq/amc`, the same proxy `update_pt_params()` uses) between
+1.65 and 2.17 — deep past the `yield_onset=0.7` saturation point, so all 6
+already sat at the `yield_floor` (`G_e *= 0.05`, a 20× reduction). One ring
+further out, `yield_ratio` ranged 0.13-1.56 (mean 0.77) — a mix including
+several fully-elastic (unyielded) elements. This ~20×+ contrast between
+immediate neighbors is invisible to a max-over-1-ring estimate exactly when,
+like here, the *node's own* 1-ring happens to contain none of the stiffer
+population.
+
+This is systematically worse at boundary nodes: interior nodes average 24
+touching elements vs. ~12 for boundary nodes vs. only 6 for node 2519 itself
+— fewer samples means a higher chance that all of them land on the same side
+of a sharp material transition, and boundary nodes have no Dirichlet
+constraint to fall back on if they do. A domain-wide scan confirmed this
+statistically: of 284 nodes whose own 1-ring patch spans a yield-ratio range
+>0.5, the 220 interior ones showed local-contrast values no higher than 1.18
+(indistinguishable from normal mesh noise), while the 64 boundary ones
+ranged up to the 14.09× seen at node 2519.
+
+**Fix** (`geometry.cxx`, `update_pt_params()`): widen the `mu_i` search
+(only `mu_i` — `h_i` stays local/1-ring, since it governs a genuinely local
+CFL-like size constraint) to a 2-ring — the node's own patch, plus the
+patches of every other node sharing an element with it:
+```cpp
+for (int k = 0; k < npatch; ++k) {
+    int e = patch[k];
+    h_i = std::min(h_i, h_e_vec[e]);
+    mu_i = std::max(mu_i, mu_ve_vec[e]);
+    for (int jn = 0; jn < NODES_PER_ELEM; ++jn) {
+        int j = (*var.connectivity)[e][jn];
+        if (j == i) continue;
+        for (int k2 = 0; k2 < var.support.size(j); ++k2)
+            mu_i = std::max(mu_i, mu_ve_vec[var.support.patch(j)[k2]]);
+    }
+}
+```
+This can only raise `mu_i` (lower `dtau_rho`, add damping) relative to the
+1-ring estimate — it cannot destabilize a node that was already adequately
+damped, only correct nodes whose 1-ring sample was unluckily uniform.
+
+**Result.** Re-running the same `1e-6` config: node 2519's local contrast at
+the frame that previously showed 14.09× now reads 1.15×; `vy` dropped from
+`-3.18e-10` to `+8.07e-12` (>10× smaller) at the same simulated time. A
+domain-wide scan of the maximum local-contrast value across *every* node, in
+every output frame from `t=0` to `t≈4100 yr` (40 frames spanning the entire
+window this investigation was conducted over), never exceeded **3.05×**, and
+the corresponding node's own velocity never exceeded the imposed boundary
+velocity — down from the pre-fix combination of a 50,458× spike (bug A/B
+era) and a 14.09×/comparable-to-BC-velocity spike (bug C, isolated).
+
+**Status.** All three fixes are in place together
+(`dynearthsol.cxx`, `bc.cxx`, `geometry.cxx`, `fields.cxx`, `parameters.hpp`).
+Not yet re-validated: whether this remains clean through the vigorous
+localization phase (the `dt_weakening` throughput regime noted in the "Net
+outcome" section above), and whether `PT_relative_tolerance` can now be
+safely loosened below `1e-6` given bugs A-C no longer confound that question.

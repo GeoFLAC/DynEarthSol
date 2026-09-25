@@ -2177,7 +2177,20 @@ void update_pt_params(const Param& param, Variables& var)
         (*var.PT_Gdtau_e)[e] = Re * CFL * minh * mu_ve_e / (rp2 * L);
     }
 
-    // --- nodal Δτ/ρ̃: conservative min-h / max-μ^ve over adjacent elements ---
+    // --- nodal Δτ/ρ̃: conservative min-h over the 1-ring, max-μ^ve widened
+    // to a 2-ring. A node whose own 1-ring patch happens to sit entirely
+    // inside a locally yield-softened region (every touching element
+    // already at update_pt_params()'s yield-aware mu_ve_e floor) has no
+    // stiffer neighbor in that patch to anchor a safely small dtau_rho --
+    // max-over-1-ring just returns the same soft value, silently
+    // under-damping that one node while nodes one hop further out (whose
+    // patch happens to catch a still-elastic element) get properly damped.
+    // Most exposed at boundary nodes, which start with about half the
+    // element count of an interior node's patch (so a run of unlucky
+    // uniform softening is more likely) and have no kinematic constraint to
+    // fall back on. Looking one hop further for the stiffness estimate
+    // (never for h_i, which stays local) closes that sampling blind spot;
+    // it can only raise mu_i, i.e. only add damping, never remove it.
     #pragma omp parallel for default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, L)
     for (int i = 0; i < var.nnode; ++i) {
         double h_i  = std::numeric_limits<double>::max();
@@ -2185,12 +2198,39 @@ void update_pt_params(const Param& param, Variables& var)
         const int npatch = var.support.size(i);
         const int* patch = var.support.patch(i);
         for (int k = 0; k < npatch; ++k) {
-            h_i  = std::min(h_i, h_e_vec[patch[k]]);
-            mu_i = std::max(mu_i, mu_ve_vec[patch[k]]);
+            int e = patch[k];
+            h_i  = std::min(h_i, h_e_vec[e]);
+            mu_i = std::max(mu_i, mu_ve_vec[e]);
+            for (int jn = 0; jn < NODES_PER_ELEM; ++jn) {
+                int j = (*var.connectivity)[e][jn];
+                if (j == i) continue;
+                const int npatch2 = var.support.size(j);
+                const int* patch2 = var.support.patch(j);
+                for (int k2 = 0; k2 < npatch2; ++k2)
+                    mu_i = std::max(mu_i, mu_ve_vec[patch2[k2]]);
+            }
         }
         (*var.PT_dtau_rho)[i] = (mu_i > 0.0)
             ? CFL * h_i * L * NODES_PER_ELEM / (Re * mu_i * (*var.volume_n)[i])
             : 0.0;
+    }
+
+    // Cap dtau_rho at Winkler-boundary nodes so the EXPLICIT step there
+    // doesn't wildly overshoot the boundary's own stiffness -- dtau_rho*B is
+    // the term's effective damping ratio; capping it near 1 keeps the
+    // explicit step sane even before the per-iteration implicit correction
+    // (dynearthsol.cxx) removes the remaining one-iteration lag. Uses
+    // PT_winkler_B from the previous apply_stress_bcs() call (bc.cxx); size
+    // mismatch just after a remesh (not yet recomputed for the new node
+    // count) skips the cap for this call rather than reading out of bounds.
+    if (param.bc.has_winkler_foundation && param.control.has_PT &&
+        (int)var.PT_winkler_B->size() == var.nnode) {
+        #pragma omp parallel for default(none) shared(var)
+        for (int i = 0; i < var.nnode; ++i) {
+            double B = (*var.PT_winkler_B)[i];
+            if (B > 0.0)
+                (*var.PT_dtau_rho)[i] = std::min((*var.PT_dtau_rho)[i], 1.0 / B);
+        }
     }
 
     var.PT_h_min      = h_min;

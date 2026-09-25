@@ -694,9 +694,26 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
             nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
         }
 
+        // Per-facet d(force_z)/d(vel_z) self-coupling from this boundary's
+        // predicted-position Winkler term (see the zc block below). Same
+        // value for every node on a facet, since p depends only on the
+        // facet-average vz. Populated below only for i==iboundz0 with the
+        // Winkler foundation active in PT mode; accumulated per node in the
+        // aggregation loop, mirroring how the force itself is accumulated.
+        std::vector<double> facet_winklerB;
+        const bool track_winklerB = (i==iboundz0 && param.bc.has_winkler_foundation
+                                      && param.control.has_PT);
+        if (track_winklerB) {
+            facet_winklerB.assign(bound, 0.0);
+            if ((int)var.PT_winkler_B->size() != var.nnode)
+                var.PT_winkler_B->resize(var.nnode);
+            std::fill(var.PT_winkler_B->begin(), var.PT_winkler_B->end(), 0.0);
+        }
+
 #ifndef ACC
         #pragma omp parallel default(none) \
-            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes)
+            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes, \
+                   facet_winklerB, track_winklerB)
 #endif
         {
             // loops over all bdry facets
@@ -758,6 +775,18 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                     p = var.compensation_pressure -
                         (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
                         param.control.gravity * (zc + param.mesh.zlength);  // Adjust for predicted depth from base
+
+                    if (track_winklerB) {
+                        // d(force_z)/d(vel_z) self-coupling: p depends on this
+                        // facet's average vz via zc above (dzc/dvz_j = dt/N for
+                        // each of its N nodes), and each node's own force
+                        // contribution is p*normal_z/N -- same expression,
+                        // hence same derivative, for every node on the facet.
+                        double k_winkler = (rho_effective + param.bc.winkler_delta_rho)
+                                            * param.control.gravity;
+                        facet_winklerB[n] = -k_winkler * var.dt * normal[NDIMS-1]
+                                            / (NODES_PER_FACET * NODES_PER_FACET);
+                    }
                 }
                 else if (i==iboundz1 && param.bc.has_water_loading) {
                     // hydrostatic water loading for the surface boundary
@@ -809,6 +838,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                         if (n == conn[NODE_OF_FACET[f][l]]) {
                             for (int d=0; d<NDIMS; ++d)
                                 force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];  // subtract the force from the facet
+                            if (track_winklerB)
+                                (*var.PT_winkler_B)[n] += facet_winklerB[ibound];
                             break;  // found the node in the facet
                         }
                     }
