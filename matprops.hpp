@@ -75,6 +75,10 @@ public:
                                  int state_model) const;
     #pragma acc routine seq
     double pls_weakening_allowance(int e, double pls, double f) const;
+    #pragma acc routine seq
+    double tau_dl(int e) const;
+    #pragma acc routine seq
+    bool smooth_weakening() const { return has_smooth_weakening; }
 
     // Rebuild the per-element property means if elemmarkers changed since the last call.
     // Must be called after ANYTHING that mutates elemmarkers, before the next read.
@@ -134,6 +138,9 @@ private:
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
     double_vec tension_max;
+    double_vec relaxation_time;
+    double_vec pls_scale;
+    const bool has_smooth_weakening;
 
     // hydraulic process
     const double_vec &ppressure;

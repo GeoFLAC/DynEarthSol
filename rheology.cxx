@@ -485,6 +485,29 @@ static void elasto_plastic(double bulkm, double shearm,
 
 #pragma acc routine seq
 template <typename T>
+static void elastic_trial2d(double bulkm, double shearm, const double* de,
+                            T s, double& syy,
+                            bool has_hydraulic_diffusion, double dpp)
+{
+    // elastic trial stress
+    double a1 = bulkm + 4. / 3 * shearm;
+    double a2 = bulkm - 2. / 3 * shearm;
+    double sxx = s[0] + de[1]*a2 + de[0]*a1;
+    double szz = s[1] + de[0]*a2 + de[1]*a1;
+    double sxz = s[2] + de[2]*2*shearm;
+    syy += (de[0] + de[1]) * a2; // Stress YY component, plane strain
+
+    // Apply the pore pressure effect if hydraulic diffusion is enabled
+    if (has_hydraulic_diffusion)
+    {
+        sxx += dpp;
+        syy += dpp;
+        szz += dpp;
+    }
+    s[0] = sxx; s[1] = szz; s[2] = sxz;
+}
+
+template <typename T>
 static void elasto_plastic2d(double bulkm, double shearm,
                              double amc, double anphi, double anpsi,
                              double hardn, double ten_max,
@@ -515,21 +538,13 @@ static void elasto_plastic2d(double bulkm, double shearm,
     depls = 0;
     failure_mode = 0;
 
-    // elastic trial stress
+    elastic_trial2d(bulkm, shearm, de, s, syy, has_hydraulic_diffusion, dpp);
+    double sxx = s[0], szz = s[1], sxz = s[2];
+    // a1/a2 recomputed here (also computed inside elastic_trial2d) since the
+    // shear-failure branch below (alams) still needs them.
     double a1 = bulkm + 4. / 3 * shearm;
     double a2 = bulkm - 2. / 3 * shearm;
-    double sxx = s[0] + de[1]*a2 + de[0]*a1;
-    double szz = s[1] + de[0]*a2 + de[1]*a1;
-    double sxz = s[2] + de[2]*2*shearm;
-    syy += (de[0] + de[1]) * a2; // Stress YY component, plane strain
 
-    // Apply the pore pressure effect if hydraulic diffusion is enabled
-    if (has_hydraulic_diffusion)
-    {
-        sxx += dpp;
-        syy += dpp;
-        szz += dpp;
-    }
     //
     // transform to principal stress coordinate system
     //
@@ -700,6 +715,89 @@ static void elasto_plastic2d(double bulkm, double shearm,
     }
 }
 
+// Fully implicit (self-consistent) Mohr-Coulomb return map, for rh_ep with
+// control.has_smooth_weakening: cohesion/friction are evaluated at the CONVERGED
+// end-of-step plastic strain rather than frozen at the step's starting pls, by
+// fixed-point (Picard) iteration on kappa = pls_old + depls(amc(kappa), anphi(kappa)).
+// Each inner solve passes hardn=0: with amc/anphi held fixed for that call,
+// elasto_plastic{,2d}()'s single-shot formula is then the EXACT return map onto a
+// (locally) non-hardening surface -- the outer iteration, not the internal hardn
+// correction, is what supplies the end-of-step softening. anpsi (flow direction) is
+// frozen at pls_old throughout: per doc/deferred-improvements.md, dilation-angle
+// softening affects the flow direction but not the yield consistency condition, so
+// it does not need to be part of the self-consistent solve. If max_iter is exhausted
+// before converging, the last (best-effort) iterate is used -- never diverges silently.
+#pragma acc routine seq
+template <typename T>
+static void elasto_plastic_implicit(const MatProps* mat, int e, double pls_old,
+                                    double bulkm, double shearm,
+                                    const double* de, double& depls, T s,
+                                    int &failure_mode,
+                                    bool has_hydraulic_diffusion,
+                                    double &dpp)
+{
+    double s0[NSTR];
+    for (int i = 0; i < NSTR; ++i) s0[i] = s[i];
+
+    double kappa = pls_old;
+    double anpsi0 = 0;
+    const int max_iter = 20;
+    const double tol = 1e-6;
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        double amc, anphi, anpsi, hardn, ten_max;
+        mat->plastic_props(e, kappa, amc, anphi, anpsi, hardn, ten_max);
+        (void)hardn;
+        if (iter == 0) anpsi0 = anpsi;
+
+        for (int i = 0; i < NSTR; ++i) s[i] = s0[i];
+        elasto_plastic(bulkm, shearm, amc, anphi, anpsi0, 0.0, ten_max,
+                       de, depls, s, failure_mode, has_hydraulic_diffusion, dpp);
+
+        double kappa_new = pls_old + depls;
+        double delta = std::fabs(kappa_new - kappa);
+        kappa = kappa_new;
+        if (delta < tol * (kappa_new + 1e-12)) break;
+    }
+}
+
+#pragma acc routine seq
+template <typename T>
+static void elasto_plastic2d_implicit(const MatProps* mat, int e, double pls_old,
+                                      double bulkm, double shearm,
+                                      const double* de, double& depls,
+                                      T s, double &syy,
+                                      int &failure_mode,
+                                      bool has_hydraulic_diffusion,
+                                      double &dpp)
+{
+    double s0[NSTR];
+    for (int i = 0; i < NSTR; ++i) s0[i] = s[i];
+    double syy0 = syy;
+
+    double kappa = pls_old;
+    double anpsi0 = 0;
+    const int max_iter = 20;
+    const double tol = 1e-6;
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        double amc, anphi, anpsi, hardn, ten_max;
+        mat->plastic_props(e, kappa, amc, anphi, anpsi, hardn, ten_max);
+        (void)hardn;
+        if (iter == 0) anpsi0 = anpsi;
+
+        for (int i = 0; i < NSTR; ++i) s[i] = s0[i];
+        syy = syy0;
+        elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi0, 0.0, ten_max,
+                         de, depls, s, syy, failure_mode, has_hydraulic_diffusion, dpp);
+
+        double kappa_new = pls_old + depls;
+        double delta = std::fabs(kappa_new - kappa);
+        kappa = kappa_new;
+        if (delta < tol * (kappa_new + 1e-12)) break;
+    }
+}
+
 void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& stressyy, double_vec& dpressure, double_vec& viscosity,
                    tensor_t& strain, double_vec& plstrain,
@@ -855,15 +953,86 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 var.mat->plastic_props(e, plstrain[e],
                                        amc, anphi, anpsi, hardn, ten_max);
                 int failure_mode;
-                if (var.mat->is_plane_strain) {
-                    elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+
+                const bool dl_on = param.control.has_duvaut_lions;
+                const double tau = dl_on ? var.mat->tau_dl(e) : 0.0;
+                // Implicit (self-consistent) return map: replaces the frozen-parameter
+                // closed form with a Picard iteration re-evaluating amc/anphi at the
+                // converged end-of-step pls -- see elasto_plastic{,2d}_implicit() above
+                // and doc/... (smooth weakening / implicit self-consistent update plan).
+                const bool implicit_on = param.control.has_smooth_weakening;
+
+                if (!dl_on || tau <= 0.0 || var.dt <= 0.0) {
+                    // Exactly today's path when implicit_on is false -- zero extra
+                    // cost, zero behavior change.
+                    if (var.mat->is_plane_strain) {
+                        if (implicit_on)
+                            elasto_plastic2d_implicit(var.mat, e, plstrain[e], bulkm, shearm,
+                                                      de, depls, s, syy, failure_mode,
+                                                      has_hydraulic_diffusion, dpp);
+                        else
+                            elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                             de, depls, s, syy, failure_mode,
+                                             has_hydraulic_diffusion, dpp);
+                    }
+                    else {
+                        if (implicit_on)
+                            elasto_plastic_implicit(var.mat, e, plstrain[e], bulkm, shearm,
+                                                    de, depls, s, failure_mode,
+                                                    has_hydraulic_diffusion, dpp);
+                        else
+                            elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                           de, depls, s, failure_mode,
+                                           has_hydraulic_diffusion, dpp);
+                    }
                 }
                 else {
-                    elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                    // Duvaut-Lions blend: weight -> 1 as dt >> tau (recovers
+                    // rate-independent plasticity), -> 0 as dt << tau (strong
+                    // regularization toward the elastic trial). depls scales
+                    // by the same weight as the stress blend -- see
+                    // doc/pt-duvaut-lions-viscoplasticity.md.
+                    const double weight = var.dt / (tau + var.dt);
+
+                    if (var.mat->is_plane_strain) {
+                        double s_trial[NSTR];
+                        for (int i = 0; i < NSTR; ++i) s_trial[i] = s[i];
+                        double syy_trial = syy;
+                        elastic_trial2d(bulkm, shearm, de, s_trial, syy_trial,
+                                        has_hydraulic_diffusion, dpp);
+
+                        if (implicit_on)
+                            elasto_plastic2d_implicit(var.mat, e, plstrain[e], bulkm, shearm,
+                                                      de, depls, s, syy, failure_mode,   // s,syy -> inviscid
+                                                      has_hydraulic_diffusion, dpp);
+                        else
+                            elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                             de, depls, s, syy, failure_mode,   // s,syy -> inviscid
+                                             has_hydraulic_diffusion, dpp);
+
+                        for (int i = 0; i < NSTR; ++i)
+                            s[i] = (1-weight)*s_trial[i] + weight*s[i];
+                        syy = (1-weight)*syy_trial + weight*syy;
+                    }
+                    else {
+                        double s_trial[NSTR];
+                        for (int i = 0; i < NSTR; ++i) s_trial[i] = s[i];
+                        if (has_hydraulic_diffusion) elastic_effective(bulkm, shearm, de, s_trial, dpp);
+                        else                          elastic(bulkm, shearm, de, s_trial);
+
+                        if (implicit_on)
+                            elasto_plastic_implicit(var.mat, e, plstrain[e], bulkm, shearm,
+                                                    de, depls, s, failure_mode,          // s -> inviscid
+                                                    has_hydraulic_diffusion, dpp);
+                        else
+                            elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                           de, depls, s, failure_mode,          // s -> inviscid
+                                           has_hydraulic_diffusion, dpp);
+
+                        for (int i = 0; i < NSTR; ++i)
+                            s[i] = (1-weight)*s_trial[i] + weight*s[i];
+                    }
+                    depls *= weight;
                 }
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;

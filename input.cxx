@@ -398,7 +398,17 @@ static void declare_parameters(po::options_description &cfg,
         ("control.has_thermal_diffusion", po::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
-         "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+         "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n")
+
+        ("control.has_duvaut_lions", po::value<bool>(&p.control.has_duvaut_lions)->default_value(false),
+         "Enable Duvaut-Lions viscoplastic regularization of the rh_ep return map.\n")
+
+        ("control.has_smooth_weakening", po::value<bool>(&p.control.has_smooth_weakening)->default_value(false),
+         "Replace the piecewise-linear pls0/pls1 weakening ramp with a smooth "
+         "(exponential) law and solve the rh_ep return map implicitly (self-consistent "
+         "end-of-step cohesion/friction). When true, mat.pls_scale sets the e-folding "
+         "strain scale and the piecewise-linear ramp (pls0/pls1) is not used; "
+         "dt_weakening is no longer needed and is bypassed for rh_ep elements.\n")
 
         ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -862,6 +872,13 @@ static void declare_parameters(po::options_description &cfg,
          "Cohesion of the materials when weakening starts '[d0, d1, d2, ...]' (in Pa)")
         ("mat.cohesion1", po::value<std::string>()->default_value("[4e6]"),
          "Cohesion of the materials when weakening saturates '[d0, d1, d2, ...]' (in Pa)")
+        ("mat.relaxation_time", po::value<std::string>()->default_value("[0]"),
+         "Duvaut-Lions viscoplastic relaxation time of the materials '[d0, d1, d2, ...]' "
+         "(in seconds; only used when control.has_duvaut_lions is true; 0 recovers "
+         "rate-independent plasticity)")
+        ("mat.pls_scale", po::value<std::string>()->default_value("[0.1]"),
+         "Smooth-weakening e-folding scale of the materials '[d0, d1, d2, ...]' (no unit; "
+         "only used when control.has_smooth_weakening is true, in place of pls0/pls1)")
         ("mat.friction_angle0", po::value<std::string>()->default_value("[30]"),
          "Friction angle of the materials when weakening starts '[d0, d1, d2, ...]' (in degree)")
         ("mat.friction_angle1", po::value<std::string>()->default_value("[5]"),
@@ -1474,6 +1491,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, -1);
         get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, -1);
         get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.relaxation_time", p.mat.relaxation_time, p.mat.nmat, -1);
+        get_numbers(vm, "mat.pls_scale", p.mat.pls_scale, p.mat.nmat, -1);
         get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, -1);
         get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
         get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);

@@ -189,6 +189,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 //   stress_old(*var.stress_old),
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
+  has_smooth_weakening(p.control.has_smooth_weakening),
   ppressure(*var.ppressure),
   dppressure(*var.dppressure),
   log_table(*var.log_table),
@@ -214,6 +215,8 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     dilation_angle0 = p.mat.dilation_angle0;
     dilation_angle1 = p.mat.dilation_angle1;
     tension_max = p.mat.tension_max;
+    relaxation_time = p.mat.relaxation_time;
+    pls_scale = p.mat.pls_scale;
 
     // Hydraulic parameters
     porosity = p.mat.porosity;
@@ -309,6 +312,8 @@ MatProps::~MatProps()
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume)
     #pragma acc exit data delete(heat_capacity,therm_cond,pls0,pls1,cohesion0)
     #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1,tension_max)
+    #pragma acc exit data delete(relaxation_time)
+    #pragma acc exit data delete(pls_scale)
 
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
@@ -388,7 +393,20 @@ void MatProps::plastic_weakening(int e, double pls,
         int k = elemmarkers[e][m];
         if (k == 0) continue;
         n += k;
-        if (pls < pls0[m]) {
+        if (has_smooth_weakening) {
+            // Smooth exponential weakening: X(pls) = X1 + (X0-X1)*exp(-pls/scale).
+            // cohesion0/1, friction_angle0/1, dilation_angle0/1 keep their
+            // virgin/residual meaning; pls0 is unused (no onset plateau) and
+            // pls_scale (the e-folding strain) replaces pls1 as the ramp-width
+            // parameter. Everywhere differentiable, unlike the ramp below.
+            double scale = pls_scale[m];
+            double w = (scale > 0) ? std::exp(-pls / scale) : 0.0;
+            c += (cohesion1[m] + w * (cohesion0[m] - cohesion1[m])) * k;
+            f += (friction_angle1[m] + w * (friction_angle0[m] - friction_angle1[m])) * k;
+            d += (dilation_angle1[m] + w * (dilation_angle0[m] - dilation_angle1[m])) * k;
+            h += ((scale > 0) ? -(cohesion0[m] - cohesion1[m]) / scale * w : 0.0) * k;
+        }
+        else if (pls < pls0[m]) {
             // no weakening yet
             c += cohesion0[m] * k;
             f += friction_angle0[m] * k;
@@ -614,6 +632,21 @@ void MatProps::plastic_props(int e, double pls,
     amc = 2 * cohesion * std::sqrt(anphi);
 
     ten_max = (phi == 0)? tmax : std::min(tmax, cohesion/tan_safe(tan_table,phi*DEG2RAD));
+}
+
+double MatProps::tau_dl(int e) const
+{
+    // Element-averaged Duvaut-Lions relaxation time (marker-weighted,
+    // matching cohesion/tension_max above). 0 = rate-independent plasticity.
+    double tau = 0;
+    int n = 0;
+    for (int m = 0; m < nmat; m++) {
+        int k = elemmarkers[e][m];
+        if (k == 0) continue;
+        n += k;
+        tau += relaxation_time[m] * k;
+    }
+    return (n > 0) ? tau / n : 0.0;
 }
 
 double MatProps::pls_weakening_allowance(int e, double pls, double f) const

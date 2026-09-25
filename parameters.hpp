@@ -249,6 +249,8 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_duvaut_lions;
+    bool has_smooth_weakening;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -473,6 +475,8 @@ struct Mat {
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
     double_vec tension_max;
+    double_vec relaxation_time;  // Duvaut-Lions viscoplastic relaxation time (s); 0 = rate-independent
+    double_vec pls_scale;  // smooth-weakening e-folding scale (same units as pls); 0/unset = disabled
 
     // Excavation/backfill: file of "elem_id new_mattype" pairs applied at
     // start/restart (marker retag + stress reset). Empty = disabled.

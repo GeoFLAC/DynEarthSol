@@ -1677,9 +1677,14 @@ double compute_dt_PT(const Param& param, Variables& var)
     // ramp get the flat run-up for free).  The plastic strain rate is
     // estimated from the previous step: delta_plstrain/dt, so steps_min is
     // the tightest element's allowance measured in previous-dt steps.
+    // With has_smooth_weakening, rh_ep's return map evaluates cohesion/friction
+    // self-consistently at the converged end-of-step pls (rheology.cxx's
+    // elasto_plastic{,2d}_implicit()) instead of freezing them at start-of-step --
+    // there is no staleness left for this limiter to protect against.
     const bool check_weakening = (param.control.PT_dpls_fraction > 0) &&
                                  (param.mat.rheol_type & MatProps::rh_plastic) &&
-                                 (var.dt > 0);
+                                 (var.dt > 0) &&
+                                 !param.control.has_smooth_weakening;
     const double dpls_f = param.control.PT_dpls_fraction;
     double steps_min = std::numeric_limits<double>::max();
 
