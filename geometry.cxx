@@ -1823,7 +1823,7 @@ double compute_dt_PT(const Param& param, Variables& var)
     // |vbc_val|; an element touching multiple active faces (e.g. a corner)
     // uses the worst (largest) eps_worst among the faces it touches.
     double dt_bc_yield = std::numeric_limits<double>::max();
-    if (param.mat.rheol_type & MatProps::rh_plastic) {
+    if (param.control.has_bc_yield_limit && (param.mat.rheol_type & MatProps::rh_plastic)) {
         struct FaceSpec { uint flag; double vbc; };
         FaceSpec faces[6] = {
             { param.bc.vbc_x0 ? BOUNDX0 : 0u, std::fabs(param.bc.vbc_val_x0) },

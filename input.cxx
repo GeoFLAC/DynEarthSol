@@ -410,6 +410,17 @@ static void declare_parameters(po::options_description &cfg,
          "strain scale and the piecewise-linear ramp (pls0/pls1) is not used; "
          "dt_weakening is no longer needed and is bypassed for rh_ep elements.\n")
 
+        ("control.has_bc_yield_limit", po::value<bool>(&p.control.has_bc_yield_limit)->default_value(false),
+         "Bound dt_PT so that the worst-case elastic strain rate at a velocity-Dirichlet "
+         "boundary (all of that face's vbc absorbed by its thinnest adjacent element) "
+         "cannot drive it past yield within one step (see doc/pt-boundary-pluck.md, "
+         "dt_bc_yield). Was introduced to guard against the since-removed staggered PT "
+         "scheme's boundary-pluck bug; on the gaussian-weakzone-3d-PT benchmark it was "
+         "the sole dt(PT) bottleneck (300-500x tighter than dt_weakening) with no "
+         "correctness benefit once that scheme was removed, so default is now false. Set "
+         "to true as a fallback if PT stagnates badly at a velocity-Dirichlet boundary in "
+         "a config this wasn't validated against.\n")
+
         ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
         ("control.hydration_migration_speed", po::value<double>(&p.control.hydration_migration_speed)->default_value(3e-9),

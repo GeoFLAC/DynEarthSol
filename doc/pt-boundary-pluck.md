@@ -1416,3 +1416,56 @@ Not yet re-validated: whether this remains clean through the vigorous
 localization phase (the `dt_weakening` throughput regime noted in the "Net
 outcome" section above), and whether `PT_relative_tolerance` can now be
 safely loosened below `1e-6` given bugs A-C no longer confound that question.
+
+## `dt_bc_yield` retired to opt-in (`has_bc_yield_limit`, default now `false`)
+
+A later investigation (into why a smooth-weakening/implicit-return-map change
+to `dt_weakening` gave no wall-clock benefit on `gaussian-weakzone-3d-PT`)
+enabled `debug.dt=yes` and read the raw per-step `dt(PT)` component
+breakdown. `dt_bc_yield` was the binding term at *every* step of the run,
+300-500x tighter than `dt_weakening` (which was never remotely close to
+binding, contrary to what its "throughput" framing above assumed) — meaning
+`dt_bc_yield`, not weakening-curve staleness, was PT's real ceiling on that
+benchmark the whole time, both before and after this document's fixes.
+
+Per the "Root cause" and "Resolution" sections above, `dt_bc_yield`'s own
+motivating bug (boundary elements yielding first due to `apply_vbcs()`
+pinning full imposed velocity every PT iteration before propagation) was a
+*symptom* of the staggered scheme's broken, undamped return map — the
+staggered scheme was the actual root cause of the pluck and has since been
+deleted from the code entirely. That raised the question of whether
+`dt_bc_yield` still does anything useful now that the scheme it was guarding
+against no longer exists.
+
+Gated it behind `control.has_bc_yield_limit` and tested with it off on the
+same benchmark, full-length (`max_time_in_yr=8000`):
+
+| | steps | sim. time | wall-clock | PT stagnations | `dt` behavior |
+|---|---|---|---|---|---|
+| `has_bc_yield_limit=true` (old default) | 117 | 8025 yr | 30:10 | 12 | 46→38→40 yr (dip-and-recover) |
+| `has_bc_yield_limit=false` | 50 | 8002 yr | **9:02** | 27 | flat ~160 yr throughout |
+
+**3.3x wall-clock speedup, no boundary-plucking regression.** Checked the
+final frame's velocity field the same way the "Root cause" section above
+distinguishes a pluck from a ramp: smooth, monotonic, domain-spanning
+(`-2.4e-10` at the left boundary through zero near the domain center to
+`+2.5e-10` at the right, 5540 nodes), not a boundary-only spike pattern.
+Plastic strain (max 0.502 vs 0.510) and stress magnitudes closely track the
+`has_bc_yield_limit=true` run; no NaNs either run.
+
+The higher stagnation count (12→27, all still resolving cleanly, never
+hitting `PT_max_iter`) is a real, if modest, cost: without `dt_bc_yield`
+throttling the per-step boundary overshoot, PT's inner loop works harder to
+correct a bigger elastic-trial excursion before settling. The current
+(non-staggered, always-damped) return-map correction absorbs it fine on this
+benchmark, but this is only one benchmark, and this general class of problem
+(transient boundary-first yielding under Dirichlet velocity BCs) has
+independently motivated three separate mechanisms in this document's history
+(the reverted `dt_yield`, "solution 3", and `dt_bc_yield` itself) — plausibly
+a recurring PT-with-Dirichlet-BCs failure mode, not something tied to one
+specific historical bug.
+
+**Decision:** default `has_bc_yield_limit` to `false` (the evidence clearly
+favors it for typical use), but keep the flag and code path as an opt-in
+fallback rather than deleting the mechanism, for whoever hits a config where
+PT's inner loop stagnates badly at a velocity-Dirichlet boundary without it.

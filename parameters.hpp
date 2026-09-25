@@ -251,6 +251,7 @@ struct Control {
     bool has_hydraulic_diffusion;
     bool has_duvaut_lions;
     bool has_smooth_weakening;
+    bool has_bc_yield_limit;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
