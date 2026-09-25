@@ -2,12 +2,14 @@
 # encoding: utf-8
 '''Convert the binary output of DynEarthSol to VTK files.
 
-usage: 2vtk.py [-a -c -m -p -t -h] modelname [start [end [delta]]]]
+usage: 2vtk.py [-a -c -copy -g -m -p -t -h] modelname [start [end [delta]]]]
 
 options:
     -a          save data in ASCII format (default: binary)
     -c          save files in current directory (default: same directory as
                 the data files)
+    -copy       copy a restarted model's parent frames here, not link them
+    -g          convert a restarted model's parent frames first (see below)
     -m          save marker data
     -p          save principal components (s1 and s3) of deviatoric stress
     -t          save all tensor components (default: only 1st/2nd invariants)
@@ -19,11 +21,19 @@ options:
 If 'start' is not provided, start from the 0th frame.
 If 'start' is -1, resume previous conversion.
 If 'end' is not provided or is -1, end at the last output.
+
+A restarted model's series is completed from its .manifest, up the chain of runs
+it restarted from; a parent with no frame here before the restart frame (only
+the restart frame copied, say) ends the chain with a warning. A parent's frames
+are linked here under this model's name from the .vtu/.vtp files converting it
+writes; -g converts them there first, -copy writes copies here, and a frame
+with no .vtu to link is skipped with a warning. 'start' and 'end' index the
+whole series; -u updates only the model's own frames.
 '''
 
 from __future__ import print_function, unicode_literals
 import sys, os, shutil
-import base64, zlib, glob
+import base64, zlib, glob, itertools
 import numpy as np
 
 # Disable HDF5 file locking to avoid BlockingIOError on some filesystems
@@ -64,8 +74,18 @@ conductivity = 3.3
 # Update existing VTKHDF file?
 update_vtkhdf = False
 
+# Link a parent run's frames from its own output (-copy: copy them here)?
+link_parent_frames = True
+
+# Convert a parent run's frames before linking them (-g)?
+generate_parent_frames = False
+
 # min mutiprocessing threads
 mutiprocessing_threads = 4
+
+# Options the workers read, passed to them: spawned workers (the macOS default) skip __main__.
+WORKER_OPTIONS = ('output_in_binary', 'output_in_cwd', 'output_tensor_components',
+                  'output_principle_stress', 'output_markers', 'output_melting')
 
 ########################
 # Is numpy version < 1.8?
@@ -199,6 +219,13 @@ def calculate_derived_data(des, frame):
         
     return point_data, cell_data
 
+def unlinked(filename):
+    '''filename with any link there removed, so writing it replaces a parent's file.'''
+    if os.path.islink(filename):
+        os.remove(filename)
+    return filename
+
+
 def process_single_frame(args):
     des, output_prefix, i = args
 
@@ -212,7 +239,7 @@ def process_single_frame(args):
     suffix = '{0:0=6}'.format(frame)
 
     filename = '{0}.{1}.vtu'.format(output_prefix, suffix)
-    fvtu = open(filename, 'w')
+    fvtu = open(unlinked(filename), 'w')
 
     try:
         vtu_header(fvtu, nnode, nelem, time_in_yr, step)
@@ -460,36 +487,184 @@ def process_vtkhdf_update(args):
 
     return suffix
 
+
+def read_run_records(modelname):
+    '''[runtime.model] records of modelname.manifest, oldest first ([] without one).
+    Each restart appends one; one after the "could not start" seam wrote no frames.'''
+    records, rec, failed = [], None, False
+    if not os.path.isfile(modelname + '.manifest'):
+        return records
+    with open(modelname + '.manifest') as f:
+        for line in f:
+            # headers and seams begin at column 0; no line of the embedded code diff begins with '['
+            if line.startswith('# ---- a run that could not start'):
+                failed = True
+            elif line.startswith('['):
+                rec = None
+                if line.strip() == '[runtime.model]':
+                    rec = {}
+                    if not failed:
+                        records.append(rec)
+                    failed = False
+            elif rec is not None and '=' in line:
+                key, value = line.split('=', 1)
+                rec[key.strip()] = value.strip()
+    return records
+
+
+def restart_origin(modelname):
+    '''(parent, first frame of its own) of the run whose frames modelname holds, (None, 0)
+    if fresh; a same-name resume keeps its earlier frames, so the record before it decides.'''
+    for rec in reversed(read_run_records(modelname)):
+        if rec['restarting'] != 'yes':
+            return None, 0
+        # DES resolved both names against its cwd, and '..' after symlinks as realpath does
+        cwd = modelname
+        for _ in os.path.normpath(rec['modelname']).split(os.sep):
+            cwd = os.path.dirname(cwd)
+        parent = os.path.realpath(os.path.join(cwd, rec['restart_from_model']))
+        if parent != os.path.realpath(modelname):
+            return os.path.relpath(parent), int(rec['restart_from_frame'])
+    return None, 0
+
+
+def saved_frames(modelname):
+    '''Frame numbers of the modelname.save.* files on disk, whatever its .info lists.'''
+    frames = set()
+    for fn in glob.glob(modelname + '.save.*'):
+        num = fn[len(modelname + '.save.'):].split('.')[0]
+        if num.isdigit():
+            frames.add(int(num))
+    return frames
+
+
+def restart_series(modelname):
+    '''(des, frame index) of every frame of modelname's restart series, oldest first:
+    each run holds its frames from its restart frame on, its parent the earlier ones.'''
+    series, stop, seen = [], None, set()
+    while True:
+        if os.path.realpath(modelname) in seen:   # restarted from its own descendant
+            print(f'Warning: the restart chain returns to {modelname}; the frames before '
+                  f'{stop} are not converted.', file=sys.stderr)
+            return series
+        seen.add(os.path.realpath(modelname))
+        des = Dynearthsol(modelname)
+        parent, first = restart_origin(modelname)
+        series[:0] = [(des, i) for i, f in enumerate(des.frames)
+                      if f >= first and (stop is None or f < stop)]
+        if parent is None:
+            return series
+        # Frames on disk only: a copied restart frame (or .info) is not the parent run.
+        if not any(f < first for f in saved_frames(parent)):
+            print(f'Warning: {modelname} restarted from frame {first} of {parent}, which has no '
+                  f'frame before {first} here; those frames are not converted.', file=sys.stderr)
+            return series
+        print(f'Series: {modelname} restarted from frame {first} of {parent}.', file=sys.stderr)
+        modelname, stop = parent, first
+
+
+def init_worker(options):
+    globals().update(options)
+
+
+def prefix_of(modelname):
+    '''Where the .vtu/.vtp files of modelname's own frames go.'''
+    return os.path.basename(modelname) if output_in_cwd else modelname
+
+
+def announce_model(batch, ndone, prefix):
+    '''Name the model whose frames batch converts, below the last progress line.'''
+    des, own, i = batch[0]
+    if ndone:
+        print(file=sys.stderr)   # the progress line ends in '\r'; keep it
+    linked = f', linked as {prefix}.*' if own != prefix else ''
+    print(f'Working on model {des.modelname} (frames {des.frames[i]}-{des.frames[batch[-1][2]]}){linked}.',
+          file=sys.stderr)
+
+
+def link_frames(batch, prefix):
+    '''Give prefix's names to the files a parent's batch has under its own prefix;
+    returns the frames without a .vtu there to link.'''
+    missing = []
+    if batch[0][1] == prefix:
+        return missing
+    for des, own, i in batch:
+        suffix = '{0:0=6}'.format(des.frames[i])
+        if not os.path.exists('{0}.{1}.vtu'.format(own, suffix)):
+            missing.append(des.frames[i])
+            continue
+        for name in ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp'):
+            target, link = name.format(own, suffix), name.format(prefix, suffix)
+            if not os.path.exists(target):   # a frame without markers has no .vtp
+                continue
+            if os.path.lexists(link):
+                os.remove(link)
+            os.symlink(os.path.relpath(os.path.realpath(target),
+                                       os.path.realpath(os.path.dirname(link))), link)
+    return missing
+
+
+def convert_batches(batches, prefix, target_func, imap):
+    '''Convert the batches through imap, one model at a time, linking each parent's as ours.'''
+    nout = sum(len(b) for b in batches)
+    width, ndone = len(str(nout)), 0
+    for batch in batches:
+        announce_model(batch, ndone, prefix)
+        for result in imap(target_func, batch):
+            ndone += 1
+            print(f'Frame #{result} converted ({ndone:{width}d}/{nout}).', end='\r', file=sys.stderr)
+        link_frames(batch, prefix)
+
+
 def main(modelname, start, end, delta):
-    des = Dynearthsol(modelname)
-    prefix = os.path.basename(modelname) if output_in_cwd else modelname
+    series = restart_series(modelname)
+    frames = [d.frames[i] for d, i in series]
+    prefix = prefix_of(modelname)
 
     if start == -1:
-        vtulist = sorted(glob.glob(modelname + '.*.vtu'))
-        lastframe = int(vtulist[-1][(len(modelname)+1):-4]) if vtulist else des.frames[0]
-        start = des.frames.index(lastframe) + 1
+        vtulist = sorted(glob.glob(prefix + '.*.vtu'))
+        lastframe = int(vtulist[-1][(len(prefix)+1):-4]) if vtulist else frames[0]
+        start = frames.index(lastframe) + 1
     if end == -1:
-        end = len(des.frames)
+        end = len(frames)
 
-    indices = list(range(start, end, delta))
-    # frame numbers, not output indices: a restarted model's output 0 is its restart frame
-    frames = des.frames[start:end:delta]
+    selected = series[start:end:delta]
+    if update_vtkhdf:
+        # -u rewrites .vtkhdf frames, which are not linked: it keeps to the model's own
+        selected = [(d, i) for d, i in selected if d.modelname == modelname]
+    # a parent's frames go under its own prefix, to be linked as ours, unless -copy
+    args_list = [(d, prefix_of(d.modelname) if link_parent_frames else prefix, i)
+                 for d, i in selected]
+    # one batch per model, in series order, so the model being worked on can be named
+    batches = [list(b) for _, b in itertools.groupby(args_list, key=lambda args: args[0])]
 
-    nout = len(indices)
-    ndigit = len(str(nout))
-    ndone = 0
-    
+    # a parent's existing files are linked as they are, unless -g converts them first
+    if not generate_parent_frames:
+        for batch in batches:
+            des, own, _ = batch[0]
+            if own == prefix:
+                continue
+            missing = link_frames(batch, prefix)
+            print(f'Linked {len(batch) - len(missing)} of {len(batch)} frames of {des.modelname} '
+                  f'as {prefix}.*', file=sys.stderr)
+            if missing:
+                print(f'Warning: {len(missing)} frames ({missing[0]} to {missing[-1]}) have no .vtu '
+                      f'there to link; convert {des.modelname} or pass -g.', file=sys.stderr)
+        batches = [b for b in batches if b[0][1] == prefix]
+
+    # frame numbers, not series positions: a parent's linked frames are not converted
+    converted = [d.frames[i] for batch in batches for d, _, i in batch]
+    nout = len(converted)
+
     if nout == 0:
-        print(f'No frames to convert (Avail. frames: {des.frames[0]} to {des.frames[-1]}).', file=sys.stderr)
+        print(f'No frames to convert (Avail. frames: {frames[0]} to {frames[-1]}).', file=sys.stderr)
         return
     
     try:
         import multiprocessing as mp
         print(f'Using {mutiprocessing_threads} threads (-ncpu {mutiprocessing_threads}) for conversion (system max: {mp.cpu_count()}).', file=sys.stderr)
-        print(f'Converting {nout} frames from {frames[0]} to {frames[-1]} with step {delta}.',
+        print(f'Converting {nout} frames from {converted[0]} to {converted[-1]} with step {delta}.',
               file=sys.stderr)
-
-        args_list = [(des, prefix, i) for i in indices]
 
         if update_vtkhdf:
             if h5py is None:
@@ -499,10 +674,10 @@ def main(modelname, start, end, delta):
         else:
             target_func = process_single_frame
 
-        with mp.Pool(processes = mutiprocessing_threads) as pool:
-            for result in pool.imap_unordered(target_func, args_list):
-                ndone += 1
-                print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
+        options = {name: globals()[name] for name in WORKER_OPTIONS}
+        with mp.Pool(processes = mutiprocessing_threads, initializer = init_worker,
+                     initargs = (options,)) as pool:
+            convert_batches(batches, prefix, target_func, pool.imap_unordered)
 
     except ImportError:
         print('Multiprocessing is not available, using single thread instead.')
@@ -514,10 +689,7 @@ def main(modelname, start, end, delta):
         else:
             target_func = process_single_frame
 
-        for i in indices:
-            result = target_func((des, prefix, i))
-            ndone += 1
-            print(f'Frame #{result} converted ({ndone:{ndigit}d}/{nout}).', end='\r', file=sys.stderr)
+        convert_batches(batches, prefix, target_func, map)
             
         
     print()
@@ -525,7 +697,7 @@ def main(modelname, start, end, delta):
 
 
 def output_vtp_file(des, frame, filename, markersetname, time_in_yr, step):
-    fvtp = open(filename, 'w')
+    fvtp = open(unlinked(filename), 'w')
 
     class MarkerSizeError(RuntimeError):
         pass
@@ -850,6 +1022,10 @@ if __name__ == '__main__':
         output_markers = True
     if '-u' in sys.argv or '--update-vtkhdf' in sys.argv:
         update_vtkhdf = True
+    if '-copy' in sys.argv:
+        link_parent_frames = False
+    if '-g' in sys.argv:
+        generate_parent_frames = True
     if '-melt' in sys.argv:
         output_melting = True
     if '-heat' in sys.argv:
