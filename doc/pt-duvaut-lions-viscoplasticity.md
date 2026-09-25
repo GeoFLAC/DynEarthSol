@@ -34,6 +34,71 @@ guarantee that the default (and `tau=0`) path is bit-identical to today's
 code — then validate that it relaxes `dt_weakening` and narrows the PT/DR
 wall-time gap without corrupting the physical answer.
 
+## Theoretical background: Perzyna vs. Duvaut-Lions
+
+Duvaut-Lions (DL) viscoplasticity is often assumed to be a later, improved
+alternative to Perzyna's overstress viscoplasticity (Perzyna, 1963) — DL does
+postdate Perzyna (Duvaut & Lions, 1972; English translation 1976) — but the
+literature does not support "improved" as the right characterization. Two
+independent sources converge on the same point:
+
+- De Angelis (2012) frames the two as commonly-adopted *alternatives*, and
+  notes that "under certain conditions and assumptions, the Duvaut-Lions
+  model may be considered as derived from the Perzyna model" — a derivation,
+  not a supersession.
+- Nguyen, Amores & Montáns (2020) show that for the linear case (Perzyna's
+  overstress exponent N=1 — the case relevant here, since this
+  implementation's blend is linear in the stress/depls interpolation), the
+  two models are **mathematically identical** under the right parameter
+  identification. DL's actual advantage is algorithmic, not physical: the
+  viscous (regularized) solution is built directly from the already-computed
+  inviscid (rate-independent) solution, so "the inviscid case is
+  automatically recovered" for free. That is exactly the property this
+  implementation exploits — the blend reuses the existing
+  `elasto_plastic()`/`elasto_plastic2d()` return map unchanged, rather than
+  requiring a new local-Newton solve for a general Perzyna overstress
+  function.
+
+**So: DL is the algorithmically convenient special case of Perzyna
+viscoplasticity for this codebase, not a chronological improvement on it.**
+
+**Relating `tau_dl` to a relaxation viscosity.** The relaxation *time* `tau`
+this implementation takes directly (`mat.relaxation_time`, in seconds) can
+equivalently be specified as a relaxation *viscosity* `eta` (units Pa·s) via
+
+```
+tau_dl = eta / G
+```
+
+for a representative shear modulus `G`. This is the same η/τ pairing used in
+the literature (Li, Zhao & Guo, 2024: "adjusting the ratio η/τ, η is the
+viscosity... and τ is the relaxation time," citing Borja, 2020, for the
+equivalence under parameter matching) and it is dimensionally exact
+(`[Pa·s]/[Pa] = [s]`). It also matches the Maxwell relaxation-time convention
+*already used elsewhere in this codebase*: `dt_maxwell = 0.5 * visc_min /
+shearm` in `compute_dt_PT()` (`geometry.cxx`) and the `maxwell()` stress
+update (`rheology.cxx`) both use `tau_Maxwell = eta/G` for exactly the same
+reason. If a viscosity-based parameterization is preferred over specifying
+`tau` directly (e.g. reusing or extending the `mat.visc_activation_energy`
+Arrhenius-viscosity machinery, or a new `mat.relaxation_viscosity`), deriving
+`tau_dl = eta/G` internally in `MatProps::tau_dl()` — rather than storing
+`tau` directly — would be a straightforward, literature-consistent swap; not
+implemented here since the current plan takes `tau` directly.
+
+**References:**
+- Perzyna, P. (1963). The constitutive equations for rate sensitive plastic
+  materials. *Quarterly of Applied Mathematics*, 20(4), 321–332.
+- Duvaut, G., & Lions, J.L. (1976). *Inequalities in Mechanics and Physics.*
+  Springer. (French original: *Les Inéquations en Mécanique et en Physique*,
+  1972.)
+- De Angelis, F. (2012). On the Relation between Two Constitutive Models
+  Frequently Adopted in Viscoplasticity. *Applied Mechanics and Materials*,
+  256–259, 995–1003. https://doi.org/10.4028/www.scientific.net/amm.256-259.995
+- Nguyen, K., Amores, V.J., & Montáns, F.J. (2020). Thermodynamically
+  consistent nonlinear viscoplastic formulation... arXiv:2009.12169.
+- Li, S., Zhao, J., & Guo, H. (2024). A Viscoplasticity Model for Shale Creep
+  Behavior... *Energies*, 17(5), 1122. https://doi.org/10.3390/en17051122
+
 ## Scope
 
 **In scope:** `MatProps::rh_ep` only — the rheology the benchmark
