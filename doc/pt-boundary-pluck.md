@@ -1181,10 +1181,12 @@ weak zone (given weak-zone parameters that make it the genuine weakest point at
 its depth), converging cleanly to tolerance. Two separate, non-blocking items
 were characterized along the way and remain open: the `dt_weakening` throughput
 cost during vigorous localization (PT falls back to DR-scale small steps), and
-the broader PT-vs-DR cost picture (PT is currently ~2× slower than DR in
-wall-clock on this CPU build, dominated by per-step iteration count that grows
-with localization — the main lever there is running the GPU/`ACC` build, which
-is where accelerated PT's advantage actually lives).
+the broader PT-vs-DR cost picture (PT is currently slower than DR in wall-clock
+on this CPU build, dominated by per-step iteration count that grows with
+localization). **Correction, see "PT-vs-DR: a corrected cost model" below: the
+GPU/`ACC` build is not expected to change this comparison** — the reasoning
+below shows the gap is a structural iteration-count mismatch, not a per-
+operation speed problem GPU parallelism would relatively favor.
 
 ## Follow-up investigation: anomalous nodal velocity spikes at loosened tolerance
 
@@ -1414,8 +1416,45 @@ era) and a 14.09×/comparable-to-BC-velocity spike (bug C, isolated).
 (`dynearthsol.cxx`, `bc.cxx`, `geometry.cxx`, `fields.cxx`, `parameters.hpp`).
 Not yet re-validated: whether this remains clean through the vigorous
 localization phase (the `dt_weakening` throughput regime noted in the "Net
-outcome" section above), and whether `PT_relative_tolerance` can now be
-safely loosened below `1e-6` given bugs A-C no longer confound that question.
+outcome" section above).
+
+**Re-validated later, see below: `PT_relative_tolerance` cannot yet be safely
+loosened below `1e-6`** — a smaller version of this exact bug (same node,
+smaller magnitude) recurs at `1e-5`.
+
+### Follow-up: does the bug C fix hold at looser tolerance? No, not fully
+
+Re-ran `gaussian-weakzone-3d-PT` (`has_bc_yield_limit=false`, this session's
+new default) at `PT_relative_tolerance=1e-5` vs. `1e-6`, full-length, and did
+the same domain-wide max-local-contrast scan across every output frame
+(`|v|` at a node / mean `|v|` of its direct 1-ring neighbors), filtering out
+roundoff-floor pairs (`mean_nb <= 1e-13`, ~3 orders of magnitude below the
+physical `vbc` scale) to avoid spurious huge ratios between two near-zero
+values:
+
+| tolerance | max meaningful contrast | where |
+|---|---|---|
+| `1e-6` | 2.50x | frame 0 (`t=0`), node 0 — benign initial-condition geometry |
+| `1e-5` | **8.66x** | frame 13 (`t≈2081 yr`), **node 2519** |
+
+Node 2519 is the *exact same node* as the original bug C report above: same
+`bcflag=16` (bottom-only), same 6 touching elements, all still frozen at
+`plstrain=0.5` (no real yielding at any of them), `vy` (`3.15e-10`)
+dominating the other two components by roughly an order of magnitude over
+its 7 neighbors (`~4-5e-11`) — the identical spatial/physical signature,
+just at a smaller magnitude than the original pre-fix `14.09x` (and far
+below the pre-fix bugs-A/B `50458x`).
+
+**Conclusion:** the 2-ring `mu_i` widening fix reduces but does not
+eliminate the vulnerability — it shrinks the region a stiffer reference
+element could be missed from, but does not guarantee one exists within 2
+rings for every node. At looser tolerance, PT exits with more residual noise
+for this same under-damping mechanism to surface as a visible spike, at the
+same worst-case node (smallest 1-ring patch, bottom boundary, no kinematic
+constraint). **Do not loosen `PT_relative_tolerance` below `1e-6` for this
+class of config** without also widening the `mu_i` search radius further (a
+3-ring search, or a global fallback when 2 rings are too locally uniform) —
+not yet attempted.
 
 ## `dt_bc_yield` retired to opt-in (`has_bc_yield_limit`, default now `false`)
 
@@ -1469,3 +1508,70 @@ specific historical bug.
 favors it for typical use), but keep the flag and code path as an opt-in
 fallback rather than deleting the mechanism, for whoever hits a config where
 PT's inner loop stagnates badly at a velocity-Dirichlet boundary without it.
+
+## PT-vs-DR: a corrected cost model (retracting the GPU claim above)
+
+With `has_bc_yield_limit=false`, PT reaches `gaussian-weakzone-3d-PT`'s
+target (`max_time_in_yr=8000`) in 50 outer steps / 8:41 of compute. Re-ran
+the identical mesh/ic/mat setup in DR mode (`examples/smooth_pt_test/dr_baseline.cfg`):
+10,687 steps / **2:12** of compute (`output_step_interval=1` inflates DR's
+*total* wall-clock to 55:41 via 10,687 separate output writes — 95.9% of it
+is I/O, an artifact of mirroring PT's output cadence onto a run needing
+200x more steps; compute-only time is the fair, cadence-independent number).
+**DR is ~3.9x faster than PT in raw compute** on this benchmark, even after
+removing `dt_bc_yield` (before that fix, PT was ~13.2x slower).
+
+**Why GPU would not fix this — a mechanism, not a hand-wave.** One PT inner
+iteration and one DR step are the same kind of computation: both evaluate
+forces/residuals from the current state and apply a local, explicit update
+across the mesh (PT's inner iteration is literally a damped-wave-equation
+step, per `accelerated-PT.md`'s telegraph-equation derivation — the same
+mathematical character as DR's explicit dynamics, just in pseudo-time). If
+`cost_per_DR_step ≈ cost_per_PT_iteration` (both are ~one sweep over the same
+mesh), total cost reduces to a pure iteration-count comparison:
+
+```
+DR total  = N_DR steps  x cost_per_step
+PT total  = N_PT steps  x K iterations/step  x cost_per_iteration
+```
+
+PT wins only if `N_DR/N_PT > K` — the outer-step-count reduction must exceed
+the average inner-iteration count per step. This ratio is **hardware-
+independent**: GPU parallelism would speed up `cost_per_step` and
+`cost_per_iteration` by roughly the same factor (same kernels, same
+arithmetic intensity, same synchronization pattern), so it does not change
+which side of this inequality wins. The earlier "GPU is where accelerated
+PT's advantage lives" claim (in "Net outcome" above) had no such mechanism
+behind it and does not survive this check.
+
+**Confirming the numbers fit this model.** `N_DR/N_PT = 10687/50 ≈ 214`.
+Backing out `K` from measured compute time (`520.65s / 50 steps = 10.41
+s/step`, against DR's own `0.0123 s/step`) gives `K ≈ 846` average inner
+iterations per outer PT step. `214 < 846` — off by almost exactly the
+measured 3.9x slowdown, i.e. the simple two-parameter model above predicts
+the result quantitatively, not just in direction.
+
+**Where `K ≈ 846` comes from, and why it is not a fixable inefficiency.**
+`accelerated-PT.md`'s own convergence-rate formula is
+`N ≈ ln(1/ε)·L/(π·CFL·h)`. With `L=100 km`, `h≈500 m` (rough weak-zone-
+refined estimate), `CFL≈1`, `ε=1e-6`: `N ≈ 13.8*200/π ≈ 878` — matching the
+empirically-backed-out `K≈846` closely. PT's inner-iteration count is set by
+the *same* domain-crossing scaling that sets DR's own CFL-limited step size;
+accelerated PT does not eliminate that O(L/h) cost, it relocates it from
+"many cheap DR steps" to "one outer step with an O(L/h)-iteration inner
+solve." Accelerated PT's actual theoretical advantage (Räss et al. 2022) is
+against a *naive* (non-accelerated) pseudo-transient solver — O(κ) iterations
+reduced to O(√κ) via optimal damping — not a guarantee against DR.
+
+**When PT should actually win.** The model says: whenever the total simulated
+time requires many more DR steps than the O(L/h)-ish inner-iteration cost PT
+pays *once* per (much larger) outer step. On this benchmark, DR's own step
+count (10,687) is only ~13x its per-outer-step domain-crossing cost (`K≈846`)
+— not enough headroom once PT's outer-step reduction (~214x) is weighed
+against that iteration cost. A benchmark spanning a much longer total
+simulated time relative to the domain's elastic-crossing time (e.g. much
+slower boundary velocity, or a much larger `max_time_in_yr`, without a
+commensurate mesh refinement) should show DR's step count grow roughly
+linearly with total time while PT's `K` stays governed by mesh geometry
+alone — that is the regime where `N_DR/N_PT` should eventually exceed `K`.
+Not yet tested.
