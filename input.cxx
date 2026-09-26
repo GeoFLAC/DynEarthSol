@@ -441,6 +441,8 @@ static void declare_parameters(po::options_description &cfg,
          "over two consecutive windows of this many iterations.  -1 = auto; 0 = disabled.\n")
         ("control.PT_dpls_fraction", po::value<double>(&p.control.PT_dpls_fraction)->default_value(0.1),
          "PT mode only: cap dt so no element traverses more than this fraction of its weakening ramp per step. 0 = disabled.\n")
+        ("control.PT_max_dpls", po::value<double>(&p.control.PT_max_dpls)->default_value(0.0),
+         "PT mode only (experimental): cap dt so the largest per-element plastic-strain increment per step stays near this value, estimated from the previous step; dt may at most double per step. 0 = disabled.\n")
         ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(3*std::sqrt(10.0)/2*M_PI),
          "Accelerated PT numerical Reynolds number Re (Raess et al. 2022, Eq. 31).\n")
         ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.9/std::sqrt((double)NDIMS)),

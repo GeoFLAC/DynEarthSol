@@ -1798,6 +1798,25 @@ double compute_dt_PT(const Param& param, Variables& var)
     double dt_weakening = (check_weakening && steps_min < 1e300) ?
         steps_min * var.dt : std::numeric_limits<double>::max();
 
+    // Plastic-strain-increment limit (experimental, off by default): keep the
+    // largest per-element plastic-strain increment near PT_max_dpls, using
+    // the previous step's increments as the rate estimate. A single large
+    // rate-independent increment spreads yielding around a fault instead of
+    // concentrating it on the fault (doc/pt-boundary-pluck.md, "Step size vs.
+    // strain localization"). Growth is capped at 2x per step so dt cannot
+    // jump back to a large value in one step after being cut.
+    double dt_pls = std::numeric_limits<double>::max();
+    if (param.control.PT_max_dpls > 0 &&
+        (param.mat.rheol_type & MatProps::rh_plastic) && var.dt > 0) {
+        double dp_max = 0;
+        #pragma omp parallel for reduction(max:dp_max) default(none) shared(var)
+        for (int e = 0; e < var.nelem; ++e)
+            dp_max = std::max(dp_max, (*var.delta_plstrain)[e]);
+        dt_pls = 2.0 * var.dt;
+        if (dp_max > 0)
+            dt_pls = std::min(dt_pls, var.dt * param.control.PT_max_dpls / dp_max);
+    }
+
     // Boundary-yield dt limiter (experimental; see doc/pt-boundary-pluck.md,
     // "dt-based fix for boundary-first yielding"). Distinct from the
     // previously-reverted dt_yield: that read back the PT loop's own
@@ -1936,14 +1955,14 @@ double compute_dt_PT(const Param& param, Variables& var)
         }
     }
 
-    double dt = std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion,
-                          dt_weakening, dt_bc_yield})
-                * param.control.dt_fraction;
+    double dt = std::min(std::min({dt_maxwell, dt_advection, dt_diffusion, dt_hydro_diffusion,
+                                   dt_weakening, dt_bc_yield})
+                         * param.control.dt_fraction, dt_pls);
     if (param.debug.dt) {
         std::cout << "step #" << var.steps << "  dt(PT): " << dt_maxwell << " "
                   << dt_advection << " " << dt_diffusion << " "
                   << dt_hydro_diffusion << " " << dt_weakening << " "
-                  << dt_bc_yield << " sec\n";
+                  << dt_bc_yield << " " << dt_pls << " sec\n";
     }
     if (dt <= 0 || dt > 1e300) {
         // no finite physical limit (e.g. zero boundary velocity and no
