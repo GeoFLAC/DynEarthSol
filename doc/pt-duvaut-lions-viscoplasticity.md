@@ -361,3 +361,14 @@ proportional to `depls` (a "radial" projection). Verified directly:
 5. **(Future work, not this change) `tau` calibration** — systematically
    tie `tau` to a physically- or numerically-motivated scale (e.g. a Maxwell
    time, or the DR step size) once the mechanism is validated qualitatively.
+
+## Follow-up: DL in the PT solve, and what it can and cannot do (commit 418eda8)
+
+The DL blend was applied only by the post-PT corrector; `update_stress_PT()`
+now applies the same `(1-w)·trial + w·target` blend (`rh_ep`) so PT balances
+the stored stress. Tested at dt≈2000 yr on `gaussian-weakzone-3d-PT`: at
+η=10^18 Pa·s (τ≈1 yr, the order needed for sharp localization) DL is
+effectively off (weight 0.9995); at η=10^21 Pa·s (τ≈1060 yr) PT matches DR but
+neither localizes. DL therefore cannot reconcile large PT steps with sharp
+localization. Details in "Step size vs. strain localization" at the end of
+`doc/pt-boundary-pluck.md`.

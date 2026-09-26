@@ -1937,3 +1937,104 @@ at small residuals (median ~3e-5, worst ~2e-4). (2) DR's own 2D frame at
 t=8000 yr is suspect: its max plastic strain drops from 0.87 (t=6000) to
 0.117, below the seeded weak zone's 0.5, which looks like its 338 remeshes
 eroding the field; not used as a reference.
+
+## Step size vs. strain localization: why large-`dt` PT cannot beat DR here
+
+With the fixes above, the question from "PT-vs-DR: a corrected cost model"
+becomes: how large can PT's `dt` be while still producing the physically
+required fault (a sharp shear band taking most of the extension)?
+`gaussian-weakzone-3d-PT`, 3D, thermal diffusion off (uniform temperature),
+`dt_fraction` scaling the `dt_advection` limit; all runs to t≈8000 yr;
+configs in `examples/smooth_pt_test/`.
+
+**Intermediate step sizes** (`idt_*.cfg`, piecewise-linear ramp):
+
+| `dt` | steps | compute | max pls | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|---|
+| DR (0.75 yr) | 10,687 | 2:12 | 0.526 | −4.9, −5.5, −4.6, +5.8, +5.2 |
+| ≈160 yr | 50 | 3:14 | 0.522 | −4.7, −4.5, −3.5, +4.6, +4.7 |
+| ≈500 yr | 17 | 3:21 | 0.518 | −4.7, −4.5, −3.5, +4.6, +4.7 |
+| ≈1000 yr | 8 | 1:52 | 0.514 | −4.6, −3.7, −2.5, +4.0, +4.4 |
+| ≈2000 yr | 4 | 1:01 | 0.512 | −4.5, −3.1, −1.8, +3.1, +3.9 |
+
+Before localization (t≈4000 yr) every `dt` matches DR. After it, `dt` ≤
+500 yr reproduces DR's two-block pattern; `dt` ≥ 1000 yr gives a weaker,
+broader shear zone with more elements yielding (16,000–16,500 vs DR's
+14,900). The large-`dt` steps hit `PT_max_iter=5000` without reaching the
+`1e-6` tolerance, and that exit is silent.
+
+**Not the frozen weakening parameters.** With `has_smooth_weakening` (after
+making PT's target use the implicit return map -- commit `418eda8`; before
+that the implicit update reached only the post-PT corrector), dt≈1000 and
+2000 yr give the same result as with frozen parameters (max pls 0.513 vs
+0.514; same velocities). Over one step the plastic-strain increment is small,
+so cohesion and friction barely change within it. The DR reference for these
+runs uses the same smooth law (`dr_smooth.cfg`, `pls_scale = 0.15`).
+
+**Not under-convergence.** Rerunning dt≈2000 yr with `PT_max_iter = 20000`
+(`idts_2000m.cfg`) converges every step to `1e-6` (12,000–20,000
+iterations/step, 6:36 compute) and gives the same answer (max pls 0.5120 vs
+0.5119).
+
+**Restart test: large steps spread yielding even from a localized state.**
+PT restarted from DR's localized t=8000 yr checkpoint (`dr_sm_ck.cfg`,
+`rst_*.cfg`; `dt` ramps up from DR's 0.75 yr over a few steps):
+
+| step | `dt` | new-yield | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|
+| DR start, t=8000 | — | 14,937 | −4.9, −5.6, −4.7, +5.9, +5.3 |
+| PT, t=8027 | 25 yr | 14,979 | −4.8, −4.7, −4.1, +4.7, +4.7 |
+| PT, t=8668 | 641 yr | 15,554 | −4.7, −4.1, −3.0, +3.9, +4.4 |
+| PT, t=9863 | 1,760 yr | 17,046 | −4.6, −4.0, −2.7, +4.2, +4.5 |
+| DR, t=9000 | 0.75 yr | 15,077 | −4.7, −4.6, −4.1, +4.6, +4.6 |
+
+Every step converged to `1e-6`. A 25-yr step keeps the fault sharp; a
+single 1,760-yr increment adds ~2,000 newly yielding elements outside the
+band (DR adds ~140 in 1000 yr) and smears the velocity jump across it.
+
+**Interpretation.** PT's pseudo-time is fictitious: its step sizes
+(`dtau_rho = CFL·h·L·N/(Re·μ_ve·V)`, `θ ≈ Re·CFL·h/((r+2)·L)`) are tuned for
+convergence and are independent of `dt`, and the iterates are not a physical
+trajectory. Each converged PT step is one backward-Euler increment of the
+rate-independent elasto-plastic problem carrying `vbc·dt` of boundary
+displacement. When that increment spans the localization (or continued
+slip on an established fault), the incremental problem admits more than one
+admissible plastic-strain distribution; the converged solution spreads
+yielding around the fault, whereas DR selects the localized branch
+progressively over many small increments. This is a hypothesis consistent
+with all of the above, not a proof.
+
+**Duvaut-Lions does not remove the constraint** (`dl*.cfg`; commit
+`418eda8` makes PT's target apply the DL blend, which previously reached
+only the post-PT corrector):
+
+| t≈8000 yr | max pls | new-yield | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|
+| DR, no DL | 0.525 | 14,937 | −4.9, −5.6, −4.7, +5.9, +5.3 |
+| DR, η=10¹⁸ Pa·s (τ≈1 yr) | 0.523 | 15,037 | −4.9, −5.4, −4.4, +5.7, +5.2 |
+| DR, η=10²¹ Pa·s (τ≈1060 yr) | 0.501 | 19,336 | −4.3, −2.1, −0.05, +1.3, +3.3 |
+| PT dt≈2000, no DL | 0.512 | 16,432 | −4.5, −3.2, −2.0, +3.2, +4.0 |
+| PT dt≈2000, η=10¹⁸ | 0.512 | 16,504 | −4.5, −3.2, −1.9, +3.2, +3.9 |
+| PT dt≈2000, η=10²¹ | 0.502 | 19,689 | −4.4, −2.2, −0.05, +1.5, +3.4 |
+
+(τ = η/G, G = 30 GPa.) At η=10¹⁸ Pa·s -- the order Duretz et al. needed for
+sharp localization -- the DL weight `dt/(τ+dt)` is 0.9995 at dt≈2000 yr, so
+DL is effectively off. At η=10²¹ Pa·s PT at dt≈2000 yr agrees with DR (DL
+makes the result step-size independent once τ ~ `dt`), but neither
+localizes: the regularization strong enough to make a 2000-yr step
+well-posed also suppresses the fault.
+
+**Implications.** If the viscoplastic regularization is to be active at the
+viscosities that allow sharp localization (10¹⁷–10¹⁸ Pa·s, τ ≈ 0.1–1 yr),
+`dt` must resolve τ -- the size of DR's own step here, where PT has no
+chance. Without DL, localization was still reproduced with dt ≲ 500 yr,
+but at those step sizes PT (3:14–3:21) is slower than DR (2:12; 1:12 with
+the smooth law): N_DR/N_PT ≈ 630 at dt≈500 yr, while each PT step costs
+~1,000 DR steps. So for this class of problem -- where the physics requires
+resolving strain localization -- PT's large steps cannot be used through the
+localizing phases, and PT does not beat DR at any step size that gets the
+fault right. Problems where large steps are physically legitimate (e.g.
+slow viscous or visco-elastic flow with little localization) remain
+untested and are where PT could still pay off. A `dt` limiter based on the
+per-step plastic-strain increment (shrinking `dt` only in localizing phases)
+is an untested option.

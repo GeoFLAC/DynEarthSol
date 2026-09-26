@@ -161,3 +161,15 @@ itself (100% of a step's imposed boundary velocity absorbed by one
 boundary-adjacent element, zero elastic propagation into the interior) or
 address the underlying PT inner-loop stability concern it exists to avoid —
 neither is a weakening-law problem.
+
+## Follow-up: the implicit update now reaches the PT solve (commit 418eda8)
+
+The implicit return map was applied only by the post-PT corrector
+(`update_stress()`); `update_stress_PT()` built PT's target with the ordinary
+return map at start-of-step parameters, so PT converged against a stress
+different from the one stored. The target now uses
+`elasto_plastic{,2d}_implicit()` when `has_smooth_weakening` is on. Even so,
+it does not fix the reduced localization of large-`dt` PT steps -- the
+plastic-strain increment per step is too small for the parameters to change
+much within a step. See "Step size vs. strain localization" at the end of
+`doc/pt-boundary-pluck.md`.
