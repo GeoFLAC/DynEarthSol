@@ -450,11 +450,11 @@ character of the failure (oscillation → convergence) rather than just
 shifting a stagnation-iteration count or a residual magnitude within the
 same oscillating regime.
 
-> **Superseded (3D).** This blend has the wrong fixed point: it converges to
-> a stress about halfway between the yield surface and the elastic trial,
+> **Superseded.** This blend has the wrong fixed point: it converges to a
+> stress about halfway between the yield surface and the elastic trial,
 > i.e. spurious post-yield hardening that suppresses localization. Replaced
-> in 3D by relaxing toward the return-mapped target; see "PT did not
-> localize" at the end of this document. Plane strain still uses it.
+> (3D and plane strain) by relaxing toward the return-mapped target; see
+> "PT did not localize" near the end of this document.
 
 (Run hit a different MMG3D crash after this step —
 `MMG3D_consistency_error_message` — same unrelated meshing-library
@@ -1804,7 +1804,52 @@ remaining lag is expected from a single 7486-yr step from rest: cohesion and
 friction are frozen at their start-of-step values, so the softening feedback
 that drives localization only acts on the next step.
 
-**Open.** (1) Plane strain still uses the biased blend. (2) An intermediate
-step size (500–2000 yr) is the test that decides whether PT can stay
-accurate while beating DR. (3) Both large-`dt` steps still end at
-`PT_max_iter`.
+**Open.** (1) Plane strain still uses the biased blend -- fixed, see next
+section. (2) An intermediate step size (500–2000 yr) is the test that
+decides whether PT can stay accurate while beating DR. (3) Both large-`dt`
+steps still end at `PT_max_iter`.
+
+### Plane strain
+
+**Change** (`rheology.cxx`, `update_stress_PT()`). Plane strain now uses
+the same scheme: the target is `elasto_plastic2d()` applied to `τ_old` and
+the start-of-step out-of-plane stress `stressyy` with the full strain
+increment, and the in-plane stress relaxes toward it. With both paths on the
+new scheme, the old damped-projection blend is removed.
+
+This also fixes a second, pre-existing plane-strain bug. The old blend
+modified `stressyy` in place on every PT iteration, but only `stress` is
+restored from `stress_old` before the post-PT corrector
+(`copy_stress_PT()` does not touch `stressyy`), so the corrector applied the
+physical update on top of an out-of-plane stress PT had already changed.
+`stressyy` is now read, never written, during PT iterations, so the
+corrector starts from its start-of-step value.
+
+**Test** (`examples/ps_test/`, `dynearthsol2d` built with `make ndims=2`).
+`tests/functional/2d-ep-irregular.cfg` with `is_plane_strain = yes`: strong
+softening (cohesion 44→0.4 MPa and friction 30°→2° over plastic strain
+0–0.1) and a seeded weak zone. `inertial_scaling = 1e4`,
+`has_thermal_diffusion = no` (uniform temperature, a no-op),
+`max_time_in_yr = 8000`; PT runs use `dt_fraction = 0.02` (first step
+dt≈186 yr). DR (`ps_dr.cfg`) runs 190,416 steps to 8000 yr.
+
+| t≈2000 yr | max pls | new-yield elements | top-30 pls at x | `vx` at x=5,25,45,65,85 km (1e-9 m/s) |
+|---|---|---|---|---|
+| DR | 0.529 | 118 | 43–52 km | −1.0, −1.2, −0.69, +1.3, +1.1 |
+| **PT new** | **0.538** | **116** | **43–52 km** | **−1.0, −1.1, −0.63, +1.2, +1.1** |
+| PT old | 0.505 | 178 | 29–57 km | −0.91, −0.47, −0.11, +0.34, +0.71 |
+
+PT now localizes with DR (two blocks separated at the weak zone, same
+location and plastic-strain statistics); old PT was still spread out. The
+3D path is unchanged apart from roundoff (fields from the 3D benchmark
+differ by ~1e-10 relative from the previous build).
+
+**Open: PT fails right after a remesh once the model has localized.** Both
+PT runs crash before 8000 yr with an MMG2D remeshing failure (`DES exit
+41`): the new one at t≈3577 yr, the old one at t≈6800 yr (it localizes
+later). In the new run the sequence is a remesh, then a PT solve that
+stagnates at `residual/residual_0 = 0.117` (essentially unconverged), a
+`dt` collapse to 0.0065 yr, and a failed remesh on the next step. DR gets
+through the same localization to 8000 yr. So the trigger is a PT solve
+failing right after a remesh in a localized state, not the plane-strain
+change itself; not yet investigated.

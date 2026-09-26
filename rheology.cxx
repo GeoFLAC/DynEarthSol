@@ -1204,15 +1204,16 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
     nvtxRangePush(__FUNCTION__);
 #endif
     // Räss et al. (2022), Sec. 2.4, Eq. 36 — PT relaxation of the physical
-    // elastic constitutive update, followed by a plastic return map.
+    // constitutive update.
     //
-    // The physical (elastic trial) target for this time step is
+    // The physical target for this time step is the elastic trial
     //   τ* = τ_old + C : ε̇ Δt,   C:ε̇Δt = λ Δt tr(ε̇) I + 2 G Δt ε̇,
-    // and each PT iteration relaxes the current stress toward it:
+    // return-mapped onto the yield surface (Mohr-Coulomb + tension cutoff)
+    // for plastic rheologies, and each PT iteration relaxes the current
+    // stress toward it:
     //   τ^{k+1} = (τ^k + θ_e τ*) / (1 + θ_e),   θ_e = G̃Δτ|_e / (G_e Δt),
-    // then projects τ^{k+1} back onto the yield surface (Mohr-Coulomb +
-    // tension cutoff) so the converged state satisfies both equilibrium and
-    // the yield condition.
+    // so the converged state satisfies both equilibrium and the yield
+    // condition.
     //
     // θ_e must be built from the NUMERICAL modulus G̃, not the physical one:
     // G̃Δτ|_e = Re·CFL·h_e·μ^ve_e/((r+2)·L) (var.PT_Gdtau_e, local per-element
@@ -1222,17 +1223,15 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
     // Applying the full physical increment C:ε̇Δt every PT iteration (as
     // update_stress() does) violates the pseudo-wave CFL by ~L/h → divergence.
     //
-    // The projection is a PURE return map (zero strain increment) and does
-    // NOT accumulate plastic strain: strain/plstrain/delta_plstrain
-    // bookkeeping is done once per time step by the post-PT corrector call
-    // of update_stress() with the converged velocity (see the main loop).
+    // The return map here only builds the target and does NOT accumulate
+    // plastic strain: strain/plstrain/delta_plstrain bookkeeping is done
+    // once per time step by the post-PT corrector call of update_stress()
+    // with the converged velocity (see the main loop).
     //
     // NOTE: viscous (Maxwell) relaxation and rate-and-state friction are not
     // applied during the PT iterations.
 
     const double dt = var.dt;
-    // The plastic return map (damped by the w0/w1 blend below) is applied on
-    // every PT iteration for plastic, non-RSF rheologies.
     const bool apply_plastic = (param.mat.rheol_type & MatProps::rh_plastic)
                             && !(param.mat.rheol_type & MatProps::rh_rsf);
 
@@ -1253,7 +1252,7 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
 
         TensorAccessor s = stress[e];
 
-        if (apply_plastic && !var.mat->is_plane_strain) {
+        if (apply_plastic) {
             // Relax toward the return-mapped physical target P(τ_old + C:ε̇Δt)
             // -- the same update the post-PT corrector applies -- so the
             // converged stress lies on the yield surface. Projecting the
@@ -1271,8 +1270,18 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
                                    amc, anphi, anpsi, hardn, ten_max);
             double depls = 0, dpp = 0;
             int failure_mode;
-            elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
-                           de, depls, tgt, failure_mode, false, dpp);
+            if (var.mat->is_plane_strain) {
+                // stressyy is left at its start-of-step value throughout the
+                // PT loop: it enters only the target here, and the corrector
+                // updates it once from that same value.
+                double syy = (*var.stressyy)[e];
+                elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                                 de, depls, tgt, syy, failure_mode, false, dpp);
+            }
+            else {
+                elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                               de, depls, tgt, failure_mode, false, dpp);
+            }
             #pragma acc loop seq
             for (int i = 0; i < NSTR; ++i)
                 s[i] = w0 * s[i] + w1 * tgt[i];
@@ -1291,49 +1300,6 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
                             + 2 * Gdt * (*var.strain_rate)[e][i]
                             + (i < NDIMS ? lambda * dev : 0.0);
             s[i] = w0 * s[i] + w1 * target;
-        }
-
-        if (apply_plastic) {
-            // Return map with zero strain increment: elasto_plastic() adds
-            // C:de = 0 to the (relaxed) stress and projects it back to the
-            // yield surface if it violates yield; depls is discarded.
-            double amc, anphi, anpsi, hardn, ten_max;
-            var.mat->plastic_props(e, (*var.plstrain)[e],
-                                   amc, anphi, anpsi, hardn, ten_max);
-            const double de0[NSTR] = {0};
-            double depls = 0, dpp = 0;
-            int failure_mode;
-
-            // Damp the return-map correction itself with the same theta
-            // used for the elastic relaxation above (experimental; see
-            // doc/pt-boundary-pluck.md). Left undamped, elasto_plastic()
-            // snaps any yield violation back to the yield surface in
-            // full, every single iteration, regardless of theta -- an
-            // instantaneous correction riding on top of an intentionally
-            // damped elastic build-up. Treating the fully-projected
-            // stress as another "target" approached at the same rate
-            // keeps the plastic correction consistent with the rest of
-            // the PT scheme's pseudo-inertia.
-            double s_pre[NSTR];
-            #pragma acc loop seq
-            for (int i = 0; i < NSTR; ++i) s_pre[i] = s[i];
-
-            if (var.mat->is_plane_strain) {
-                double& syy = (*var.stressyy)[e];
-                double syy_pre = syy;
-                elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
-                                 de0, depls, s, syy, failure_mode,
-                                 false, dpp);
-                syy = w0 * syy_pre + w1 * syy;
-            }
-            else {
-                elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
-                               de0, depls, s, failure_mode,
-                               false, dpp);
-            }
-            #pragma acc loop seq
-            for (int i = 0; i < NSTR; ++i)
-                s[i] = w0 * s_pre[i] + w1 * s[i];
         }
     }
 
