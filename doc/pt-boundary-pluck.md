@@ -2037,4 +2037,71 @@ fault right. Problems where large steps are physically legitimate (e.g.
 slow viscous or visco-elastic flow with little localization) remain
 untested and are where PT could still pay off. A `dt` limiter based on the
 per-step plastic-strain increment (shrinking `dt` only in localizing phases)
-is an untested option.
+was tried next.
+
+### A plastic-strain-increment `dt` limiter (`PT_max_dpls`)
+
+**Implementation** (`compute_dt_PT()`, commit `a64e6a1`; off by default):
+`dt_pls = dt_prev · PT_max_dpls / max_e Δε_p`, using the previous step's
+largest per-element plastic-strain increment as the rate estimate, with `dt`
+allowed at most to double per step so it cannot jump back to a large value
+after being cut. Applied after `dt_fraction`; `debug.dt` prints it as a
+seventh column.
+
+**Test** (`dpl_*.cfg`: piecewise-linear ramp, dt ceiling ≈2000 yr,
+`PT_max_iter = 5000`), to t≈8000 yr:
+
+| run | compute | steps | max pls | new-yield | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|---|---|
+| DR | 2:12 | 10,687 | 0.526 | 14,876 | −4.9, −5.5, −4.6, +5.8, +5.2 |
+| **PT, `PT_max_dpls = 1e-3`** | **2:28** | 21 | **0.525** | **14,953** | −4.7, −4.7, −3.8, +4.7, +4.7 |
+| PT, fixed dt≈160 yr | 3:14 | 50 | 0.522 | 14,896 | −4.7, −4.5, −3.5, +4.6, +4.7 |
+| PT, fixed dt≈500 yr | 3:21 | 17 | 0.518 | 15,371 | −4.7, −4.5, −3.5, +4.6, +4.7 |
+| PT, fixed dt≈2000 yr | 1:01 | 4 | 0.512 | 16,526 | −4.5, −3.1, −1.8, +3.1, +3.9 |
+
+With 1e-3 the run takes three 2021-yr steps while plastic strain is small,
+then `dt` drops (808, 228, 96 yr) to ~35–70 yr through localization; the
+large step across the onset leaves no lasting damage. It is the closest PT
+match to DR so far and cheaper than any fixed-`dt` PT run that gets the
+fault right. With 3e-3 the per-step increment never reached the target, so
+the run reproduced fixed dt≈2000 yr.
+
+It is still ~12% slower than DR, and that margin comes from the large steps
+before localization. Once the fault is slipping, a ~60-yr PT step costs
+~5.7 s, while DR covers 60 yr in ~80 steps at 0.012 s (~1 s): during
+sustained slip PT is ~6x slower than DR, so a run dominated by active
+faulting would favor DR further.
+
+## Conclusion: DR is the more efficient solver when strain localization must be modeled
+
+After fixing the boundary-velocity bug, the damped-return-map fixed point,
+the post-remesh instability, and making PT's target consistent with the
+stored stress, PT reproduces DR's physics -- but on this benchmark it never
+beats DR once the fault must be resolved:
+
+- **Localization has to be resolved in time.** Converged large
+  rate-independent increments (≳ 600 yr here) spread yielding around the
+  fault, even when started from a localized state; neither self-consistent
+  weakening parameters nor tighter convergence changes this. Duvaut-Lions
+  regularization makes the result step-size independent only when its
+  relaxation time is comparable to `dt`, and at such viscosities (~10²¹ Pa·s
+  for dt≈2000 yr) nothing localizes; at the viscosities that allow sharp
+  localization (10¹⁷–10¹⁸ Pa·s, τ≈0.1–1 yr) it is inactive at large `dt`.
+- **The cost is structural.** PT wins only if `N_DR/N_PT` exceeds its
+  iterations per step (`K`), and one PT iteration costs about one DR step.
+  Resolving localization forces `dt` down to tens–hundreds of years, where
+  `K` (thousands) exceeds the step saving. This is an iteration-count
+  comparison, so faster hardware (e.g. GPU) speeds up both about equally and
+  does not change the outcome.
+- **Best PT result:** the plastic-strain-increment limiter (2:28 vs DR's
+  2:12), and only because of large steps before localization; during
+  sustained slip PT is several times slower per unit model time.
+
+**Scope and caveats.** One benchmark (`gaussian-weakzone-3d-PT`), one mesh
+resolution, CPU build. A problem where localization develops slowly relative
+to the loading, or occupies a small part of the run, would shift the balance
+toward PT. PT's per-step iteration count was not optimized (e.g. by
+preconditioning or multigrid-style acceleration); reducing it is the lever
+that could change the conclusion. Problems where large steps are physically
+legitimate -- slow viscous or visco-elastic flow with little localization --
+were not tested and are where PT could still pay off.
