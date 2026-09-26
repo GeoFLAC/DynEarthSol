@@ -5,14 +5,52 @@ All notable changes to DynEarthSol are documented here. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries are grouped by theme rather than by pull request; each references the
-pull request that carries the detail. Changes with no effect on users of the
-code -- CI workflows, repository metadata, release plumbing -- are not listed.
+pull request that carries the detail. An entry is one or two sentences on what
+a user of the code notices -- a parameter, a result that moved, a build that
+now works -- not on how; mechanism and evidence stay in the pull request.
+Changes with no effect on users of the code -- CI workflows, repository
+metadata, release plumbing -- are not listed.
 For a release, the full auto-generated list of merged pull requests is in its
 [GitHub release notes](https://github.com/GeoFLAC/DynEarthSol/releases).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
+  environment, gospl_extensions and a 3D executable ready to run ([#96]).
+- Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
+  with commit-message guidelines and an AI-usage policy, pull request and issue
+  templates, and `AGENTS.md` for coding assistants ([#96]).
+- Frames embed their step, counts and time, so a run restarts and is read
+  without its `.info` index; `utils/recreate_info.py` rebuilds the index ([#96]).
+
+### Changed
+
+- `README.md` matches the current build and tools again: several statements
+  were stale, among them exported `BOOST_ROOT_DIR` being ignored, a default
+  input file, and MMG built from a hand clone rather than the submodule ([#96]).
+- The code is called DynEarthSol and DES in the docs and comments, as the
+  repository, `CITATION.cff` and the v2.0 paper already do; the 3D suffix
+  predates the 2D executable ([#96]).
+- `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
+  run instead of 12047 ([#96]).
+
+### Fixed
+
+- The thermal mass was built before the initial temperature was set, so thermal
+  diffusion ran 5.4 % slow on hot silicate ([#96]).
+- A NaN velocity stops the run with exit code 50 instead of writing frames until
+  the mesh dies ([#96]).
+- Ctrl-C stops a GoSPL-coupled run; Python's SIGINT handler had swallowed it
+  ([#96]).
+- `openmp=0` links on glibc ([#96]).
+- The MMG build ignores an exported `CFLAGS`, which could change the remeshed
+  mesh ([#96]).
+- HDF5 file locking is off, so ParaView can open a frame while a run writes it.
+  Two runs sharing a `modelname` are no longer refused ([#96]).
+- Every `mat.mattype_*` is range-checked against `num_materials` at startup;
+  an out-of-range index used to read past the per-material arrays ([#96]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -175,3 +213,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#91]: https://github.com/GeoFLAC/DynEarthSol/pull/91
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
+[#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96

@@ -11,12 +11,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 ARG TZ=UTC
 ARG CXXVERSION=gcc-11
+# GOSPL=1 adds a conda `gospl` environment and gospl_extensions, and builds the
+# 3D executable with use_gospl=1 (GoSPL coupling is 3D only).
+ARG GOSPL=0
 # Update package list and install necessary software
 RUN apt-get update && apt-get install -y \
     build-essential \
     libboost-program-options-dev \
     python3 \
     python3-pip \
+    git \
+    curl \
+    ca-certificates \
     vim \
     sudo
 
@@ -63,11 +69,26 @@ RUN adduser --disabled-password --gecos '' --uid $USER_ID $USER \
 
 # Set $HOME
 USER $USER
-ENV HOME /home/$USER
-ENV USER $USER
+ENV HOME=/home/$USER
+ENV USER=$USER
 
 # pip install requirements
 RUN pip install numpy scipy
+
+# GoSPL stack: Miniforge, the gospl env (geodels channel, Python 3.11 to match
+# the Makefile default), and gospl_extensions built against that env. Kept
+# before the source copy so a code change does not rebuild this layer.
+RUN if [ "$GOSPL" = "1" ]; then \
+      curl -fsSL "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh" -o /tmp/miniforge.sh \
+      && bash /tmp/miniforge.sh -b -p $HOME/miniforge3 && rm /tmp/miniforge.sh \
+      && $HOME/miniforge3/bin/mamba create -y -n gospl -c geodels -c conda-forge gospl python=3.11 \
+      && $HOME/miniforge3/bin/conda clean -afy \
+      && git clone --depth 1 https://github.com/GeoFLAC/gospl_extensions.git $HOME/opt/gospl_extensions \
+      && cd $HOME/opt/gospl_extensions/cpp_interface \
+      && $HOME/miniforge3/bin/conda run -n gospl make install-local \
+      && printf '. %s/miniforge3/etc/profile.d/conda.sh\nconda activate gospl\n' "$HOME" | sudo tee /etc/profile.d/gospl.sh > /dev/null \
+      && printf '. %s/miniforge3/etc/profile.d/conda.sh\nconda activate gospl\n' "$HOME" >> ~/.bashrc; \
+    fi
 
 # Clone the repository
 COPY --chown=$USER:$USER . $HOME/DynEarthSol
@@ -76,7 +97,10 @@ COPY --chown=$USER:$USER . $HOME/DynEarthSol
 WORKDIR $HOME/DynEarthSol
 ARG NDIMS=2
 RUN make ndims=$NDIMS cleanall \
-    && if [ "$CXXVERSION" = "clang-14" ]; then \
+    && if [ "$GOSPL" = "1" ]; then \
+      make ndims=3 use_gospl=1 -j4 \
+        CONDA_ENV_PATH=$HOME/miniforge3/envs/gospl PYTHON_VERSION=3.11; \
+    elif [ "$CXXVERSION" = "clang-14" ]; then \
       make ndims=$NDIMS -j4 CXX=clang++;\
     else \
       make ndims=$NDIMS -j4; \

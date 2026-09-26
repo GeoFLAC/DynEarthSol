@@ -1,6 +1,6 @@
 # -*- Makefile -*-
 #
-# Makefile for DynEarthSol3D
+# Makefile for DynEarthSol
 #
 # Author: Eh Tan <tan2@earth.sinica.edu.tw>
 #
@@ -833,6 +833,14 @@ endif
 # Enable Array2D structure of Array
 CXXFLAGS += -DSOA
 
+## nanoflann uses std::thread, which needs pthread on glibc. openmp=1 gets it for
+## free from -fopenmp; openmp=0 linked nothing and failed with an undefined
+## pthread_create. Harmless where libc already provides it.
+ifneq ($(strip $(openmp)), 1)
+	CXXFLAGS += -pthread
+	LDFLAGS += -pthread
+endif
+
 ## Action
 
 .PHONY: all clean take-snapshot prepare build check-deps config FORCE
@@ -1086,9 +1094,11 @@ ifeq ($(usemmg), 1)
 	fi
 
 	@mkdir -p mmg/build
+	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
+	@# from the environment on the FIRST configure, so an exported one is baked in.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && LDFLAGS="" CXXFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
 	fi
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		$(MAKE) -C mmg/build; \

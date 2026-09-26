@@ -4,6 +4,7 @@
 
 #include "gospl_extensions.h"
 #include <Python.h>
+#include <csignal>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
@@ -34,7 +35,12 @@ bool GoSPLDriver::init_python() {
         std::cerr << "Failed to initialize gospl extensions" << std::endl;
         return false;
     }
-    
+
+    // Py_Initialize() installs Python's SIGINT handler, which only raises
+    // KeyboardInterrupt the next time bytecode runs -- never, between coupling
+    // events -- so Ctrl-C was swallowed. Restore the default so it kills the run.
+    std::signal(SIGINT, SIG_DFL);
+
     python_initialized = true;
     std::cout << "GoSPL Driver: Python/gospl_extensions initialized" << std::endl;
     return true;

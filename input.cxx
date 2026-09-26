@@ -330,10 +330,6 @@ static void declare_parameters(po::options_description &cfg,
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
          "Any other value is rejected at startup.\n")
-//        ("control.surface_pressure_correction", po::value<bool>(&p.control.surface_pressure_correction)->default_value(false),
-//         "Correct the pressure of surface elements"
-//         "which has positive stress 1st invariant"
-//         "and force the 1st invariant to zero.")
         ("control.is_using_mixed_stress", po::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
 
@@ -936,8 +932,6 @@ static void declare_parameters(po::options_description &cfg,
     cfg.add_options()
         ("debug.dt", po::value<bool>(&p.debug.dt)->default_value(false),
          "Print all dt criteria")
-//        ("debug.has_two_layers_for", po::value<bool>(&p.debug.has_two_layers_for)->default_value(true),
-//         "Use two layers of for elem to avoid race condition.")
         ;
 }
 
@@ -1498,13 +1492,26 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "mat.num_materials must be greater than 0.");
         }
 
-        // mattype_ref indexes the per-material arrays directly in ref_pressure(),
-        // compute_dt() and compute_mass(), so it must be a valid material.
-        if (p.mat.mattype_ref < 0 || p.mat.mattype_ref >= p.mat.nmat) {
-            std::cerr << "Error: mat.mattype_ref (" << p.mat.mattype_ref
-                      << ") must be within [0, mat.num_materials-1] = [0, "
-                      << p.mat.nmat - 1 << "].\n";
-            die(EXIT_CONFIG_VALUE);
+        // Every mat.mattype_* indexes the per-material arrays (rho0, therm_cond,
+        // elemmarkers[e], ...) unchecked, so each must name an existing material.
+        const std::pair<const char*, int> mattypes[] = {
+            {"mattype_ref", p.mat.mattype_ref},
+            {"mattype_mantle", p.mat.mattype_mantle},
+            {"mattype_depleted_mantle", p.mat.mattype_depleted_mantle},
+            {"mattype_partial_melting_mantle", p.mat.mattype_partial_melting_mantle},
+            {"mattype_crust", p.mat.mattype_crust},
+            {"mattype_sed", p.mat.mattype_sed},
+            {"mattype_oceanic_crust", p.mat.mattype_oceanic_crust},
+            {"mattype_mor_extrusion", p.mat.mattype_mor_extrusion},
+            {"mattype_asthenosphere", p.mat.mattype_asthenosphere},
+        };
+        for (const auto& m : mattypes) {
+            if (m.second < 0 || m.second >= p.mat.nmat) {
+                std::cerr << "Error: mat." << m.first << " (" << m.second
+                          << ") must be within [0, mat.num_materials-1] = [0, "
+                          << p.mat.nmat - 1 << "].\n";
+                die(EXIT_CONFIG_VALUE);
+            }
         }
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {

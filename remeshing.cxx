@@ -2403,7 +2403,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // int *nsegment = new_segment.data();
     // int *nsegflag = new_segflag.data();
 
-    // 2) Pupolate DES3D mesh-defining arrays
+    // 2) Pupolate DES mesh-defining arrays
     //   a) Vertex recovering
     for (int i = 0; i < var.nnode; ++i) {
         if ( MMG3D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), &(new_coord[i][2]), NULL, NULL, NULL) != 1 )
@@ -2429,7 +2429,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     }     
     std::cerr << "New segments populated\n";
 
-    //   d) Let the DES3D arrays point to the newly populated data 
+    //   d) Let the DES arrays point to the newly populated data 
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
@@ -2651,7 +2651,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     segflag_t new_segflag( var.nseg );
     std::cerr << "Resized arrays\n";
 
-    // 2) Pupolate DES3D mesh-defining arrays
+    // 2) Pupolate DES mesh-defining arrays
     //   a) Vertexes recovering
     for (int i = 0; i < var.nnode; ++i) {
         if ( MMG2D_Get_vertex(mmgMesh, &(new_coord[i][0]), &(new_coord[i][1]), NULL, NULL, NULL) != 1 )
@@ -2677,7 +2677,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     }
     std::cerr << "New segments populated\n";
 
-    //   d) Let the DES3D arrays point to the newly populated data 
+    //   d) Let the DES arrays point to the newly populated data 
     var.coord->steal_ref( new_coord );
     var.connectivity->steal_ref( new_connectivity );
     var.segment->steal_ref( new_segment );
@@ -2734,6 +2734,11 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 
     init_elem_size_n.resize(var.nnode);
     std::fill_n(init_elem_size_n.begin(), var.nnode, 0);
+
+    // var.volume_n is zero-filled until compute_mass writes it; dividing by that silently
+    // yields inf for every node and poisons the frozen MMG metric base.
+    if (var.volume_n->empty() || (*var.volume_n)[0] <= 0.0)
+        die(EXIT_INTERNAL_ASSERT, "initialize_elem_size_n() ran before compute_mass()");
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, init_elem_size_n)

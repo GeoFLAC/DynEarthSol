@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
-'''Convert the binary output of DynEarthSol3D to VTK files.
+'''Convert the binary output of DynEarthSol to VTK files.
 
 usage: 2vtk.py [-a -c -m -p -t -h] modelname [start [end [delta]]]]
 
