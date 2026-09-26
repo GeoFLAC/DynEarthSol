@@ -25,10 +25,11 @@ If 'end' is not provided or is -1, end at the last output.
 A restarted model's series is completed from its .manifest, up the chain of runs
 it restarted from; a parent with no frame here before the restart frame (only
 the restart frame copied, say) ends the chain with a warning. A parent's frames
-are linked here under this model's name from the .vtu/.vtp files converting it
-writes; -g converts them there first, -copy writes copies here, and a frame
-with no .vtu to link is skipped with a warning. 'start' and 'end' index the
-whole series; -u updates only the model's own frames.
+are linked here under this model's name from the .vtu/.vtp (-u -c: .vtkhdf)
+files converting it writes; -g converts them there first, -copy writes copies
+here, and a frame with no file to link is skipped with a warning. 'start' and
+'end' index the whole series. In place, -u links nothing, as DES truncates
+through a link: it updates a parent's own frames only with -g.
 '''
 
 from __future__ import print_function, unicode_literals
@@ -446,7 +447,7 @@ def process_vtkhdf_update(args):
         # Use the standard naming convention: prefix.suffix.vtkhdf
         target_filename = '{0}.{1}.vtkhdf'.format(output_prefix, suffix)
         if os.path.abspath(src_filename) != os.path.abspath(target_filename):
-            shutil.copy2(src_filename, target_filename)
+            shutil.copy2(src_filename, unlinked(target_filename))
     else:
         # In-place update
         target_filename = src_filename
@@ -584,16 +585,18 @@ def announce_model(batch, ndone, prefix):
 
 def link_frames(batch, prefix):
     '''Give prefix's names to the files a parent's batch has under its own prefix;
-    returns the frames without a .vtu there to link.'''
+    returns the frames without a .vtu (-u: .vtkhdf) there to link.'''
     missing = []
     if batch[0][1] == prefix:
         return missing
+    names = (('{0}.{1}.vtkhdf',) if update_vtkhdf else
+             ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp'))
     for des, own, i in batch:
         suffix = '{0:0=6}'.format(des.frames[i])
-        if not os.path.exists('{0}.{1}.vtu'.format(own, suffix)):
+        if not os.path.exists(names[0].format(own, suffix)):
             missing.append(des.frames[i])
             continue
-        for name in ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp'):
+        for name in names:
             target, link = name.format(own, suffix), name.format(prefix, suffix)
             if not os.path.exists(target):   # a frame without markers has no .vtp
                 continue
@@ -629,11 +632,12 @@ def main(modelname, start, end, delta):
         end = len(frames)
 
     selected = series[start:end:delta]
-    if update_vtkhdf:
-        # -u rewrites .vtkhdf frames, which are not linked: it keeps to the model's own
+    # in place, each frame is updated in its own file and nothing is linked (see the usage)
+    in_place = update_vtkhdf and not output_in_cwd
+    if in_place and not generate_parent_frames:
         selected = [(d, i) for d, i in selected if d.modelname == modelname]
-    # a parent's frames go under its own prefix, to be linked as ours, unless -copy
-    args_list = [(d, prefix_of(d.modelname) if link_parent_frames else prefix, i)
+    # a parent's frames go under its own prefix, to be linked as ours, unless in place or -copy
+    args_list = [(d, prefix if in_place or not link_parent_frames else prefix_of(d.modelname), i)
                  for d, i in selected]
     # one batch per model, in series order, so the model being worked on can be named
     batches = [list(b) for _, b in itertools.groupby(args_list, key=lambda args: args[0])]
@@ -648,7 +652,8 @@ def main(modelname, start, end, delta):
             print(f'Linked {len(batch) - len(missing)} of {len(batch)} frames of {des.modelname} '
                   f'as {prefix}.*', file=sys.stderr)
             if missing:
-                print(f'Warning: {len(missing)} frames ({missing[0]} to {missing[-1]}) have no .vtu '
+                kind = '.vtkhdf' if update_vtkhdf else '.vtu'
+                print(f'Warning: {len(missing)} frames ({missing[0]} to {missing[-1]}) have no {kind} '
                       f'there to link; convert {des.modelname} or pass -g.', file=sys.stderr)
         batches = [b for b in batches if b[0][1] == prefix]
 
