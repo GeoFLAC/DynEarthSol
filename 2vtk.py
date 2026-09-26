@@ -29,12 +29,13 @@ are linked here under this model's name from the .vtu/.vtp (-u -c: .vtkhdf)
 files converting it writes; -g converts them there first, -copy writes copies
 here, and a frame with no file to link is skipped with a warning. 'start' and
 'end' index the whole series. In place, -u links nothing, as DES truncates
-through a link: it updates a parent's own frames only with -g.
+through a link: it updates a parent's own frames only with -g, which also lists
+the series in modelname.vtkhdf.series for ParaView.
 '''
 
 from __future__ import print_function, unicode_literals
 import sys, os, shutil
-import base64, zlib, glob, itertools
+import base64, zlib, glob, itertools, json
 import numpy as np
 
 # Disable HDF5 file locking to avoid BlockingIOError on some filesystems
@@ -607,6 +608,25 @@ def link_frames(batch, prefix):
     return missing
 
 
+def write_series_file(series, modelname):
+    '''List every frame of the series, by its .save file, in modelname.vtkhdf.series:
+    names relative to that file, times each frame's time_yr (the .info time keeps 7 digits).'''
+    filename = modelname + '.vtkhdf.series'
+    here = os.path.realpath(os.path.dirname(filename))
+    files = []
+    for des, i in series:
+        fn = des.get_fn(des.frames[i])
+        if not fn.endswith('.vtkhdf'):   # -u skips des-binary frames, so there is no series to list
+            print(f'Warning: {fn} is not a .vtkhdf frame; {filename} is not written.', file=sys.stderr)
+            return
+        files.append({'name': os.path.relpath(os.path.realpath(fn), here),
+                      'time': des.read_field(des.frames[i], 'time_yr')[0]})
+    with open(unlinked(filename), 'w') as f:
+        json.dump({'file-series-version': '1.0', 'files': files}, f, indent=1)
+    nrun = len({des.modelname for des, _ in series})
+    print(f'Listed the {len(files)} frames of {nrun} runs in {filename}.', file=sys.stderr)
+
+
 def convert_batches(batches, prefix, target_func, imap):
     '''Convert the batches through imap, one model at a time, linking each parent's as ours.'''
     nout = sum(len(b) for b in batches)
@@ -656,6 +676,9 @@ def main(modelname, start, end, delta):
                 print(f'Warning: {len(missing)} frames ({missing[0]} to {missing[-1]}) have no {kind} '
                       f'there to link; convert {des.modelname} or pass -g.', file=sys.stderr)
         batches = [b for b in batches if b[0][1] == prefix]
+    # in place, -g lists the series for ParaView instead of linking
+    if in_place and generate_parent_frames and any(d.modelname != modelname for d, _ in series):
+        write_series_file(series, modelname)
 
     # frame numbers, not series positions: a parent's linked frames are not converted
     converted = [d.frames[i] for batch in batches for d, _, i in batch]
