@@ -331,31 +331,56 @@ void refresh_rsf_friction(const Param& param, Variables& var,
 
 #pragma acc routine seq
 template <typename T>
-static void elastic(double bulkm, double shearm, const double* de, T s)
+static void elastic(double bulkm, double shearm, const double* de, T s, double& syy)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
     double dev = trace(de);
+    double volumetric_normal_increment = lambda * dev;
 
     for (int i=0; i<NDIMS; ++i)
-        s[i] += 2 * shearm * de[i] + lambda * dev;
+        s[i] += 2 * shearm * de[i] + volumetric_normal_increment;
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] += 2 * shearm * de[i];
+
+    // Plane strain has zero out-of-plane strain.
+    syy += volumetric_normal_increment;
 }
 
 #pragma acc routine seq
 template <typename T>
-static void elastic_effective(double bulkm, double shearm, const double* de, T s,  double &dpp)
+static void elastic(double bulkm, double shearm, const double* de, T s)
+{
+    double unused_syy = 0;
+    elastic(bulkm, shearm, de, s, unused_syy);
+}
+
+#pragma acc routine seq
+template <typename T>
+static void elastic_effective(double bulkm, double shearm, const double* de, T s,
+                              double& dpp, double& syy)
 {
     /* increment the stress s according to the incremental strain de */
     double lambda = bulkm - 2. /3 * shearm;
     double dev = trace(de);
+    double volumetric_normal_increment = lambda * dev;
 
     for (int i=0; i<NDIMS; ++i)
-        s[i] += 2 * shearm * de[i] + lambda * dev + dpp;
+        s[i] += 2 * shearm * de[i] + volumetric_normal_increment + dpp;
 
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] += 2 * shearm * de[i];
+
+    syy += volumetric_normal_increment + dpp;
+}
+
+#pragma acc routine seq
+template <typename T>
+static void elastic_effective(double bulkm, double shearm, const double* de, T s,
+                              double& dpp)
+{
+    double unused_syy = 0;
+    elastic_effective(bulkm, shearm, de, s, dpp, unused_syy);
 }
 
 #pragma acc routine seq
@@ -919,11 +944,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double shearm = var.mat->shearm(e);
                 if (has_hydraulic_diffusion)
                 {
-                    elastic_effective(bulkm, shearm, de, s, dpp);
+                    if (var.mat->is_plane_strain)
+                        elastic_effective(bulkm, shearm, de, s, dpp, syy);
+                    else
+                        elastic_effective(bulkm, shearm, de, s, dpp);
                 }
                 else
                 {
-                    elastic(bulkm, shearm, de, s);
+                    if (var.mat->is_plane_strain)
+                        elastic(bulkm, shearm, de, s, syy);
+                    else
+                        elastic(bulkm, shearm, de, s);
                 }
             }
             break;
