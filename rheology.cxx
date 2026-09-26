@@ -1253,6 +1253,32 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
 
         TensorAccessor s = stress[e];
 
+        if (apply_plastic && !var.mat->is_plane_strain) {
+            // Relax toward the return-mapped physical target P(τ_old + C:ε̇Δt)
+            // -- the same update the post-PT corrector applies -- so the
+            // converged stress lies on the yield surface. Projecting the
+            // damped iterate instead converges to ~halfway between the
+            // yield surface and the elastic trial (a spurious post-yield
+            // hardening that suppresses localization).
+            double tgt[NSTR], de[NSTR];
+            #pragma acc loop seq
+            for (int i = 0; i < NSTR; ++i) {
+                tgt[i] = (*var.stress_old)[e][i];
+                de[i] = (*var.strain_rate)[e][i] * dt;
+            }
+            double amc, anphi, anpsi, hardn, ten_max;
+            var.mat->plastic_props(e, (*var.plstrain)[e],
+                                   amc, anphi, anpsi, hardn, ten_max);
+            double depls = 0, dpp = 0;
+            int failure_mode;
+            elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                           de, depls, tgt, failure_mode, false, dpp);
+            #pragma acc loop seq
+            for (int i = 0; i < NSTR; ++i)
+                s[i] = w0 * s[i] + w1 * tgt[i];
+            continue;
+        }
+
         double dev = 0;
         #pragma acc loop seq
         for (int d = 0; d < NDIMS; ++d)
