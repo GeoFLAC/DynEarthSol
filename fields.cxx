@@ -778,7 +778,8 @@ namespace {
 }
 
 
-void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
+void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain,
+                   double dt)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -800,9 +801,10 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
     // sj[5] = dt * ( s1 * w5 - s2 * w5 + s3 * w4 + s4 * w3)
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, stress, strain)
+    #pragma omp parallel for default(none) shared(var, stress, strain) \
+        firstprivate(dt)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop gang vector firstprivate(dt) async
     for (int e=0; e<var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 
@@ -828,8 +830,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
                 w5 += 0.5 * (v[i][1] * shpdz[i] - v[i][NDIMS-1] * shpdy[i]);
         }
 
-        jaumann_rate_3d(stress[e], var.dt, w3, w4, w5);
-        jaumann_rate_3d(strain[e], var.dt, w3, w4, w5);
+        jaumann_rate_3d(stress[e], dt, w3, w4, w5);
+        jaumann_rate_3d(strain[e], dt, w3, w4, w5);
 
 #else
 
@@ -845,8 +847,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain)
                 w2 += 0.5 * (v[i][NDIMS-1] * shpdx[i] - v[i][0] * shpdz[i]);
         }
 
-        jaumann_rate_2d(stress[e], var.dt, w2);
-        jaumann_rate_2d(strain[e], var.dt, w2);
+        jaumann_rate_2d(stress[e], dt, w2);
+        jaumann_rate_2d(strain[e], dt, w2);
 
 #endif
     }

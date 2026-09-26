@@ -64,6 +64,7 @@ double calculate_residual_force(const Variables& var, array_t& vel);
 void update_velocity(const Variables& var, array_t& vel);
 // void update_velocity_PT(const Variables& var, array_t& vel);
 void update_coordinate(const Variables& var, array_t& coord);
-void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain);
+void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain,
+                   double dt);
 
 #endif

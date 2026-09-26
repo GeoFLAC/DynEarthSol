@@ -882,6 +882,9 @@ int main(int argc, const char* argv[])
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
+        // Objective rotation still belongs to the current physical step, even
+        // if the update below selects var.dt for the next step.
+        const double rotation_dt = var.dt;
         apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
@@ -896,7 +899,7 @@ int main(int argc, const char* argv[])
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
-            rotate_stress(var, *var.stress, *var.strain);
+            rotate_stress(var, *var.stress, *var.strain, rotation_dt);
 
         monitor_write_if_due(param, var);
 
