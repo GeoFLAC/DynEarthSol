@@ -335,6 +335,11 @@ anything other than reproducing this note.
 
 ### Solution 3: yield-aware `mu_ve_e`
 
+> **Removed** (commit `220bbfb`). Its deviatoric, friction-ignoring proxy
+> flags still-elastic elements at depth, and after a remesh refines the
+> shear band this destabilized PT. See "PT diverged after a remesh" at the
+> end of this document.
+
 **What was implemented** (`geometry.cxx`, `update_pt_params()`). Before
 computing `mu_ve_e`, each element's elastic shear modulus `G_e` is
 softened when its current stress is close to or past yield:
@@ -1342,6 +1347,9 @@ no longer trends upward.
 
 ## Bug C: a stiffness-sampling blind spot at small-patch (mostly boundary) nodes
 
+> **Note:** the softening this bug interacts with (solution 3) has since been
+> removed. The 2-ring widening is kept since it can only add damping.
+
 **Symptom.** After bugs A and B were fixed, a *different* component —
 `vy`, not `vz` — spiked at a single node (id 2519, `bcflag=0x10`, bottom-only,
 no kinematic constraint in any direction) at `1e-6` tolerance: visually, a
@@ -1852,4 +1860,80 @@ stagnates at `residual/residual_0 = 0.117` (essentially unconverged), a
 `dt` collapse to 0.0065 yr, and a failed remesh on the next step. DR gets
 through the same localization to 8000 yr. So the trigger is a PT solve
 failing right after a remesh in a localized state, not the plane-strain
-change itself; not yet investigated.
+change itself. Fixed; see next section.
+
+## PT diverged after a remesh: yield-aware damping softening removed
+
+**Diagnosis.** A restart from a checkpoint at step 600 (`ps_ck.cfg`, then
+`rs_*.cfg` in `examples/ps_test/`) reproduces the failure in 5 steps: steps
+601-604 converge to `1e-6`, the bottom-distortion remesh follows, and the
+next solve's residual *grows* from 3.2% to 27% of the force scale. After
+that solve, bottom nodes near the band move down at up to 0.13 m/s (the mesh
+bottom reaches z≈−40 km), so the next remesh receives a mesh with a 1e10 m²
+element and MMG2D fails or loops forever (gdb: stuck in `MMG2D_chkcol`).
+The MMG failures are damage, not the cause: the inputs PT and DR hand MMG at
+their first remesh (dumped and compared) are equivalent and valid -- same
+element counts, no degenerate elements, consistent boundary edges, size
+field 280–5458 m vs 279–5458 m.
+
+Isolation, from the same checkpoint with a forced remesh
+(`max_boundary_distortion = 0.2`):
+
+| variant | after the remesh |
+|---|---|
+| elastic | converges (~1e-5) |
+| elasto-plastic | diverges (0.16% → 18%) |
+| elasto-plastic, yield-aware softening off | converges, run completes |
+
+**Cause.** `update_pt_params()` softened each element's `G_e` for damping
+(down to 5%) when `tau_eq/amc > 0.7` ("solution 3"). The proxy uses only
+the deviatoric stress and cohesion, ignoring friction × pressure, so at
+depth -- exactly where the shear band meets the Winkler bottom -- it flags
+elements that are still responding elastically. Their `dtau_rho` then
+exceeds what their real stiffness allows, which is unstable. Before a
+remesh the 2-ring stiffness search (bug C) usually still found an unsoftened
+neighbor; the remesh refines the band (the MMG size field shrinks elements
+where plastic strain is high), so two rings cover a much smaller region and
+the anchor is lost. The softening's original purpose was to damp a limit
+cycle between the damped elastic update and an instantaneous projection;
+the return-mapped target (above) removed that mismatch.
+
+**Fix** (`geometry.cxx`, commit `220bbfb`): remove the softening; `mu_ve_e`
+now uses `G_e` directly.
+
+**Also fixed: out-of-bounds retune snapshot after an in-loop remesh.**
+Forcing frequent remeshes exposed heap corruption on the first remesh
+(`malloc(): unsorted double linked list corrupted`); AddressSanitizer
+(`make ndims=2 opt=-1`) located it in `rayleigh_update_Re()`. A remesh
+inside the PT loop (the quality check runs when `pt_step %
+quality_check_step_interval == 0`, including iteration 0) changes `nnode`
+after the step-start snapshot, and the next retune read and wrote
+`PT_vel_prev`/`PT_force_prev` past their end. `rayleigh_update_Re()` now
+resizes, re-snapshots and skips that retune. After the fix, forced-remesh
+runs under AddressSanitizer were clean (elastic: 2,149 remeshes;
+elasto-plastic: 458 remeshes). This bug was real but not the cause of the
+crash above -- there the remesh happens between steps, where the step-start
+resize already covered it.
+
+**Results** (final code):
+
+| run | compute | stagnated steps | outcome |
+|---|---|---|---|
+| 2D plane strain (`ps_pt_final.cfg`), to 8000 yr | 2:03 | 616 of 1,424 | completes (crashed at t≈3577 yr before), 2 remeshes, 0 MMG errors |
+| 3D (`bc_final.cfg`), dt≈160 yr, to 8000 yr | 3:14 (was 4:58) | 1 | physics unchanged |
+
+| 2D vs DR | max pls | new-yield | top-30 pls at x | `vx` at x=5,25,45,65,85 km (1e-9 m/s) |
+|---|---|---|---|---|
+| DR, t=4000 | 0.678 | 339 | 44–46 km | −1.1, −1.4, −0.60, +1.4, +1.3 |
+| PT, t=4001 | 0.701 | 316 | 44–47 km | −1.0, −1.2, −0.43, +1.2, +1.1 |
+| DR, t=6000 | 0.872 | 335 | 44–46 km | −0.97, −0.88, −0.11, +1.3, +1.1 |
+| PT, t=6006 | 0.811 | 311 | 44–47 km | −0.98, −0.89, −0.26, +0.87, +0.95 |
+
+3D vs DR at t≈8000 yr: max pls 0.522 vs 0.526, new-yield 14,896 vs 14,876,
+band at x=48–52 km vs 47–51 km.
+
+**Open.** (1) In 2D, many steps stagnate above the `1e-6` tolerance, though
+at small residuals (median ~3e-5, worst ~2e-4). (2) DR's own 2D frame at
+t=8000 yr is suspect: its max plastic strain drops from 0.87 (t=6000) to
+0.117, below the seeded weak zone's 0.5, which looks like its 338 remeshes
+eroding the field; not used as a reference.
