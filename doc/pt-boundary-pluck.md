@@ -450,6 +450,12 @@ character of the failure (oscillation → convergence) rather than just
 shifting a stagnation-iteration count or a residual magnitude within the
 same oscillating regime.
 
+> **Superseded (3D).** This blend has the wrong fixed point: it converges to
+> a stress about halfway between the yield surface and the elastic trial,
+> i.e. spurious post-yield hardening that suppresses localization. Replaced
+> in 3D by relaxing toward the return-mapped target; see "PT did not
+> localize" at the end of this document. Plane strain still uses it.
+
 (Run hit a different MMG3D crash after this step —
 `MMG3D_consistency_error_message` — same unrelated meshing-library
 territory as the earlier crashes in this document.)
@@ -1713,5 +1719,92 @@ relative). Now that the imposed load actually reaches the interior, elements
 yield within a single large step, and the plastic nonsmoothness floor noted
 earlier in this document applies. The exit at `PT_max_iter` is silent (no
 message, unlike the stagnation exit). This affects convergence cost at large
-`dt`, not the correctness of the velocity field. Full-length runs with the
-fix, and a comparison of the plastic-strain field against DR, are pending.
+`dt`, not the correctness of the velocity field.
+
+**Full-length runs with this fix** (`bc_yield_off_full_fix.cfg`, dt≈160 yr,
+50 steps to t≈8000 yr): compute 8:41 → 6:03, stagnations 27 → 2, and the
+dt≈160 yr and dt≈7486 yr runs now agree with each other. But compared with
+DR at the same time, PT did **not** localize -- see next section.
+
+## PT did not localize: the damped return map had the wrong fixed point
+
+**Symptom.** With the boundary-velocity fix, PT at t≈8000 yr still showed a
+distributed, roughly linear velocity ramp and little plastic strain, while DR
+had localized: the domain split into two nearly rigid blocks at about
+`±vbc`, with the weak zone taking the shear. Metrics compare the plastic-
+strain field and velocity, binned in x, since the meshes differ after
+remeshing:
+
+| t≈8000 yr | max pls | 99.9th pct | new-yield elements (near x-bdry) | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|---|
+| DR | 0.526 | 0.519 | 14,876 (345) | −4.9, −5.5, −4.6, +5.8, +5.2 |
+| PT, boundary fix only | 0.506 | 0.505 | 18,429 (391) | −4.4, −2.6, −1.0, +2.0, +3.6 |
+
+("New-yield" counts elements with plastic strain in (1e-6, 0.45), i.e.
+yielding outside the seeded `pls=0.5` weak zone.) PT yielded broadly but
+weakly, rather than concentrating strain in the weak zone.
+
+**Cause.** `update_stress_PT()` did two blended updates per iteration, with
+`w0 = 1/(1+θ)`, `w1 = θ/(1+θ)`, `θ = Gdtau_e/(G·dt) ≈ 0.01`:
+
+```
+a = w0·s + w1·T        // relax toward the elastic trial T = τ_old + C:ε̇Δt
+s = w0·a + w1·P(a)     // damped projection of the iterate (P = return map)
+```
+
+For an element whose trial exceeds the yield stress `Y` (1-D, `P(a)=Y`),
+the fixed point of this pair is
+
+```
+a = (Y + (1+θ)·T) / (2+θ) ≈ (Y + T)/2,    s ≈ (Y + T)/2
+```
+
+-- the converged stress sits about halfway between the yield surface and the
+elastic trial, not on the yield surface. PT's velocity therefore balances a
+material that behaves as if it hardens after yield with tangent ~G/2. Strain
+localization needs a zero or negative post-yield tangent; a positive one
+suppresses it. Two side effects follow: the post-PT corrector stores the true
+`P(T)`, which PT never balanced, so every step starts with an imbalance
+(step 2's initial residual of 4e13 at dt≈7486 yr); and PT chases a stress it
+never uses, which contributes to non-convergence at large `dt`.
+
+**Fix** (`rheology.cxx`, `update_stress_PT()`, 3D): relax toward the
+return-mapped physical target instead,
+
+```
+s = w0·s + w1·P(τ_old + C:ε̇Δt)
+```
+
+computed with `elasto_plastic()` on `τ_old` with the full strain increment --
+the same return map the corrector applies. The fixed point is `s = P(T)`, on
+the yield surface. The iterate is never projected directly, so there is no
+undamped snap-back (the concern that motivated damping the projection in the
+first place). Plane strain keeps the old blend for now: it would also need
+the out-of-plane stress `stressyy` saved at the start of the step.
+
+**Result** (`bc_yield_off_full_pfix.cfg`, dt≈160 yr, t≈8000 yr):
+
+| | max pls | 99.9th pct | new-yield (near x-bdry) | top-50 pls at x | `vx` at x=5,25,45,65,85 km (1e-10 m/s) |
+|---|---|---|---|---|---|
+| DR | 0.526 | 0.519 | 14,876 (345) | 47–51 km | −4.9, −5.5, −4.6, +5.8, +5.2 |
+| **PT, both fixes** | **0.522** | **0.517** | **14,883 (316)** | **48–52 km** | **−4.7, −4.4, −3.5, +4.6, +4.7** |
+| PT, boundary fix only | 0.506 | 0.505 | 18,429 (391) | 49–52 km | −4.4, −2.6, −1.0, +2.0, +3.6 |
+
+PT now localizes in the same place as DR, with nearly identical plastic-
+strain statistics. At t≈3,800 yr (before localization) the two also agree
+(147 new-yield elements near the boundary each). DR's velocities overshoot
+`vbc` (up to 5.8e-10) because DR is dynamic; PT's quasi-static solution
+stays at `vbc`. Compute 6:03 → 4:58, 2 stagnations; DR is 2:12, so at this
+step size PT is still ~2.3x slower.
+
+At dt≈7486 yr (thermal diffusion off, 2 steps, 30 s), step 1 moves toward DR
+(max pls 0.508 vs DR 0.516, new-yield 15,617 vs DR 14,661, vs 0.501 / 18,143
+before) and step 2 has localized into two blocks at the weak zone. The
+remaining lag is expected from a single 7486-yr step from rest: cohesion and
+friction are frozen at their start-of-step values, so the softening feedback
+that drives localization only acts on the next step.
+
+**Open.** (1) Plane strain still uses the biased blend. (2) An intermediate
+step size (500–2000 yr) is the test that decides whether PT can stay
+accurate while beating DR. (3) Both large-`dt` steps still end at
+`PT_max_iter`.
