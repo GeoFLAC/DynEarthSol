@@ -1985,6 +1985,21 @@ void rayleigh_update_Re(const Param& param, Variables& var,
 {
     if (!var.PT_vel_prev || !var.PT_force_prev) return;
 
+    // A remesh inside the PT loop changes nnode after the step-start snapshot;
+    // the old snapshot belongs to a different mesh, so start a fresh one and
+    // skip this retune rather than index past its end.
+    if ((int) var.PT_vel_prev->size() != var.nnode ||
+        (int) var.PT_force_prev->size() != var.nnode) {
+        var.PT_vel_prev->resize(var.nnode, 0.0);
+        var.PT_force_prev->resize(var.nnode, 0.0);
+        for (int i = 0; i < var.nnode; ++i)
+            for (int j = 0; j < NDIMS; ++j) {
+                (*var.PT_vel_prev)[i][j]   = vel[i][j];
+                (*var.PT_force_prev)[i][j] = force[i][j];
+            }
+        return;
+    }
+
     double num = 0.0, den = 0.0;
 
     #pragma omp parallel for reduction(+:num,den) default(none) \
@@ -2087,29 +2102,9 @@ void update_pt_params(const Param& param, Variables& var)
     double G_sum     = 0.0;
     double vol_sum   = 0.0;
 
-    // Yield-aware modulus softening (experimental). update_stress_PT()
-    // relaxes stress toward the elastic target with a damped rate theta
-    // built from mu_ve_e, then -- every single iteration, regardless of
-    // theta -- projects any yield violation straight back onto the yield
-    // surface via a full, undamped return map (elasto_plastic()). Feeding
-    // the pure elastic G_e into mu_ve_e when an element is at/near yield
-    // ignores that mismatch: the elastic part creeps slowly, but the
-    // plastic part snaps back instantly every time it's crossed, which is
-    // a plausible driver of the observed residual limit cycle (confirmed
-    // independent of any softening curve -- see doc/pt-boundary-pluck.md).
-    // Approximate "how close to yield" with a deviatoric-stress-only
-    // (friction/pressure term ignored) proxy, since exposing the exact
-    // principal-stress-based Mohr-Coulomb check from rheology.cxx was out
-    // of scope for this experiment.  This softening keeps the local damping
-    // consistent with the material's post-yield stiffness when the plastic
-    // return map is applied (damped) every PT iteration.
-    const bool has_plastic = (param.mat.rheol_type & MatProps::rh_plastic) != 0;
-    const double yield_onset = 0.7, yield_floor = 0.05;
-
     #pragma omp parallel for reduction(min:h_min) reduction(+:h_sum,mu_ve_sum,G_sum,vol_sum) \
         reduction(max:mu_ve_max) \
-        default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L) \
-        firstprivate(has_plastic, yield_onset, yield_floor)
+        default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, rp2, L)
     for (int e = 0; e < var.nelem; ++e) {
         // --- minimum element height ---
         int n0 = (*var.connectivity)[e][0];
@@ -2142,29 +2137,6 @@ void update_pt_params(const Param& param, Variables& var)
 
         // --- effective visco-elastic viscosity (Räss et al. 2022, Eq. 35) ---
         double G_e  = var.mat->shearm(e);
-        if (has_plastic) {
-            ConstTensorAccessor s = (*var.stress)[e];
-            double mean = 0;
-            for (int d = 0; d < NDIMS; ++d) mean += s[d];
-            mean /= NDIMS;
-            double J2 = 0;
-            for (int d = 0; d < NDIMS; ++d) {
-                double dev = s[d] - mean;
-                J2 += 0.5 * dev * dev;
-            }
-            for (int d = NDIMS; d < NSTR; ++d)
-                J2 += s[d] * s[d];
-            double tau_eq = std::sqrt(J2);
-
-            double amc, anphi, anpsi, hardn, ten_max;
-            var.mat->plastic_props(e, (*var.plstrain)[e], amc, anphi, anpsi, hardn, ten_max);
-            double yield_ratio = (amc > 0) ? tau_eq / amc : 0.0;
-
-            if (yield_ratio > yield_onset) {
-                double t = std::min((yield_ratio - yield_onset) / (1.0 - yield_onset), 1.0);
-                G_e *= 1.0 - t * (1.0 - yield_floor);
-            }
-        }
         double mu_e = (*var.viscosity)[e];
         // Guard against G=0 (purely viscous material) or dt=0
         double mu_ve_e = (G_e > 0.0 && var.dt > 0.0)
@@ -2183,19 +2155,10 @@ void update_pt_params(const Param& param, Variables& var)
     }
 
     // --- nodal Δτ/ρ̃: conservative min-h over the 1-ring, max-μ^ve widened
-    // to a 2-ring. A node whose own 1-ring patch happens to sit entirely
-    // inside a locally yield-softened region (every touching element
-    // already at update_pt_params()'s yield-aware mu_ve_e floor) has no
-    // stiffer neighbor in that patch to anchor a safely small dtau_rho --
-    // max-over-1-ring just returns the same soft value, silently
-    // under-damping that one node while nodes one hop further out (whose
-    // patch happens to catch a still-elastic element) get properly damped.
-    // Most exposed at boundary nodes, which start with about half the
-    // element count of an interior node's patch (so a run of unlucky
-    // uniform softening is more likely) and have no kinematic constraint to
-    // fall back on. Looking one hop further for the stiffness estimate
-    // (never for h_i, which stays local) closes that sampling blind spot;
-    // it can only raise mu_i, i.e. only add damping, never remove it.
+    // to a 2-ring. The widening was added against a now-removed yield-aware
+    // softening of mu_ve_e (see doc/pt-boundary-pluck.md, bug C); it is kept
+    // because it can only raise mu_i, i.e. only add damping at nodes near a
+    // stiffness contrast, and never removes it. h_i stays local.
     #pragma omp parallel for default(none) shared(var, h_e_vec, mu_ve_vec, Re, CFL, L)
     for (int i = 0; i < var.nnode; ++i) {
         double h_i  = std::numeric_limits<double>::max();
