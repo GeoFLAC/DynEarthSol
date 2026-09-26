@@ -1509,7 +1509,19 @@ favors it for typical use), but keep the flag and code path as an opt-in
 fallback rather than deleting the mechanism, for whoever hits a config where
 PT's inner loop stagnates badly at a velocity-Dirichlet boundary without it.
 
+> **Update:** the reason `dt_bc_yield` mattered at all was a separate bug
+> found later -- the main-loop PT solved with velocity boundaries held at
+> rest, so the whole `vbc·dt` landed in the boundary-adjacent elements each
+> step, exactly `dt_bc_yield`'s "worst case". See "Root cause of the
+> large-`dt` pluck" below. With that fixed, `dt_bc_yield` guards against a
+> scenario the solver no longer produces.
+
 ## PT-vs-DR: a corrected cost model (retracting the GPU claim above)
+
+> **Note:** the measurements in this section (`K≈846`, 3.9x) predate the
+> boundary-velocity fix in "Root cause of the large-`dt` pluck" below; every
+> PT step here was partly spent repairing the previous step's boundary kick.
+> The cost model itself stands, but the numbers need re-measuring.
 
 With `has_bc_yield_limit=false`, PT reaches `gaussian-weakzone-3d-PT`'s
 target (`max_time_in_yr=8000`) in 50 outer steps / 8:41 of compute. Re-ran
@@ -1593,21 +1605,17 @@ at machine-zero velocity (`~1e-28`), only the 82 boundary nodes carrying
 `vbc`. Textbook pluck signature by the velocity-ramp-shape test used
 throughout this document.
 
-**But this is not dt-dependent on its own -- every run's first step looks
-like this.** Checked the *known-good* small-`dt` run
-(`bc_yield_off_full.cfg`, `dt~160yr`, already validated as a clean,
-physical ramp by its final frame): its own frame 1 (`t=160yr`) shows
-5458/5540 near-zero nodes too -- identical to the large-`dt` case. By frame
-2 (`t=320yr`, one more step later), that collapses to 104/5540 -- essentially
-fully resolved. So a single-step "boundary snaps to `vbc`, interior still at
-rest" state is the *normal*, expected transient starting from a true-rest
-initial condition, not a bug -- the question is how fast subsequent steps
-resolve it, not whether step 1 shows it.
+**Every run's first step looks like this, at every `dt`.** The known-good
+small-`dt` run (`bc_yield_off_full.cfg`, `dt~160yr`) shows the same
+5458/5540 near-zero nodes at its frame 1 (`t=160yr`), collapsing to 104/5540
+by frame 2. (This was first misread as a benign transient from a rest
+initial condition. It is not -- a converged quasi-static step cannot leave
+the interior untouched. See "Root cause" below.)
 
-**The real, `dt`-dependent signal: how resolved is step 2?** Swept
-`dt_fraction` (with `has_thermal_diffusion=no` throughout, so `dt_advection`
-is the sole limiter being scaled) from `dt≈150yr` to `dt≈7486yr`, ran 2
-steps each, checked frame 2's near-zero-node count:
+**Step 2 resolution vs. `dt`.** Swept `dt_fraction` (with
+`has_thermal_diffusion=no` throughout, so `dt_advection` is the sole limiter
+being scaled) from `dt≈150yr` to `dt≈7486yr`, ran 2 steps each, checked
+frame 2's near-zero-node count:
 
 | `dt` (yr) | near-zero nodes / 5540 at step 2 |
 |---|---|
@@ -1618,44 +1626,92 @@ steps each, checked frame 2's near-zero-node count:
 | 5614.5 | 613 |
 | 7485.9 | 682 |
 
-**Smooth and monotonic, not a threshold/bifurcation.** This rules out a
-Bug-A/B/C-style hard failure mode (those showed sharp on/off transitions
-tied to specific mesh/remesh/stagnation events) and points to a continuous
-degradation: the larger the outer step, the less spatially complete that
-step's "converged" state is, needing more subsequent outer steps to catch
-up -- eroding some of the step-count savings a large `dt` is supposed to buy.
+The count grows smoothly with `dt`. This was first attributed to
+`update_pt_params()`'s damping tuning (`Re_new`, `mu_ve_e`) depending on
+`var.dt`. **That hypothesis was wrong** and is retracted: here `mu_s ≥ 1e24
+Pa·s` while `G·dt` is ~1.5e20-7e21, so `mu_ve ≈ G·dt`, and `dt` cancels
+everywhere it matters -- in `Re_new` (`∝ G_mean·dt/mu_ve_mean`), in the
+velocity update (`dtau_rho ∝ 1/dt` times a force `∝ G·dt·∇ε̇`), and in the
+stress relaxation weight (`theta = Gdtau_e/(G·dt)`). The elastic PT
+iteration is dt-invariant by construction. What the sweep actually measures
+is the size of the damage step 1 leaves for step 2 to repair, which scales
+with `dt` (below).
 
-**Mechanism: the accelerated-PT damping tuning is not `dt`-invariant.**
-`update_pt_params()` (`geometry.cxx`) computes both the adaptive damping
-parameter and the visco-elastic modulus feeding it directly from the outer
-physical `dt`:
-```cpp
-// geometry.cxx:2031
-const double Re_new = eta_star * rp2 * var.PT_L * var.PT_G_mean * var.dt
-                       / (...);
-// geometry.cxx:2170
-double mu_ve_e = (G_e > 0.0 && var.dt > 0.0)
-    ? 1.0 / (1.0 / (G_e * var.dt) + 1.0 / mu_e)
-    : ...;
-```
-`Re_new` scales linearly with `var.dt`; `mu_ve_e` shifts from the elastic
-modulus `G_e` (small `dt`) toward the viscous modulus `mu_e` (large `dt`) as
-`G_e * var.dt` grows relative to `mu_e`. Accelerated PT's fast-convergence
-guarantee (Räss et al. 2022) holds for damping calibrated to a specific
-regime; as `dt` grows and `Re`/`mu_ve_e` drift, the inner loop can still
-satisfy the scalar relative-residual tolerance (the still-undisturbed
-interior is trivially self-consistent -- nothing has reached it yet, so it
-reports no residual) without having genuinely propagated the disturbance as
-far as it would need to for spatial completeness. This is the same
-conceptual gap the very first "Analysis" section of this document flagged
-(item 3: "η/Δτ tuning uses elastic stiffness, not the actual tangent
-stiffness") but manifesting through `dt`, not through yield-softening.
+## Root cause of the large-`dt` pluck: the main-loop PT solved with boundaries held at rest
 
-**Status: characterized, not yet fixed.** This is a real, structural
-limitation on how large `dt` can usefully go, distinct from (and smoother
-than) the old staggered-scheme pluck. A proper fix means re-deriving how
-`Re`/`mu_ve_e` (or the broader `PT_dtau_rho`/damping tuning they feed) should
-scale with the outer physical `dt` so a single step's convergence guarantee
-holds regardless of step size -- the same class of problem Räss et al.
-solve by introducing accelerated PT for the temperature equation too, rather
-than accepting a small thermal-diffusion-limited `dt`. Not yet attempted.
+**Diagnosis.** Per-iteration residual logging (`PT_info_interval`) showed
+step 1 declaring convergence at iteration 0 (`residual ≈ 0.07 N` against
+`force_scale ≈ 8.2e14`) at every `dt`. Forcing the loop to keep going
+(`PT_relative_tolerance=1e-20`, 400 iterations) changed nothing: the
+residual never rose above ~0.05 N and the interior velocity stayed at
+~1e-25. Instrumenting the loop showed why: during PT iterations **every**
+velocity, including the boundary nodes, was ~1e-24 -- the imposed `vbc` was
+never applied inside the PT solve, even though the output frames show
+boundary nodes at `vbc`.
+
+**Mechanism.** `apply_vbcs()` (`bc.cxx`) sets all Dirichlet velocities to
+zero whenever `control.PT_jump` is true, and the main loop sets
+`PT_jump = true` for the whole PT block (it also disables FLAC damping in
+`update_force()` during PT iterations, which is intended). So each PT solve
+found an equilibrium with the velocity boundaries held at rest: it only
+relaxed whatever imbalance was already in `stress_old`, and never saw the
+imposed kinematics. After the loop `PT_jump` is cleared, `apply_vbcs()`
+restores `vbc`, and the corrector computes the strain rate from "interior
+velocity solved with zero-velocity boundaries" plus "`vbc` pinned at the
+boundary nodes" -- a velocity jump across the boundary-adjacent elements,
+i.e. a strain of `vbc·dt/h` concentrated there, applied a full step late.
+The next step's PT then has to spread that kick inward.
+
+This accounts for every observation in the previous section:
+- Step 1 (initial condition in exact equilibrium): nothing to relax, so PT
+  "converges" at iteration 0 and the interior never moves, at any `dt`.
+- Step 2 starts with the boundary kick as its imbalance (initial residual
+  2.1e13 at `dt=150yr`, 1.4e14 at `dt=7486yr`). It scales with `dt`, so
+  repairing it is harder at large `dt`; at `dt≈7486yr` step 2 hit
+  `PT_max_iter` without converging. That is the step-2 sweep above.
+- At large `dt` the boundary-layer strain `vbc·dt/h` exceeds yield, so the
+  imposed motion is dissipated plastically at the boundary instead of
+  transmitted -- the boundary pluck.
+- `dt_bc_yield`'s "worst case" -- all of a face's `vbc` absorbed by its
+  thinnest adjacent element over one step -- was not a worst case. It is
+  literally what the code did every step, which is why that limiter kept
+  the pluck at bay.
+
+**Origin.** The original `apply_vbcs_PT()` always zeroed the Dirichlet
+velocities and was used both for `initial_body_force_adjustment()` and the
+main-loop PT, when the main loop still advected the mesh every PT iteration.
+Commit `891079b` folded it into `apply_vbcs()` behind `PT_jump`, preserving
+that behavior; commit `fde0510` then turned the main-loop PT into the current
+predictor-corrector that solves for the full velocity of the step, where
+zero-velocity boundaries are wrong. Holding the boundaries at rest is only
+correct for the static initial body-force adjustment.
+
+**Fix** (`bc.cxx`, `apply_vbcs()`): zero the Dirichlet velocities only when
+`PT_jump && param.ic.has_body_force_adjustment`. That flag is true only
+while `initial_body_force_adjustment()` runs (the main loop clears it right
+after the call), the same idiom `update_force()` already uses to skip
+Neumann stress BCs during that adjustment. `PT_jump` itself is unchanged, so
+FLAC damping stays off during PT iterations. DR is unaffected (`PT_jump` is
+only set inside PT loops).
+
+**Validation so far** (`examples/smooth_pt_test/`, `resid_*.cfg`, 2 steps):
+
+| run | step 1 | step 2 |
+|---|---|---|
+| `dt≈150yr`, before | converged at iter 0, 5458/5540 near-zero | 411 iters, 102/5540 |
+| `dt≈150yr`, after | 460 iters, **105/5540** | 292 iters (initial residual 5.2e9, down from 2.1e13), 102/5540 |
+| `dt≈7486yr`, before | converged at iter 0, 5458/5540 | hit `PT_max_iter`, 682/5540 |
+| `dt≈7486yr`, after | **104/5540** | **106/5540** |
+
+After the fix the step-1 and step-2 velocity fields at `dt≈7486yr` are the
+same linear ramp as at `dt≈150yr` (`±4.35e-10` in the end bins through zero
+at the center) -- the pluck is gone at 50x the step size.
+
+**Remaining issue.** At `dt≈7486yr` both steps still hit `PT_max_iter=5000`
+without meeting the `1e-6` tolerance (the residual floors at ~9e-6
+relative). Now that the imposed load actually reaches the interior, elements
+yield within a single large step, and the plastic nonsmoothness floor noted
+earlier in this document applies. The exit at `PT_max_iter` is silent (no
+message, unlike the stagnation exit). This affects convergence cost at large
+`dt`, not the correctness of the velocity field. Full-length runs with the
+fix, and a comparison of the plastic-strain field against DR, are pending.

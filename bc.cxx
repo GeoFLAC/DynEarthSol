@@ -327,7 +327,12 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vy0_l = bc.vbc_val_y0_l;
     double bc_vy1_l = bc.vbc_val_y1_l;
 
-    if (param.control.PT_jump) {
+    // Hold velocity boundaries at rest only for the static initial body-force
+    // adjustment. The main-loop PT solves the physical time step and must see
+    // the imposed velocities; zeroing them there leaves the boundary motion to
+    // the post-PT corrector as a vbc*dt jump concentrated in the boundary-
+    // adjacent elements (the boundary pluck; see doc/pt-boundary-pluck.md).
+    if (param.control.PT_jump && param.ic.has_body_force_adjustment) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
 #ifdef THREED
