@@ -1575,3 +1575,87 @@ commensurate mesh refinement) should show DR's step count grow roughly
 linearly with total time while PT's `K` stays governed by mesh geometry
 alone — that is the regime where `N_DR/N_PT` should eventually exceed `K`.
 Not yet tested.
+
+## Boundary-pluck signature recurs at large `dt` -- but as a smooth degradation, not the old hard failure
+
+With `has_bc_yield_limit=false` and `has_thermal_diffusion=no` (removing the
+only two limiters keeping `dt` small on `gaussian-weakzone-3d-PT`), `dt`
+jumps to `dt_advection`'s ~7486 yr and the target is reached in 2 outer
+steps, 18 seconds -- but the final `plastic strain` field showed `max=0.5`
+exactly (the IC seed value, zero new yielding), despite covering nearly 2x
+the cumulative boundary displacement of the 50-step/160yr-per-step run
+(which *did* show new yielding by a comparable point). That discrepancy is
+the signal this section chases down.
+
+**First check: is step 1 alone boundary-only at large `dt`?** Yes --
+`no_therm_diff_full.save.000001.vtkhdf` (`t=7486yr`) shows 5458/5540 nodes
+at machine-zero velocity (`~1e-28`), only the 82 boundary nodes carrying
+`vbc`. Textbook pluck signature by the velocity-ramp-shape test used
+throughout this document.
+
+**But this is not dt-dependent on its own -- every run's first step looks
+like this.** Checked the *known-good* small-`dt` run
+(`bc_yield_off_full.cfg`, `dt~160yr`, already validated as a clean,
+physical ramp by its final frame): its own frame 1 (`t=160yr`) shows
+5458/5540 near-zero nodes too -- identical to the large-`dt` case. By frame
+2 (`t=320yr`, one more step later), that collapses to 104/5540 -- essentially
+fully resolved. So a single-step "boundary snaps to `vbc`, interior still at
+rest" state is the *normal*, expected transient starting from a true-rest
+initial condition, not a bug -- the question is how fast subsequent steps
+resolve it, not whether step 1 shows it.
+
+**The real, `dt`-dependent signal: how resolved is step 2?** Swept
+`dt_fraction` (with `has_thermal_diffusion=no` throughout, so `dt_advection`
+is the sole limiter being scaled) from `dt≈150yr` to `dt≈7486yr`, ran 2
+steps each, checked frame 2's near-zero-node count:
+
+| `dt` (yr) | near-zero nodes / 5540 at step 2 |
+|---|---|
+| 149.7  | 102 |
+| 657.6  | 198 |
+| 1871.5 | 314 |
+| 3743.0 | 488 |
+| 5614.5 | 613 |
+| 7485.9 | 682 |
+
+**Smooth and monotonic, not a threshold/bifurcation.** This rules out a
+Bug-A/B/C-style hard failure mode (those showed sharp on/off transitions
+tied to specific mesh/remesh/stagnation events) and points to a continuous
+degradation: the larger the outer step, the less spatially complete that
+step's "converged" state is, needing more subsequent outer steps to catch
+up -- eroding some of the step-count savings a large `dt` is supposed to buy.
+
+**Mechanism: the accelerated-PT damping tuning is not `dt`-invariant.**
+`update_pt_params()` (`geometry.cxx`) computes both the adaptive damping
+parameter and the visco-elastic modulus feeding it directly from the outer
+physical `dt`:
+```cpp
+// geometry.cxx:2031
+const double Re_new = eta_star * rp2 * var.PT_L * var.PT_G_mean * var.dt
+                       / (...);
+// geometry.cxx:2170
+double mu_ve_e = (G_e > 0.0 && var.dt > 0.0)
+    ? 1.0 / (1.0 / (G_e * var.dt) + 1.0 / mu_e)
+    : ...;
+```
+`Re_new` scales linearly with `var.dt`; `mu_ve_e` shifts from the elastic
+modulus `G_e` (small `dt`) toward the viscous modulus `mu_e` (large `dt`) as
+`G_e * var.dt` grows relative to `mu_e`. Accelerated PT's fast-convergence
+guarantee (Räss et al. 2022) holds for damping calibrated to a specific
+regime; as `dt` grows and `Re`/`mu_ve_e` drift, the inner loop can still
+satisfy the scalar relative-residual tolerance (the still-undisturbed
+interior is trivially self-consistent -- nothing has reached it yet, so it
+reports no residual) without having genuinely propagated the disturbance as
+far as it would need to for spatial completeness. This is the same
+conceptual gap the very first "Analysis" section of this document flagged
+(item 3: "η/Δτ tuning uses elastic stiffness, not the actual tangent
+stiffness") but manifesting through `dt`, not through yield-softening.
+
+**Status: characterized, not yet fixed.** This is a real, structural
+limitation on how large `dt` can usefully go, distinct from (and smoother
+than) the old staggered-scheme pluck. A proper fix means re-deriving how
+`Re`/`mu_ve_e` (or the broader `PT_dtau_rho`/damping tuning they feed) should
+scale with the outer physical `dt` so a single step's convergence guarantee
+holds regardless of step size -- the same class of problem Räss et al.
+solve by introducing accelerated PT for the temperature equation too, rather
+than accepting a small thermal-diffusion-limited `dt`. Not yet attempted.
