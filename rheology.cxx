@@ -1265,22 +1265,59 @@ void update_stress_PT(const Param& param, const Variables& var, tensor_t& stress
                 tgt[i] = (*var.stress_old)[e][i];
                 de[i] = (*var.strain_rate)[e][i] * dt;
             }
-            double amc, anphi, anpsi, hardn, ten_max;
-            var.mat->plastic_props(e, (*var.plstrain)[e],
-                                   amc, anphi, anpsi, hardn, ten_max);
             double depls = 0, dpp = 0;
             int failure_mode;
-            if (var.mat->is_plane_strain) {
-                // stressyy is left at its start-of-step value throughout the
-                // PT loop: it enters only the target here, and the corrector
-                // updates it once from that same value.
-                double syy = (*var.stressyy)[e];
-                elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
-                                 de, depls, tgt, syy, failure_mode, false, dpp);
+            // stressyy is left at its start-of-step value throughout the PT
+            // loop: it enters only the target here, and the corrector updates
+            // it once from that same value.
+            if (param.control.has_smooth_weakening) {
+                // Same self-consistent (end-of-step) return map the post-PT
+                // corrector uses, so PT balances the stress that gets stored.
+                if (var.mat->is_plane_strain) {
+                    double syy = (*var.stressyy)[e];
+                    elasto_plastic2d_implicit(var.mat, e, (*var.plstrain)[e], bulkm, G,
+                                              de, depls, tgt, syy, failure_mode, false, dpp);
+                }
+                else {
+                    elasto_plastic_implicit(var.mat, e, (*var.plstrain)[e], bulkm, G,
+                                            de, depls, tgt, failure_mode, false, dpp);
+                }
             }
             else {
-                elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
-                               de, depls, tgt, failure_mode, false, dpp);
+                double amc, anphi, anpsi, hardn, ten_max;
+                var.mat->plastic_props(e, (*var.plstrain)[e],
+                                       amc, anphi, anpsi, hardn, ten_max);
+                if (var.mat->is_plane_strain) {
+                    double syy = (*var.stressyy)[e];
+                    elasto_plastic2d(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                                     de, depls, tgt, syy, failure_mode, false, dpp);
+                }
+                else {
+                    elasto_plastic(bulkm, G, amc, anphi, anpsi, hardn, ten_max,
+                                   de, depls, tgt, failure_mode, false, dpp);
+                }
+            }
+            // Duvaut-Lions: the same elastic-trial / inviscid blend the
+            // corrector applies for rh_ep, so PT balances the stored stress.
+            if (param.control.has_duvaut_lions &&
+                var.mat->rheol_type == MatProps::rh_ep) {
+                const double tau = var.mat->tau_dl(e);
+                if (tau > 0.0) {
+                    const double weight = dt / (tau + dt);
+                    double trial[NSTR];
+                    #pragma acc loop seq
+                    for (int i = 0; i < NSTR; ++i) trial[i] = (*var.stress_old)[e][i];
+                    if (var.mat->is_plane_strain) {
+                        double syy = (*var.stressyy)[e];
+                        elastic_trial2d(bulkm, G, de, trial, syy, false, dpp);
+                    }
+                    else {
+                        elastic(bulkm, G, de, trial);
+                    }
+                    #pragma acc loop seq
+                    for (int i = 0; i < NSTR; ++i)
+                        tgt[i] = (1 - weight) * trial[i] + weight * tgt[i];
+                }
             }
             #pragma acc loop seq
             for (int i = 0; i < NSTR; ++i)
