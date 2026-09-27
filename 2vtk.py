@@ -438,7 +438,7 @@ def process_vtkhdf_update(args):
         if os.path.exists(src_filename + '.vtkhdf'):
             src_filename += '.vtkhdf'
         else:
-            print(f"Skipping frame {frame}: {src_filename} is not a .vtkhdf file.")
+            print(f"Skipping frame {frame}: {src_filename} is not a .vtkhdf file.", file=sys.stderr)
             return frame
 
     suffix = '{0:0=6}'.format(frame)
@@ -484,7 +484,7 @@ def process_vtkhdf_update(args):
                 write_dataset('/VTKHDF/grid/CellData/' + name, data, name)
 
     except Exception as e:
-        print(f"Error processing frame {frame}: {e}")
+        print(f"Error processing frame {frame}: {e}", file=sys.stderr)
         raise
 
     return suffix
