@@ -1255,7 +1255,8 @@ build_revision.hpp: FORCE
 
 runtime_info.$(ndims)d$(suffix).o: build_revision.hpp
 
-$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(BUILD_STAMP)
+## nanoflann.hpp reaches every unit through parameters.hpp.
+$(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(ANN_DIR)/include/nanoflann.hpp $(BUILD_STAMP)
 	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
 
 $(KNN_BVH_LIB): FORCE
