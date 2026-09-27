@@ -6,7 +6,6 @@
 
 #include "constants.hpp"
 #include "output.hpp"
-#include "utils.hpp"
 
 void handle_ats_output(const Param& param,
                        Variables& var,
@@ -37,9 +36,7 @@ void handle_ats_output(const Param& param,
         if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
             output.write_checkpoint(param, var);
 
-        const int64_t t0 = get_nanoseconds();
         output.write(var);
-        var.func_time.output_time += get_nanoseconds() - t0;
 
         state.last_output_step = var.steps;
         wrote_earthquake_output = true;
@@ -54,9 +51,7 @@ void handle_ats_output(const Param& param,
             if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                 output.write_checkpoint(param, var);
 
-            const int64_t t0 = get_nanoseconds();
             output.write(var);
-            var.func_time.output_time += get_nanoseconds() - t0;
         }
 
         // Catch-up logic for mixed step/time schedules.
