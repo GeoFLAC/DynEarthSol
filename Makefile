@@ -1053,49 +1053,35 @@ install-gospl-wrapper:
 	@chmod +x dynearthsol-gospl
 endif
 
+## $(call ensure_submodule,<path>,<a file the build needs in it>,<who needs it>): update a
+## submodule git reports as missing or on another commit; restore the deleted files of one whose
+## file is gone although git reports its checkout (its .git link kept), edited files as they are.
+define ensure_submodule
+@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		if git submodule status $(1) | grep -q '^[-+]'; then \
+			echo "   Status mismatch. Updating submodule $(1)..."; \
+			git submodule update --init --recursive --progress --depth 1 $(1); \
+		elif [ ! -f "$(1)/$(2)" ]; then \
+			echo "   $(1)/$(2) is missing. Restoring the deleted files of submodule $(1)..."; \
+			git -C $(1) ls-files -z --deleted | xargs -0 git -C $(1) checkout --; \
+		fi; \
+	elif [ ! -f "$(1)/$(2)" ]; then \
+		echo "Error: $(3) requires the $(1) submodule, but git is unavailable or this source tree is not a git checkout."; \
+		echo "       Please provide $(1), e.g. with 'git submodule update --init --recursive $(1)'."; \
+		exit 1; \
+	fi
+endef
+
 ## check-deps first, as a prerequisite rather than another line in this recipe,
 ## so that the ordering holds under `make -j` and `make check-deps` still works
 ## on its own.
 prepare: check-deps $(FLAG_STAMPS)
-	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		if git submodule status $(ANN_DIR) | grep -q '^[-+]'; then \
-			echo "   Status mismatch. Updating submodule $(ANN_DIR)..."; \
-			git submodule update --init --recursive --progress --depth 1 $(ANN_DIR); \
-		fi; \
-	elif [ -f "$(ANN_DIR)/include/nanoflann.hpp" ]; then \
-		:; \
-	else \
-		echo "Error: DES build requires $(ANN_DIR), but git is unavailable or this source tree is not a git checkout."; \
-		echo "       Please initialize/provide $(ANN_DIR) before building with 'git submodule update --init --recursive $(ANN_DIR)'."; \
-		exit 1; \
-	fi
+	$(call ensure_submodule,$(ANN_DIR),include/nanoflann.hpp,DES)
 ifeq ($(openacc), 1)
-	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		if git submodule status $(KNN_BVH_DIR) | grep -q '^[-+]'; then \
-			echo "   Status mismatch. Updating submodule $(KNN_BVH_DIR)..."; \
-			git submodule update --init --recursive --progress --depth 1 $(KNN_BVH_DIR); \
-		fi; \
-	elif [ -f "$(KNN_BVH_DIR)/Makefile" ]; then \
-		:; \
-	else \
-		echo "Error: OpenACC build requires $(KNN_BVH_DIR), but git is unavailable or this source tree is not a git checkout."; \
-		echo "       Please initialize/provide $(KNN_BVH_DIR) before building with openacc=1."; \
-		exit 1; \
-	fi
+	$(call ensure_submodule,$(KNN_BVH_DIR),Makefile,openacc=1)
 endif
 ifeq ($(usemmg), 1)
-	@if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		if git submodule status mmg | grep -q '^[-+]'; then \
-			echo "   Status mismatch. Updating submodule mmg..."; \
-			git submodule update --init --recursive --progress --depth 1 mmg; \
-		fi; \
-	elif [ -f "mmg/CMakeLists.txt" ]; then \
-		:; \
-	else \
-		echo "Error: usemmg requires the mmg submodule, but git is unavailable or this source tree is not a git checkout."; \
-		echo "       Please initialize/provide the mmg submodule before building with usemmg=1."; \
-		exit 1; \
-	fi
+	$(call ensure_submodule,mmg,CMakeLists.txt,usemmg=1)
 
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
