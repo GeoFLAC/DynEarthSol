@@ -1767,52 +1767,33 @@ void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 #endif
 }
 
-void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, \
+void correct_surface_element(const Variables& var, double_vec& volume, \
     tensor_t& stress, tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
-    #pragma omp parallel default(none) \
-        shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
+    #pragma omp parallel for default(none) \
+        shared(var, volume, stress, strain, strain_rate, plstrain)
 #endif
-    {
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
-        for (int i=0; i<var.ntop_elems; i++) {
-            const int e = (*var.top_elems)[i];
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
+    for (int i=0; i<var.ntop_elems; i++) {
+        const int e = (*var.top_elems)[i];
 
-            ConstArrayIndirectAccessor coord1 = var.coord->view_const((*var.connectivity)[e]);
-            double new_volumes = compute_volume(coord1);
-            double rdv =  new_volumes / volume[e];
-            volume[e] = new_volumes;
-            if (rdv < 1.0) continue;
+        ConstArrayIndirectAccessor coord1 = var.coord->view_const((*var.connectivity)[e]);
+        double new_volumes = compute_volume(coord1);
+        double rdv =  new_volumes / volume[e];
+        volume[e] = new_volumes;
+        if (rdv < 1.0) continue;
 
-            // correct stress and strain
-            plstrain[e] /= rdv;
-            // correct the plastic strain overestimation of surface element caused by sedimentation.
-            for (int j=0;j<NSTR;j++) {
-                stress[e][j] /= rdv;
-                strain[e][j] /= rdv;
-                strain_rate[e][j] /= rdv;
-            }
-        }
-
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
-        for (int n=0;n<var.surfinfo.ntop;n++) {
-            int nt = (*var.surfinfo.top_nodes)[n];
-            const int npatch = var.support.size(nt);
-            const int* patch = var.support.patch(nt);
-            double acc = 0.;
-            for (int i=0;i<npatch;i++)
-                acc += volume[patch[i]];
-            volume_n[nt] = acc;
+        // correct stress and strain
+        plstrain[e] /= rdv;
+        // correct the plastic strain overestimation of surface element caused by sedimentation.
+        for (int j=0;j<NSTR;j++) {
+            stress[e][j] /= rdv;
+            strain[e][j] /= rdv;
+            strain_rate[e][j] /= rdv;
         }
     }
 
@@ -1943,7 +1924,7 @@ void update_surface_topography(const Param& param, const Variables& var, array_t
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, \
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
                        int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
@@ -1957,7 +1938,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
     update_surface_topography(param, var, coord, surfinfo);
 
-    correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
+    correct_surface_element(var, volume, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
         // The main loop rebuilds the serpentinization grid under this same step

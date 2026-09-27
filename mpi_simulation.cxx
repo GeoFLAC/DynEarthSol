@@ -928,7 +928,6 @@ struct MpiSimulation::Impl {
     Fields surface_node_fields(Variables& var) {
         Fields fields;
         fields.add(var.coord);
-        fields.add(var.volume_n);
         return fields;
     }
 
@@ -945,11 +944,10 @@ struct MpiSimulation::Impl {
     // Correct each rank's surface elements for their volume change since the last coordinate update.
     void correct_surface() {
         Variables& var = local;
-        correct_surface_element(var, *var.volume, *var.volume_n, *var.stress, *var.strain, *var.strain_rate,
+        correct_surface_element(var, *var.volume, *var.stress, *var.strain, *var.strain_rate,
                                 *var.plstrain);
         exchange(MpiEntity::Element, {{var.volume->data(), 1}, {var.plstrain->data(), 1},
             {var.stress->data(), NSTR}, {var.strain->data(), NSTR}, {var.strain_rate->data(), NSTR}});
-        exchange(MpiEntity::Node, {{var.volume_n->data(), 1}});
     }
 
     void boundary() {
@@ -1288,7 +1286,7 @@ struct MpiSimulation::Impl {
             else boundary();
             if (rank == 0)
                 surface_processes(param, *master, *master->coord, *master->stress, *master->strain,
-                                  *master->strain_rate, *master->plstrain, *master->volume, *master->volume_n,
+                                  *master->strain_rate, *master->plstrain, *master->volume,
                                   master->surfinfo, master->markersets, *master->elemmarkers,
                                   *master->markers_in_elem);
             if (whole) distribute(false);

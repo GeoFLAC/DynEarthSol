@@ -772,7 +772,7 @@ void update_mesh(const Param& param, Variables& var)
                 top_before[t] = side_wall_top_z(var, t);
     }
     surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                  *var.plstrain, *var.volume, *var.volume_n, \
+                  *var.plstrain, *var.volume, \
                   var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     var.func_time.surface_time += get_nanoseconds() - surface_start;
     ++var.nsurface;

@@ -3637,8 +3637,8 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
         (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
-    // The node loop below divides by var.volume_n, which compute_mass fills first and
-    // correct_surface_element rewrites at top nodes (a call before compute_mass gives +inf sizes;
+    // The node loop below divides by var.volume_n, which compute_mass fills (a call before
+    // compute_mass gives +inf sizes;
     // the size test also catches a fill from a smaller nnode). compute_mass leaves its node kernel
     // async: without the wait this host read sees the pre-kernel zeros.
     #pragma acc wait
