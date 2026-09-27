@@ -66,7 +66,7 @@ const char* const no_code_diff = "not embedded -- this binary was built without 
 // the block. Versions and options only: no paths, no environment.
 __attribute__((used)) const char snapshot_sentinel[] =
     "build.snapshot.code       : rev=" DES_REVISION " branch=" DES_BRANCH DES_DIRTY
-    " origin=" DES_ORIGIN " state_utc=" DES_STATE_UTC
+    " origin=" DES_ORIGIN " state_time=" DES_STATE_TIME
     // ndims from THREED keeps build_revision.hpp dimension-neutral.
     "\nbuild.snapshot.options    :"
 #ifdef THREED
@@ -464,18 +464,25 @@ std::string read_hostname()
     return "unknown";
 }
 
-// %FT%TZ in UTC; "unknown" on failure -- strftime leaves the buffer indeterminate.
-std::string utc_stamp(std::time_t t)
+// local_now()'s format for any instant; "unknown" on failure, since strftime then
+// leaves the buffer indeterminate.
+std::string local_stamp(std::time_t t)
 {
-    char stamp[32];
-    if (const std::tm* utc = std::gmtime(&t))
-        if (std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", utc) > 0)
-            return stamp;
-    return "unknown";
+    char stamp[64];   // 24 fixed chars, a space, the zone: a zone over ~38 reads "unknown"
+    const std::tm* local = std::localtime(&t);
+    if (!local || std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S%z %Z", local) == 0)
+        return "unknown";
+    // %z prints -0500 (GNU's %:z is not portable) or nothing; its sign follows the 19
+    // chars of "YYYY-MM-DDTHH:MM:SS", and the colon goes after the hour.
+    const std::size_t sign = 19;
+    std::string s(stamp);
+    if (s.size() > sign + 3 && (s[sign] == '+' || s[sign] == '-'))
+        s.insert(sign + 3, 1, ':');
+    return s;
 }
 
 // The executable's mtime: a timestamp embedded in the binary would change the binary.
-std::string exe_mtime_utc()
+std::string read_exe_mtime()
 {
     char path[4096];   // Linux PATH_MAX; an over-long path degrades to "unknown"
 #if defined(__APPLE__)
@@ -491,7 +498,7 @@ std::string exe_mtime_utc()
 #ifndef WIN32
     struct stat st;
     if (stat(path, &st) != 0) return "unknown";
-    return utc_stamp(st.st_mtime);
+    return local_stamp(st.st_mtime);
 #endif
 }
 
@@ -556,9 +563,9 @@ int omp_team_size_now()
 #endif
 }
 
-std::string utc_now()
+std::string local_now()
 {
-    return utc_stamp(std::time(NULL));
+    return local_stamp(std::time(NULL));
 }
 
 // Free+inactive pages on macOS (free_count includes the speculative ones), MemAvailable
@@ -676,10 +683,10 @@ BuildInfo probe_build_info()
     const std::size_t eq = dirty.find('=');
     b.dirty = (eq == std::string::npos) ? "clean" : dirty.substr(eq + 1);
     b.origin = DES_ORIGIN;
-    b.state_utc = DES_STATE_UTC;
+    b.state_time = DES_STATE_TIME;
     b.build_os = DES_BUILD_OS;
     b.builder = DES_BUILDER;
-    b.exe_mtime_utc = exe_mtime_utc();
+    b.exe_mtime = read_exe_mtime();
 
     return b;
 }
@@ -770,7 +777,7 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
         add(run, "restart_from_model", param.sim.restarting_from_modelname);
         add(run, "restart_from_frame", std::to_string(param.sim.restarting_from_frame));
     }
-    add(run, "start_utc", utc_now());
+    add(run, "start_time", local_now());
     add_section(m, "runtime.model", run);
 
     Fields host;
@@ -839,10 +846,10 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
                 add(env, acc_env_names[i], v);
     add_section(m, "runtime.env", env);
 
-    // The embedded block as [build.*] sections; exe_mtime_utc joins the host line, the block's
+    // The embedded block as [build.*] sections; exe_mtime joins the host line, the block's
     // last, so the parse files it there.
     const std::string block = std::string(snapshot_sentinel)
-                            + " exe_mtime_utc=" + build.exe_mtime_utc;
+                            + " exe_mtime=" + build.exe_mtime;
     std::istringstream blocklines(block);
     std::string line;
     Fields compile, link, other;        // the bare-flag-list topics, by stage

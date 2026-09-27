@@ -34,10 +34,10 @@ struct BuildInfo {
     std::string branch;
     std::string dirty;      // file/±line counts ("2f/+13/-12"), or "clean"
     std::string origin;     // credential-stripped remote URL
-    std::string state_utc;  // when the source/configuration state last changed, not a build time
+    std::string state_time; // when the source/configuration state last changed, not a build time
     std::string build_os;   // the build host's OS
     std::string builder;    // user@host that built the binary
-    std::string exe_mtime_utc; // the executable file's mtime: a cp or a touch moves it
+    std::string exe_mtime;  // the executable file's mtime: a cp or a touch moves it
 };
 
 // The offload device this process got, not a build property: an openacc=1 binary falls
@@ -89,7 +89,7 @@ void report_mesh_info(const Variables& var, const char* tag);
 int omp_team_size_now();
 
 // Samples for the frame provenance: each degrades to "unknown" or 0 rather than fail.
-std::string utc_now();
+std::string local_now();          // "2026-09-26T18:53:59-05:00 CDT": local, offset, zone
 // This process's rss, sampled once and folded into the caller's running peak, floored at
 // that sample: a record never shows a peak below its own rss.
 double sample_rss_gib(double& peak_rss_gib);

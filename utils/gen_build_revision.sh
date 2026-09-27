@@ -112,7 +112,8 @@ if [ "$src_mmg" = submodule ] && [ -r "$DES_REV_MMG_DIR/build/.mmg-rev" ]; then
 fi
 
 # --- build host --------------------------------------------------------------
-sutc=$(date -u "+%FT%TZ")
+# The run side's local-time format from one date call; %:z is GNU-only, so sed adds the colon.
+stime=$(date "+%Y-%m-%dT%H:%M:%S%z %Z" | sed 's/\([+-][0-9][0-9]\)\([0-9][0-9]\) /\1:\2 /')
 buser=$(id -un 2>/dev/null) || buser=unknown
 [ -n "$buser" ] || buser=unknown
 bhost=$(hostname -s 2>/dev/null) || bhost=unknown
@@ -134,7 +135,7 @@ tmp=$out.tmp.$$   # per process: two builds in one tree may run this at once
     printf '#define DES_BRANCH "%s"\n'        "$branch"
     printf '#define DES_DIRTY "%s"\n'         "${dirty:+ dirty=$dirty}"
     printf '#define DES_ORIGIN "%s"\n'        "$origin"
-    printf '#define DES_STATE_UTC "%s"\n'     "$sutc"
+    printf '#define DES_STATE_TIME "%s"\n'    "$stime"
     printf '#define DES_BUILD_OS "%s"\n'      "$bos"
     printf '#define DES_BUILDER "%s"\n'       "$buser@$bhost"
     printf '#define DES_MAKE_OPTS "%s"\n'     "$DES_REV_MK_OPTS"
@@ -231,9 +232,9 @@ fi
 rm -f "$tmp.body"
 
 # --- replace only on a real change ------------------------------------------
-# Compared without DES_STATE_UTC, or every make would relink everything.
-grep -v '^#define DES_STATE_UTC ' "$tmp" > "$tmp.cmp1"
-grep -v '^#define DES_STATE_UTC ' "$out" > "$tmp.cmp2" 2>/dev/null || :
+# Compared without DES_STATE_TIME, or every make would relink everything.
+grep -v '^#define DES_STATE_TIME ' "$tmp" > "$tmp.cmp1"
+grep -v '^#define DES_STATE_TIME ' "$out" > "$tmp.cmp2" 2>/dev/null || :
 if cmp -s "$tmp.cmp1" "$tmp.cmp2"; then
     rm -f "$tmp" "$tmp.cmp1" "$tmp.cmp2"
     exit 0

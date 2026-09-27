@@ -8,7 +8,8 @@ DES records where each build, run and frame came from:
 | The run | in `<modelname>.manifest`, beside the model's output |
 | Each frame | in the frame: a `/provenance` group (HDF5), a `provenance` record (des-binary) |
 
-Unknown values read `"unknown"`, `-1` or `0`.
+Times are local, with their UTC offset and zone: `2026-09-26T18:53:59-05:00 CDT`. Unknown values
+read `"unknown"`, `-1` or `0`.
 
 ## The build
 
@@ -46,7 +47,7 @@ The manifest uses the cfg format, with these sections in this order:
 | `[runtime.device]` | `kernel` (`CPU` or `GPU`); on a GPU run, the device, its driver and memory |
 | `[runtime.threads]` | whether OpenMP is on, the team size, and the wait policy |
 | `[runtime.env]` | the thread and device variables that are set, DES's own macOS default included |
-| `[build.*]` | the executable's `build.snapshot` block, and `exe_mtime_utc`, the file's own mtime |
+| `[build.*]` | the executable's `build.snapshot` block, and `exe_mtime`, the file's own mtime |
 | `build.code-changes` | under `snapshot_diff=1` the diff, else a line saying it was not embedded |
 
 * `omp_threads` is the team size as measured, not read from `OMP_NUM_THREADS`. `OMP_NUM_THREADS`
@@ -69,8 +70,8 @@ The record is written with the first frame, together with the first `.info` row.
 ### Which executable wrote it
 
 A manifest describes the executable that *wrote* it. To see whether that executable was rebuilt
-since, compare the manifest's `exe_mtime_utc` and `state_utc` with the executable you have now.
-A plain `cp` or `touch` moves the mtime, so `exe_mtime_utc` dates the file, not the build.
+since, compare the manifest's `exe_mtime` and `state_time` with the executable you have now. A
+plain `cp` or `touch` moves the mtime, so `exe_mtime` dates the file, not the build.
 
 ## Each frame
 
@@ -85,8 +86,8 @@ strings <model>.save.000000                            # des-binary build
 
 | Fields | What they say |
 |---|---|
-| `code_rev`, `code_branch`, `code_dirty`, `code_origin`, `code_state_utc` | the source |
-| `build_os`, `builder`, `exe_mtime_utc` | the build's OS and user@host, the executable's mtime |
+| `code_rev`, `code_branch`, `code_dirty`, `code_origin`, `code_state_time` | the source |
+| `build_os`, `builder`, `exe_mtime` | the build's OS and user@host, the executable's mtime |
 | `os`, `runner`, `cpu_model`, `logical_cores`, `mem_total_gib`, `kernel` | the machine it ran on |
 | `omp_threads` | the team size at this write, as measured; `-1` in an `openmp=0` build |
 | `restart_from` | `no`, or the `<model>:<frame>` this run restarted from |
@@ -108,7 +109,7 @@ series:
 | `mem_avail_gib`, `load_avg_1m` | the machine's available memory and 1-minute load |
 | `cpu_time_sec` | this run's CPU time |
 | `gpu_mem_used_dev_gib` | the device memory in use: the whole device, not this run |
-| `write_utc` | when the frame was written |
+| `write_time` | when the frame was written |
 
 Read the series with its caveats:
 

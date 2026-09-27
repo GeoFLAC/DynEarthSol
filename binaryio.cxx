@@ -51,10 +51,10 @@ void provenance_fields(Sink& sink, const BuildInfo& build, const CpuInfo& cpu,
     sink("code_branch", build.branch);
     sink("code_dirty", build.dirty);
     sink("code_origin", build.origin);
-    sink("code_state_utc", build.state_utc);
+    sink("code_state_time", build.state_time);
     sink("build_os", build.build_os);
     sink("builder", build.builder);
-    sink("exe_mtime_utc", build.exe_mtime_utc);
+    sink("exe_mtime", build.exe_mtime);
 
     sink("os", cpu.os);
     sink("runner", cpu.runner);
@@ -86,7 +86,7 @@ void provenance_fields(Sink& sink, const BuildInfo& build, const CpuInfo& cpu,
     sink("mem_avail_gib", host_mem_avail_gib_now());
     sink("cpu_time_sec", process_cpu_time_sec());
     sink("load_avg_1m", host_load_avg_1m());
-    sink("write_utc", utc_now());
+    sink("write_time", local_now());
 }
 
 } // anonymous namespace
