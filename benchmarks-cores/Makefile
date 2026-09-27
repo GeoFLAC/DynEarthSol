@@ -73,7 +73,11 @@ $(error unknown make variable(s): $(UNKNOWN_VARS). Known: $(KNOWN_VARS))
 endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
-IS_RESTARTING := $(shell awk -F '=' '/^is_restarting/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
+# As the binary reads it: this key only (not is_restarting_weakzone), no trailing comment, any
+# case; true is yes, true, on or 1. HASH: make 3.81 reads a bare "#" in a function call
+# as a comment, 4.3+ reads "\#" as is.
+HASH := \#
+IS_RESTARTING := $(shell awk -F '=' '/^[ \t]*is_restarting[ \t]*=/ {sub(/$(HASH).*/, "", $$2); gsub(/[ \t]/, "", $$2); print tolower($$2)}' $(CASE))
 RESTARTING_FROM_MODELNAME := $(shell awk -F '=' '/^[ \t]*restarting_from_modelname/ {gsub(/^[ \t]+|[ \t]+$$/, "", $$2); print $$2}' $(CASE))
 JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
 CASENAME = $(notdir $(CASE))
@@ -103,7 +107,7 @@ RESTART_TEST = OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
 # One model under another spelling ("./result", an absolute path, a symlinked directory):
 # resolve the directory. A prefix differing only in case is not caught.
 model_loc = $(realpath $(dir $(1)))/$(notdir $(1))
-ifeq ($(IS_RESTARTING),yes)
+ifneq ($(filter yes true on 1,$(IS_RESTARTING)),)
   ifeq ($(call model_loc,$(MODELNAME)),$(call model_loc,$(RESTARTING_FROM_MODELNAME)))
     define RUN_TEST
       @echo "Warning: MODELNAME '$(MODELNAME)' and RESTARTING_FROM_MODELNAME '$(RESTARTING_FROM_MODELNAME)' name one model: Avoid rm -f"
