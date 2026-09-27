@@ -51,6 +51,13 @@ Output::~Output()
 {}
 
 
+double Output::update_peak_rss_gib()
+{
+    sample_rss_gib(peak_rss_gib);
+    return peak_rss_gib;
+}
+
+
 void Output::write_info(const Variables& var, double dt)
 {
     char buffer[256];

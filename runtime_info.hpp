@@ -1,6 +1,7 @@
 #ifndef DYNEARTHSOL_RUNTIME_INFO_HPP
 #define DYNEARTHSOL_RUNTIME_INFO_HPP
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -82,6 +83,11 @@ void report_build_and_runtime_info(const Manifest& manifest);
 // keep_existing: append even on a fresh run, for a run about to fail.
 void write_manifest(const Param& param, const Manifest& manifest,
                     bool keep_existing = false);
+// Appends [runtime.end] when the time loop ends; a record without one did not end normally.
+// manifest is the start record, written again first if the file went missing.
+void write_manifest_end(const Param& param, const Manifest& manifest, const Variables& var,
+                        int steps_this_run, int64_t wall_ns, int64_t init_ns,
+                        int64_t compute_ns, double peak_rss_gib);
 void report_mesh_info(const Variables& var, const char* tag);
 
 // The team size a region gets now; CpuInfo's is one startup sample, which a dynamic team

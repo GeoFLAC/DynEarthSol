@@ -1024,6 +1024,9 @@ int main(int argc, const char* argv[])
 
     monitor_finalize(var);
 
+    // Before end() deletes the Output that keeps the run's peak.
+    const double peak_rss_gib = var.output->update_peak_rss_gib();
+
     // at end of code, clean up lost memory reported by valgrind
     end(var);
 
@@ -1067,5 +1070,8 @@ int main(int argc, const char* argv[])
         }
 #endif
     }
+
+    write_manifest_end(param, manifest, var, var.steps - static_cast<int>(starting_step),
+                       duration_ns, init_time, computation_time, peak_rss_gib);
     return 0;
 }

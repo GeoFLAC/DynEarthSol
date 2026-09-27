@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -48,6 +49,7 @@
 #include <mmg/common/mmgversion.h>
 #endif
 #include "binaryio.hpp"
+#include "constants.hpp"
 
 namespace {
 
@@ -192,7 +194,7 @@ std::string format_double(const char* spec, double v)
     return buf;
 }
 
-// %.1f in the manifest and on screen; frames keep the full precision.
+// %.1f in the start record and on screen; frames keep the full precision.
 std::string gib_or_unknown(double gib)
 {
     return (gib > 0) ? format_double("%.1f", gib) : std::string("unknown");
@@ -213,6 +215,20 @@ typedef std::vector<Field> Fields;
 void add(Fields& fs, const std::string& key, const std::string& value)
 {
     fs.push_back(Field(key, value));
+}
+
+// A duration twice: "Nd HH:MM:SS" to read, the day part from one day up, then seconds.
+void add_duration(Fields& fs, const std::string& name, double sec)
+{
+    const long long s = std::llround(sec);
+    char buf[48];   // the longest, "106751d 23:59:59", is 16
+    if (s >= 86400)
+        std::snprintf(buf, sizeof(buf), "%lldd %02lld:%02lld:%02lld",
+                      s / 86400, s % 86400 / 3600, s % 3600 / 60, s % 60);
+    else
+        std::snprintf(buf, sizeof(buf), "%02lld:%02lld:%02lld", s / 3600, s % 3600 / 60, s % 60);
+    add(fs, name, buf);
+    add(fs, name + "_sec", format_double("%.3f", sec));
 }
 
 // Unprobed = absent in the manifest; frames instead carry a fixed set with sentinels.
@@ -241,6 +257,17 @@ std::FILE* open_manifest(const std::string& filename, const char* mode, const ch
         std::cerr << "Warning: cannot open file '" << filename << "' for writing; "
                   << lost << " not recorded\n";
     return f;
+}
+
+// Check the error flag AND fclose: a record is smaller than the stdio buffer, so on a
+// full disk ferror still reads clean while fclose fails and the record is lost.
+void close_manifest(std::FILE* f, const std::string& filename)
+{
+    const bool write_failed = (std::ferror(f) != 0);
+    const bool close_failed = (std::fclose(f) != 0);
+    if (write_failed || close_failed)
+        std::cerr << "Warning: failed writing to file '" << filename
+                  << "'; run provenance may be incomplete\n";
 }
 
 // A key starts with a letter or '_', a compiler flag with '-': that tells a key=value
@@ -882,6 +909,23 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
     return m;
 }
 
+// The start record: its sections, then the code-changes block or the line saying none.
+static void write_record(std::FILE* f, const Manifest& manifest)
+{
+    for (std::size_t i = 0; i < manifest.size(); ++i)
+        write_section(f, manifest[i].name, manifest[i].fields);
+
+#ifdef DES_HAS_CODE_DIFF
+    // Verbatim, so the binary's sed recipe reads it here too; last, as the one non-INI and
+    // unbounded (1 MB) part.
+    std::fprintf(f, "%s\n", snapshot_code_diff);
+#else
+    // Said, not left out: "not built with it" must not read like a clean tree. A comment,
+    // so no INI reader takes it for a key.
+    std::fprintf(f, "# build.code-changes: %s\n", no_code_diff);
+#endif
+}
+
 void write_manifest(const Param& param, const Manifest& manifest, bool keep_existing)
 {
     const std::string filename(param.sim.modelname + ".manifest");
@@ -899,26 +943,65 @@ void write_manifest(const Param& param, const Manifest& manifest, bool keep_exis
                         ? "# ---- a run that could not start follows ----\n\n"
                         : "# ---- restart: another record follows ----\n\n");
 
-    for (std::size_t i = 0; i < manifest.size(); ++i)
-        write_section(f, manifest[i].name, manifest[i].fields);
+    write_record(f, manifest);
 
-#ifdef DES_HAS_CODE_DIFF
-    // Verbatim, so the binary's sed recipe reads it here too; last, as the one non-INI and
-    // unbounded (1 MB) part.
-    std::fprintf(f, "%s\n", snapshot_code_diff);
-#else
-    // Said, not left out: "not built with it" must not read like a clean tree. A comment,
-    // so no INI reader takes it for a key.
-    std::fprintf(f, "# build.code-changes: %s\n", no_code_diff);
-#endif
+    close_manifest(f, filename);
+}
 
-    // Check the error flag AND fclose: the record is smaller than the stdio buffer, so
-    // on a full disk ferror still reads clean while fclose fails and the record is lost.
-    const bool write_failed = (std::ferror(f) != 0);
-    const bool close_failed = (std::fclose(f) != 0);
-    if (write_failed || close_failed)
-        std::cerr << "Warning: failed writing to file '" << filename
-                  << "'; run provenance may be incomplete\n";
+void write_manifest_end(const Param& param, const Manifest& manifest, const Variables& var,
+                        int steps_this_run, int64_t wall_ns, int64_t init_ns,
+                        int64_t compute_ns, double peak_rss_gib)
+{
+    // What a reader asks first leads: did it finish and why, how long, how far, what it
+    // cost; then where the time went, each phase as time, count and average.
+    Fields end;
+    add(end, "end_time", local_now());
+    // Which of the time loop's two exits fired; max_steps when both did.
+    add(end, "stopped_by", var.steps >= param.sim.max_steps ? "max_steps" : "max_time_in_yr");
+    add_duration(end, "wall_time", wall_ns * 1e-9);
+    add(end, "last_step", std::to_string(var.steps));
+    // Below last_step only on a restart, which resumes the step count.
+    add(end, "steps_this_run", std::to_string(steps_this_run));
+    add(end, "model_time_yr", format_double("%.6g", var.time / YEAR2SEC));
+    add(end, "nnode", std::to_string(var.nnode));
+    add(end, "nelem", std::to_string(var.nelem));
+    // Against wall_time x omp_threads, the run's parallel efficiency.
+    const double cpu_sec = process_cpu_time_sec();
+    if (cpu_sec > 0) add_duration(end, "cpu_time", cpu_sec);
+    // %.3g, not gib_or_unknown's %.1f: a small run's peak would read 0.0.
+    if (peak_rss_gib > 0) add(end, "mem_peak_rss_gib", format_double("%.3g", peak_rss_gib));
+
+    // The screen's time summary: wall = init + compute + remesh + output, compute being the
+    // remainder. Per step divides by this run's steps, not the resumed count the screen uses.
+    add_duration(end, "init_time", init_ns * 1e-9);
+    add_duration(end, "compute_time", compute_ns * 1e-9);
+    add(end, "compute_sec_per_step", format_double("%.6g", compute_ns * 1e-9 / steps_this_run));
+    add_duration(end, "remesh_time", var.func_time.remesh_time * 1e-9);
+    add(end, "remeshings", std::to_string(var.nremesh));
+    // Absent without a remesh, as on screen; outputs >= 1 (the frame before the loop).
+    if (var.nremesh > 0)
+        add(end, "remesh_sec_per_remesh",
+            format_double("%.6g", var.func_time.remesh_time * 1e-9 / var.nremesh));
+    add_duration(end, "output_time", var.func_time.output_time * 1e-9);
+    add(end, "outputs", std::to_string(var.noutput));
+    add(end, "output_sec_per_output",
+        format_double("%.6g", var.func_time.output_time * 1e-9 / var.noutput));
+
+    // Appended to this run's record: after its start sections, before any restart's seam.
+    const std::string filename(param.sim.modelname + ".manifest");
+    std::FILE* f = open_manifest(filename, "a", "run end");
+    if (f == NULL) return;
+    // The start record exists only in this file: one deleted or emptied during the run
+    // gets it back from memory, so the end never stands alone.
+    std::fseek(f, 0, SEEK_END);
+    if (std::ftell(f) == 0) {
+        std::fprintf(f, "# ---- the manifest went missing during the run: record rewritten"
+                        " at its end ----\n\n");
+        write_record(f, manifest);
+    }
+    std::fprintf(f, "\n");
+    write_section(f, "runtime.end", end);
+    close_manifest(f, filename);
 }
 
 DeviceInfo init_offload_device()

@@ -49,6 +49,7 @@ The manifest uses the cfg format, with these sections in this order:
 | `[runtime.env]` | the thread and device variables that are set, DES's own macOS default included |
 | `[build.*]` | the executable's `build.snapshot` block, and `exe_mtime`, the file's own mtime |
 | `build.code-changes` | under `snapshot_diff=1` the diff, else a line saying it was not embedded |
+| `[runtime.end]` | how the run ended; see below |
 
 * `omp_threads` is the team size as measured, not read from `OMP_NUM_THREADS`. `OMP_NUM_THREADS`
   sets the team; unset, OpenMP takes every logical CPU, which on a hybrid CPU includes the
@@ -66,6 +67,36 @@ The record is written with the first frame, together with the first `.info` row.
 * A run that dies before its first frame leaves the file as it was.
 * A GPU build that finds no device appends its record at once, after a
   `# ---- a run that could not start follows ----` line.
+* A manifest deleted or emptied during the run gets its start record back at the end, after a
+  `# ----` line saying so.
+
+### How the run ended: `[runtime.end]`
+
+When the time loop ends, `[runtime.end]` closes the record. A record without it died, was killed,
+or is still running.
+
+Its first three fields are `end_time`, `stopped_by` (`max_steps` or `max_time_in_yr`) and
+`wall_time`, so this shows how every run of a sweep ended and how long it took:
+
+```bash
+grep -A3 '^\[runtime.end\]' */*.manifest
+```
+
+The other fields:
+
+| Fields | What they say |
+|---|---|
+| `last_step`, `steps_this_run`, `model_time_yr`, `nnode`, `nelem` | how far it got |
+| `cpu_time`, `mem_peak_rss_gib` | what it cost |
+| `init_time`, `compute_time`, `remesh_time`, `output_time` | the screen's time summary |
+| `compute_sec_per_step` | the compute time over `steps_this_run` |
+| `remeshings`, `remesh_sec_per_remesh` | the remesh count and average |
+| `outputs`, `output_sec_per_output` | the output count and average |
+
+* As on screen, wall = init + compute + remesh + output.
+* `remesh_sec_per_remesh` is left out when the run did not remesh.
+* Every total is written twice, to read and in seconds to the millisecond:
+  `wall_time = 3d 01:01:11` (the day part from one day up) and `wall_time_sec = 262871.412`.
 
 ### Which executable wrote it
 

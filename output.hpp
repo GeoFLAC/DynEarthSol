@@ -50,6 +50,8 @@ public:
     void write_exact_error(const Variables& var);
     void write_checkpoint(const Param& param, const Variables& var);
     void average_fields(Variables& var);
+    // The running peak with one more sample folded in, for the manifest's end record.
+    double update_peak_rss_gib();
 
 };
 
