@@ -74,10 +74,10 @@ endif
 
 MODELNAME := $(shell awk -F '=' '/^modelname/ {gsub(/^[ \t]+|[ \t]+/, "", $$2); print $$2}' $(CASE))
 # As the binary reads it: this key only (not is_restarting_weakzone), no trailing comment, any
-# case; true is yes, true, on or 1. HASH: make 3.81 reads a bare "#" in a function call
+# case; true is yes, true, on, 1 or empty. HASH: make 3.81 reads a bare "#" in a function call
 # as a comment, 4.3+ reads "\#" as is.
 HASH := \#
-IS_RESTARTING := $(shell awk -F '=' '/^[ \t]*is_restarting[ \t]*=/ {sub(/$(HASH).*/, "", $$2); gsub(/[ \t]/, "", $$2); print tolower($$2)}' $(CASE))
+IS_RESTARTING := $(shell awk -F '=' '/^[ \t]*is_restarting[ \t]*=/ {sub(/$(HASH).*/, "", $$2); gsub(/[ \t]/, "", $$2); print ($$2 == "" ? "true" : tolower($$2))}' $(CASE))
 RESTARTING_FROM_MODELNAME := $(shell awk -F '=' '/^[ \t]*restarting_from_modelname/ {gsub(/^[ \t]+|[ \t]+$$/, "", $$2); print $$2}' $(CASE))
 JOBNAME = ${CASE}.${OMP}-${DATE}-${HOST}-${KERNEL}-${NUM}
 CASENAME = $(notdir $(CASE))
