@@ -472,6 +472,8 @@ def main(modelname, start, end, delta):
         end = len(des.frames)
 
     indices = list(range(start, end, delta))
+    # frame numbers, not output indices: a restarted model's output 0 is its restart frame
+    frames = des.frames[start:end:delta]
 
     nout = len(indices)
     ndigit = len(str(nout))
@@ -484,7 +486,8 @@ def main(modelname, start, end, delta):
     try:
         import multiprocessing as mp
         print(f'Using {mutiprocessing_threads} threads (-ncpu {mutiprocessing_threads}) for conversion (system max: {mp.cpu_count()}).', file=sys.stderr)
-        print(f'Converting {nout} frames from {start} to {end-1} with step {delta}.', file=sys.stderr)
+        print(f'Converting {nout} frames from {frames[0]} to {frames[-1]} with step {delta}.',
+              file=sys.stderr)
 
         args_list = [(des, prefix, i) for i in indices]
 
