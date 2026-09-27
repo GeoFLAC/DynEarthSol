@@ -100,10 +100,13 @@ endif
 RUN_TEST = rm -f ${MODELNAME}.*; OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
 RESTART_TEST = OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ${EXE} ${CASE}
 
+# One model under another spelling ("./result", an absolute path, a symlinked directory):
+# resolve the directory. A prefix differing only in case is not caught.
+model_loc = $(realpath $(dir $(1)))/$(notdir $(1))
 ifeq ($(IS_RESTARTING),yes)
-  ifeq ($(MODELNAME),$(RESTARTING_FROM_MODELNAME))
+  ifeq ($(call model_loc,$(MODELNAME)),$(call model_loc,$(RESTARTING_FROM_MODELNAME)))
     define RUN_TEST
-      @echo "Warning: MODELNAME & RESTARTING_FROM_MODELNAME are both '$(MODELNAME)': Avoid rm -f"
+      @echo "Warning: MODELNAME '$(MODELNAME)' and RESTARTING_FROM_MODELNAME '$(RESTARTING_FROM_MODELNAME)' name one model: Avoid rm -f"
       ${RESTART_TEST}
     endef
   endif
