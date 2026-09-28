@@ -1539,7 +1539,8 @@ PT's inner loop stagnates badly at a velocity-Dirichlet boundary without it.
 
 With `has_bc_yield_limit=false`, PT reaches `gaussian-weakzone-3d-PT`'s
 target (`max_time_in_yr=8000`) in 50 outer steps / 8:41 of compute. Re-ran
-the identical mesh/ic/mat setup in DR mode (`examples/smooth_pt_test/dr_baseline.cfg`):
+the identical mesh/ic/mat setup in DR mode (`gaussian-weakzone-3d-PT.cfg` with
+`has_PT = no`):
 10,687 steps / **2:12** of compute (`output_step_interval=1` inflates DR's
 *total* wall-clock to 55:41 via 10,687 separate output writes — 95.9% of it
 is I/O, an artifact of mirroring PT's output cadence onto a run needing
@@ -1708,7 +1709,7 @@ Neumann stress BCs during that adjustment. `PT_jump` itself is unchanged, so
 FLAC damping stays off during PT iterations. DR is unaffected (`PT_jump` is
 only set inside PT loops).
 
-**Validation so far** (`examples/smooth_pt_test/`, `resid_*.cfg`, 2 steps):
+**Validation so far** (`gaussian-weakzone-3d-PT` run for 2 steps):
 
 | run | step 1 | step 2 |
 |---|---|---|
@@ -1944,8 +1945,10 @@ With the fixes above, the question from "PT-vs-DR: a corrected cost model"
 becomes: how large can PT's `dt` be while still producing the physically
 required fault (a sharp shear band taking most of the extension)?
 `gaussian-weakzone-3d-PT`, 3D, thermal diffusion off (uniform temperature),
-`dt_fraction` scaling the `dt_advection` limit; all runs to t≈8000 yr;
-configs in `examples/smooth_pt_test/`.
+`dt_fraction` scaling the `dt_advection` limit; all runs to t≈8000 yr.
+The `*.cfg` names below are run labels; the configs were not kept. Each is
+`gaussian-weakzone-3d-PT.cfg` with the changes stated in its row or
+paragraph.
 
 **Intermediate step sizes** (`idt_*.cfg`, piecewise-linear ramp):
 
@@ -2071,6 +2074,68 @@ before localization. Once the fault is slipping, a ~60-yr PT step costs
 ~5.7 s, while DR covers 60 yr in ~80 steps at 0.012 s (~1 s): during
 sustained slip PT is ~6x slower than DR, so a run dominated by active
 faulting would favor DR further.
+
+## Why a converged large step cannot select the localized solution
+
+The "Interpretation" above calls the multiplicity of incremental solutions
+a hypothesis. Here is the mechanism behind it, and why no convergence
+criterion applied within a step can fix it.
+
+**Localization is a history, not a state.** A band forms because the
+elements that yield first keep an advantage: they weaken first, carry more
+of the strain, and unload their neighbors elastically before those
+neighbors yield. Because plastic strain is permanent, the advantage
+compounds over time. The process is a sequence in physical time, and it
+selects the localized branch one small increment at a time. DR resolves
+that sequence automatically.
+
+**A backward-Euler step has no "first."** One PT step solves only for the
+end-of-step state. During the iterations, plastic strain is *not*
+accumulated: the return map builds the target from `stress_old`, the
+start-of-step `plstrain` and the current velocity iterate, and the
+strain/`plstrain` bookkeeping happens once, in the post-PT corrector
+(`update_stress_PT()`). So yielding within the iteration is reversible, and
+the only history the step sees is the contrast in plastic strain at the
+start of the step. The iteration has its own feedback (with the implicit
+map, an element taking more strain in an iterate is also weaker in that
+iterate), but pseudo-time is not physical time, and nothing makes the
+iteration follow the physical order of yielding. It converges to a fixed
+point of the discrete step, and over a large increment that fixed point is
+the diffuse solution.
+
+**Permanence then compounds across steps.** Once a diffuse step is
+accepted, its plastic strain is committed. The next step starts from
+pre-weakened neighbors, the band has lost part of its advantage, and each
+further large step widens the zone. This is what the restart test shows: after a
+25-yr step from DR's localized state, a single 641-yr step added ~600 newly
+yielding elements, and the next one ~1,500 more.
+
+**Consequence: solver-side constraints are not the lever.** Tighter
+tolerance was already shown not to change the answer ("Not
+under-convergence"): iterating further refines the same fixed point rather
+than jumping to another. Perturbing a converged diffuse state and iterating
+on would help only if that state were a saddle, which is unlikely given the
+above. What selects the physical solution is **time resolution of the
+softening process**: each step must be short enough that the band works
+through part of its softening before its neighbors yield. Roughly
+
+    dt ≲ Δε_soft · W / ΔV
+
+(softening plastic-strain range × band width / slip rate), i.e. the time
+the band needs to soften at the imposed slip rate. `PT_max_dpls` is a
+version of this bound, and DR meets it automatically with its small steps.
+With Duvaut-Lions there is a second bound, `dt ≲ τ`, and the binding limit
+is the smaller of the two.
+
+A related estimate from the Duvaut-Lions band-width tests (branch
+`feature/duvaut-lions`, `doc/duvaut-lions-smooth-weakening.md`): the
+regularized band width scales roughly as W ≈ c·τ·G·ΔV/Δσ, with c ≈ 3 and
+the Δσ exponent nearer 0.8 than 1 in a Duretz et al. (2019) Crust-1
+reproduction. Choosing τ so that W spans a few elements of size h makes
+the `dt ≲ τ` bound scale with the mesh, dt ≲ h·Δσ/(G·ΔV) up to O(1)
+factors. For ΔV = 1 cm/yr, Δσ = 50 MPa, G = 30 GPa and h = 1 km, that is
+of order 10² yr: far above DR's step, but still below the step sizes at
+which PT would pay off (see the cost model above).
 
 ## Conclusion: DR is the more efficient solver when strain localization must be modeled
 
