@@ -718,6 +718,7 @@ SRCS =	\
 	nn-interpolation.cxx \
 	output.cxx \
 	phasechanges.cxx \
+	pseudo_transient.cxx \
 	remeshing.cxx \
 	rheology.cxx \
 	runtime_info.cxx \
@@ -752,6 +753,7 @@ INCS =	\
 	output.hpp \
 	parameters.hpp \
 	phasechanges.hpp \
+	pseudo_transient.hpp \
 	remeshing.hpp \
 	rheology.hpp \
 	runtime_info.hpp \
