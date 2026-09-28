@@ -1,0 +1,355 @@
+// B0 focused test: undamped force exposure in update_force.
+// Modes: -DBASE (5-arg API) / -DB0 (6-arg API with force_undamped output).
+// Mesh: two elements sharing node 0, identical constant stress -> cancellation at node 0.
+// Cases: cancellation, Neumann traction, damping exclusion, body force.
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <utility>
+#include <vector>
+
+#include "parameters.hpp"
+#include "fields.hpp"
+#include "matprops.hpp"
+
+#ifndef ATOL
+#define ATOL 1e-9
+#endif
+#ifndef RTOL
+#define RTOL 1e-14
+#endif
+
+static int nfail = 0;
+static int npass = 0;
+
+static bool close(double x, double y) {
+    return std::fabs(x - y) <= ATOL + RTOL * std::fabs(x) + RTOL * std::fabs(y);
+}
+
+static void check(const char* what, double got, double expected) {
+    if (close(got, expected)) { ++npass; }
+    else { ++nfail; std::printf("FAIL %s: got %.17g expected %.17g\n", what, got, expected); }
+}
+
+struct Fixture {
+    Variables var;
+    Param param{};
+    array_t coord, vel, force, force_residual;
+#ifdef B0
+    array_t force_undamped;
+#endif
+    conn_t connectivity;
+    tensor_t stress;
+    elem_cache tmp_result;
+    double_vec volume;
+    double_vec temperature, pressure, pressure_increment, lookup;
+    tensor_t strain_rate;
+    int_vec2D markers;
+    int_vec etmp_int;
+
+    Fixture() {}
+};
+
+static void build_mesh(Fixture& m) {
+    // Node layout: global 0 is shared by both elements (local 0 in each).
+    // Elem 0 non-shared nodes: global 1..NDIMS (unit simplex, positive orientation).
+    // Elem 1 non-shared nodes: global NDIMS+1 .. 2*NDIMS (reflected through origin).
+    const int nnode = 1 + 2 * NDIMS;
+    const int nelem = 2;
+    m.var.nnode = nnode;
+    m.var.nelem = nelem;
+
+    m.coord.resize(nnode);
+    m.vel.resize(nnode);
+    m.force.resize(nnode);
+    m.force_residual.resize(nnode);
+#ifdef B0
+    m.force_undamped.resize(nnode);
+#endif
+    m.connectivity.resize(nelem);
+    m.stress.resize(nelem);
+    m.tmp_result.resize(nelem);
+    m.volume.assign(nelem, 0.0);
+
+    // Element 0: unit simplex in positive octant.
+    for (int i = 0; i < NODES_PER_ELEM; ++i)
+        for (int d = 0; d < NDIMS; ++d)
+            m.coord[i][d] = (i == d + 1) ? 1.0 : 0.0;
+    for (int i = 0; i < NODES_PER_ELEM; ++i)
+        m.connectivity[0][i] = i;
+    m.volume[0] = (NDIMS == 2) ? 0.5 : (1.0 / 6.0);
+
+    // Element 1: reflected through origin. In 3D swap local 1 and 2 to keep
+    // positive orientation (mirror flips handedness).
+    for (int i = 0; i < NODES_PER_ELEM; ++i) {
+        int g = (i == 0) ? 0 : NDIMS + i;
+        for (int d = 0; d < NDIMS; ++d)
+            m.coord[g][d] = -(i == d + 1 ? 1.0 : 0.0);
+    }
+    for (int i = 0; i < NODES_PER_ELEM; ++i) {
+        if (NDIMS == 3 && i == 1) m.connectivity[1][i] = NDIMS + 2;
+        else if (NDIMS == 3 && i == 2) m.connectivity[1][i] = NDIMS + 1;
+        else m.connectivity[1][i] = (i == 0) ? 0 : NDIMS + i;
+    }
+    m.volume[1] = (NDIMS == 2) ? 0.5 : (1.0 / 6.0);
+
+    for (int e = 0; e < nelem; ++e)
+        for (int s = 0; s < NSTR; ++s)
+            m.stress[e][s] = 0.0;
+    for (int i = 0; i < nnode; ++i)
+        for (int d = 0; d < NDIMS; ++d) {
+            m.vel[i][d] = 0.0;
+            m.force[i][d] = 0.0;
+            m.force_residual[i][d] = 0.0;
+#ifdef B0
+            m.force_undamped[i][d] = 0.0;
+#endif
+        }
+
+    // Full CSR support graph from connectivity.
+    m.var.support.arr_data.clear();
+    m.var.support.idx_data.assign(nnode + 1, 0);
+    m.var.support.lidx_data.clear();
+    for (int e = 0; e < nelem; ++e)
+        for (int l = 0; l < NODES_PER_ELEM; ++l)
+            m.var.support.idx_data[m.connectivity[e][l] + 1]++;
+    for (int n = 1; n <= nnode; ++n)
+        m.var.support.idx_data[n] += m.var.support.idx_data[n - 1];
+    m.var.support.arr_data.assign(m.var.support.idx_data[nnode], 0);
+    m.var.support.lidx_data.assign(m.var.support.idx_data[nnode], 0);
+    std::vector<int> fill(m.var.support.idx_data.begin(), m.var.support.idx_data.end() - 1);
+    for (int e = 0; e < nelem; ++e)
+        for (int l = 0; l < NODES_PER_ELEM; ++l) {
+            int n = m.connectivity[e][l];
+            int pos = fill[n]++;
+            m.var.support.arr_data[pos] = e;
+            m.var.support.lidx_data[pos] = l;
+        }
+    m.var.support.rebind();
+
+    m.var.coord = &m.coord;
+    m.var.connectivity = &m.connectivity;
+    m.var.stress = &m.stress;
+    m.var.volume = &m.volume;
+    m.var.vel = &m.vel;
+    m.var.force = &m.force;
+    m.var.force_residual = &m.force_residual;
+
+    for (int i = 0; i < nbdrytypes; ++i) {
+        m.var.vbc_types[i] = 0;
+        m.var.vbc_values[i] = 0.0;
+    }
+    for (int i = 0; i < nbdrytypes_hydro; ++i) {
+        m.var.stress_bc_types[i] = 0;
+        m.var.stress_bc_values[i] = 0.0;
+    }
+    m.param.control.gravity = 0.0;
+    m.param.control.damping_option = 0;
+    m.param.control.damping_factor = 0.0;
+    m.param.ic.has_body_force_adjustment = true;
+}
+
+static void run_update_force(Fixture& m) {
+#ifdef BASE
+    update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result);
+#else
+    update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result, &m.force_undamped);
+    // The optional output cannot change either existing output. Reevaluate the
+    // identical assembly with the default null argument and compare exact bits.
+    std::vector<double> force_before, residual_before;
+    for (int n=0; n<m.var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) {
+            force_before.push_back(m.force[n][d]);
+            residual_before.push_back(m.force_residual[n][d]);
+        }
+    update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result);
+    for (int n=0; n<m.var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) {
+            const int k = n*NDIMS+d;
+            const double f = m.force[n][d], r = m.force_residual[n][d];
+            if (std::memcmp(&f, &force_before[k], sizeof(double)) ||
+                std::memcmp(&r, &residual_before[k], sizeof(double))) {
+                ++nfail;
+                std::printf("FAIL optional output changed assembly at %d,%d\n", n, d);
+            } else ++npass;
+        }
+#endif
+}
+
+// Case 1: identical constant stress in both elements -> net internal force at shared node 0 is 0.
+static void test_cancellation() {
+    std::printf("[cancellation]\n");
+    Fixture* m = new Fixture();
+    build_mesh(*m);
+    const double sx = 0.7, sy = -0.3, sz = 0.5, sxy = 0.2, sxz = -0.1, syz = 0.4;
+    m->stress[0][0] = sx; m->stress[0][1] = sy; m->stress[0][2] = sz;
+    if (NSTR > 3) { m->stress[0][3] = sxy; m->stress[0][4] = sxz; m->stress[0][5] = syz; }
+    m->stress[1][0] = sx; m->stress[1][1] = sy; m->stress[1][2] = sz;
+    if (NSTR > 3) { m->stress[1][3] = sxy; m->stress[1][4] = sxz; m->stress[1][5] = syz; }
+
+    run_update_force(*m);
+
+    // Measurement only (legacy defect record): force_residual at the shared node
+    // is overwritten per incident element, so it equals the last element's term,
+    // not the assembled sum. With identical stress in both elements it is nonzero
+    // while the true assembled internal force is exactly 0.
+#ifdef BASE
+    {
+        std::printf("  [measure] legacy force_residual@shared = (%.17g", m->force_residual[0][0]);
+        for (int d = 1; d < NDIMS; ++d)
+            std::printf(", %.17g", m->force_residual[0][d]);
+        std::printf(")\n");
+        bool residual_nonzero = false;
+        for (int d = 0; d < NDIMS; ++d)
+            if (!close(m->force_residual[0][d], 0.0)) residual_nonzero = true;
+        if (!residual_nonzero) {
+            ++nfail;
+            std::printf("FAIL cancel legacy-residual-nonzero: expected nonzero legacy defect, got ~0\n");
+        } else { ++npass; }
+    }
+#endif
+
+    for (int d = 0; d < NDIMS; ++d) {
+        char name[64];
+        snprintf(name, sizeof name, "cancel f0[%d]", d);
+        check(name, m->force[0][d], 0.0);
+#ifdef B0
+        snprintf(name, sizeof name, "cancel u0[%d]", d);
+        check(name, m->force_undamped[0][d], 0.0);
+#endif
+    }
+    delete m;
+}
+
+// Case 2: Neumann traction on facet away from shared node.
+// Facet 0 of element 0 (nodes 1..NDIMS): positive outward normal components.
+// type 1 -> x-direction only. Each facet node gets T*normal[d]/NODES_PER_FACET.
+static void test_traction() {
+    std::printf("[traction]\n");
+    Fixture* m = new Fixture();
+    build_mesh(*m);
+    const double T = 0.9;
+    m->var.bfacets[iboundx0] = new std::vector<std::pair<int,int>>;
+    m->var.bfacets[iboundx0]->push_back(std::make_pair(0, 0));
+    m->var.stress_bc_types[iboundx0] = 1;
+    m->var.stress_bc_values[iboundx0] = T;
+    m->param.ic.has_body_force_adjustment = false;
+
+    run_update_force(*m);
+
+    // Facet 0 of the unit simplex: area-weighted outward normal.
+    // 2D edge (1,0)-(0,1): normal = (1,1), nx = 1. 3D face: normal = (0.5,0.5,0.5).
+    const double nx = (NDIMS == 2) ? 1.0 : 0.5;
+    const double add = T / NODES_PER_FACET;
+    for (int l = 1; l < NODES_PER_ELEM; ++l) {
+        int g = l; // facet 0 nodes are global 1..NDIMS
+        char name[64];
+        snprintf(name, sizeof name, "traction f%d[0]", g);
+        check(name, m->force[g][0], add * nx);
+        for (int d = 1; d < NDIMS; ++d) {
+            snprintf(name, sizeof name, "traction f%d[%d]", g, d);
+            check(name, m->force[g][d], 0.0);
+        }
+#ifdef B0
+        snprintf(name, sizeof name, "traction u%d[0]", g);
+        check(name, m->force_undamped[g][0], add * nx);
+#endif
+    }
+    char name[64];
+    snprintf(name, sizeof name, "traction f0[0]");
+    check(name, m->force[0][0], 0.0);
+#ifdef B0
+    snprintf(name, sizeof name, "traction u0[0]");
+    check(name, m->force_undamped[0][0], 0.0);
+#endif
+    delete m->var.bfacets[iboundx0];
+    delete m;
+}
+
+// Case 3: damping_option=2 -> force damped, undamped output not.
+static void test_damping() {
+    std::printf("[damping]\n");
+    Fixture* m = new Fixture();
+    build_mesh(*m);
+    const double sx = 0.6;
+    m->stress[0][0] = sx;
+    m->param.control.damping_option = 2;
+    m->param.control.damping_factor = 0.25;
+    for (int i = 0; i < m->var.nnode; ++i)
+        for (int d = 0; d < NDIMS; ++d)
+            m->vel[i][d] = 1.0;
+
+    run_update_force(*m);
+
+    // Node 1 (local 1 of elem 0): shpdx[1]=1, others 0 -> tr = sx*vol, force = -sx*vol.
+    const double vol = (NDIMS == 2) ? 0.5 : (1.0 / 6.0);
+    const double undamped = -sx * vol;
+    const double damped = undamped * (1.0 - 0.25);
+    char name[64];
+    snprintf(name, sizeof name, "damping f1[0]");
+    check(name, m->force[1][0], damped);
+#ifdef B0
+    snprintf(name, sizeof name, "damping u1[0]");
+    check(name, m->force_undamped[1][0], undamped);
+#endif
+    delete m;
+}
+
+static void test_body_force() {
+    std::printf("[body force]\n");
+    Fixture* m = new Fixture();
+    build_mesh(*m);
+    m->temperature.assign(m->var.nnode, 273.0);
+    m->pressure.assign(m->var.nnode, 0.0);
+    m->pressure_increment.assign(m->var.nnode, 0.0);
+    m->strain_rate.resize(m->var.nelem);
+    m->markers.assign(m->var.nelem, int_vec(1, 1));
+    m->etmp_int.resize(m->var.nelem);
+    m->var.temperature = &m->temperature;
+    m->var.ppressure = &m->pressure;
+    m->var.dppressure = &m->pressure_increment;
+    m->var.strain_rate = &m->strain_rate;
+    m->var.elemmarkers = &m->markers;
+    m->var.etmp_int = &m->etmp_int;
+    m->var.log_table = m->var.tan_table = m->var.sin_table = &m->lookup;
+    // Suppress gravity-induced boundary tractions to isolate the body load.
+    // Neumann tractions are exercised separately, using the real BC routine.
+    for (int i=0; i<nbdrytypes; ++i) m->var.vbc_types[i] = 1;
+    auto& p = m->param.mat;
+    p.nmat = 1;
+    p.rheol_type = MatProps::rh_elastic;
+    p.rho0 = {2500.0}; p.alpha = {0.0}; p.porosity = {0.2};
+    p.bulk_modulus = {1e9}; p.shear_modulus = {1e9};
+    p.visc_exponent = {1.0}; p.visc_coefficient = {1.0};
+    p.biot_coeff = {1.0}; p.heat_capacity = {1.0};
+    p.therm_cond = {1.0}; p.fluid_bulk_modulus = {2e9};
+    m->param.control.gravity = 9.8;
+    m->param.control.damping_option = 2;
+    m->param.control.damping_factor = 0.25;
+    m->var.mat = new MatProps(m->param, m->var);
+    run_update_force(*m);
+    // Each simplex distributes its weight equally among its vertices. The
+    // shared vertex receives two contributions, all other vertices one.
+    const double weight = (2500.0*0.8 + 1000.0*0.2)*9.8*m->volume[0];
+    for (int n=0; n<m->var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) {
+            const double raw = d == NDIMS-1 ? -weight*(n == 0 ? 2 : 1)/NODES_PER_ELEM : 0;
+            check("damped gravity", m->force[n][d], raw*0.75);
+#ifdef B0
+            check("undamped gravity", m->force_undamped[n][d], raw);
+#endif
+        }
+    delete m->var.mat;
+    delete m;
+}
+
+int main() {
+    test_cancellation();
+    test_traction();
+    test_damping();
+    test_body_force();
+    std::printf("\n%d passed, %d failed\n", npass, nfail);
+    return nfail == 0 ? 0 : 1;
+}

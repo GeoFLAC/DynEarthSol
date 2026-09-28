@@ -560,7 +560,8 @@ static double rho(const conn_t &var_connectivity, \
 }
 */
 
-void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, elem_cache& tmp_result)
+void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
+                  elem_cache& tmp_result, array_t* force_undamped)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -642,6 +643,17 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     // }
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
+    if (force_undamped) {
+        // Same accelerator queue as assembly and damping; the wait below makes
+        // both outputs visible to the caller. Constraint projection is separate.
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, force, force_undamped)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int n=0; n<var.nnode; ++n)
+            for (int d=0; d<NDIMS; ++d)
+                (*force_undamped)[n][d] = force[n][d];
+    }
     apply_damping(param, var, force);
     
     #pragma acc wait
