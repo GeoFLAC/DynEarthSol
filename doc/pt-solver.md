@@ -1,6 +1,8 @@
 # Physical-step pseudo-transient mechanics
 
-Implementation draft: final numerical and backend qualification is pending.
+This refactor defines the mechanical trial/commit boundary for future coupling.
+Validation coverage and convergence limits are stated below; it does not replace
+the existing constitutive integration algorithms.
 
 With `control.has_PT=yes`, mechanics starts from the physical-step baseline,
 solves on fixed reference geometry, and leaves one accepted constitutive state.
@@ -19,8 +21,9 @@ Maxwell normal stresses receive the pending isotropic pressure increment once.
 Plane strain includes yy in mean/deviatoric stress, the EVP branch comparison and
 NMD; the selected EVP candidate supplies yy as well as the in-plane components.
 Pure viscous replacement stress uses the current pore-pressure level rather than
-repeated increments. Non-PT callers retain the existing defaults. These paths still
-require the final material and coupling tests before numerical qualification.
+repeated increments. Non-PT callers retain the existing defaults. Material trial
+tests cover these pressure and plane-strain paths. This does not qualify a new
+coupled hydraulic formulation.
 
 The residual is the RMS assembled undamped force projected onto admissible velocity
 perturbations, normalized by the free rank. Gravity, Neumann traction and foundation
@@ -49,8 +52,8 @@ viscosity, `PT_CFL` and `PT_Re`. Lagged stress is solver scratch. Acceptance alw
 uses the full constitutive candidate, so a small residual of lagged stress cannot
 commit an inconsistent material state. No plastic-yield heuristic is introduced.
 The factor construction follows the effective-viscosity/dual-time approach in
-[Räss et al. (2022)](https://gmd.copernicus.org/articles/15/5757/2022/); transferring
-it to this discretization still requires the final convergence tests.
+[Räss et al. (2022)](https://gmd.copernicus.org/articles/15/5757/2022/); convergence
+remains dependent on the material response, mesh, loading and requested tolerance.
 
 Physical mesh motion, stress rotation, transport and remeshing remain outside the
 trial loop. Equilibrium is established on the reference geometry; it does not
@@ -76,4 +79,34 @@ The hydraulic transport equation and its existing in-plane mean-stress coupling
 remain unchanged; this refactor does not implement a new poroelastic formulation.
 At corners the ordered boundary dispatch retains its precedence rules; the affine
 fixed-point construction is not a simultaneous enforcement of every conflicting
-boundary prescription. These cases require explicit final validation.
+boundary prescription. The focused constraint tests cover the stated projection and precedence semantics;
+arbitrary contradictory boundary specifications are not supported.
+
+## Validation and limits
+
+The [focused tests](../tests/residual-assembly-test/README.md) exercise actual force,
+constraint, material, residual and failed-solve paths in 2D/3D on ASan/UBSan,
+OpenMP and OpenACC. Separate [functional tests](../tests/functional/pt_restart.md)
+cover initial checkpoints, pending remesh stages and regular output scheduling.
+The existing [EP/RSF benchmark](../benchmarks/simple_shear_rsf/README.md) has an
+opt-in PT mode. Maxwell relaxation has also been checked against its discrete
+update and continuum time-convergence reference. Those checks do not establish
+convergence for every material/loading combination.
+
+- A solve may reach the iteration limit or stagnate. Retain its failed status;
+  it must not commit a discarded candidate or silently relax its tolerance.
+- A relative-only target can fall below floating-point cancellation accuracy near
+  equilibrium. No automatic residual floor or time-step retry is introduced.
+- Weak volumetric modes in some 2D viscous cases require more than the default
+  iteration cap. Difficult finite-increment 3D plastic cases can also fail.
+  The existing incremental Mohr–Coulomb return is preserved; nonsmooth behavior
+  is not a reason to change that algorithm within this refactor.
+- Checkpoint tests cover the regular output schedule with unchanged output controls.
+  Earthquake-event history and averaged-output accumulators are outside that scope.
+- Dry GPU mechanical correctness and dry remesh/restart have scoped coverage;
+  full hydraulic GPU qualification and realistic-size GPU performance are not
+  claimed. Small-mesh launch overhead remains a known cost.
+
+No experimental secant extrapolation, adaptive coefficient tuning or new plastic
+corner-return algorithm is part of this implementation. Such changes require
+separate numerical contracts and validation.

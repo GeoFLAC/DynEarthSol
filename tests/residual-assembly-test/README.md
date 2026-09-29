@@ -46,3 +46,11 @@ The PT residual reduction is tested directly with first/last-node loads, unit,
 1e200 and 1e-200 force scales, zero free rank and nonfinite inputs. Integration
 comparisons must also use a common mesh and a nonzero initial imbalance: a solver
 exit code alone cannot rule out falsely reported convergence on a backend.
+
+The material fixture also calls the actual PT solver with iteration caps 1 and 3,
+zero stopping tolerance, nonzero shear velocity and a pending pressure increment.
+For elastic/Maxwell/viscous/EP/EVP it requires a positive residual and iteration-limit
+failure, then checks exact restoration of stress, strain, all seven captured scalar
+histories and velocity. Pressure inputs, physical time/dt and array identities must
+remain unchanged. The three-iteration case exercises numerical updates before
+rollback. These are rejection/lifecycle checks, not convergence benchmarks.

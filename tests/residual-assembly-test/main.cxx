@@ -529,6 +529,72 @@ static void test_material_trials() {
                     check("initial RSF independent of pseudo velocity",anphi,first_strength);
                 }
             }
+
+            // A real failed solve must restore history after numerical updates,
+            // including rejected yielded trials and the pending pressure input.
+            if (alpha==0.6) {
+                auto* ntmp=new double_vec(nn,0.);
+                auto* etmp=new double_vec(ne,0.);
+                auto* volume_n=new double_vec(nn,0.);
+                auto* flags=new uint_vec(nn,0);
+                auto* normals=new array_t(nbdrytypes,0.);
+                m->var.ntmp=ntmp; m->var.etmp=etmp; m->var.volume_n=volume_n;
+                m->var.bcflag=flags; m->var.bnormals=normals;
+                m->var.tmp_result=&m->tmp_result;
+                for(int n=0;n<nn;++n)
+                    for(int k=0;k<m->var.support.size(n);++k)
+                        (*volume_n)[n]+=m->volume[m->var.support.patch(n)[k]];
+                m->var.vbc_val_z1_loading_period=1;
+                m->param.bc.vbc_period_x0_time_in_yr={0,1};
+                m->param.bc.vbc_period_x1_time_in_yr={0,1};
+                m->param.bc.vbc_period_x0_ratio={1,1};
+                m->param.bc.vbc_period_x1_ratio={1,1};
+                for(int k=0;k<4;++k) {
+                    m->var.vbc_vertical_div_x0[k]=m->var.vbc_vertical_div_x1[k]=k/3.;
+                    m->var.vbc_vertical_ratio_x0[k]=m->var.vbc_vertical_ratio_x1[k]=1;
+                }
+                m->param.mesh.xlength=m->param.mesh.ylength=m->param.mesh.zlength=2;
+                m->param.control.PT_CFL=0.25;
+                m->param.control.PT_Re=14.90188239869415;
+                m->param.control.PT_relative_tolerance=0;
+                m->param.control.PT_absolute_tolerance=0;
+                m->param.control.PT_stagnation_window=0;
+                auto* after=new MechanicalState(ne);
+                for(int cap : {1,3}) {
+                    baseline->restore(m->var);
+                    for(int n=0;n<nn;++n) for(int d=0;d<NDIMS;++d)
+                        m->vel[n][d]=d==0 ? 2*m->coord[n][NDIMS-1] : 0;
+                    m->param.control.PT_max_iter=cap;
+                    const PTResult result=run_physical_step_pt(m->param,m->var);
+                    #pragma acc wait
+                    check("failed solve status",result.status==PTStatus::max_iterations,1);
+                    check("failed solve iterations",result.iterations,cap);
+                    check("failed solve has imbalance",result.residual>0,1);
+                    check("failed solve threshold",result.threshold,0);
+                    after->capture(m->var);
+                    for(int e=0;e<ne;++e) {
+                        for(int d=0;d<NSTR;++d) {
+                            check("rollback stress exact",after->stress[e][d]==baseline->stress[e][d],1);
+                            check("rollback strain exact",after->strain[e][d]==baseline->strain[e][d],1);
+                        }
+                        for(int k=0;k<7;++k)
+                            check("rollback history exact",after->scalars[e][k]==baseline->scalars[e][k],1);
+                    }
+                    for(int n=0;n<nn;++n) {
+                        for(int d=0;d<NDIMS;++d)
+                            check("rollback velocity exact",m->vel[n][d]==(d==0 ? 2*m->coord[n][NDIMS-1] : 0),1);
+                        check("pending pressure retained",m->pressure_increment[n]==-10,1);
+                        check("pressure retained",m->pressure[n]==10,1);
+                    }
+                    check("physical time retained",m->var.time==1,1);
+                    check("physical dt retained",m->var.dt==0.1,1);
+                    check("stress allocation retained",m->var.stress==&m->stress,1);
+                    check("strain allocation retained",m->var.strain==strain,1);
+                    check("viscosity allocation retained",m->var.viscosity==visc,1);
+                }
+                delete after; delete ntmp; delete etmp; delete volume_n;
+                delete flags; delete normals;
+            }
             delete baseline; delete m->var.mat;
             delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
             delete friction; delete state; delete div; delete m;
