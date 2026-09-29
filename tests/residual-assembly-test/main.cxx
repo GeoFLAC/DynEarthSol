@@ -14,6 +14,8 @@
 #include "fields.hpp"
 #include "bc.hpp"
 #include "rheology.hpp"
+#include "pseudo_transient.hpp"
+#include <limits>
 #include "matprops.hpp"
 
 #ifndef ATOL
@@ -534,7 +536,33 @@ static void test_material_trials() {
     }
 }
 
+static void test_pt_norm() {
+    std::printf("[PT projected residual reduction]\n");
+    auto* m = new Fixture();
+    build_mesh(*m);
+    auto* constraints = new VelocityConstraints(m->var.nnode);
+    for(int n=0;n<m->var.nnode;++n) constraints->free_rank[n]=NDIMS;
+    for (int first : {0, m->var.nnode-2})
+    for(double scale : {1.,1e200,1e-200}) {
+        for(int n=0;n<m->var.nnode;++n)
+            for(int d=0;d<NDIMS;++d) m->force[n][d]=0;
+        m->force[first][0]=3*scale;
+        m->force[first+1][NDIMS-1]=-4*scale;
+        const double expected=scale*std::sqrt(25./(m->var.nnode*NDIMS));
+        check("scaled residual ratio",pt_residual_rms(m->var,*constraints,m->force)/expected,1);
+    }
+    for(int n=0;n<m->var.nnode;++n) constraints->free_rank[n]=0;
+    check("no free residual",pt_residual_rms(m->var,*constraints,m->force),0);
+    m->force[0][0]=std::numeric_limits<double>::quiet_NaN();
+    check("nonfinite force rejected",std::isnan(pt_residual_rms(m->var,*constraints,m->force)),1);
+    m->force[0][0]=0;
+    m->vel[0][0]=std::numeric_limits<double>::infinity();
+    check("nonfinite velocity rejected",std::isnan(pt_residual_rms(m->var,*constraints,m->force)),1);
+    delete constraints; delete m;
+}
+
 int main() {
+    test_pt_norm();
     test_material_trials();
     test_constraints();
     test_cancellation();

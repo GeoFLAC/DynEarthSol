@@ -22,8 +22,9 @@ struct PTWorkspace {
     PTWorkspace(int ne, int nn) : start(ne), constraints(nn), lagged_stress(ne),
         old_velocity(nn), undamped(nn), stress_fraction(ne), mobility(nn) {}
 };
+}
 
-double residual_rms(const Variables& var, const VelocityConstraints& constraints,
+double pt_residual_rms(const Variables& var, const VelocityConstraints& constraints,
                     const array_t& force)
 {
     double scale = 0;
@@ -33,13 +34,13 @@ double residual_rms(const Variables& var, const VelocityConstraints& constraints
     #pragma omp parallel for default(none) shared(var, constraints, force) reduction(max:scale) reduction(+:rank) reduction(|:bad)
 #endif
     #pragma acc parallel loop gang vector reduction(max:scale) reduction(+:rank) reduction(|:bad)
-    for (int n=0; n<var.nnode; ++n) {
-        rank += constraints.free_rank[n];
-        for (int d=0; d<NDIMS; ++d) {
-            const double f = force[n][d];
-            bad |= !std::isfinite(f) || !std::isfinite((*var.vel)[n][d]);
-            scale = std::max(scale, std::abs(f));
-        }
+    // Flatten components so every reduction update belongs to the parallel loop.
+    for (long long k=0; k<static_cast<long long>(var.nnode)*NDIMS; ++k) {
+        const int n = k/NDIMS, d = k%NDIMS;
+        if (d == 0) rank += constraints.free_rank[n];
+        const double f = force[n][d];
+        bad |= !std::isfinite(f) || !std::isfinite((*var.vel)[n][d]);
+        scale = std::max(scale, std::abs(f));
     }
     if (bad) return std::numeric_limits<double>::quiet_NaN();
     if (!rank || scale == 0) return 0;
@@ -58,6 +59,7 @@ double residual_rms(const Variables& var, const VelocityConstraints& constraints
     return scale*std::sqrt(sum/rank);
 }
 
+namespace {
 bool finite_candidate(const Variables& var)
 {
     int bad = 0;
@@ -102,7 +104,7 @@ PTResult solve(const Param& param, Variables& var, bool initial)
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped);
         project_free_vectors(var, w.constraints, w.undamped);
         result.iterations = iteration+1;
-        result.residual = residual_rms(var, w.constraints, w.undamped);
+        result.residual = pt_residual_rms(var, w.constraints, w.undamped);
         var.l2_residual = result.residual;
         if (iteration == 0) result.initial_residual = result.residual;
         if (!std::isfinite(result.residual) || !finite_candidate(var)) {
@@ -138,7 +140,10 @@ PTResult solve(const Param& param, Variables& var, bool initial)
             break;
         }
         if (iteration+1 == param.control.PT_max_iter) break;
-        compute_pt_factors(param, var, w.stress_fraction, w.mobility);
+        // Geometry, physical dt and elastic moduli are fixed during this solve.
+        // Only a viscous rheology adds candidate-dependent viscosity to factors.
+        if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
+            compute_pt_factors(param, var, w.stress_fraction, w.mobility);
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, w)
 #endif

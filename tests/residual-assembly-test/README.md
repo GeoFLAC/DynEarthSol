@@ -41,3 +41,8 @@ the real material/body-force fixture, null-output equivalence checks and build
 drivers, and independently validated the baseline and changed implementations.
 
 The PT constraint/material and initial-checkpoint tests were added by Codex.
+
+The PT residual reduction is tested directly with first/last-node loads, unit,
+1e200 and 1e-200 force scales, zero free rank and nonfinite inputs. Integration
+comparisons must also use a common mesh and a nonzero initial imbalance: a solver
+exit code alone cannot rule out falsely reported convergence on a backend.

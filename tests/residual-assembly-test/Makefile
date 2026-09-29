@@ -24,7 +24,7 @@ GPU_CC ?= $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/de
 CPPFLAGS += -DACC -I$(ROOT)/knn-bvh/include
 CXXFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 endif
-SOURCES := main.cxx $(addprefix $(ROOT)/,fields.cxx bc.cxx matprops.cxx utils.cxx rheology.cxx)
+SOURCES := main.cxx $(addprefix $(ROOT)/,fields.cxx bc.cxx matprops.cxx utils.cxx rheology.cxx pseudo_transient.cxx)
 HEADERS := $(wildcard $(ROOT)/*.hpp)
 .PHONY: check clean
 ifeq ($(backend),acc)

@@ -10,6 +10,11 @@ struct MechanicalState;
 void evaluate_mechanical_trial(const Param& param, Variables& var,
                                const MechanicalState& physical_start, bool initial_equilibrium = false);
 
+struct VelocityConstraints;
+// Force must already be projected into the admissible velocity subspace.
+double pt_residual_rms(const Variables& var, const VelocityConstraints& constraints,
+                       const array_t& force);
+
 enum class PTStatus { converged, max_iterations, stagnated, nonfinite };
 struct PTResult {
     PTStatus status = PTStatus::max_iterations;
