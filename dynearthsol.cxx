@@ -447,7 +447,10 @@ void restart(const Param& param, Variables& var)
 
     create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    apply_vbcs(param, var, *var.vel);
+    // PT checkpoints carry the accepted velocity. The legacy boundary map can
+    // change it (notably on oblique boundaries); the next PT solve imposes its
+    // own constraints at the next physical time.
+    if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
@@ -479,9 +482,10 @@ void restart(const Param& param, Variables& var)
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
-    // For some reason, the following is added by Denis
-    // However, it is not clear why this is needed.
-    if (param.control.use_global_velocity_scaling) {
+    // Preserve the saved next-step dt and velocity scale for PT. Recomputing
+    // here would select a different interval than uninterrupted execution,
+    // which selects dt at mesh/slow-update stages. Mass was rebuilt above.
+    if (param.control.use_global_velocity_scaling && !param.control.has_PT) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }

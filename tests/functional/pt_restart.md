@@ -12,7 +12,8 @@ Use new output directories for each run. Omit `--restart-frame` to check the
 initial equilibrium checkpoint; use `--restart-frame 2` to restart after a prior
 mesh change. Logs, inputs and compared outputs remain in the output directory.
 
-The test compares every final save/checkpoint payload exactly, excluding wall
+The test checks the restored velocity before the next solve and compares every
+subsequent save/checkpoint payload exactly, excluding wall
 clock duration. HDF5 datasets must also have matching shapes and types and finite
 numeric values. `--require-remesh` requires completed remeshing in both runs and
 changed connectivity. The fixture deliberately triggers existing mesh-quality
@@ -20,6 +21,22 @@ loop-limit warnings; a pass does not establish acceptable mesh quality. The
 one-year output interval avoids unrelated output-clock rounding in this short,
 step-driven test. The harness suppresses extra remesh output frames so frame
 numbers match physical step numbers.
+
+## Dynamic time interval and oblique boundaries
+
+```sh
+OMP_NUM_THREADS=2 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol2d tests/functional/pt_dynamic_restart.cfg /tmp/des-pt-dynamic-2d --restart-frame 1
+OMP_NUM_THREADS=2 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol3d tests/functional/pt_dynamic_restart.cfg /tmp/des-pt-dynamic-3d --restart-frame 1
+OMP_NUM_THREADS=2 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol2d tests/functional/pt_oblique_restart.cfg /tmp/des-pt-oblique-2d --restart-frame 1
+```
+
+The stationary elastic fixtures use automatic global velocity scaling. The axis
+fixture has a nonzero mechanical response; the 2D oblique fixture uses rigid
+translation to isolate type-11 boundary velocities. A repeated legacy boundary
+operation must not alter accepted PT velocity, and restart must not select a new
+time interval ahead of the normal
+physical update cadence. These cases complement the fixed-dt schedule tests.
+Relative polygon paths are resolved against the source configuration directory.
 
 ## Regular output schedule
 

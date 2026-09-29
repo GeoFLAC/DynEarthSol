@@ -59,6 +59,10 @@ def main():
     cfg.optionxform = str
     cfg.read(source)
     assert cfg.getboolean('control', 'has_PT')
+    if cfg.getint('mesh', 'meshing_option', fallback=1) in (90, 91):
+        poly = Path(cfg['mesh']['poly_filename'])
+        if not poly.is_absolute():
+            cfg['mesh']['poly_filename'] = str((source.resolve().parent / poly).resolve())
     cfg['sim'].update(modelname='fresh', max_steps=str(args.steps), output_step_interval='1',
                       checkpoint_frame_interval='1', has_initial_checkpoint='yes',
                       has_output_during_remeshing='no',
@@ -81,13 +85,18 @@ def main():
             if all(value == 0 for value in velocity):
                 rates = struct.unpack('d' * (len(saved['strain-rate']) // 8), saved['strain-rate'])
                 assert all(value == 0 for value in rates), 'Numerical correction rate leaked into initial output'
-    differences = {}
-    for suffix in ('save', 'chkpt'):
-        a = fields(output / (f'fresh.{suffix}.{args.steps:06d}'))
-        b = fields(output / (f'resumed.{suffix}.{args.steps:06d}'))
-        assert a.keys() == b.keys()
-        # Wall-clock duration is observational metadata, not physical state.
-        differences[suffix] = [key for key in a if key.split('/')[-1] != 'walltime_sec' and a[key] != b[key]]
+    # Check the restored velocity before another solve can hide a boundary-map
+    # error. Then compare every continuation frame, including time and saved dt.
+    a = fields(output / f'fresh.save.{args.restart_frame:06d}')
+    b = fields(output / f'resumed.save.{args.restart_frame:06d}')
+    differences = {'restored_velocity': [] if a['velocity'] == b['velocity'] else ['velocity']}
+    for frame in range(args.restart_frame + 1, args.steps + 1):
+        for suffix in ('save', 'chkpt'):
+            a = fields(output / f'fresh.{suffix}.{frame:06d}')
+            b = fields(output / f'resumed.{suffix}.{frame:06d}')
+            assert a.keys() == b.keys()
+            # Wall-clock duration is observational metadata, not physical state.
+            differences[f'{suffix}.{frame}'] = [key for key in a if key.split('/')[-1] != 'walltime_sec' and a[key] != b[key]]
     (output / 'comparison.json').write_text(json.dumps(differences, indent=2) + '\n')
     assert not any(differences.values()), differences
     if args.require_remesh:
@@ -96,7 +105,7 @@ def main():
         first = fields(output / 'fresh.save.000000')
         last = fields(output / f'fresh.save.{args.steps:06d}')
         assert first['connectivity'] != last['connectivity'], 'Mesh connectivity did not change'
-    print(f'PASS: equilibrated initial state; restart from frame {args.restart_frame}; all final physical fields exact')
+    print(f'PASS: equilibrated initial state; restored velocity and all continuation fields exact from frame {args.restart_frame}')
 
 
 if __name__ == '__main__':

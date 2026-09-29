@@ -72,8 +72,17 @@ Completion state is checkpointed so a restart does not repeat initial adjustment
 Hydraulic checkpoints now store the pending signed pressure increment consumed
 by the next mechanical step. Old hydraulic checkpoints lacking it are rejected:
 the missing increment cannot be inferred exactly from a pressure level alone.
-Dry restart behavior is unchanged. Existing barycentric remapping transfers the
-pending increment with the other nodal hydraulic fields.
+Dry checkpoints do not require this hydraulic field. Existing barycentric remapping
+transfers the pending increment with the other nodal hydraulic fields.
+
+PT restart preserves the saved velocity, next-step dt and velocity scale. It does
+not reapply the legacy velocity boundary map or select a new dt merely because
+execution resumed. The next PT solve imposes its constraints at the next physical
+time; mesh and slow-update stages retain ownership of subsequent dt selection.
+Exact continuation assumes unchanged controls. Changed timestep controls take
+effect at those existing selection stages, rather than in the restart loader.
+A pending remesh can therefore still select dt before the next step, just as in
+uninterrupted execution. Non-PT restart retains its existing boundary/dt behavior.
 
 The hydraulic transport equation and its existing in-plane mean-stress coupling
 remain unchanged; this refactor does not implement a new poroelastic formulation.
