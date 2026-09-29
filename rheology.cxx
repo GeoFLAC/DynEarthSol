@@ -814,7 +814,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel,
-                   double_vec& dyn_fric_coeff, double_vec& state_variable)
+                   double_vec& dyn_fric_coeff, double_vec& state_variable,
+                   bool trial_reference_geometry)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -835,7 +836,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     #pragma omp parallel for default(none) shared(param, var, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(has_hydraulic_diffusion, needs_slip_rate, \
+        firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, \
                      needs_projected_velocity)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
@@ -971,7 +972,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, s);
             }
             break;
@@ -1004,7 +1006,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
                 #pragma acc loop seq
@@ -1092,7 +1095,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
                 #pragma acc loop seq
@@ -1185,4 +1189,50 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
 #ifdef NPROF
     nvtxRangePop();
 #endif
+}
+
+void MechanicalState::capture(const Variables& var)
+{
+    #pragma acc wait
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e=0; e<var.nelem; ++e) {
+        for (int d=0; d<NSTR; ++d) {
+            stress[e][d] = (*var.stress)[e][d];
+            strain[e][d] = (*var.strain)[e][d];
+        }
+        scalars[e][0] = (*var.stressyy)[e];
+        scalars[e][1] = (*var.dpressure)[e];
+        scalars[e][2] = (*var.viscosity)[e];
+        scalars[e][3] = (*var.plstrain)[e];
+        scalars[e][4] = (*var.delta_plstrain)[e];
+        scalars[e][5] = (*var.dyn_fric_coeff)[e];
+        scalars[e][6] = (*var.state_variable)[e];
+    }
+}
+
+void MechanicalState::restore(Variables& var) const
+{
+    if (var.nelem != static_cast<int>(stress.size()))
+        die(EXIT_INTERNAL_ASSERT, "Mechanical baseline cannot cross a mesh topology change.");
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e=0; e<var.nelem; ++e) {
+        for (int d=0; d<NSTR; ++d) {
+            (*var.stress)[e][d] = stress[e][d];
+            (*var.strain)[e][d] = strain[e][d];
+        }
+        (*var.stressyy)[e] = scalars[e][0];
+        (*var.dpressure)[e] = scalars[e][1];
+        (*var.viscosity)[e] = scalars[e][2];
+        (*var.plstrain)[e] = scalars[e][3];
+        (*var.delta_plstrain)[e] = scalars[e][4];
+        (*var.dyn_fric_coeff)[e] = scalars[e][5];
+        (*var.state_variable)[e] = scalars[e][6];
+    }
+    #pragma acc wait
 }

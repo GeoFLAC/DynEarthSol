@@ -256,6 +256,9 @@ struct Control {
     mutable bool PT_jump;
     int PT_max_iter;
     double PT_relative_tolerance;
+    double PT_absolute_tolerance;
+    double PT_CFL, PT_Re;
+    int PT_stagnation_window;
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
@@ -821,6 +824,8 @@ struct Variables {
 
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
+
+    bool initial_equilibrium_done = false;
 
     Variables()
     {

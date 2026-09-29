@@ -2027,3 +2027,66 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
     }
     return q;
 }
+
+void compute_pt_factors(const Param& param, const Variables& var,
+                        double_vec& stress_fraction, double_vec& mobility)
+{
+    // Localized Räss et al. (2022), effective viscosity and dual-time factors.
+    // The physical constitutive target is evaluated elsewhere; these factors
+    // affect the route to equilibrium, never the stored physical history.
+    #pragma acc wait
+    double length = std::max(param.mesh.xlength, param.mesh.zlength);
+#ifdef THREED
+    length = std::max(length, param.mesh.ylength);
+#endif
+    if (!(length > 0 && var.dt > 0 && std::isfinite(var.dt)))
+        die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
+    double_vec height(var.nelem), mu(var.nelem);
+    for (int e=0; e<var.nelem; ++e) {
+        double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+#ifdef THREED
+        double dy[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, dx, dy, dz);
+#else
+        get_local_shape_fn(var, e, dx, dz);
+#endif
+        double maxgrad2 = 0;
+        for (int k=0; k<NODES_PER_ELEM; ++k) {
+            double g2 = dx[k]*dx[k] + dz[k]*dz[k];
+#ifdef THREED
+            g2 += dy[k]*dy[k];
+#endif
+            maxgrad2 = std::max(maxgrad2, g2);
+        }
+        height[e] = 1/std::sqrt(maxgrad2);
+        const double shear = var.mat->shearm(e);
+        const double bulk = var.mat->bulkm(e);
+        double effective = shear*var.dt;
+        if (param.mat.rheol_type & MatProps::rh_viscous) {
+            const double visc = (*var.viscosity)[e];
+            effective = (param.mat.rheol_type & MatProps::rh_elastic)
+                ? 1/(1/effective + 1/visc) : visc;
+        }
+        // Include compressional stiffness in the pseudo-wave bound, including
+        // the elastic volumetric response of the pure viscous branch.
+        const double ratio = std::max(1.0, bulk*var.dt/effective);
+        const double theta = param.control.PT_Re*param.control.PT_CFL*height[e]/((ratio+2)*length);
+        if (!(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta)))
+            die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
+        mu[e] = effective;
+        stress_fraction[e] = theta/(1+theta);
+    }
+    for (int n=0; n<var.nnode; ++n) {
+        double h = std::numeric_limits<double>::max(), visc = 0, volume = 0;
+        const int* patch = var.support.patch(n);
+        for (int k=0; k<var.support.size(n); ++k) {
+            const int e = patch[k];
+            h = std::min(h, height[e]);
+            visc = std::max(visc, mu[e]);
+            volume += (*var.volume)[e]/NODES_PER_ELEM;
+        }
+        if (!(visc > 0 && volume > 0))
+            die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
+        mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
+    }
+}

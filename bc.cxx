@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <unordered_map>
 #include <iomanip>
 #include <math.h>
@@ -224,7 +226,64 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 }
 
 
-void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
+namespace {
+#pragma acc routine seq
+void project_boundary_intersection(const Variables& var, int ic, int ib,
+                                   ConstArrayAccessor n, ArrayAccessor v, bool normalized)
+{
+    // ic < ib, matching how create_boundary_normals keys the table.
+    const int slot = var.edge_slot[ic*nbdrytypes + ib];
+    if (slot < 0) return;  // no shared edge, so no direction to project onto
+    const double *edge = &var.edge_vec[slot*NDIMS];
+    double corrected_edge[NDIMS] = {};
+    if (normalized) {
+        double na[NDIMS], nb[NDIMS];
+        for (int d=0; d<NDIMS; ++d) {
+            na[d] = (*var.bnormals)[ic][d];
+            nb[d] = n[d];
+        }
+        if (var.vbc_types[ib] == 11) nb[NDIMS-1] = 0;
+#ifdef THREED
+        corrected_edge[0] = na[1]*nb[2]-na[2]*nb[1];
+        corrected_edge[1] = na[2]*nb[0]-na[0]*nb[2];
+        corrected_edge[2] = na[0]*nb[1]-na[1]*nb[0];
+        double cross2 = 0;
+        for (int d=0; d<NDIMS; ++d) cross2 += corrected_edge[d]*corrected_edge[d];
+#else
+        const double cross = na[0]*nb[1]-na[1]*nb[0];
+        const double cross2 = cross*cross;
+        if (cross2 > 1e-24) {
+            // Independent normals in 2D constrain both components.
+            v[0] = v[1] = 0;
+            return;
+        }
+#endif
+        if (cross2 <= 1e-24) {
+            double vn = 0, norm2 = 0;
+            for (int d=0; d<NDIMS; ++d) {
+                vn += v[d]*nb[d];
+                norm2 += nb[d]*nb[d];
+            }
+            if (norm2 > 0)
+                for (int d=0; d<NDIMS; ++d) v[d] -= vn*nb[d]/norm2;
+            return;
+        }
+        edge = corrected_edge;
+    }
+
+    double edge_norm2 = 0;
+    for (int d=0; d<NDIMS; ++d) edge_norm2 += edge[d]*edge[d];
+    if (normalized && edge_norm2 == 0) return;
+    double ve = 0;
+    for (int d=0; d<NDIMS; d++)
+        ve += v[d] * edge[d];
+
+    for (int d=0; d<NDIMS; d++)
+        v[d] = ve * edge[d] / (normalized ? edge_norm2 : 1.0);  // v must be parallel to edge
+}
+}
+
+void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -327,7 +386,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double bc_vy0_l = bc.vbc_val_y0_l;
     double bc_vy1_l = bc.vbc_val_y1_l;
 
-    if (param.control.PT_jump) {
+    if (param.control.PT_jump || homogeneous) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
 #ifdef THREED
@@ -379,12 +438,12 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 #ifndef ACC
 #ifdef THREED
     #pragma omp parallel for default(none) \
-        shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
+        shared(bc, var, vel, homogeneous, normalized, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
         bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, \
         bc_vx0_l, bc_vx1_l, bc_vy0_l, bc_vy1_l, lateral_faces)
 #else
     #pragma omp parallel for default(none) \
-        shared(bc, var, vel, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
+        shared(bc, var, vel, homogeneous, normalized, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
         bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, zmin, \
         bc_vx0_l, bc_vx1_l, \
         vbc_applied_x0, vbc_applied_x1, \
@@ -404,6 +463,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 
         uint flag = (*var.bcflag)[i];
         ArrayAccessor v = vel[i];
+        const double prescribed = homogeneous ? 0.0 : 1.0;
 
 #ifdef THREED
         //
@@ -413,20 +473,20 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             if (!(flag & f.mask)) continue;
             switch (f.type) {
             case 0: break;
-            case 1: v[f.ni] = f.val; break;
+            case 1: v[f.ni] = prescribed*f.val; break;
             case 2: v[f.li] = 0; v[2] = 0; break;
-            case 3: v[f.ni] = f.val; v[f.li] = 0; v[2] = 0; break;
-            case 4: v[f.li] = f.val; v[2] = 0; break;
-            case 5: v[f.ni] = 0; v[f.li] = f.val; v[2] = 0; break;
-            case 6: v[f.ni] = f.val; v[f.li] = f.val_l; break;
-            case 7: v[f.ni] = f.val; v[f.li] = 0; break;
+            case 3: v[f.ni] = prescribed*f.val; v[f.li] = 0; v[2] = 0; break;
+            case 4: v[f.li] = prescribed*f.val; v[2] = 0; break;
+            case 5: v[f.ni] = 0; v[f.li] = prescribed*f.val; v[2] = 0; break;
+            case 6: v[f.ni] = prescribed*f.val; v[f.li] = prescribed*f.val_l; break;
+            case 7: v[f.ni] = prescribed*f.val; v[f.li] = 0; break;
             }
         }
 #else
         ConstArrayAccessor x = (*var.coord)[i];
         double ratio, rr, dvr;
-        double vbc_exact_x0 = vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
-        double vbc_exact_x1 = vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
+        double vbc_exact_x0 = prescribed * vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
+        double vbc_exact_x1 = prescribed * vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
         //
         // X (2D)
         //
@@ -455,7 +515,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 break;
             case 6:
                 v[0] = vbc_exact_x0;
-                v[1] = bc_vx0_l;
+                v[1] = prescribed*bc_vx0_l;
                 break;
             }
         }
@@ -479,7 +539,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 break;
             case 6:
                 v[0] = vbc_exact_x1;
-                v[1] = bc_vx1_l;
+                v[1] = prescribed*bc_vx1_l;
                 break;
             }
         }
@@ -502,7 +562,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                             vn += v[d] * n[d];  // normal velocity
 
 			for (int d=0; d<NDIMS; d++)
-                            v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
+                            v[d] += ((prescribed * var.vbc_values[ib]) - vn) * n[d];  // setting normal velocity
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
@@ -513,20 +573,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         vn += v[d] * n[d];  // normal velocity
 
 				    for (int d=0; d<NDIMS; d++)
-                                        v[d] += (var.vbc_values[ib] - vn) * n[d];  // setting normal velocity
+                                        v[d] += ((prescribed * var.vbc_values[ib]) - vn) * n[d];  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    // ic < ib, matching how create_boundary_normals keys the table.
-                                    const int slot = var.edge_slot[ic*nbdrytypes + ib];
-                                    if (slot < 0) continue;  // no shared edge, so no direction to project onto
-                                    const double *edge = &var.edge_vec[slot*NDIMS];
-
-                                    double ve = 0;
-                                    for (int d=0; d<NDIMS; d++)
-                                        ve += v[d] * edge[d];
-
-                                    for (int d=0; d<NDIMS; d++)
-                                        v[d] = ve * edge[d];  // v must be parallel to edge
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized);
                                 }
                             }
                         }
@@ -534,7 +584,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                     break;
                 case 3:
                     for (int d=0; d<NDIMS; d++)
-                        v[d] = var.vbc_values[ib] * n[d];  // v must be normal to n
+                        v[d] = (prescribed * var.vbc_values[ib]) * n[d];  // v must be normal to n
                     break;
                 case 11:
                     fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
@@ -544,7 +594,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                             vn += v[d] * n[d];  // normal velocity
 
 			for (int d=0; d<NDIMS-1; d++)
-                            v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
+                            v[d] += ((prescribed * var.vbc_values[ib]) * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
@@ -555,20 +605,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                                         vn += v[d] * n[d];  // normal velocity
 
 				    for (int d=0; d<NDIMS-1; d++)
-                                        v[d] += (var.vbc_values[ib] * fac - vn) * n[d];  // setting normal velocity
+                                        v[d] += ((prescribed * var.vbc_values[ib]) * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                                 }
                                 else if (var.vbc_types[ic] == 1) {
-                                    // ic < ib, matching how create_boundary_normals keys the table.
-                                    const int slot = var.edge_slot[ic*nbdrytypes + ib];
-                                    if (slot < 0) continue;  // no shared edge, so no direction to project onto
-                                    const double *edge = &var.edge_vec[slot*NDIMS];
-
-                                    double ve = 0;
-                                    for (int d=0; d<NDIMS; d++)
-                                        ve += v[d] * edge[d];
-
-                                    for (int d=0; d<NDIMS; d++)
-                                        v[d] = ve * edge[d];  // v must be parallel to edge
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized);
                                 }
                             }
                         }
@@ -577,7 +617,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
                 case 13:
                     fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
                     for (int d=0; d<NDIMS-1; d++)
-                        v[d] = var.vbc_values[ib] * fac * n[d];
+                        v[d] = (prescribed * var.vbc_values[ib]) * fac * n[d];
                     v[NDIMS-1] = 0;
                     break;
                 }
@@ -1869,4 +1909,95 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #endif
 
 
+}
+
+void build_velocity_constraints(const Param& param, const Variables& var,
+                                VelocityConstraints& constraints, bool homogeneous)
+{
+    // F(v)=Jv+b is the existing ordered BC map. Its admissible velocities solve
+    // (I-J)v=b. Homogeneous calls give J without subtracting prescribed velocities,
+    // avoiding cancellation when a load is large relative to a perturbation.
+    #pragma acc wait
+    const int nn = var.nnode;
+    std::unique_ptr<array_t> basis_owner(new array_t(nn, 0.0));
+    array_t& basis = *basis_owner;
+    auto& p = constraints.projector;
+    auto& offset = constraints.prescribed;
+    for (int ib=iboundn0; ib<=iboundn3; ++ib) {
+        if (var.vbc_types[ib] != 11 && var.vbc_types[ib] != 13) continue;
+        for (int n=0; n<nn; ++n) {
+            if (!((*var.bcflag)[n] & (1U << ib))) continue;
+            const double nz = (*var.bnormals)[ib][NDIMS-1];
+            if (!(1 - nz*nz > 1e-14))
+                die(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
+        }
+    }
+    for (int n=0; n<nn; ++n)
+        for (int d=0; d<NDIMS; ++d) offset[n][d] = 0;
+    apply_vbcs(param, var, offset, homogeneous, true);
+    for (int column=0; column<NDIMS; ++column) {
+        for (int n=0; n<nn; ++n)
+            for (int d=0; d<NDIMS; ++d) basis[n][d] = d == column ? 1 : 0;
+        apply_vbcs(param, var, basis, true, true);
+        for (int n=0; n<nn; ++n)
+            for (int d=0; d<NDIMS; ++d)
+                p[n][d*NDIMS+column] = (d == column ? 1.0 : 0.0) - basis[n][d];
+    }
+    // At most NDIMS rows: reorthogonalized elimination supplies both the minimum
+    // norm affine solution and an orthogonal free-space projector, including edges.
+    for (int n=0; n<nn; ++n) {
+        double q[NDIMS][NDIMS] = {}, rhs[NDIMS] = {};
+        int rank = 0;
+        double scale = 0;
+        for (int d=0; d<NDIMS; ++d) scale = std::max(scale, std::abs(offset[n][d]));
+        for (int row=0; row<NDIMS; ++row) {
+            double a[NDIMS], b = offset[n][row];
+            for (int d=0; d<NDIMS; ++d) a[d] = p[n][row*NDIMS+d];
+            for (int pass=0; pass<2; ++pass)
+                for (int k=0; k<rank; ++k) {
+                    double dot = 0;
+                    for (int d=0; d<NDIMS; ++d) dot += a[d]*q[k][d];
+                    for (int d=0; d<NDIMS; ++d) a[d] -= dot*q[k][d];
+                    b -= dot*rhs[k];
+                }
+            double norm2 = 0;
+            for (int d=0; d<NDIMS; ++d) norm2 += a[d]*a[d];
+            if (norm2 <= 1e-24) {
+                if (std::abs(b) > 1e-12*std::max(scale, std::numeric_limits<double>::min()))
+                    die(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
+                continue;
+            }
+            const double norm = std::sqrt(norm2);
+            for (int d=0; d<NDIMS; ++d) q[rank][d] = a[d]/norm;
+            rhs[rank++] = b/norm;
+        }
+        constraints.free_rank[n] = NDIMS-rank;
+        for (int d=0; d<NDIMS; ++d) {
+            offset[n][d] = 0;
+            for (int k=0; k<rank; ++k) offset[n][d] += rhs[k]*q[k][d];
+            for (int j=0; j<NDIMS; ++j) {
+                p[n][d*NDIMS+j] = d == j ? 1 : 0;
+                for (int k=0; k<rank; ++k) p[n][d*NDIMS+j] -= q[k][d]*q[k][j];
+            }
+        }
+    }
+}
+
+void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,
+                          array_t& vectors, bool include_prescribed)
+{
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, constraints, vectors) firstprivate(include_prescribed)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n=0; n<var.nnode; ++n) {
+        double x[NDIMS];
+        for (int d=0; d<NDIMS; ++d) x[d] = vectors[n][d];
+        for (int d=0; d<NDIMS; ++d) {
+            double value = include_prescribed ? constraints.prescribed[n][d] : 0;
+            for (int j=0; j<NDIMS; ++j) value += constraints.projector[n][d*NDIMS+j]*x[j];
+            vectors[n][d] = value;
+        }
+    }
+    #pragma acc wait
 }

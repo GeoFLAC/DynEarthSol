@@ -408,7 +408,15 @@ static void declare_parameters(po::options_description &cfg,
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
-         "tolerance for relative change for breaking PT loop")
+         "Relative tolerance on projected physical-force RMS, scaled by initial imbalance")
+        ("control.PT_absolute_tolerance", po::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
+         "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
+        ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.25),
+         "Pseudo-wave CFL factor for local dual-time relaxation (0 < CFL <= 0.5)")
+        ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(14.90188239869415),
+         "Positive pseudo Reynolds number for dual-time relaxation")
+        ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(500),
+         "Stop with failure after this many iterations without residual improvement; 0 disables")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
@@ -1576,6 +1584,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
+        }
+        if (p.control.has_PT) {
+            if (p.control.PT_max_iter < 1 || p.control.PT_stagnation_window < 0 ||
+                !(p.control.PT_CFL > 0 && p.control.PT_CFL <= 0.5) ||
+                !(p.control.PT_Re > 0 && std::isfinite(p.control.PT_Re)) ||
+                !(p.control.PT_relative_tolerance >= 0 && std::isfinite(p.control.PT_relative_tolerance)) ||
+                !(p.control.PT_absolute_tolerance >= 0 && std::isfinite(p.control.PT_absolute_tolerance)) ||
+                (p.control.PT_relative_tolerance == 0 && p.control.PT_absolute_tolerance == 0))
+                die(EXIT_CONFIG_VALUE, "Invalid PT iteration, tolerance or relaxation parameters.");
+            if (p.control.PT_jump)
+                die(EXIT_CONFIG_VALUE, "PT_jump is internal solver state; configure it as false.");
         }
         if (p.control.rsf_dtheta_max > 0) {
             if (p.control.fixed_dt != 0.0) {

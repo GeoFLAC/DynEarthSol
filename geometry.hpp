@@ -111,4 +111,7 @@ double elem_quality(const array_t &coord, const conn_t &connectivity,
 double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
                           const double_vec &volume, int &worst_elem);
 
+// Local dual-time factors on the fixed mechanical reference mesh.
+void compute_pt_factors(const Param& param, const Variables& var,
+                        double_vec& stress_fraction, double_vec& mobility);
 #endif

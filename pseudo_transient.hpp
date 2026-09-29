@@ -3,15 +3,26 @@
 
 #include "parameters.hpp"
 
-// Existing definition lives in dynearthsol.cxx. Declared here so the
-// pseudo-transient orchestration below (a separate translation unit) can reuse it.
-void update_mesh(const Param &param, Variables &var);
+struct MechanicalState;
+// Reusable trial evaluation for future outer pressure/mechanics iterations.
+// Velocity and pressure inputs live in var; physical_start is never modified.
+// Geometry and physical dt must remain fixed for the lifetime of the baseline.
+void evaluate_mechanical_trial(const Param& param, Variables& var,
+                               const MechanicalState& physical_start);
 
-// Pseudo-transient relaxation of the current physical step, extracted verbatim
-// from main() in dynearthsol.cxx. hydraulic_diffusion_switch is owned by the
-// caller and is set by this function when it disables
-// param.control.has_hydraulic_diffusion for the PT loop; this function restores
-// the flag when the switch is set before returning.
-void run_physical_step_pt(Param &param, Variables &var, bool &hydraulic_diffusion_switch);
+enum class PTStatus { converged, max_iterations, stagnated, nonfinite };
+struct PTResult {
+    PTStatus status = PTStatus::max_iterations;
+    int iterations = 0;
+    double residual = 0, initial_residual = 0;
+};
+const char* pt_status_name(PTStatus status);
+// Called before any physical constitutive update. One accepted candidate is
+// left in Variables; failed solves restore physical-start mechanical history.
+PTResult run_physical_step_pt(const Param& param, Variables& var);
+// Elastic prestress correction on fixed geometry, with homogeneous supports and
+// no physical aging, transport or pressure increment consumption.
+PTResult run_initial_equilibrium_pt(const Param& param, Variables& var);
+void require_pt_convergence(const Variables& var, const PTResult& result);
 
 #endif

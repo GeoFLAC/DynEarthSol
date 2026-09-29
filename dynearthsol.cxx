@@ -379,6 +379,22 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        if (param.control.has_hydraulic_diffusion) {
+            if (!bin_chkpt.has_array("pending pore pressure increment"))
+                die(EXIT_IO_RESTART, "Hydraulic checkpoint lacks the pending pressure increment; exact continuation is not recoverable.");
+            bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
+        }
+        if (param.control.has_PT) {
+            if (bin_chkpt.has_array("initial equilibrium done")) {
+                int complete = 0;
+                bin_chkpt.read_scalar(complete, "initial equilibrium done");
+                var.initial_equilibrium_done = complete != 0;
+            } else {
+                // Legacy output is written before adjustment at step zero and
+                // after the accepted physical step at positive step counts.
+                var.initial_equilibrium_done = var.steps > 0;
+            }
+        }
         // previous-step volume for volumetric strain rate.
         bin_chkpt.read_array(*var.volume_old, "volume_old");
 
@@ -559,52 +575,6 @@ void isostasy_adjustment(const Param &param, Variables &var)
 #endif
 }
 
-void initial_body_force_adjustment(const Param &param, Variables &var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    
-    // pseudo transient (PT) loop
-    var.l2_residual = calculate_residual_force(var, *var.force_residual);
-    residual_old = var.l2_residual;
-    if (param.control.has_PT)
-    {   
-        // var.dt = compute_dt_PT(param, var);
-        param.control.PT_jump = true;
-        for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
-        {
-            apply_vbcs(param, var, *var.vel);
-            if (param.control.has_moving_mesh)
-                update_mesh(param, var);
-            update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.etmp);
-            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel,
-                *var.dyn_fric_coeff, *var.state_variable);
-            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-            // update_velocity_PT(var, *var.vel);
-            update_velocity(var, *var.vel);
-            var.l2_residual = calculate_residual_force(var, *var.force_residual);
-            double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-            if (relative_change < param.control.PT_relative_tolerance) {
-            break;  // Exit the loop if relative change is small enough
-            }
-            residual_old = var.l2_residual;
-        }
-        param.control.PT_jump = false;
-    }
-
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
 
 int main(int argc, const char* argv[])
 {
@@ -761,18 +731,12 @@ int main(int argc, const char* argv[])
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
-    double dt_copy = 0.0;
-    bool hydraulic_diffusion_switch = false;
-
-    if(param.ic.has_body_force_adjustment)
-    {
-        if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
-        // this is similar to isostasy_adjustment(param, var); so maybe should be merged to it later.
-        // Only works with PT loop
-        initial_body_force_adjustment(param, var); 
-        if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
-        param.ic.has_body_force_adjustment = false;
+    if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
+        if (param.control.has_PT)
+            require_pt_convergence(var, run_initial_equilibrium_pt(param, var));
     }
+    var.initial_equilibrium_done = true;
+    param.ic.has_body_force_adjustment = false;
 
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "
@@ -795,23 +759,27 @@ int main(int argc, const char* argv[])
         if (param.control.has_hydraulic_diffusion)
             update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
 
-        update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.etmp);
-        compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-        update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-            *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-            *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel,
-            *var.dyn_fric_coeff, *var.state_variable);
+        if (param.control.has_PT) {
+            require_pt_convergence(var, run_physical_step_pt(param, var));
+        } else {
+            update_strain_rate(var, *var.strain_rate);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
+            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
+                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
+                *var.strain_rate,
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
 
-        // Nodal Mixed Discretization For Stress
-        if (param.control.is_using_mixed_stress)
-            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
-            
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-        update_velocity(var, *var.vel);
+            // Nodal Mixed Discretization For Stress
+            if (param.control.is_using_mixed_stress)
+                NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
 
-        run_physical_step_pt(param, var, hydraulic_diffusion_switch);
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+            update_velocity(var, *var.vel);
+
+            var.l2_residual = calculate_residual_force(var, *var.force_residual);
+        }
 
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
@@ -819,7 +787,7 @@ int main(int argc, const char* argv[])
         // Objective rotation still belongs to the current physical step, even
         // if the update below selects var.dt for the next step.
         const double rotation_dt = var.dt;
-        apply_vbcs(param, var, *var.vel);
+        if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
         else if (param.control.rsf_dtheta_max > 0.0) {
