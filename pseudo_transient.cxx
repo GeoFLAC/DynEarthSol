@@ -117,9 +117,16 @@ PTResult solve(const Param& param, Variables& var, bool initial)
             // solver's lagged stress. No second constitutive update follows.
             for (int n=0; n<var.nnode; ++n)
                 for (int d=0; d<NDIMS; ++d) (*var.force_residual)[n][d] = w.undamped[n][d];
-            if (initial)
+            if (initial) {
                 for (int n=0; n<var.nnode; ++n)
                     for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = w.old_velocity[n][d];
+                // The correction velocity is numerical. Initial output and
+                // physical transport must see rates from the restored velocity.
+                update_strain_rate(var, *var.strain_rate);
+                compute_dvoldt(var, *var.ntmp, *var.etmp);
+                compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+                #pragma acc wait
+            }
             return result;
         }
         if (result.residual < best*(1-1e-12)) {

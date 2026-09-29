@@ -1,4 +1,4 @@
-# Undamped force assembly
+# Force assembly, PT constraints and material trials
 
 Run from this directory:
 
@@ -24,8 +24,20 @@ use `abs(x-y) <= 1e-9 + 1e-14*abs(x) + 1e-14*abs(y)` in the fixture's force unit
 
 `mode=BASE` calls the old five-argument API and measures the legacy residual
 overwrite defect. The default `mode=B0` exercises the optional undamped output.
-These tests do not qualify a corrected PT solver or constraint projection.
+Both modes now require the current source tree for the added PT tests. The fixture
+also checks affine constraint fixed points, projector symmetry/idempotence/rank,
+oblique horizontal normals and imposed edge motion; pressure-only responses for
+elastic/Maxwell/viscous/EP/EVP at Biot coefficients 0, 0.6 and 1; plane-strain yy;
+repeated shear and yielded plastic trials; and frozen initial RSF properties.
+It does not qualify full-solve convergence, remeshing or physical RSF aging.
+
+`../functional/pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY`
+uses a supplied short binary-output PT case to check that frame-zero initialization
+is complete, then compares all physical save/checkpoint fields after a frame-zero
+restart. Only wall-clock metadata is excluded from byte comparisons.
 
 The initial fixture was authored by Qwen3.8-27B-FP8 under supervision. Codex added
 the real material/body-force fixture, null-output equivalence checks and build
 drivers, and independently validated the baseline and changed implementations.
+
+The PT constraint/material and initial-checkpoint tests were added by Codex.

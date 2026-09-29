@@ -24,7 +24,7 @@ GPU_CC ?= $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/de
 CPPFLAGS += -DACC -I$(ROOT)/knn-bvh/include
 CXXFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 endif
-SOURCES := main.cxx $(addprefix $(ROOT)/,fields.cxx bc.cxx matprops.cxx utils.cxx)
+SOURCES := main.cxx $(addprefix $(ROOT)/,fields.cxx bc.cxx matprops.cxx utils.cxx rheology.cxx)
 HEADERS := $(wildcard $(ROOT)/*.hpp)
 .PHONY: check clean
 ifeq ($(backend),acc)
@@ -33,8 +33,11 @@ ifeq ($(backend),acc)
 check:
 	env -u MAKEFLAGS -u MFLAGS mode=$(mode) $(MAKE) -C $(ROOT) -f Makefile -f tests/residual-assembly-test/acc.mk ndims=$(ndims) openacc=1 hdf5=0 GPU_CC=$(GPU_CC) residual-assembly-check
 else
-$(TARGET): $(SOURCES) $(HEADERS)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) -o $@
+.DEFAULT_GOAL := $(TARGET)
+$(ROOT)/3x3-C/lib3x3.a: $(wildcard $(ROOT)/3x3-C/*.c $(ROOT)/3x3-C/*.h)
+	$(MAKE) -C $(ROOT)/3x3-C openacc=0
+$(TARGET): $(SOURCES) $(HEADERS) $(ROOT)/3x3-C/lib3x3.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) $(ROOT)/3x3-C/lib3x3.a -o $@
 check: $(TARGET)
 	./$(TARGET)
 endif

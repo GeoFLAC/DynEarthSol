@@ -628,7 +628,7 @@ int main(int argc, const char* argv[])
 
         var.dt = compute_dt(param, var);
 
-        if (param.sim.has_initial_checkpoint)
+        if (param.sim.has_initial_checkpoint && !param.control.has_PT)
             var.output->write_checkpoint(param, var);
     }
     else {
@@ -724,6 +724,9 @@ int main(int argc, const char* argv[])
     }
     var.initial_equilibrium_done = true;
     param.ic.has_body_force_adjustment = false;
+
+    if (!param.sim.is_restarting && param.control.has_PT && param.sim.has_initial_checkpoint)
+        var.output->write_checkpoint(param, var);
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 

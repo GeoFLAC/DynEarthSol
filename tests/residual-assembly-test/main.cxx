@@ -12,6 +12,8 @@
 
 #include "parameters.hpp"
 #include "fields.hpp"
+#include "bc.hpp"
+#include "rheology.hpp"
 #include "matprops.hpp"
 
 #ifndef ATOL
@@ -345,7 +347,196 @@ static void test_body_force() {
     delete m;
 }
 
+
+// Independent geometric oracles: identity, one normal, two normal constraints.
+// Also check projector algebra and prescribed velocities using the real dispatch.
+static void test_constraints() {
+    std::printf("[PT velocity constraints]\n");
+    Fixture* m = new Fixture();
+    build_mesh(*m);
+    auto* flags = new uint_vec(m->var.nnode, 0);
+    auto* normals = new array_t(nbdrytypes, 0.0);
+    auto* c = new VelocityConstraints(m->var.nnode);
+    m->var.bcflag = flags;
+    m->var.bnormals = normals;
+    m->var.time = 0;
+    m->var.vbc_val_z1_loading_period = 1;
+    m->param.bc.vbc_period_x0_time_in_yr = {0,1};
+    m->param.bc.vbc_period_x1_time_in_yr = {0,1};
+    m->param.bc.vbc_period_x0_ratio = {1,1};
+    m->param.bc.vbc_period_x1_ratio = {1,1};
+    for (int k=0;k<4;++k) {
+        m->var.vbc_vertical_div_x0[k] = m->var.vbc_vertical_div_x1[k] = k/3.;
+        m->var.vbc_vertical_ratio_x0[k] = m->var.vbc_vertical_ratio_x1[k] = 1;
+    }
+    const double a = 0.6, b = 0.8;
+    (*normals)[iboundn0][0] = a;
+    (*normals)[iboundn0][NDIMS-1] = b;
+    for (int scenario=0;scenario<5;++scenario) {
+        std::printf("  scenario %d\n", scenario);
+        m->param.bc.vbc_x0 = scenario == 2 ? 1 : 0;
+        m->param.bc.vbc_val_x0 = 2;
+        m->var.vbc_types[iboundx0] = m->param.bc.vbc_x0;
+        m->var.vbc_types[iboundn0] = scenario == 3 ? 11 : (scenario == 4 ? 3 : 1);
+        m->var.vbc_values[iboundn0] = 3;
+        for (int n=0;n<m->var.nnode;++n)
+            (*flags)[n] = scenario == 0 ? 0 : (1U << iboundn0) | (scenario == 2 ? BOUNDX0 : 0);
+        build_velocity_constraints(m->param,m->var,*c);
+        for (int n=0;n<m->var.nnode;++n) {
+            const int rank = scenario == 0 ? NDIMS : (scenario == 2 ? NDIMS-2 : (scenario == 4 ? 0 : NDIMS-1));
+            check("free rank",c->free_rank[n],rank);
+            for (int d=0;d<NDIMS;++d) {
+                double po = 0;
+                for(int j=0;j<NDIMS;++j) {
+                    double pp = 0;
+                    for(int k=0;k<NDIMS;++k) pp += c->projector[n][d*NDIMS+k]*c->projector[n][k*NDIMS+j];
+                    check("P squared",pp,c->projector[n][d*NDIMS+j]);
+                    check("P symmetry",c->projector[n][d*NDIMS+j],c->projector[n][j*NDIMS+d]);
+                    po += c->projector[n][d*NDIMS+j]*c->prescribed[n][j];
+                }
+                check("P offset",po,0);
+                m->vel[n][d] = d+5;
+            }
+        }
+        project_free_vectors(m->var,*c,m->vel,true);
+        for(int n=0;n<m->var.nnode;++n) {
+            if(scenario == 0) for(int d=0;d<NDIMS;++d) check("free identity",m->vel[n][d],d+5);
+            else if(scenario == 3) check("horizontal normal",m->vel[n][0],3);
+            else check("normal velocity",a*m->vel[n][0]+b*m->vel[n][NDIMS-1],3);
+            if(scenario == 2) check("earlier normal retained",m->vel[n][0],2);
+            for(int d=0;d<NDIMS;++d) m->force[n][d] = m->vel[n][d];
+        }
+        apply_vbcs(m->param,m->var,m->vel,false,true);
+        for(int n=0;n<m->var.nnode;++n)
+            for(int d=0;d<NDIMS;++d) check("affine fixed point",m->vel[n][d],m->force[n][d]);
+    }
+    delete c; delete normals; delete flags; delete m;
+}
+
+
+static void test_material_trials() {
+    std::printf("[PT material pressure and repeated trials]\n");
+    for (int model : {MatProps::rh_elastic, MatProps::rh_maxwell, MatProps::rh_viscous,
+                      MatProps::rh_ep, MatProps::rh_evp}) {
+        for (double alpha : {0.,0.6,1.}) {
+            Fixture* m = new Fixture();
+            build_mesh(*m);
+            const int ne=m->var.nelem, nn=m->var.nnode;
+            auto* strain = new tensor_t(ne,0.);
+            auto* yy = new double_vec(ne,0.);
+            auto* dp = new double_vec(ne,0.);
+            auto* visc = new double_vec(ne,1e9);
+            auto* pls = new double_vec(ne,0.);
+            auto* dpls = new double_vec(ne,0.);
+            auto* friction = new double_vec(ne,0.6);
+            auto* state = new double_vec(ne,10.);
+            auto* div = new double_vec(ne,0.);
+            m->strain_rate.resize(ne,0.);
+            m->temperature.assign(nn,300.);
+            m->pressure.assign(nn,10.);
+            m->pressure_increment.assign(nn,-10.);
+            m->markers.assign(ne,int_vec(1,1));
+            m->var.strain=strain; m->var.stressyy=yy; m->var.dpressure=dp;
+            m->var.viscosity=visc; m->var.plstrain=pls; m->var.delta_plstrain=dpls;
+            m->var.dyn_fric_coeff=friction; m->var.state_variable=state;
+            m->var.edvoldt=div; m->var.strain_rate=&m->strain_rate;
+            m->var.temperature=&m->temperature; m->var.ppressure=&m->pressure;
+            m->var.dppressure=&m->pressure_increment; m->var.elemmarkers=&m->markers;
+            m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
+            m->var.dt=0.1; m->var.time=1;
+            auto& p=m->param.mat;
+            p.nmat=1; p.rheol_type=model; p.is_plane_strain=NDIMS==2;
+            p.rho0={2500}; p.alpha={0}; p.porosity={0.2};
+            p.bulk_modulus={1e9}; p.shear_modulus={1e9};
+            p.visc_exponent={1}; p.visc_coefficient={1};
+            p.visc_activation_energy={0}; p.visc_activation_volume={0};
+            p.visc_min=p.visc_max=1e9;
+            p.biot_coeff={alpha}; p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9};
+            p.pls0={1}; p.pls1={2}; p.cohesion0=p.cohesion1={1e8};
+            p.friction_angle0=p.friction_angle1={0};
+            p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e8;
+            m->param.control.has_hydraulic_diffusion=true;
+            m->param.control.is_using_mixed_stress=true;
+            m->var.mat=new MatProps(m->param,m->var);
+            auto* baseline=new MechanicalState(ne);
+            baseline->capture(m->var);
+            for (int trial=0;trial<5;++trial) {
+                baseline->restore(m->var);
+                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                #pragma acc wait
+                for(int e=0;e<ne;++e) {
+                    for(int d=0;d<NSTR;++d) {
+                        check("pressure-only total stress",m->stress[e][d],d<NDIMS?-10*alpha:0);
+                        check("zero strain",(*strain)[e][d],0);
+                    }
+                    if(NDIMS==2) check("plane strain pressure yy",(*yy)[e],-10*alpha);
+                    check("pressure trace",(*dp)[e],-30*alpha);
+                    check("plastic history",(*pls)[e],0);
+                    check("plastic increment",(*dpls)[e],0);
+                    check("state unchanged",(*state)[e],10);
+                    // Deliberately contaminate every snapshot scalar to check restore.
+                    (*yy)[e]=(*dp)[e]=(*visc)[e]=(*pls)[e]=(*dpls)[e]=(*friction)[e]=(*state)[e]=99;
+                }
+            }
+            // Nonzero shear increment: a discarded trial must not accumulate
+            // total strain, while Maxwell/EVP use one physical relaxation interval.
+            for (int trial=0;trial<5;++trial) {
+                baseline->restore(m->var);
+                for(int e=0;e<ne;++e) m->strain_rate[e][NDIMS]=0.02;
+                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                #pragma acc wait
+                double shear=4e6;
+                if(model==MatProps::rh_viscous) shear=4e7;
+                if(model==MatProps::rh_maxwell || model==MatProps::rh_evp) shear/=1.05;
+                for(int e=0;e<ne;++e) {
+                    check("single shear strain increment",(*strain)[e][NDIMS],0.002);
+                    check("constitutive shear",m->stress[e][NDIMS],shear);
+                    check("friction restored",(*friction)[e],0.6);
+                    check("history restored",(*state)[e],10);
+                }
+            }
+            if ((model==MatProps::rh_ep || model==MatProps::rh_evp) && alpha==0) {
+                double first_plastic=0, first_shear=0;
+                for(int trial=0;trial<5;++trial) {
+                    baseline->restore(m->var);
+                    for(int e=0;e<ne;++e) m->strain_rate[e][NDIMS]=2;
+                    update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                                  m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                    #pragma acc wait
+                    if(trial==0) { first_plastic=(*pls)[0]; first_shear=m->stress[0][NDIMS]; }
+                    check("plastic branch exercised",first_plastic>0,1);
+                    for(int e=0;e<ne;++e) {
+                        check("plastic history not accumulated",(*pls)[e],first_plastic);
+                        check("one plastic increment",(*dpls)[e],first_plastic);
+                        check("repeated plastic stress",m->stress[e][NDIMS],first_shear);
+                        check("single yielded strain increment",(*strain)[e][NDIMS],0.2);
+                    }
+                }
+            }
+            if (model==MatProps::rh_elastic && alpha==0) {
+                double first_strength=0;
+                for(double slip : {1e-9,1.0,100.0}) {
+                    double amc,anphi,anpsi,hardn,tenmax,mu=0.6,theta=10;
+                    m->var.mat->plastic_props_rsf(0,0,amc,anphi,anpsi,hardn,tenmax,
+                                                 slip,mu,theta,0.1,0,true);
+                    if(slip==1e-9) first_strength=anphi;
+                    check("initial RSF frozen friction",mu,0.6);
+                    check("initial RSF frozen state",theta,10);
+                    check("initial RSF independent of pseudo velocity",anphi,first_strength);
+                }
+            }
+            delete baseline; delete m->var.mat;
+            delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
+            delete friction; delete state; delete div; delete m;
+        }
+    }
+}
+
 int main() {
+    test_material_trials();
+    test_constraints();
     test_cancellation();
     test_traction();
     test_damping();
