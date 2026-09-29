@@ -20,6 +20,7 @@ struct PTResult {
     PTStatus status = PTStatus::max_iterations;
     int iterations = 0;
     double residual = 0, initial_residual = 0;
+    double threshold = 0;
 };
 const char* pt_status_name(PTStatus status);
 // Called before any physical constitutive update. One accepted candidate is

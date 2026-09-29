@@ -35,3 +35,13 @@ PT checkpoints retain the original schedule anchors and the next regular output
 index. Older checkpoints without these fields remain readable with a warning
 and legacy scheduling; incomplete new schedule records are rejected. This test
 does not qualify earthquake-event history or averaged-field accumulator restart.
+
+## Nonconvergence diagnostics
+
+A failed PT solve reports its requested stopping threshold separately from the
+existing status line. The threshold is the configured absolute tolerance plus
+the relative tolerance times the initial residual of that physical step. Near
+equilibrium, this relative-only target may fall below attainable arithmetic
+accuracy. A small reported residual alone does not authorize acceptance: failed
+candidates are still rolled back, and the solver does not silently relax the
+threshold. Diagnose the force scale and conditioning before changing controls.

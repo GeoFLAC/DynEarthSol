@@ -106,14 +106,16 @@ PTResult solve(const Param& param, Variables& var, bool initial)
         result.iterations = iteration+1;
         result.residual = pt_residual_rms(var, w.constraints, w.undamped);
         var.l2_residual = result.residual;
-        if (iteration == 0) result.initial_residual = result.residual;
+        if (iteration == 0) {
+            result.initial_residual = result.residual;
+            result.threshold = param.control.PT_absolute_tolerance +
+                param.control.PT_relative_tolerance*result.initial_residual;
+        }
         if (!std::isfinite(result.residual) || !finite_candidate(var)) {
             result.status = PTStatus::nonfinite;
             break;
         }
-        const double threshold = param.control.PT_absolute_tolerance +
-            param.control.PT_relative_tolerance*result.initial_residual;
-        if (result.residual <= threshold) {
+        if (result.residual <= result.threshold) {
             result.status = PTStatus::converged;
             // The accepted stress is the constitutive/NMD candidate, never the
             // solver's lagged stress. No second constitutive update follows.
@@ -235,7 +237,10 @@ void require_pt_convergence(const Variables& var, const PTResult& result)
 {
     std::printf("PT step=%d status=%s iterations=%d residual=%.17g initial=%.17g\n",
                 var.steps, pt_status_name(result.status), result.iterations, result.residual, result.initial_residual);
-    if (result.status != PTStatus::converged)
+    if (result.status != PTStatus::converged) {
+        std::fprintf(stderr, "PT stopping threshold=%.17g; no candidate was accepted.\n",
+                     result.threshold);
         die(result.status == PTStatus::nonfinite ? EXIT_RUNTIME_NAN : EXIT_RUNTIME_NONCONVERGENCE,
             "PT mechanical equilibrium failed; physical-start mechanical history restored.");
+    }
 }

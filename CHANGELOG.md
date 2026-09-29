@@ -27,6 +27,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- Failed PT solves report the requested stopping threshold alongside the
+  residual, without changing convergence criteria.
 - `README.md` matches the current build and tools again: several statements
   were stale, among them exported `BOOST_ROOT_DIR` being ignored, a default
   input file, and MMG built from a hand clone rather than the submodule ([#96]).
