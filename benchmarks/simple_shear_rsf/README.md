@@ -67,6 +67,12 @@ Run all nine simple-shear cases plus healing with:
 python3 check_simple_shear_benchmark.py --all
 ~~~
 
+Add `--pt` to the runner or checker to exercise PT mechanical updates with the
+same physical steps and reference tolerances. The RSF auxiliary GVS controls
+remain enabled. These prescribed-motion cells satisfy force balance on the first
+candidate; they verify accepted constitutive histories, not convergence through
+multiple PT iterations. Use a separate traction-driven case for that check.
+
 The checker verifies pointwise stress error, recovers the rate used by the RSF
 law from the monitored friction and state outputs, and iterates the discrete
 zero-velocity healing update independently. Temporary results are removed

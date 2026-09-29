@@ -105,6 +105,7 @@ def main() -> None:
         description="Check the paper's local EP/RSF benchmark references."
     )
     parser.add_argument("--exe", default=None, help="Path to dynearthsol2d. If omitted, auto-detect.")
+    parser.add_argument("--pt", action="store_true", help="Check PT mechanics against the same reference solutions.")
     parser.add_argument(
         "--cases",
         nargs="+",
@@ -156,6 +157,8 @@ def main() -> None:
         ]
         if args.exe:
             run_cmd.extend(["--exe", str(Path(args.exe).expanduser().resolve())])
+        if args.pt:
+            run_cmd.append("--pt")
         subprocess.run(run_cmd, cwd=script_dir, check=True)
 
         failures: list[str] = []
