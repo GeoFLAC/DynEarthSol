@@ -22,6 +22,21 @@ one-year output interval avoids unrelated output-clock rounding in this short,
 step-driven test. The harness suppresses extra remesh output frames so frame
 numbers match physical step numbers.
 
+## Hydrostatic initial equilibrium
+
+```sh
+OMP_NUM_THREADS=2 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol2d tests/functional/pt_hydrostatic_equilibrium.cfg /tmp/des-pt-hydrostatic-2d --require-stationary
+OMP_NUM_THREADS=2 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol3d tests/functional/pt_hydrostatic_equilibrium.cfg /tmp/des-pt-hydrostatic-3d --require-stationary
+```
+
+Repeat with `--restart-frame 1` and new output directories. This no-load fixture
+requires stress and pore pressure to remain within 1e-8 of their initial maximum
+absolute magnitude (scale floor 1 Pa), with exactly fixed coordinates. Initial
+PT equilibration retains physical sidewall support and body forces; it suppresses
+transport and pressure-increment consumption, not the hydraulic load definition.
+It does not establish general poroelastic analytical accuracy. Binary and HDF5
+executables use the same checker; the stationarity check requires NumPy.
+
 ## Dynamic time interval and oblique boundaries
 
 ```sh

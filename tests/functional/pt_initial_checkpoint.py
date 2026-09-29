@@ -47,6 +47,8 @@ def main():
     parser.add_argument('--restart-frame', type=int, default=0)
     parser.add_argument('--steps', type=int, default=3)
     parser.add_argument('--require-remesh', action='store_true')
+    parser.add_argument('--require-stationary', action='store_true',
+                        help='Require a no-load hydrostatic fixture to retain stress and pressure')
     args = parser.parse_args()
     if not 0 <= args.restart_frame < args.steps:
         parser.error('require 0 <= restart-frame < steps')
@@ -99,6 +101,20 @@ def main():
             differences[f'{suffix}.{frame}'] = [key for key in a if key.split('/')[-1] != 'walltime_sec' and a[key] != b[key]]
     (output / 'comparison.json').write_text(json.dumps(differences, indent=2) + '\n')
     assert not any(differences.values()), differences
+    if args.require_stationary:
+        import numpy as np
+        initial = fields(output / 'fresh.save.000000')
+        changes = {}
+        for frame in range(1, args.steps + 1):
+            current = fields(output / f'fresh.save.{frame:06d}')
+            for name in ('stress', 'pore pressure'):
+                a = np.frombuffer(initial[name], dtype=np.float64)
+                b = np.frombuffer(current[name], dtype=np.float64)
+                scale = max(1.0, float(np.max(np.abs(a))))
+                changes[f'{name}.{frame}'] = float(np.max(np.abs(b - a))) / scale
+            assert initial['coordinate'] == current['coordinate'], 'Stationary mesh moved'
+        (output / 'stationarity.json').write_text(json.dumps(changes, indent=2) + '\n')
+        assert all(value <= 1e-8 for value in changes.values()), changes
     if args.require_remesh:
         for phase in ('fresh', 'restart'):
             assert 'Remeshing finished.' in (output / (phase + '.log')).read_text(), phase

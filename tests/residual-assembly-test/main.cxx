@@ -462,6 +462,21 @@ static void test_material_trials() {
             m->var.mat=new MatProps(m->param,m->var);
             auto* baseline=new MechanicalState(ne);
             baseline->capture(m->var);
+            if (model==MatProps::rh_elastic || model==MatProps::rh_ep) {
+                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,
+                              *friction,*state,true,true);
+                #pragma acc wait
+                for(int e=0;e<ne;++e) {
+                    for(int d=0;d<NSTR;++d)
+                        check("initial equilibrium ignores pending pressure",m->stress[e][d],0);
+                    check("initial pressure yy unchanged",(*yy)[e],0);
+                }
+                for(int n=0;n<nn;++n) {
+                    check("initial pressure level preserved",m->pressure[n],10);
+                    check("initial pending pressure preserved",m->pressure_increment[n],-10);
+                }
+            }
             for (int trial=0;trial<5;++trial) {
                 baseline->restore(m->var);
                 update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,

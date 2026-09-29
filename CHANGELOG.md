@@ -40,6 +40,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- PT initial equilibrium preserves hydraulic sidewall support when physical
+  stepping begins, avoiding a spurious pore-pressure transient without an
+  applied top load.
+
 - PT checkpoints preserve regular output timing across restart, including RSF
   step/time schedules. Older checkpoints retain legacy scheduling with a warning.
 - PT restarts at a mesh-quality check now complete the pending remeshing stage

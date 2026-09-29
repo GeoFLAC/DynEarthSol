@@ -835,7 +835,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
-    const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    // Instantaneous initialization equilibrates the existing stress without
+    // consuming a pressure increment belonging to the next physical step.
+    const bool has_hydraulic_diffusion =
+        param.control.has_hydraulic_diffusion && !initial_equilibrium;
     // Only option 0 projects the centroid velocity; option 1 derives its rate
     // from the strain-rate invariant.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)

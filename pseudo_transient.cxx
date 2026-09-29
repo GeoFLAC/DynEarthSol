@@ -211,7 +211,9 @@ PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
         die(EXIT_CONFIG_VALUE, "Initial instantaneous PT equilibrium requires an elastic skeleton; use a physical-time process for pure viscous material.");
     std::unique_ptr<Param> initial_owner(new Param(param));
     Param& initial = *initial_owner;
-    initial.control.has_hydraulic_diffusion = false;
+    // Keep the physical load definition: the hydraulic option also controls
+    // sidewall support pressure. This solve never advances fluid transport;
+    // update_stress uses initial_equilibrium to leave pending pressure alone.
     initial.mat.rheol_type &= ~MatProps::rh_viscous;
     if (initial.mat.rheol_type & MatProps::rh_rsf) {
         update_strain_rate(var, *var.strain_rate);
