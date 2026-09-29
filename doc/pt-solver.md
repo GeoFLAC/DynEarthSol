@@ -14,10 +14,13 @@ pressure inputs are fixed during each mechanical solve. NMD applies to every
 candidate before force evaluation. Trial Maxwell volume strain uses the corrected
 strain-rate trace times physical dt on the fixed reference mesh.
 
-The ordinary `update_stress` return maps remain the constitutive authority. Their
-existing material-model limitations are not removed by this refactor. Qualification
-must include the plane-strain and pressure treatment of each Maxwell/EVP branch;
-code-path availability is not a claim of validated coupled physics.
+The ordinary `update_stress` return maps remain the constitutive authority. For PT,
+Maxwell normal stresses receive the pending isotropic pressure increment once.
+Plane strain includes yy in mean/deviatoric stress, the EVP branch comparison and
+NMD; the selected EVP candidate supplies yy as well as the in-plane components.
+Pure viscous replacement stress uses the current pore-pressure level rather than
+repeated increments. Non-PT callers retain the existing defaults. These paths still
+require the final material and coupling tests before numerical qualification.
 
 The residual is the RMS assembled undamped force projected onto admissible velocity
 perturbations, normalized by the free rank. Gravity, Neumann traction and foundation
@@ -53,14 +56,24 @@ Physical mesh motion, stress rotation, transport and remeshing remain outside th
 trial loop. Equilibrium is established on the reference geometry; it does not
 claim equilibrium after moving that geometry. No live baseline crosses a remesh.
 
-Initial body-force equilibration is a distinct elastic prestress correction with
-homogeneous supports and no transport or physical aging. Initial adjustment for
-inelastic rheology is explicitly rejected in this draft. Duration-based isostasy
-retains its separate physical-time process. Completion state is checkpointed so a
-restart does not inadvertently repeat initial adjustment.
+Initial body-force equilibration uses the instantaneous elastic/plastic skeleton
+with homogeneous supports and no transport, viscous relaxation or physical aging.
+RSF friction and state are frozen at the initial physical values, independent of
+numerical correction velocities. Plastic history is committed only for the accepted
+initial candidate. Maxwell and EVP initialization use their instantaneous skeletons.
+Pure viscous material has no such skeleton and is explicitly rejected for this
+initialization contract. Duration-based isostasy retains its physical-time process.
+Initial equilibrium precedes frame-zero output and monitor initialization.
+Completion state is checkpointed so a restart does not repeat initial adjustment.
 
 Hydraulic checkpoints now store the pending signed pressure increment consumed
 by the next mechanical step. Old hydraulic checkpoints lacking it are rejected:
 the missing increment cannot be inferred exactly from a pressure level alone.
 Dry restart behavior is unchanged. Existing barycentric remapping transfers the
 pending increment with the other nodal hydraulic fields.
+
+The hydraulic transport equation and its existing in-plane mean-stress coupling
+remain unchanged; this refactor does not implement a new poroelastic formulation.
+At corners the ordered boundary dispatch retains its precedence rules; the affine
+fixed-point construction is not a simultaneous enforcement of every conflicting
+boundary prescription. These cases require explicit final validation.

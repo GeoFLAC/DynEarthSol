@@ -18,7 +18,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt);
 
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd,
-                double_vec &etmp);
+                double_vec &etmp, double_vec* stressyy = nullptr);
 
 // Surface-relative reference pressure for SPR remeshing: ref_pressure is evaluated
 // at the effective depth below the CURRENT surface instead of the fixed datum z = 0,

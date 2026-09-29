@@ -229,57 +229,50 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 namespace {
 #pragma acc routine seq
 void project_boundary_intersection(const Variables& var, int ic, int ib,
-                                   ConstArrayAccessor n, ArrayAccessor v, bool normalized)
+                                   ConstArrayAccessor n, ArrayAccessor v, bool normalized,
+                                   double prescribed_normal)
 {
-    // ic < ib, matching how create_boundary_normals keys the table.
-    const int slot = var.edge_slot[ic*nbdrytypes + ib];
-    if (slot < 0) return;  // no shared edge, so no direction to project onto
-    const double *edge = &var.edge_vec[slot*NDIMS];
-    double corrected_edge[NDIMS] = {};
     if (normalized) {
-        double na[NDIMS], nb[NDIMS];
+        // Add the new affine normal constraint while preserving the normal
+        // component fixed by the earlier boundary. This retains imposed motion
+        // at edges; projecting onto an edge through the origin would erase it.
+        double earlier[NDIMS] = {}, current[NDIMS] = {};
+        if (ic < iboundn0) {
+            const int direction = ic <= iboundx1 ? 0 : (ic <= iboundy1 ? 1 : NDIMS-1);
+            earlier[direction] = 1;
+        } else {
+            for (int d=0; d<NDIMS; ++d) earlier[d] = (*var.bnormals)[ic][d];
+            if (var.vbc_types[ic] == 11) earlier[NDIMS-1] = 0;
+        }
+        double aa = 0, bb = 0;
         for (int d=0; d<NDIMS; ++d) {
-            na[d] = (*var.bnormals)[ic][d];
-            nb[d] = n[d];
+            current[d] = (var.vbc_types[ib] == 11 && d == NDIMS-1) ? 0 : n[d];
+            aa += earlier[d]*earlier[d];
+            bb += current[d]*current[d];
         }
-        if (var.vbc_types[ib] == 11) nb[NDIMS-1] = 0;
-#ifdef THREED
-        corrected_edge[0] = na[1]*nb[2]-na[2]*nb[1];
-        corrected_edge[1] = na[2]*nb[0]-na[0]*nb[2];
-        corrected_edge[2] = na[0]*nb[1]-na[1]*nb[0];
-        double cross2 = 0;
-        for (int d=0; d<NDIMS; ++d) cross2 += corrected_edge[d]*corrected_edge[d];
-#else
-        const double cross = na[0]*nb[1]-na[1]*nb[0];
-        const double cross2 = cross*cross;
-        if (cross2 > 1e-24) {
-            // Independent normals in 2D constrain both components.
-            v[0] = v[1] = 0;
-            return;
+        if (!(aa > 0 && bb > 0)) return; // invalid normals rejected before kernel
+        double ab = 0, vn = 0;
+        for (int d=0; d<NDIMS; ++d) {
+            earlier[d] /= std::sqrt(aa);
+            current[d] /= std::sqrt(bb);
+            ab += earlier[d]*current[d];
+            vn += v[d]*current[d];
         }
-#endif
-        if (cross2 <= 1e-24) {
-            double vn = 0, norm2 = 0;
-            for (int d=0; d<NDIMS; ++d) {
-                vn += v[d]*nb[d];
-                norm2 += nb[d]*nb[d];
-            }
-            if (norm2 > 0)
-                for (int d=0; d<NDIMS; ++d) v[d] -= vn*nb[d]/norm2;
-            return;
-        }
-        edge = corrected_edge;
+        const double determinant = 1-ab*ab;
+        const double delta = prescribed_normal-vn;
+        for (int d=0; d<NDIMS; ++d)
+            v[d] += determinant > 1e-12
+                ? delta*(current[d]-ab*earlier[d])/determinant
+                : delta*current[d]; // parallel normals: later boundary wins
+        return;
     }
-
-    double edge_norm2 = 0;
-    for (int d=0; d<NDIMS; ++d) edge_norm2 += edge[d]*edge[d];
-    if (normalized && edge_norm2 == 0) return;
+    // Preserve the original edge map exactly for non-PT callers.
+    const int slot = var.edge_slot[ic*nbdrytypes + ib];
+    if (slot < 0) return;
+    const double* edge = &var.edge_vec[slot*NDIMS];
     double ve = 0;
-    for (int d=0; d<NDIMS; d++)
-        ve += v[d] * edge[d];
-
-    for (int d=0; d<NDIMS; d++)
-        v[d] = ve * edge[d] / (normalized ? edge_norm2 : 1.0);  // v must be parallel to edge
+    for (int d=0; d<NDIMS; ++d) ve += v[d]*edge[d];
+    for (int d=0; d<NDIMS; ++d) v[d] = ve*edge[d];
 }
 }
 
@@ -575,8 +568,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 				    for (int d=0; d<NDIMS; d++)
                                         v[d] += ((prescribed * var.vbc_values[ib]) - vn) * n[d];  // setting normal velocity
                                 }
-                                else if (var.vbc_types[ic] == 1) {
-                                    project_boundary_intersection(var, ic, ib, n, v, normalized);
+                                else if (var.vbc_types[ic] == 1 || (normalized && var.vbc_types[ic] == 11)) {
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized, prescribed*var.vbc_values[ib]);
                                 }
                             }
                         }
@@ -607,8 +600,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 				    for (int d=0; d<NDIMS-1; d++)
                                         v[d] += ((prescribed * var.vbc_values[ib]) * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                                 }
-                                else if (var.vbc_types[ic] == 1) {
-                                    project_boundary_intersection(var, ic, ib, n, v, normalized);
+                                else if (var.vbc_types[ic] == 1 || (normalized && var.vbc_types[ic] == 11)) {
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized, prescribed*var.vbc_values[ib]);
                                 }
                             }
                         }
@@ -1924,11 +1917,15 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     auto& p = constraints.projector;
     auto& offset = constraints.prescribed;
     for (int ib=iboundn0; ib<=iboundn3; ++ib) {
-        if (var.vbc_types[ib] != 11 && var.vbc_types[ib] != 13) continue;
+        if (var.vbc_types[ib] == 0) continue;
         for (int n=0; n<nn; ++n) {
             if (!((*var.bcflag)[n] & (1U << ib))) continue;
+            double norm2 = 0;
+            for (int d=0; d<NDIMS; ++d) norm2 += (*var.bnormals)[ib][d]*(*var.bnormals)[ib][d];
+            if (!std::isfinite(norm2) || std::abs(norm2-1) > 1e-10)
+                die(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
             const double nz = (*var.bnormals)[ib][NDIMS-1];
-            if (!(1 - nz*nz > 1e-14))
+            if ((var.vbc_types[ib] == 11 || var.vbc_types[ib] == 13) && !(1-nz*nz > 1e-14))
                 die(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
         }
     }

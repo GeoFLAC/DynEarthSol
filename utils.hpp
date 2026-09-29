@@ -232,6 +232,20 @@ static double second_invariant2(T t)
 #endif
 }
 
+// Plane-strain tensor invariant including the stored out-of-plane stress.
+#pragma acc routine seq
+template <typename T>
+static double second_invariant2(T t, double syy)
+{
+#ifdef THREED
+    return second_invariant2(t);
+#else
+    const double mean = (t[0] + t[1] + syy)/3;
+    return 0.5*((t[0]-mean)*(t[0]-mean) + (t[1]-mean)*(t[1]-mean) +
+                (syy-mean)*(syy-mean)) + t[2]*t[2];
+#endif
+}
+
 template <typename T>
 static double second_invariant(T t)
 {

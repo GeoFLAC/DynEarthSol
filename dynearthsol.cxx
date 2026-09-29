@@ -716,6 +716,15 @@ int main(int argc, const char* argv[])
     }
 #endif
 
+    // Publish and monitor the accepted initial state, not the pre-equilibrium
+    // candidate. The first checkpoint therefore records initialization as done.
+    if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
+        if (param.control.has_PT)
+            require_pt_convergence(var, run_initial_equilibrium_pt(param, var));
+    }
+    var.initial_equilibrium_done = true;
+    param.ic.has_body_force_adjustment = false;
+
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
@@ -730,13 +739,6 @@ int main(int argc, const char* argv[])
 
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
-
-    if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
-        if (param.control.has_PT)
-            require_pt_convergence(var, run_initial_equilibrium_pt(param, var));
-    }
-    var.initial_equilibrium_done = true;
-    param.ic.has_body_force_adjustment = false;
 
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "

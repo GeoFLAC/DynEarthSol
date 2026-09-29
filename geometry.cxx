@@ -329,7 +329,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 }
 
 
-void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp)
+void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp, double_vec* stressyy)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -360,7 +360,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, dp_nd, stress)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
@@ -375,9 +375,10 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     	TensorAccessor s = stress[e];
 
 	    double dp_orig = (*var.dpressure)[e];
-        double ddp = ( - dp_orig + dp_el ) / NDIMS;
+        double ddp = ( - dp_orig + dp_el ) / (stressyy ? 3 : NDIMS);
 	    for (int i=0; i<NDIMS; ++i)
             s[i] += ddp;
+        if (stressyy) (*stressyy)[e] += ddp;
     }
 
 #ifdef NPROF

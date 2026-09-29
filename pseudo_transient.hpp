@@ -8,7 +8,7 @@ struct MechanicalState;
 // Velocity and pressure inputs live in var; physical_start is never modified.
 // Geometry and physical dt must remain fixed for the lifetime of the baseline.
 void evaluate_mechanical_trial(const Param& param, Variables& var,
-                               const MechanicalState& physical_start);
+                               const MechanicalState& physical_start, bool initial_equilibrium = false);
 
 enum class PTStatus { converged, max_iterations, stagnated, nonfinite };
 struct PTResult {
@@ -20,7 +20,7 @@ const char* pt_status_name(PTStatus status);
 // Called before any physical constitutive update. One accepted candidate is
 // left in Variables; failed solves restore physical-start mechanical history.
 PTResult run_physical_step_pt(const Param& param, Variables& var);
-// Elastic prestress correction on fixed geometry, with homogeneous supports and
+// Instantaneous skeleton correction on fixed geometry, with homogeneous supports and
 // no physical aging, transport or pressure increment consumption.
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var);
 void require_pt_convergence(const Variables& var, const PTResult& result);

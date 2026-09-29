@@ -26,22 +26,36 @@ struct PTWorkspace {
 double residual_rms(const Variables& var, const VelocityConstraints& constraints,
                     const array_t& force)
 {
-    double sum = 0;
-    int rank = 0, bad = 0;
+    double scale = 0;
+    long long rank = 0;
+    int bad = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, constraints, force) reduction(+:sum,rank) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(var, constraints, force) reduction(max:scale) reduction(+:rank) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:sum,rank) reduction(|:bad)
+    #pragma acc parallel loop gang vector reduction(max:scale) reduction(+:rank) reduction(|:bad)
     for (int n=0; n<var.nnode; ++n) {
         rank += constraints.free_rank[n];
         for (int d=0; d<NDIMS; ++d) {
             const double f = force[n][d];
             bad |= !std::isfinite(f) || !std::isfinite((*var.vel)[n][d]);
-            sum += f*f;
+            scale = std::max(scale, std::abs(f));
         }
     }
-    if (bad || !std::isfinite(sum)) return std::numeric_limits<double>::quiet_NaN();
-    return rank ? std::sqrt(sum/rank) : 0.0;
+    if (bad) return std::numeric_limits<double>::quiet_NaN();
+    if (!rank || scale == 0) return 0;
+    // Scale before squaring: large forces must not overflow and tiny imbalances
+    // must not underflow to an artificial zero residual.
+    double sum = 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, force) firstprivate(scale) reduction(+:sum)
+#endif
+    #pragma acc parallel loop gang vector reduction(+:sum)
+    for (int n=0; n<var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) {
+            const double f = force[n][d]/scale;
+            sum += f*f;
+        }
+    return scale*std::sqrt(sum/rank);
 }
 
 bool finite_candidate(const Variables& var)
@@ -84,7 +98,7 @@ PTResult solve(const Param& param, Variables& var, bool initial)
     int last_improvement = 0;
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
-        evaluate_mechanical_trial(param, var, w.start);
+        evaluate_mechanical_trial(param, var, w.start, initial);
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped);
         project_free_vectors(var, w.constraints, w.undamped);
         result.iterations = iteration+1;
@@ -154,7 +168,7 @@ PTResult solve(const Param& param, Variables& var, bool initial)
 }
 
 void evaluate_mechanical_trial(const Param& param, Variables& var,
-                               const MechanicalState& physical_start)
+                               const MechanicalState& physical_start, bool initial_equilibrium)
 {
     physical_start.restore(var);
     update_strain_rate(var, *var.strain_rate);
@@ -163,9 +177,10 @@ void evaluate_mechanical_trial(const Param& param, Variables& var,
     update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                   *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                   *var.strain_rate, *var.ppressure, *var.dppressure, *var.vel,
-                  *var.dyn_fric_coeff, *var.state_variable, true);
+                  *var.dyn_fric_coeff, *var.state_variable, true, initial_equilibrium);
     if (param.control.is_using_mixed_stress)
-        NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
+        NMD_stress(var, *var.stress, *var.ntmp, *var.etmp,
+                   param.mat.is_plane_strain ? var.stressyy : nullptr);
     #pragma acc wait
 }
 
@@ -176,12 +191,20 @@ PTResult run_physical_step_pt(const Param& param, Variables& var)
 
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
 {
-    // Initial prestress correction is elastic, not a physical creep/aging step.
-    // Do not silently use that contract for an inelastic initial state.
-    if (param.mat.rheol_type != MatProps::rh_elastic)
-        die(EXIT_CONFIG_VALUE, "Initial PT equilibrium currently requires elastic rheology; duration-based isostasy is separate.");
-    Param initial = param;
+    // Instantaneous limit: no viscous relaxation and no RSF aging. Plastic
+    // correction remains part of the skeleton's initial equilibrium state.
+    if (!(param.mat.rheol_type & MatProps::rh_elastic))
+        die(EXIT_CONFIG_VALUE, "Initial instantaneous PT equilibrium requires an elastic skeleton; use a physical-time process for pure viscous material.");
+    std::unique_ptr<Param> initial_owner(new Param(param));
+    Param& initial = *initial_owner;
     initial.control.has_hydraulic_diffusion = false;
+    initial.mat.rheol_type &= ~MatProps::rh_viscous;
+    if (initial.mat.rheol_type & MatProps::rh_rsf) {
+        update_strain_rate(var, *var.strain_rate);
+        #pragma acc wait
+        refresh_rsf_friction(initial, var, *var.dyn_fric_coeff, *var.state_variable);
+        #pragma acc wait
+    }
     return solve(initial, var, true);
 }
 
