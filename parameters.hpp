@@ -689,6 +689,11 @@ struct Variables {
     // double dt_PT;
     double l2_residual;
     double reference_frame_time;
+    // PT regular-output continuation; the checkpoint index refers to the next step.
+    double output_start_time;
+    int output_start_step;
+    int output_next_regular_frame;
+    bool output_schedule_restored;
     int steps;
     int nremesh;
     int noutput;

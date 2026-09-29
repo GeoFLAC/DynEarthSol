@@ -38,6 +38,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- PT checkpoints preserve regular output timing across restart, including RSF
+  step/time schedules. Older checkpoints retain legacy scheduling with a warning.
 - PT restarts at a mesh-quality check now complete the pending remeshing stage
   before advancing to the next physical step.
 - The thermal mass was built before the initial temperature was set, so thermal

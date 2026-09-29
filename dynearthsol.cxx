@@ -46,6 +46,10 @@ void init_var(const Param& param, Variables& var)
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
     var.reference_frame_time = 0.0;
+    var.output_start_time = 0.0;
+    var.output_start_step = 0;
+    var.output_next_regular_frame = 1;
+    var.output_schedule_restored = false;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -364,6 +368,24 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        if (param.control.has_PT) {
+            const int fields = bin_chkpt.has_array("PT output start time") +
+                bin_chkpt.has_array("PT output start step") +
+                bin_chkpt.has_array("PT next regular frame");
+            if (fields != 0 && fields != 3)
+                die(EXIT_IO_RESTART, "Incomplete PT output schedule in checkpoint.");
+            if (fields == 3) {
+                bin_chkpt.read_scalar(var.output_start_time, "PT output start time");
+                bin_chkpt.read_scalar(var.output_start_step, "PT output start step");
+                bin_chkpt.read_scalar(var.output_next_regular_frame, "PT next regular frame");
+                if (!std::isfinite(var.output_start_time) || var.output_start_step < 0 ||
+                    var.output_start_step > var.steps || var.output_next_regular_frame < 1)
+                    die(EXIT_IO_RESTART, "Invalid PT output schedule in checkpoint.");
+                var.output_schedule_restored = true;
+            } else if (var.steps > 0) {
+                std::cerr << "Warning: checkpoint lacks PT output schedule; using legacy restart scheduling.\n";
+            }
+        }
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
@@ -766,10 +788,18 @@ int main(int argc, const char* argv[])
 
     // int rheol_type_old = param.mat.rheol_type;
 
-    const double starting_time = var.reference_frame_time;
+    if (param.control.has_PT && !var.output_schedule_restored) {
+        var.output_start_time = var.reference_frame_time;
+        var.output_start_step = var.steps;
+        var.output_next_regular_frame = 1;
+    }
+    const double starting_time = param.control.has_PT ? var.output_start_time : var.reference_frame_time;
     var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
-    const double starting_step = var.steps;
-    int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+    const double starting_step = param.control.has_PT ? var.output_start_step : var.steps;
+    int next_regular_frame = param.control.has_PT ? var.output_next_regular_frame : 1;
+    if (param.control.has_PT && !param.control.use_global_velocity_scaling)
+        var.reference_frame_time = starting_time +
+            next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
 
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
@@ -886,6 +916,8 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (param.control.has_PT)
+                    var.output_next_regular_frame = next_regular_frame + 1;
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
 

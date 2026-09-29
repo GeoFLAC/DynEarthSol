@@ -380,8 +380,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
     if (param.control.has_hydraulic_diffusion)
         bin.write_array(*var.dppressure, "pending pore pressure increment", var.dppressure->size());
-    if (param.control.has_PT)
+    if (param.control.has_PT) {
         bin.write_scalar(static_cast<int>(var.initial_equilibrium_done), "initial equilibrium done");
+        bin.write_scalar(var.output_start_time, "PT output start time");
+        bin.write_scalar(var.output_start_step, "PT output start step");
+        bin.write_scalar(var.output_next_regular_frame, "PT next regular frame");
+    }
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());

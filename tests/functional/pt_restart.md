@@ -20,3 +20,18 @@ loop-limit warnings; a pass does not establish acceptable mesh quality. The
 one-year output interval avoids unrelated output-clock rounding in this short,
 step-driven test. The harness suppresses extra remesh output frames so frame
 numbers match physical step numbers.
+
+## Regular output schedule
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d tests/functional/pt_output_schedule.cfg /tmp/des-pt-schedule --schedule mixed
+```
+
+Repeat with `--schedule step`, `time`, and `catchup`, new output directories,
+and the 3D executable. The same quiescent cell tests binary and HDF5 checkpoints.
+The comparison includes frame numbers, physical steps, output times and all
+subsequent save/checkpoint payloads. Cadence settings remain unchanged on restart.
+PT checkpoints retain the original schedule anchors and the next regular output
+index. Older checkpoints without these fields remain readable with a warning
+and legacy scheduling; incomplete new schedule records are rejected. This test
+does not qualify earthquake-event history or averaged-field accumulator restart.

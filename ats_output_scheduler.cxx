@@ -27,6 +27,28 @@ void handle_ats_output(const Param& param,
            (var.time - starting_time) >= next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)) &&
          output_allowed);
 
+    int following_regular_frame = next_regular_frame;
+    if (regular_output_due) {
+        // Catch-up logic for mixed step/time schedules.
+        int frames_due_step = 0;
+        if (param.sim.output_step_interval != std::numeric_limits<int>::max()) {
+            const int64_t steps_since = var.steps - starting_step;
+            frames_due_step = static_cast<int>(steps_since / param.sim.output_step_interval);
+        }
+
+        int frames_due_time = 0;
+        if (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max()) {
+            const double elapsed_years = (var.time - starting_time) / YEAR2SEC;
+            frames_due_time = static_cast<int>(std::floor(elapsed_years / param.sim.output_time_interval_in_yr));
+        }
+
+        const int frames_due = std::max(frames_due_step, frames_due_time);
+        following_regular_frame = frames_due + 1;
+    }
+    // Checkpoints below must carry the index for the next physical step.
+    if (param.control.has_PT)
+        var.output_next_regular_frame = following_regular_frame;
+
     bool wrote_earthquake_output = false;
 
     // (1) Earthquake-triggered output first.
@@ -59,20 +81,6 @@ void handle_ats_output(const Param& param,
             var.func_time.output_time += get_nanoseconds() - t0;
         }
 
-        // Catch-up logic for mixed step/time schedules.
-        int frames_due_step = 0;
-        if (param.sim.output_step_interval != std::numeric_limits<int>::max()) {
-            const int64_t steps_since = var.steps - starting_step;
-            frames_due_step = static_cast<int>(steps_since / param.sim.output_step_interval);
-        }
-
-        int frames_due_time = 0;
-        if (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max()) {
-            const double elapsed_years = (var.time - starting_time) / YEAR2SEC;
-            frames_due_time = static_cast<int>(std::floor(elapsed_years / param.sim.output_time_interval_in_yr));
-        }
-
-        const int frames_due = std::max(frames_due_step, frames_due_time);
-        next_regular_frame = frames_due + 1;
+        next_regular_frame = following_regular_frame;
     }
 }
