@@ -38,6 +38,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- PT restarts at a mesh-quality check now complete the pending remeshing stage
+  before advancing to the next physical step.
 - The thermal mass was built before the initial temperature was set, so thermal
   diffusion ran 5.4 % slow on hot silicate ([#96]).
 - A NaN velocity stops the run with exit code 50 instead of writing frames until

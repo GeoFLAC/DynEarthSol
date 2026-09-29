@@ -576,6 +576,33 @@ void isostasy_adjustment(const Param &param, Variables &var)
 }
 
 
+// Complete the mesh stage after an accepted physical step. Checkpoints precede
+// this stage, so a restart at a quality-check boundary must also execute it.
+static double remesh_if_needed(const Param& param, Variables& var)
+{
+    double min_quality = 1.0;
+    if (param.control.has_moving_mesh)
+    {
+        int quality_is_bad, bad_quality_index;
+        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
+        if (quality_is_bad) {
+
+            if (param.sim.has_output_during_remeshing) {
+                var.output->write_exact(var);
+            }
+
+            monitor_before_remesh(param, var);
+            remesh(param, var, quality_is_bad);
+            monitor_remesh_update(param, var);
+
+            if (param.sim.has_output_during_remeshing) {
+                var.output->write_exact(var);
+            }
+        }
+    }
+    return min_quality;
+}
+
 int main(int argc, const char* argv[])
 {
 #if defined(__APPLE__) && defined(_OPENMP)
@@ -733,6 +760,10 @@ int main(int argc, const char* argv[])
     var.output->write_exact(var);
     monitor_initialize(param, var);
 
+    if (param.sim.is_restarting && param.control.has_PT && var.steps > 0 &&
+        var.steps % param.mesh.quality_check_step_interval == 0)
+        remesh_if_needed(param, var);
+
     // int rheol_type_old = param.mat.rheol_type;
 
     const double starting_time = var.reference_frame_time;
@@ -868,26 +899,7 @@ int main(int argc, const char* argv[])
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
-            double min_quality = 1.0;
-            if (param.control.has_moving_mesh)
-            {
-                int quality_is_bad, bad_quality_index;
-                quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
-                if (quality_is_bad) {
-
-                    if (param.sim.has_output_during_remeshing) {
-                        var.output->write_exact(var);
-                    }
-
-                    monitor_before_remesh(param, var);
-                    remesh(param, var, quality_is_bad);
-                    monitor_remesh_update(param, var);
-
-                    if (param.sim.has_output_during_remeshing) {
-                        var.output->write_exact(var);
-                    }
-                }
-            }
+            double min_quality = remesh_if_needed(param, var);
 
             if (var.steps >= var.info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
