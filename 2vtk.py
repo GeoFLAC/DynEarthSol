@@ -2,18 +2,28 @@
 # encoding: utf-8
 '''Convert the binary output of DynEarthSol to VTK files.
 
-usage: 2vtk.py [-a -c -copy -g -m -p -t -h] modelname [start [end [delta]]]]
+usage: 2vtk.py [-a -c -copy -g -hdf -m -p -t -u -h]
+               modelname [start [end [delta]]]
 
 options:
     -a          save data in ASCII format (default: binary)
-    -c          save files in current directory (default: same directory as
-                the data files)
-    -copy       copy a restarted model's parent frames here, not link them
-    -g          convert a restarted model's parent frames first (see below)
+    -c          make the current directory the work directory W, where the
+                files this run writes go, links and .series included
+                (default: W is the model's own directory)
+    -copy       with -g, write the parents' frames in W under this model's
+                name, not linked
+    -g          also convert (-u: update) the earlier frames of the runs this
+                model restarted from, and link them into W under this model's
+                name (see below)
+    -hdf        write each .vtkhdf frame with calculated fields as a copy,
+                modelname.NNNNNN.vtkhdf, listed in modelname.vtkhdf.series;
+                the frame itself is not changed (requires h5py)
     -m          save marker data
     -p          save principal components (s1 and s3) of deviatoric stress
     -t          save all tensor components (default: only 1st/2nd invariants)
-    -u          update existing .vtkhdf file with calculated fields (requires h5py)
+    -u          update the .vtkhdf frames in place with calculated fields, also
+                with -c (-hdf writes copies instead), listed in
+                modelname.save.vtkhdf.series (requires h5py)
                 WARNING: Do not use this option while the simulation is running
                 or accessing the files, as it may corrupt the data.
     -h,--help   show this help
@@ -21,16 +31,30 @@ options:
 If 'start' is not provided, start from the 0th frame.
 If 'start' is -1, resume previous conversion.
 If 'end' is not provided or is -1, end at the last output.
+'start' and 'end' count the frames converted from 0, whatever their numbers: a
+restarted model's own frames begin at its restart frame, and with -g the whole
+series is counted.
 
-A restarted model's series is completed from its .manifest, up the chain of runs
-it restarted from; a parent with no frame here before the restart frame (only
-the restart frame copied, say) ends the chain with a warning. A parent's frames
-are linked here under this model's name from the .vtu/.vtp (-u -c: .vtkhdf)
-files converting it writes; -g converts them there first, -copy writes copies
-here, and a frame with no file to link is skipped with a warning. 'start' and
-'end' index the whole series. In place, -u links nothing, as DES truncates
-through a link: it updates a parent's own frames only with -g, which also lists
-the series in modelname.vtkhdf.series for ParaView.
+A restarted model's .manifest names the run it restarted from, and -g follows
+that chain. A parent with no frame on disk before the restart frame, as when
+only the restart frame's .save and .chkpt files were copied for the restart,
+ends the chain with a warning. Where each frame goes:
+
+               this model's frames     each parent's frames (-g)
+  (default)    W/model.NNNNNN.vtu      parent.NNNNNN.vtu beside the parent's
+                                       frames (-c: in W), linked as W/model.*
+  -copy        as above                W/model.NNNNNN.vtu, not linked
+  -hdf         W/model.NNNNNN.vtkhdf   parent.NNNNNN.vtkhdf beside the parent's
+                                       frames (-c: in W), linked as
+                                       W/model.NNNNNN.vtkhdf
+  -hdf -copy   as above                W/model.NNNNNN.vtkhdf, not linked
+  -u           updated in place        updated in place, linked as
+                                       W/model.save.NNNNNN.vtkhdf
+
+With -u -g, this model's own frames are linked into W as well when W is not
+their directory, and a real frame already at a link's name is kept. Caution:
+such a link has a .save name, and a DES run writing that frame in W (a fresh
+run of this model there) truncates the linked frame through it.
 '''
 
 from __future__ import print_function, unicode_literals
@@ -73,20 +97,23 @@ output_melting = False
 output_heatflux = False
 conductivity = 3.3
 
-# Update existing VTKHDF file?
+# Update the .vtkhdf frames in place (-u)?
 update_vtkhdf = False
 
-# Link a parent run's frames from its own output (-copy: copy them here)?
+# Write updated copies as modelname.NNNNNN.vtkhdf instead (-hdf)?
+hdf_copies = False
+
+# Link a parent run's output under this model's name (-copy: write it under this name)?
 link_parent_frames = True
 
-# Convert a parent run's frames before linking them (-g)?
+# Convert or update the parent runs' frames too (-g)?
 generate_parent_frames = False
 
 # min mutiprocessing threads
 mutiprocessing_threads = 4
 
 # Options the workers read, passed to them: spawned workers (the macOS default) skip __main__.
-WORKER_OPTIONS = ('output_in_binary', 'output_in_cwd', 'output_tensor_components',
+WORKER_OPTIONS = ('output_in_binary', 'hdf_copies', 'output_tensor_components',
                   'output_principle_stress', 'output_markers', 'output_melting')
 
 ########################
@@ -425,27 +452,13 @@ def process_vtkhdf_update(args):
     des, output_prefix, i = args
     frame = des.frames[i]
     
-    # Determine source and target filenames
-    # des.get_fn(frame) returns the filename with extension based on format
-    # But here we know we are dealing with vtkhdf
-    # If des.format is 'hdf5', get_fn returns .vtkhdf
-    # If des.format is 'binary', get_fn returns .save.xxxxxx (no extension or .vtu?)
-    # Let's rely on what Dynearthsol found.
-    
     src_filename = des.get_fn(frame)
-    if not src_filename.endswith('.vtkhdf'):
-        # If for some reason it doesn't end with .vtkhdf, try appending it
-        if os.path.exists(src_filename + '.vtkhdf'):
-            src_filename += '.vtkhdf'
-        else:
-            print(f"Skipping frame {frame}: {src_filename} is not a .vtkhdf file.", file=sys.stderr)
-            return frame
+    assert src_filename.endswith('.vtkhdf'), src_filename   # main() refuses des-binary runs
 
     suffix = '{0:0=6}'.format(frame)
 
-    if output_in_cwd:
-        # Copy to current directory if not already there
-        # Use the standard naming convention: prefix.suffix.vtkhdf
+    if hdf_copies:
+        # -hdf: update a copy, named like the .vtu output
         target_filename = '{0}.{1}.vtkhdf'.format(output_prefix, suffix)
         if os.path.abspath(src_filename) != os.path.abspath(target_filename):
             shutil.copy2(src_filename, unlinked(target_filename))
@@ -540,9 +553,9 @@ def saved_frames(modelname):
     return frames
 
 
-def restart_series(modelname):
-    '''(des, frame index) of every frame of modelname's restart series, oldest first:
-    each run holds its frames from its restart frame on, its parent the earlier ones.'''
+def restart_series(modelname, with_parents):
+    '''(des, frame index) of the frames to convert, oldest first: modelname's own, from its
+    restart frame on, and with_parents the earlier ones of every run up its restart chain.'''
     series, stop, seen = [], None, set()
     while True:
         if os.path.realpath(modelname) in seen:   # restarted from its own descendant
@@ -557,7 +570,13 @@ def restart_series(modelname):
         if parent is None:
             return series
         # Frames on disk only: a copied restart frame (or .info) is not the parent run.
-        if not any(f < first for f in saved_frames(parent)):
+        parent_frames = any(f < first for f in saved_frames(parent))
+        if not with_parents:
+            if parent_frames:
+                print(f'Note: {modelname} restarted from frame {first} of {parent}; -g adds its frames.',
+                      file=sys.stderr)
+            return series
+        if not parent_frames:
             print(f'Warning: {modelname} restarted from frame {first} of {parent}, which has no '
                   f'frame before {first} here; those frames are not converted.', file=sys.stderr)
             return series
@@ -570,117 +589,110 @@ def init_worker(options):
 
 
 def prefix_of(modelname):
-    '''Where the .vtu/.vtp files of modelname's own frames go.'''
+    '''Where the files named after modelname go: the current directory with -c, else beside
+    its frames.'''
     return os.path.basename(modelname) if output_in_cwd else modelname
 
 
-def announce_model(batch, ndone, prefix):
+def announce_model(batch, ndone, prefix, names):
     '''Name the model whose frames batch converts, below the last progress line.'''
     des, own, i = batch[0]
     if ndone:
         print(file=sys.stderr)   # the progress line ends in '\r'; keep it
-    linked = f', linked as {prefix}.*' if own != prefix else ''
+    linked = f', linked as {prefix}.*' if names and own != prefix else ''
     print(f'Working on model {des.modelname} (frames {des.frames[i]}-{des.frames[batch[-1][2]]}){linked}.',
           file=sys.stderr)
 
 
-def link_frames(batch, prefix):
-    '''Give prefix's names to the files a parent's batch has under its own prefix;
-    returns the frames without a .vtu (-u: .vtkhdf) there to link.'''
-    missing = []
-    if batch[0][1] == prefix:
-        return missing
-    names = (('{0}.{1}.vtkhdf',) if update_vtkhdf else
-             ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp'))
+VTU_NAMES = ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp')
+VTKHDF_NAMES = ('{0}.{1}.vtkhdf',)
+
+
+def link_file(target, link):
+    '''Point link at target by a path relative to the link's directory, replacing what is there.'''
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(os.path.relpath(os.path.realpath(target), os.path.realpath(os.path.dirname(link))), link)
+
+
+def link_frames(batch, prefix, names):
+    '''Give prefix's names to the files a parent's batch wrote under its own prefix.'''
+    if not names or batch[0][1] == prefix:
+        return
     for des, own, i in batch:
         suffix = '{0:0=6}'.format(des.frames[i])
-        if not os.path.exists(names[0].format(own, suffix)):
-            missing.append(des.frames[i])
-            continue
         for name in names:
-            target, link = name.format(own, suffix), name.format(prefix, suffix)
-            if not os.path.exists(target):   # a frame without markers has no .vtp
-                continue
-            if os.path.lexists(link):
-                os.remove(link)
-            os.symlink(os.path.relpath(os.path.realpath(target),
-                                       os.path.realpath(os.path.dirname(link))), link)
-    return missing
+            target = name.format(own, suffix)
+            if os.path.exists(target):   # a frame without markers has no .vtp
+                link_file(target, name.format(prefix, suffix))
 
 
-def write_series_file(series, modelname):
-    '''List every frame of the series, by its .save file, in modelname.vtkhdf.series:
-    names relative to that file, times each frame's time_yr (the .info time keeps 7 digits).'''
-    filename = modelname + '.vtkhdf.series'
+def write_series_file(series, file_of, filename):
+    '''List the frames of the series whose file_of(des, i) exists in filename, the JSON file ParaView
+    opens as one series: names relative to it, times each frame's time_yr (the .info time keeps
+    7 digits).'''
     here = os.path.realpath(os.path.dirname(filename))
     files = []
     for des, i in series:
-        fn = des.get_fn(des.frames[i])
-        if not fn.endswith('.vtkhdf'):   # -u skips des-binary frames, so there is no series to list
-            print(f'Warning: {fn} is not a .vtkhdf frame; {filename} is not written.', file=sys.stderr)
-            return
-        files.append({'name': os.path.relpath(os.path.realpath(fn), here),
-                      'time': des.read_field(des.frames[i], 'time_yr')[0]})
+        fn = file_of(des, i)
+        if os.path.exists(fn):
+            files.append({'name': os.path.relpath(os.path.realpath(fn), here),
+                          'time': des.read_field(des.frames[i], 'time_yr')[0]})
     with open(unlinked(filename), 'w') as f:
         json.dump({'file-series-version': '1.0', 'files': files}, f, indent=1)
     nrun = len({des.modelname for des, _ in series})
-    print(f'Listed the {len(files)} frames of {nrun} runs in {filename}.', file=sys.stderr)
+    print(f'Listed {len(files)} of the {len(series)} frames of {nrun} runs in {filename}.', file=sys.stderr)
 
 
-def convert_batches(batches, prefix, target_func, imap):
-    '''Convert the batches through imap, one model at a time, linking each parent's as ours.'''
+def convert_batches(batches, prefix, target_func, imap, names):
+    '''Convert the batches through imap, one model at a time, linking each parent's files
+    of the given names as ours.'''
     nout = sum(len(b) for b in batches)
     width, ndone = len(str(nout)), 0
     for batch in batches:
-        announce_model(batch, ndone, prefix)
+        announce_model(batch, ndone, prefix, names)
         for result in imap(target_func, batch):
             ndone += 1
             print(f'Frame #{result} converted ({ndone:{width}d}/{nout}).', end='\r', file=sys.stderr)
-        link_frames(batch, prefix)
+        link_frames(batch, prefix, names)
 
 
 def main(modelname, start, end, delta):
-    series = restart_series(modelname)
+    series = restart_series(modelname, generate_parent_frames)
+    binary = sorted({d.modelname for d, _ in series if d.format != 'hdf5'})
+    if (update_vtkhdf or hdf_copies) and binary:
+        print(f'Error: -u and -hdf update .vtkhdf frames; des-binary frames in {", ".join(binary)}.',
+              file=sys.stderr)
+        sys.exit(1)
     frames = [d.frames[i] for d, i in series]
     prefix = prefix_of(modelname)
 
     if start == -1:
-        vtulist = sorted(glob.glob(prefix + '.*.vtu'))
-        lastframe = int(vtulist[-1][(len(prefix)+1):-4]) if vtulist else frames[0]
-        start = frames.index(lastframe) + 1
+        # after the last .vtu of these frames; a -g run may have left the parents' here too
+        done = [int(f[len(prefix) + 1:-4]) for f in sorted(glob.glob(prefix + '.*.vtu'))]
+        done = [n for n in done if n in frames]
+        start = frames.index(done[-1]) + 1 if done else 0
     if end == -1:
         end = len(frames)
 
     selected = series[start:end:delta]
-    # in place, each frame is updated in its own file and nothing is linked (see the usage)
-    in_place = update_vtkhdf and not output_in_cwd
-    if in_place and not generate_parent_frames:
-        selected = [(d, i) for d, i in selected if d.modelname == modelname]
-    # a parent's frames go under its own prefix, to be linked as ours, unless in place or -copy
-    args_list = [(d, prefix if in_place or not link_parent_frames else prefix_of(d.modelname), i)
-                 for d, i in selected]
+    # a parent's files go under its own name, to be linked or listed as ours, unless -copy
+    # writes them under ours; -u updates every frame in its own file whatever the name
+    def own_prefix(d):
+        return prefix if d.modelname == modelname or not link_parent_frames else prefix_of(d.modelname)
+    args_list = [(d, own_prefix(d), i) for d, i in selected]
     # one batch per model, in series order, so the model being worked on can be named
     batches = [list(b) for _, b in itertools.groupby(args_list, key=lambda args: args[0])]
+    # a parent's .vtu/.vtp or -hdf copies are linked as it is converted, -u frames after the
+    # update (below); under -copy they carry this model's name already
+    if hdf_copies:
+        link_names = VTKHDF_NAMES
+    elif update_vtkhdf:
+        link_names = None
+    else:
+        link_names = VTU_NAMES
 
-    # a parent's existing files are linked as they are, unless -g converts them first
-    if not generate_parent_frames:
-        for batch in batches:
-            des, own, _ = batch[0]
-            if own == prefix:
-                continue
-            missing = link_frames(batch, prefix)
-            print(f'Linked {len(batch) - len(missing)} of {len(batch)} frames of {des.modelname} '
-                  f'as {prefix}.*', file=sys.stderr)
-            if missing:
-                kind = '.vtkhdf' if update_vtkhdf else '.vtu'
-                print(f'Warning: {len(missing)} frames ({missing[0]} to {missing[-1]}) have no {kind} '
-                      f'there to link; convert {des.modelname} or pass -g.', file=sys.stderr)
-        batches = [b for b in batches if b[0][1] == prefix]
-    # in place, -g lists the series for ParaView instead of linking
-    if in_place and generate_parent_frames and any(d.modelname != modelname for d, _ in series):
-        write_series_file(series, modelname)
-
-    # frame numbers, not series positions: a parent's linked frames are not converted
+    # frame numbers, not series positions: with -g the series spans several runs
     converted = [d.frames[i] for batch in batches for d, _, i in batch]
     nout = len(converted)
 
@@ -688,39 +700,43 @@ def main(modelname, start, end, delta):
         print(f'No frames to convert (Avail. frames: {frames[0]} to {frames[-1]}).', file=sys.stderr)
         return
     
+    target_func = process_vtkhdf_update if update_vtkhdf or hdf_copies else process_single_frame
     try:
         import multiprocessing as mp
         print(f'Using {mutiprocessing_threads} threads (-ncpu {mutiprocessing_threads}) for conversion (system max: {mp.cpu_count()}).', file=sys.stderr)
         print(f'Converting {nout} frames from {converted[0]} to {converted[-1]} with step {delta}.',
               file=sys.stderr)
 
-        if update_vtkhdf:
-            if h5py is None:
-                print("Error: h5py is required for --update-vtkhdf but it is not installed.", file=sys.stderr)
-                sys.exit(1)
-            target_func = process_vtkhdf_update
-        else:
-            target_func = process_single_frame
-
         options = {name: globals()[name] for name in WORKER_OPTIONS}
         with mp.Pool(processes = mutiprocessing_threads, initializer = init_worker,
                      initargs = (options,)) as pool:
-            convert_batches(batches, prefix, target_func, pool.imap_unordered)
+            convert_batches(batches, prefix, target_func, pool.imap_unordered, link_names)
 
     except ImportError:
         print('Multiprocessing is not available, using single thread instead.')
-        if update_vtkhdf:
-            if h5py is None:
-                print("Error: h5py is required for --update-vtkhdf but it is not installed.", file=sys.stderr)
-                sys.exit(1)
-            target_func = process_vtkhdf_update
-        else:
-            target_func = process_single_frame
-
-        convert_batches(batches, prefix, target_func, map)
+        convert_batches(batches, prefix, target_func, map, link_names)
             
         
-    print()
+    print(file=sys.stderr)   # ends the last progress line
+    # the .series lists the series' frames on disk: -u the .save frames, -hdf the copies
+    if update_vtkhdf:
+        if generate_parent_frames:   # every frame in the work directory as this model's .save frame
+            nlinked = 0
+            for d, i in series:
+                target = d.get_fn(d.frames[i])
+                link = '{0}.save.{1:0=6}.vtkhdf'.format(prefix, d.frames[i])
+                if os.path.realpath(link) == os.path.realpath(target):   # there already
+                    continue
+                if os.path.exists(link) and not os.path.islink(link):   # a restart left its old frame
+                    print(f'Warning: {link} is a frame, not a link; left as it is.', file=sys.stderr)
+                    continue
+                link_file(target, link)
+                nlinked += 1
+            print(f'Linked {nlinked} frames as {prefix}.save.NNNNNN.vtkhdf.', file=sys.stderr)
+        write_series_file(series, lambda d, i: d.get_fn(d.frames[i]), prefix + '.save.vtkhdf.series')
+    elif hdf_copies:
+        write_series_file(series, lambda d, i: '{0}.{1:0=6}.vtkhdf'.format(own_prefix(d), d.frames[i]),
+                          prefix + '.vtkhdf.series')
     return
 
 
@@ -1050,10 +1066,23 @@ if __name__ == '__main__':
         output_markers = True
     if '-u' in sys.argv or '--update-vtkhdf' in sys.argv:
         update_vtkhdf = True
+    if '-hdf' in sys.argv:
+        hdf_copies = True
     if '-copy' in sys.argv:
         link_parent_frames = False
     if '-g' in sys.argv:
         generate_parent_frames = True
+    for bad, why in ((h5py is None and (update_vtkhdf or hdf_copies),
+                      '-u and -hdf need h5py, which is not installed'),
+                     (update_vtkhdf and hdf_copies,
+                      '-u updates the .save frames in place and -hdf writes updated copies: use one'),
+                     (not link_parent_frames and not generate_parent_frames,
+                      '-copy copies the parent frames that -g adds'),
+                     (not link_parent_frames and update_vtkhdf,
+                      '-u updates every frame in place, so -copy has nothing to copy')):
+        if bad:
+            print(f'Error: {why}.', file=sys.stderr)
+            sys.exit(1)
     if '-melt' in sys.argv:
         output_melting = True
     if '-heat' in sys.argv:
