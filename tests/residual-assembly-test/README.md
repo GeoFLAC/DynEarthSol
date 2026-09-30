@@ -62,3 +62,10 @@ forces without changing coordinates. The failed-solve lifecycle fixture enables
 surface diffusion and requires both the per-step `dh` and accumulated `dhacc`
 sentinels to remain untouched by PT iterations. Accepted physical surface updates
 are checked separately by the integration lifecycle, not by these force tests.
+
+The Darcy fixture checks the zero-gravity limit of the actual hydraulic update.
+Constant hydraulic potential must remain stationary; a nonconstant pressure field
+must diffuse with zero net fluid change on the closed two-element mesh. Adding a
+hydrostatic background at nonzero gravity must leave the pressure increments and
+diffusivity unchanged. These checks run in both dimensions and all test backends;
+they do not establish the accuracy of the coupled consolidation time integration.

@@ -692,7 +692,68 @@ static void test_pt_norm() {
     delete constraints; delete m;
 }
 
+static void test_darcy_gravity_limit() {
+    std::printf("[Darcy zero-gravity and hydrostatic invariants]\n");
+    auto* m = new Fixture();
+    build_mesh(*m);
+    const int nn=m->var.nnode, ne=m->var.nelem;
+    m->temperature.assign(nn,273.0);
+    m->pressure.assign(nn,0.0);
+    m->pressure_increment.assign(nn,0.0);
+    m->markers.assign(ne,int_vec(1,1));
+    m->var.temperature=&m->temperature;
+    m->var.ppressure=&m->pressure;
+    m->var.dppressure=&m->pressure_increment;
+    m->var.elemmarkers=&m->markers;
+    m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
+    auto* mass=new double_vec(nn,1.0);
+    auto* rate=new double_vec(nn,0.0);
+    auto* old_mean=new double_vec(ne,0.0);
+    auto* flags=new uint_vec(nn,0);
+    m->var.hmass=mass; m->var.bcflag=flags; m->var.dt=1;
+    for(int i=0;i<nbdrytypes_hydro;++i) m->var.hbc_types[i]=0;
+    auto& p=m->param.mat;
+    p.nmat=1; p.rheol_type=MatProps::rh_elastic;
+    p.rho0={2500}; p.alpha={0}; p.porosity={0.2};
+    p.bulk_modulus={1e9}; p.shear_modulus={1e9};
+    p.visc_exponent={1}; p.visc_coefficient={1};
+    p.biot_coeff={1}; p.heat_capacity={1}; p.therm_cond={1};
+    p.fluid_bulk_modulus={2e9}; p.hydraulic_perm={1e-12};
+    p.fluid_visc={1e-3}; p.fluid_rho0={1000}; p.fluid_alpha={0};
+    m->var.mat=new MatProps(m->param,m->var);
+    double_vec reference(nn,0.0);
+    double reference_diffusivity=0;
+    for(int driven=0;driven<2;++driven) for(double gravity : {0.0,10.0}) {
+        m->param.control.gravity=gravity;
+        for(int n=0;n<nn;++n) {
+            m->pressure[n]=2e5+driven*1e5*m->coord[n][0]-1000*gravity*m->coord[n][NDIMS-1];
+            m->pressure_increment[n]=0;
+        }
+        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
+                             *rate,m->tmp_result,m->stress,*old_mean);
+        #pragma acc wait
+        double net=0,work=0;
+        for(int n=0;n<nn;++n) {
+            check("finite Darcy pressure",std::isfinite(m->pressure[n]),1);
+            check("finite Darcy increment",std::isfinite(m->pressure_increment[n]),1);
+            net+=(*mass)[n]*m->pressure_increment[n];
+            work+=driven*1e5*m->coord[n][0]*m->pressure_increment[n];
+            if(!driven) check("constant potential stationary",m->pressure_increment[n],0);
+            if(gravity==0) reference[n]=m->pressure_increment[n];
+            else check("hydrostatic background leaves flux unchanged",m->pressure_increment[n],reference[n]);
+        }
+        check("closed-system fluid conservation",net,0);
+        if(driven) check("nonconstant pressure diffuses",work>0,1);
+        const double diffusivity=m->var.mat->hydro_diff_max;
+        check("finite positive hydraulic diffusivity",std::isfinite(diffusivity)&&diffusivity>0,1);
+        if(gravity==0) reference_diffusivity=diffusivity;
+        else check("gravity independent hydraulic diffusivity",diffusivity,reference_diffusivity);
+    }
+    delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
+}
+
 int main() {
+    test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();
     test_constraints();
