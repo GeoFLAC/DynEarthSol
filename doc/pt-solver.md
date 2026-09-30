@@ -35,6 +35,49 @@ R <= PT_absolute_tolerance + PT_relative_tolerance * R_initial
 ```
 
 The relative scale is the first candidate's imbalance, not the gross prestress.
+An opt-in alternative, `control.PT_use_running_scale=yes`, uses for physical steps:
+
+```
+R <= max(1e-6 * R_n, 1000 * epsilon_double * F_abs)
+```
+
+`R_n` is the largest first residual of accepted physical solves. Initial
+equilibration does not enter this history and retains the absolute/relative
+criterion above. Explicitly configured `PT_relative_tolerance` or
+`PT_absolute_tolerance` emits a warning when the running-scale option is enabled:
+these values do not control physical-step convergence, but still control initial
+equilibrium. `F_abs` is calculated once from the first physical trial's
+element-force cache, including gravity, then held fixed throughout the solve.
+Absolute element components are summed at each node and mapped with absolute
+free-projector coefficients before the free-rank RMS reduction. Thus oblique
+constraints cannot cancel the magnitude estimate. Assembly and the scaled RMS
+reductions share the CPU/OpenMP/OpenACC implementation.
+
+The approximate minimum resolvable load, expressed as a nodal-force RMS, is
+`C * u * F_abs`, with `C=1000` and double machine epsilon `u`. This is a heuristic
+roundoff allowance, not a rigorous attainable-residual bound or a bound on field
+error. It is not directly a boundary traction in Pa. Large earlier loads can mask
+later small perturbations. Initial gravity equilibrium must be sufficiently
+resolved; excluding its residual from `R_n` does not remove a residual left in
+the physical fields.
+
+The maximum and a post-remesh exclusion flag belong to `Variables` and are
+checkpointed together. Enabled restarts require both fields; old checkpoints
+without them cannot silently start a new history. Failed solves commit neither
+field. A completed remesh retains `R_n` and excludes the next successful physical
+solve's first residual from updating it, then clears the flag. The roundoff
+scale is recomputed on the new mesh. This prevents that first interpolation
+imbalance from inflating the history, but does not guarantee mesh-independent
+tolerances under large resolution changes or exclude contamination in later
+steps. A zero history after remeshing uses the roundoff term alone.
+
+General use with history-dependent plastic, viscous or RSF material laws remains
+unvalidated. Earlier homogeneous fixed-grid Maxwell relaxation/compression tests
+are limited evidence, not qualification of arbitrary viscous flow, changing
+geometry, or irreversible state evolution. This criterion does not define a
+dynamic-mode or inertia policy. The default is `PT_use_running_scale=no`, which
+retains the existing tolerance and checkpoint behavior.
+
 Absolute tolerance has nodal-force units: N/m in 2D, N in 3D. Stagnation is failure,
 not convergence. Results distinguish `converged`, `max_iterations`, `stagnated` and
 `nonfinite`; a failed solve restores mechanical history and stops before output,

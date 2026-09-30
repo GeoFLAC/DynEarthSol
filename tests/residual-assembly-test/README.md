@@ -1,5 +1,9 @@
 # Force assembly, PT constraints and material trials
 
+Failed-trial checks cover both tolerance modes. Running-scale PT must preserve
+the committed residual maximum, pending remesh exclusion, velocities and material
+history when an iteration cap rejects the candidate.
+
 Run from this directory:
 
 ```sh

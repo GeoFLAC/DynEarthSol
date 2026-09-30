@@ -60,6 +60,35 @@ double pt_residual_rms(const Variables& var, const VelocityConstraints& constrai
 }
 
 namespace {
+// Upper magnitude estimate in the free subspace, from the already assembled
+// element cache. Absolute projector coefficients avoid cancellation in oblique
+// constraints. This is a roundoff scale, not a physical error bound.
+double absolute_force_rms(const Variables& var, const VelocityConstraints& constraints,
+                          array_t& magnitude)
+{
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, constraints, magnitude)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n) {
+        double assembled[NDIMS] = {};
+        const int* patch = var.support.patch(n);
+        const int* local = var.support.local(n);
+        for (int k=0; k<var.support.size(n); ++k) {
+            ConstElemCacheAccessor tr = (*var.tmp_result)[patch[k]];
+            for (int d=0; d<NDIMS; ++d)
+                assembled[d] += std::abs(tr[local[k]+NODES_PER_ELEM*d]);
+        }
+        for (int i=0; i<NDIMS; ++i) {
+            double value = 0;
+            for (int j=0; j<NDIMS; ++j)
+                value += std::abs(constraints.projector[n][i*NDIMS+j])*assembled[j];
+            magnitude[n][i] = value;
+        }
+    }
+    return pt_residual_rms(var, constraints, magnitude);
+}
+
 bool finite_candidate(const Variables& var)
 {
     int bad = 0;
@@ -98,6 +127,11 @@ PTResult solve(const Param& param, Variables& var, bool initial)
     // Physical transport uses this same dt once after convergence. Initial
     // equilibrium and deliberately fixed-grid runs retain reference loads.
     const double displacement_dt = !initial && param.control.has_moving_mesh ? var.dt : 0;
+    const bool running_scale = !initial && param.control.PT_use_running_scale;
+    double trial_reference = running_scale ? var.PT_initial_residual_max : 0;
+    std::unique_ptr<array_t> magnitude;
+    if (running_scale) magnitude.reset(new array_t(var.nnode));
+    double roundoff_floor = 0;
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
     int last_improvement = 0;
@@ -113,13 +147,27 @@ PTResult solve(const Param& param, Variables& var, bool initial)
             result.initial_residual = result.residual;
             result.threshold = param.control.PT_absolute_tolerance +
                 param.control.PT_relative_tolerance*result.initial_residual;
+            if (running_scale) {
+                if (!var.PT_skip_scale_update)
+                    trial_reference = std::max(trial_reference, result.initial_residual);
+                roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
+                    absolute_force_rms(var, w.constraints, *magnitude);
+                result.threshold = std::max(1e-6*trial_reference, roundoff_floor);
+            }
         }
-        if (!std::isfinite(result.residual) || !finite_candidate(var)) {
+        if (!std::isfinite(result.residual) || !std::isfinite(roundoff_floor) || !finite_candidate(var)) {
             result.status = PTStatus::nonfinite;
             break;
         }
         if (result.residual <= result.threshold) {
             result.status = PTStatus::converged;
+            if (running_scale) {
+                std::printf("PT scale step=%d initial=%.17g reference=%.17g floor=%.17g threshold=%.17g skipped=%d\n",
+                            var.steps, result.initial_residual, trial_reference, roundoff_floor,
+                            result.threshold, static_cast<int>(var.PT_skip_scale_update));
+                var.PT_initial_residual_max = trial_reference;
+                var.PT_skip_scale_update = false;
+            }
             // The accepted stress is the constitutive/NMD candidate, never the
             // solver's lagged stress. No second constitutive update follows.
             for (int n=0; n<var.nnode; ++n)

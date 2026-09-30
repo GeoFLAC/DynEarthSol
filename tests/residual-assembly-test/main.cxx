@@ -622,7 +622,10 @@ static void test_material_trials() {
                 m->var.surfinfo.dh=dh;
                 m->var.surfinfo.dhacc=dhacc;
                 auto* after=new MechanicalState(ne);
-                for(int cap : {1,3}) {
+                for(bool running : {false,true}) for(int cap : {1,3}) {
+                    m->param.control.PT_use_running_scale=running;
+                    m->var.PT_initial_residual_max=0;
+                    m->var.PT_skip_scale_update=true;
                     baseline->restore(m->var);
                     for(int n=0;n<nn;++n) for(int d=0;d<NDIMS;++d)
                         m->vel[n][d]=d==0 ? 2*m->coord[n][NDIMS-1] : 0;
@@ -632,7 +635,10 @@ static void test_material_trials() {
                     check("failed solve status",result.status==PTStatus::max_iterations,1);
                     check("failed solve iterations",result.iterations,cap);
                     check("failed solve has imbalance",result.residual>0,1);
-                    check("failed solve threshold",result.threshold,0);
+                    if (!running) check("failed solve threshold",result.threshold,0);
+                    else check("running floor is finite and positive",std::isfinite(result.threshold) && result.threshold>0,1);
+                    check("failed solve retains reference",m->var.PT_initial_residual_max,0);
+                    check("failed solve retains remesh exclusion",m->var.PT_skip_scale_update,1);
                     after->capture(m->var);
                     for(int e=0;e<ne;++e) {
                         for(int d=0;d<NSTR;++d) {

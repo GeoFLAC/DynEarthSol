@@ -403,6 +403,8 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.has_PT", po::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
+        ("control.PT_use_running_scale", po::value<bool>(&p.control.PT_use_running_scale)->default_value(false),
+         "Use running physical initial-residual scale with a roundoff floor (epsilon=1e-6, C=1000)")
         ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
          "Skip certain processes in PT loop to avoid accumulative effects. For example, surface diffusion.\n")
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
@@ -1586,6 +1588,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }
         if (p.control.has_PT) {
+            if (p.control.PT_use_running_scale &&
+                (!vm["control.PT_relative_tolerance"].defaulted() ||
+                 !vm["control.PT_absolute_tolerance"].defaulted()))
+                std::cerr << "Warning: PT_use_running_scale ignores explicitly configured "
+                          << "PT_relative_tolerance/PT_absolute_tolerance for physical steps; "
+                          << "they still apply to initial equilibrium. Physical steps use "
+                          << "epsilon=1e-6 and C=1000.\n";
             if (p.control.PT_max_iter < 1 || p.control.PT_stagnation_window < 0 ||
                 !(p.control.PT_CFL > 0 && p.control.PT_CFL <= 0.5) ||
                 !(p.control.PT_Re > 0 && std::isfinite(p.control.PT_Re)) ||

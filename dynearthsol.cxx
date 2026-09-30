@@ -38,6 +38,8 @@ void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
     var.last_remesh_time = 0;
+    var.PT_initial_residual_max = 0;
+    var.PT_skip_scale_update = false;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -368,6 +370,20 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        if (param.control.has_PT && param.control.PT_use_running_scale) {
+            const int fields = bin_chkpt.has_array("PT initial residual maximum") +
+                bin_chkpt.has_array("PT skip scale update");
+            if (fields != 2)
+                die(EXIT_IO_RESTART, "Running-scale PT restart requires its complete checkpoint state.");
+            int skip = 0;
+            bin_chkpt.read_scalar(var.PT_initial_residual_max, "PT initial residual maximum");
+            bin_chkpt.read_scalar(skip, "PT skip scale update");
+            if (!std::isfinite(var.PT_initial_residual_max) || var.PT_initial_residual_max < 0 ||
+                (skip != 0 && skip != 1))
+                die(EXIT_IO_RESTART, "Invalid running-scale PT checkpoint state.");
+            var.PT_skip_scale_update = skip != 0;
+        }
+
         if (param.control.has_PT) {
             const int fields = bin_chkpt.has_array("PT output start time") +
                 bin_chkpt.has_array("PT output start step") +

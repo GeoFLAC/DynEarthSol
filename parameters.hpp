@@ -253,6 +253,7 @@ struct Control {
     double hydration_migration_speed;
 
     bool has_PT;
+    bool PT_use_running_scale;
     mutable bool PT_jump;
     int PT_max_iter;
     double PT_relative_tolerance;
@@ -688,6 +689,8 @@ struct Variables {
     double dt;
     // double dt_PT;
     double l2_residual;
+    double PT_initial_residual_max;
+    bool PT_skip_scale_update;
     double reference_frame_time;
     // PT regular-output continuation; the checkpoint index refers to the next step.
     double output_start_time;
