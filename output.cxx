@@ -1,6 +1,7 @@
 #include <algorithm>  // For std::max_element
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>   // For realpath, std::free
 #include <iterator>  // For std::distance
 #include <iostream>
 
@@ -20,15 +21,46 @@
 namespace std { using ::snprintf; }
 #endif // WIN32
 
-Output::Output(const Param& param, int64_t start_time, int start_frame) :
+namespace {
+
+// Where a model's files are: its directory resolved (".", "..", symlinks) plus the file prefix,
+// the name as given if the directory does not resolve. A prefix differing only in case differs.
+std::string model_location(const std::string& modelname)
+{
+    const std::size_t slash = modelname.rfind('/');
+    const bool bare = (slash == std::string::npos);
+    char *dir = realpath(bare ? "." : modelname.substr(0, slash + 1).c_str(), NULL);
+    if (dir == NULL) return modelname;
+    const std::string location = std::string(dir) + "/" + modelname.substr(bare ? 0 : slash + 1);
+    std::free(dir);
+    return location;
+}
+
+}
+
+Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
+               const DeviceInfo& dev, const Manifest& manifest, int64_t start_time,
+               int start_frame) :
     modelname(param.sim.modelname),
+    param_(param),
+    restart_from(param.sim.is_restarting
+                 ? param.sim.restarting_from_modelname + ":"
+                   + std::to_string(param.sim.restarting_from_frame)
+                 : std::string("no")),
+    build(build),
+    cpu(cpu),
+    dev(dev),
+    manifest(manifest),
+    peak_rss_gib(0),
     start_time(start_time),
     is_averaged(param.sim.is_outputting_averaged_fields),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
+    // Only a first frame that overwrites the parent frame the restart read is backed up.
     may_overwrite_(param.sim.is_restarting
-        && param.sim.modelname == param.sim.restarting_from_modelname),
+        && model_location(param.sim.modelname)
+           == model_location(param.sim.restarting_from_modelname)),
     start_frame_(start_frame),
     frame(start_frame),
     time0(0)
@@ -37,6 +69,13 @@ Output::Output(const Param& param, int64_t start_time, int start_frame) :
 
 Output::~Output()
 {}
+
+
+double Output::update_peak_rss_gib()
+{
+    sample_rss_gib(peak_rss_gib);
+    return peak_rss_gib;
+}
 
 
 void Output::write_info(const Variables& var, double dt)
@@ -48,10 +87,14 @@ void Output::write_info(const Variables& var, double dt)
 
     std::string filename(modelname + ".info");
 
-    // On the first output of a same-name restart, back up the old .info and
-    // rewrite it with only the rows for frames before start_frame_, so there
-    // are no duplicate or stale entries when the new frame row is appended.
-    if (may_overwrite_ && frame == start_frame_) {
+    // The record goes out with the first .info row, so .manifest and .info change together.
+    if (frame == start_frame_)
+        write_manifest(param_, manifest);
+
+    // On the first output of a restart, back up the old .info and rewrite
+    // it with only the rows for frames before start_frame_, so there are no
+    // duplicate or stale entries when the new frame row is appended.
+    if (param_.sim.is_restarting && frame == start_frame_) {
         std::vector<std::string> kept_lines;
         if (std::FILE *r = std::fopen(filename.c_str(), "r")) {
             char line[256];
@@ -131,6 +174,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_scalar(var.nnode, "nnode");
     bin.write_scalar(var.nelem, "nelem");
 #endif
+
+    bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
     bin.write_scalar(var.time, "time_sec");
     bin.write_scalar(dt, "dt_sec");
@@ -368,6 +413,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
     BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
 #endif
+
+    bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
     bin.write_scalar(var.time, "time");
     bin.write_scalar(var.info_display_next_step, "info_display_next_step");
