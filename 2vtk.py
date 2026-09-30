@@ -2,43 +2,60 @@
 # encoding: utf-8
 '''Convert the binary output of DynEarthSol to VTK files.
 
-usage: 2vtk.py [-a -c -copy -g -hdf -m -p -t -u -h]
-               modelname [start [end [delta]]]
+usage: 2vtk.py [options] modelname [start [end [delta]]]
+
+A model that was not restarted: its .save frames become .vtu/.vtp files beside
+them, or with -c in the current directory.
+    2vtk.py model               every frame
+    2vtk.py model 10 20 2       frames 10, 12, ..., 20 (positions, see below)
+    2vtk.py model -1            resume after the last .vtu converted
+
+A restarted model: it holds its frames from its restart frame on, and its
+.manifest names the run it restarted from, its parent, which holds the earlier
+frames (and may be restarted itself).
+    2vtk.py model               this model's own frames only
+    2vtk.py -g model            the whole series: the parents' frames are
+                                converted beside their own frames (-c: in the
+                                current directory) and linked under this
+                                model's name
+    2vtk.py -g -copy model      the whole series, the parents' frames written
+                                under this model's name instead of linked
+
+.vtkhdf frames (an HDF5 build): ParaView reads them as they are. Instead of
+writing .vtu files, -u or -hdf adds the calculated fields (requires h5py).
+    2vtk.py -u model            into the frames themselves, listed in
+                                model.save.vtkhdf.series for ParaView
+    2vtk.py -hdf model          into copies, model.NNNNNN.vtkhdf, listed in
+                                model.vtkhdf.series; the frames are unchanged
+    2vtk.py -u -g model         a restarted model's whole series, the parents'
+    2vtk.py -hdf -g model       frames linked under this model's name
+                                (-hdf -g -copy: copies under it instead)
 
 options:
     -a          save data in ASCII format (default: binary)
-    -c          make the current directory the work directory W, where the
-                files this run writes go, links and .series included
-                (default: W is the model's own directory)
-    -copy       with -g, write the parents' frames in W under this model's
-                name, not linked
-    -g          also convert (-u: update) the earlier frames of the runs this
-                model restarted from, and link them into W under this model's
-                name (see below)
-    -hdf        write each .vtkhdf frame with calculated fields as a copy,
-                modelname.NNNNNN.vtkhdf, listed in modelname.vtkhdf.series;
-                the frame itself is not changed (requires h5py)
+    -c          work in the current directory: the files, links and .series
+                this run writes go there (default: the model's own directory)
+    -copy       with -g, write the parents' frames under this model's name,
+                not linked (not with -u, which updates frames in place)
+    -g          also convert (-u: update) the parents' frames, and link them
+                under this model's name
+    -hdf        write each .vtkhdf frame with calculated fields as a copy
     -m          save marker data
     -p          save principal components (s1 and s3) of deviatoric stress
     -t          save all tensor components (default: only 1st/2nd invariants)
-    -u          update the .vtkhdf frames in place with calculated fields, also
-                with -c (-hdf writes copies instead), listed in
-                modelname.save.vtkhdf.series (requires h5py)
+    -u          update the .vtkhdf frames in place with calculated fields,
+                also with -c (-hdf writes copies instead)
                 WARNING: Do not use this option while the simulation is running
                 or accessing the files, as it may corrupt the data.
     -h,--help   show this help
 
-If 'start' is not provided, start from the 0th frame.
-If 'start' is -1, resume previous conversion.
-If 'end' is not provided or is -1, end at the last output.
-'start' and 'end' count the frames converted from 0, whatever their numbers: a
-restarted model's own frames begin at its restart frame, and with -g the whole
-series is counted.
+'start', 'end' and 'delta' are positions among the frames converted, from 0,
+not frame numbers: a restarted model's own frames begin at its restart frame,
+and with -g the whole series is counted. 'end' is inclusive, and -1 or none is
+the last; 'start' -1 resumes after the last .vtu converted, from the first if
+there is none.
 
-A restarted model's .manifest names the run it restarted from, and -g follows
-that chain. A parent with no frame on disk before the restart frame, as when
-only the restart frame's .save and .chkpt files were copied for the restart,
-ends the chain with a warning. Where each frame goes:
+Where each frame goes, W being the work directory (the current one with -c):
 
                this model's frames     each parent's frames (-g)
   (default)    W/model.NNNNNN.vtu      parent.NNNNNN.vtu beside the parent's
@@ -52,9 +69,12 @@ ends the chain with a warning. Where each frame goes:
                                        W/model.save.NNNNNN.vtkhdf
 
 With -u -g, this model's own frames are linked into W as well when W is not
-their directory, and a real frame already at a link's name is kept. Caution:
-such a link has a .save name, and a DES run writing that frame in W (a fresh
-run of this model there) truncates the linked frame through it.
+their directory, and a real frame already at a link's name is kept. A parent
+with no frame on disk before the restart frame, as when only the restart
+frame's .save and .chkpt files were copied for the restart, ends the series
+there, with a warning. Caution: a -u -g link has a .save name, and a DES run
+writing that frame in W (a fresh run of this model there) truncates the
+linked frame through it.
 '''
 
 from __future__ import print_function, unicode_literals
