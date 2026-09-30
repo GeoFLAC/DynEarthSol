@@ -95,13 +95,16 @@ PTResult solve(const Param& param, Variables& var, bool initial)
         for (int n=0; n<var.nnode; ++n)
             for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = 0;
 
+    // Physical transport uses this same dt once after convergence. Initial
+    // equilibrium and deliberately fixed-grid runs retain reference loads.
+    const double displacement_dt = !initial && param.control.has_moving_mesh ? var.dt : 0;
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
     int last_improvement = 0;
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
         evaluate_mechanical_trial(param, var, w.start, initial);
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped);
+        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt);
         project_free_vectors(var, w.constraints, w.undamped);
         result.iterations = iteration+1;
         result.residual = pt_residual_rms(var, w.constraints, w.undamped);
@@ -157,7 +160,7 @@ PTResult solve(const Param& param, Variables& var, bool initial)
             }
         // Existing assembly supplies exactly the same physical loads to the
         // lagged solver stress. Artificial damping is excluded from the update.
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped);
+        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt);
         project_free_vectors(var, w.constraints, w.undamped);
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, w)

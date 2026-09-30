@@ -61,7 +61,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 // Optional caller-owned nnode-sized output includes physical loads but excludes
 // artificial damping. It must not alias force, force_residual or assembly inputs.
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-    elem_cache& tmp_result, array_t* force_undamped = nullptr);
+    elem_cache& tmp_result, array_t* force_undamped = nullptr, double displacement_dt = 0);
 double calculate_residual_force(const Variables& var, array_t& vel);
 void update_velocity(const Variables& var, array_t& vel);
 // void update_velocity_PT(const Variables& var, array_t& vel);

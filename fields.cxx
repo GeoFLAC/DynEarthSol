@@ -561,7 +561,7 @@ static double rho(const conn_t &var_connectivity, \
 */
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-                  elem_cache& tmp_result, array_t* force_undamped)
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -631,7 +631,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
         }
     }
 
-    apply_stress_bcs(param, var, force);
+    apply_stress_bcs(param, var, force, displacement_dt);
 
     // if(var.time <= 1.0)
     // {

@@ -54,3 +54,11 @@ failure, then checks exact restoration of stress, strain, all seven captured sca
 histories and velocity. Pressure inputs, physical time/dt and array identities must
 remain unchanged. The three-iteration case exercises numerical updates before
 rollback. These are rejection/lifecycle checks, not convergence benchmarks.
+
+A planar Winkler fixture checks the trial-height load against the independent
+spring resultant `Delta Fz = -rho*g*area*dt*vz`, for dry and hydraulic boundary
+densities in 2D/3D. Repeated dt values and a return to dt=0 must recover the same
+forces without changing coordinates. The failed-solve lifecycle fixture enables
+surface diffusion and requires both the per-step `dh` and accumulated `dhacc`
+sentinels to remain untouched by PT iterations. Accepted physical surface updates
+are checked separately by the integration lifecycle, not by these force tests.

@@ -20,7 +20,8 @@ void build_velocity_constraints(const Param& param, const Variables& var,
                                 VelocityConstraints& constraints, bool homogeneous = false);
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,
                           array_t& vectors, bool include_prescribed = false);
-void apply_stress_bcs(const Param& param, const Variables& var, array_t& force);
+void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
+                      double displacement_dt = 0);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Param &param, const Variables& var, double_vec& plstrain);
 void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, tensor_t& stress, \

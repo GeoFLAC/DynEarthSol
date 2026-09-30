@@ -345,6 +345,45 @@ static void test_body_force() {
             check("undamped gravity", m->force_undamped[n][d], raw);
 #endif
         }
+#ifdef B0
+    // A horizontal unit foundation: uniform upward displacement must reduce
+    // the vertical supporting force by rho*g*area*displacement. This checks
+    // the physical spring stiffness independently of the PT iteration scheme.
+    std::printf("[PT trial foundation load]\n");
+    m->param.control.damping_option = 0;
+    m->param.bc.has_winkler_foundation = true;
+    m->param.mesh.zlength = 1;
+    m->var.compensation_pressure = 40000;
+    m->var.vbc_types[iboundz0] = 0;
+    m->var.bfacets[iboundz0] = new std::vector<std::pair<int,int>>{{0,NDIMS}};
+    m->var.bnodes[iboundz0] = new int_vec;
+    for (int l=0;l<NODES_PER_FACET;++l)
+        m->var.bnodes[iboundz0]->push_back(NODE_OF_FACET[NDIMS][l]);
+    std::vector<double> coords;
+    for (int n=0;n<m->var.nnode;++n) {
+        for (int d=0;d<NDIMS;++d) coords.push_back(m->coord[n][d]);
+        m->vel[n][NDIMS-1] = 0.25;
+    }
+    for (bool wet : {false,true}) {
+        m->param.control.has_hydraulic_diffusion = wet;
+        update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped);
+        double baseline=0;
+        for (int n=0;n<m->var.nnode;++n) baseline+=m->force_undamped[n][NDIMS-1];
+        const double rho = wet ? 2200 : 2500;
+        const double area = NDIMS==2 ? 1 : 0.5;
+        for (double dt : {0.5,1.0,0.5,0.0}) {
+            update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped,dt);
+            double total=0;
+            for (int n=0;n<m->var.nnode;++n) total+=m->force_undamped[n][NDIMS-1];
+            check("foundation incremental force",total-baseline,-rho*9.8*area*dt*0.25);
+            int k=0;
+            for (int n=0;n<m->var.nnode;++n) for (int d=0;d<NDIMS;++d)
+                check("trial loads preserve coordinates",m->coord[n][d],coords[k++]);
+        }
+    }
+    delete m->var.bfacets[iboundz0];
+    delete m->var.bnodes[iboundz0];
+#endif
     delete m->var.mat;
     delete m;
 }
@@ -574,6 +613,14 @@ static void test_material_trials() {
                 m->param.control.PT_relative_tolerance=0;
                 m->param.control.PT_absolute_tolerance=0;
                 m->param.control.PT_stagnation_window=0;
+                // Enabling diffusion must not turn mechanical trials into
+                // physical surface steps, including rejected candidates.
+                m->param.control.surface_process_option=1;
+                auto* dh=new double_vec(nn,0.125);
+                auto* dhacc=new double_vec(nn,0.375);
+                m->var.surfinfo.ntop=nn;
+                m->var.surfinfo.dh=dh;
+                m->var.surfinfo.dhacc=dhacc;
                 auto* after=new MechanicalState(ne);
                 for(int cap : {1,3}) {
                     baseline->restore(m->var);
@@ -600,6 +647,8 @@ static void test_material_trials() {
                             check("rollback velocity exact",m->vel[n][d]==(d==0 ? 2*m->coord[n][NDIMS-1] : 0),1);
                         check("pending pressure retained",m->pressure_increment[n]==-10,1);
                         check("pressure retained",m->pressure[n]==10,1);
+                        check("PT leaves surface increment untouched",(*dh)[n],0.125);
+                        check("PT leaves accumulated surface change untouched",(*dhacc)[n],0.375);
                     }
                     check("physical time retained",m->var.time==1,1);
                     check("physical dt retained",m->var.dt==0.1,1);
@@ -607,6 +656,7 @@ static void test_material_trials() {
                     check("strain allocation retained",m->var.strain==strain,1);
                     check("viscosity allocation retained",m->var.viscosity==visc,1);
                 }
+                delete dh; delete dhacc;
                 delete after; delete ntmp; delete etmp; delete volume_n;
                 delete flags; delete normals;
             }

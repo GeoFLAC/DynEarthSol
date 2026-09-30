@@ -59,6 +59,23 @@ Physical mesh motion, stress rotation, transport and remeshing remain outside th
 trial loop. Equilibrium is established on the reference geometry; it does not
 claim equilibrium after moving that geometry. No live baseline crosses a remesh.
 
+For a moving-mesh physical PT step, height-dependent pressure boundary laws
+(Winkler foundation, water and side support) use the candidate facet height
+`z_reference + physical_dt * mean(candidate_vertical_velocity)`. Facet normals,
+areas, internal-force gradients and body-force volumes remain at the reference
+configuration. This is an incremental pressure-load correction, not a complete
+finite-deformation follower-load formulation. Initial equilibration, fixed-grid
+runs and non-PT calls retain reference-height loads. The candidate height is
+computed afresh; no trial writes coordinates or advances surface diffusion.
+
+Surface processes run in `update_mesh` after accepted mechanics. Their `dh`
+buffer is cleared at each physical call; `dhacc` intentionally records physical
+surface changes for marker correction. Neither is advanced by mechanical trials.
+This boundary-load correction removes the frozen-foundation force-compatibility
+obstruction, but does not guarantee convergence with the default PT iteration
+limit. Core-complex long-time morphology remains unqualified until the remaining
+slow-convergence/residual-floor behavior is resolved.
+
 Initial body-force equilibration uses the instantaneous elastic/plastic skeleton
 with homogeneous supports and no transport, viscous relaxation or physical aging.
 RSF friction and state are frozen at the initial physical values, independent of

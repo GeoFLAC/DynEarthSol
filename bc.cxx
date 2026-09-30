@@ -691,7 +691,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #endif
 }
 
-void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
+void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
+                      double displacement_dt)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -729,7 +730,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
 
 #ifndef ACC
         #pragma omp parallel default(none) \
-            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes)
+            shared(param, var, force, i, NODE_OF_FACET, bound, nbdry_nodes, displacement_dt)
 #endif
         {
             // loops over all bdry facets
@@ -756,6 +757,16 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force)
                 ConstArrayIndirectAccessor facet_coord = var.coord->view_const(idx);
 
                 normal_vector_of_facet(facet_coord, normal, zcenter);
+
+                // Incremental PT uses reference facets but evaluates the support
+                // pressure at the candidate height. Never move the actual mesh
+                // or advance surface processes while testing a mechanical trial.
+                if (displacement_dt != 0) {
+                    double vz = 0;
+                    for (int j=0; j<NODES_PER_FACET; ++j)
+                        vz += (*var.vel)[idx[j]][NDIMS-1];
+                    zcenter += displacement_dt * vz / NODES_PER_FACET;
+                }
 
                 double p;
                 if (i==iboundz0 && param.bc.has_winkler_foundation) {
