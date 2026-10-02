@@ -54,11 +54,12 @@ struct PTWorkspace {
     VelocityConstraints constraints;
     tensor_t lagged_stress;
     array_t old_velocity, undamped;
-    double_vec stress_fraction, mobility;
+    double_vec stress_fraction, mobility, height, effective_viscosity;
 
     PTWorkspace(int nelem, int nnode)
         : start(nelem), constraints(nnode), lagged_stress(nelem),
-          old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode) {}
+          old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode),
+          height(nelem), effective_viscosity(nelem) {}
 };
 
 // Upper magnitude estimate in the free subspace, from the already assembled
@@ -225,7 +226,8 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         // Geometry, physical dt and elastic moduli are fixed during this solve.
         // Only a viscous rheology adds candidate-dependent viscosity to factors.
         if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
-            compute_pt_factors(param, var, w.stress_fraction, w.mobility);
+            compute_pt_factors(param, var, w.stress_fraction, w.mobility,
+                               w.height, w.effective_viscosity);
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, w)
 #endif

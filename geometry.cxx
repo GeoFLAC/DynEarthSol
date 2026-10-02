@@ -1936,7 +1936,8 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 }
 
 void compute_pt_factors(const Param& param, const Variables& var,
-                        double_vec& stress_fraction, double_vec& mobility)
+                        double_vec& stress_fraction, double_vec& mobility,
+                        double_vec& height, double_vec& effective_viscosity)
 {
     // Localized Räss et al. (2022), effective viscosity and dual-time factors.
     // The physical constitutive target is evaluated elsewhere; these factors
@@ -1948,7 +1949,11 @@ void compute_pt_factors(const Param& param, const Variables& var,
 #endif
     if (!(length > 0 && var.dt > 0 && std::isfinite(var.dt)))
         die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
-    double_vec height(var.nelem), mu(var.nelem);
+    int bad = 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length) reduction(|:bad)
+#endif
+    #pragma acc parallel loop gang vector reduction(|:bad)
     for (int e=0; e<var.nelem; ++e) {
         double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
 #ifdef THREED
@@ -1978,22 +1983,28 @@ void compute_pt_factors(const Param& param, const Variables& var,
         // the elastic volumetric response of the pure viscous branch.
         const double ratio = std::max(1.0, bulk*var.dt/effective);
         const double theta = param.control.PT_Re*param.control.PT_CFL*height[e]/((ratio+2)*length);
-        if (!(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta)))
-            die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
-        mu[e] = effective;
+        bad |= !(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta));
+        effective_viscosity[e] = effective;
         stress_fraction[e] = theta/(1+theta);
     }
+    if (bad)
+        die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length) reduction(|:bad)
+#endif
+    #pragma acc parallel loop gang vector reduction(|:bad)
     for (int n=0; n<var.nnode; ++n) {
         double h = std::numeric_limits<double>::max(), visc = 0, volume = 0;
         const int* patch = var.support.patch(n);
         for (int k=0; k<var.support.size(n); ++k) {
             const int e = patch[k];
             h = std::min(h, height[e]);
-            visc = std::max(visc, mu[e]);
+            visc = std::max(visc, effective_viscosity[e]);
             volume += (*var.volume)[e]/NODES_PER_ELEM;
         }
-        if (!(visc > 0 && volume > 0))
-            die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
+        bad |= !(visc > 0 && volume > 0);
         mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
     }
+    if (bad)
+        die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
 }

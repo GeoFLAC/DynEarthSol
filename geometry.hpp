@@ -111,6 +111,8 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
                           const double_vec &volume, int &worst_elem);
 
 // Local dual-time factors on the fixed mechanical reference mesh.
+// Caller-owned element scratch arrays are reused for the lifetime of a solve.
 void compute_pt_factors(const Param& param, const Variables& var,
-                        double_vec& stress_fraction, double_vec& mobility);
+                        double_vec& stress_fraction, double_vec& mobility,
+                        double_vec& height, double_vec& effective_viscosity);
 #endif
