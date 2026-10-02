@@ -12,20 +12,8 @@
 #include "rheology.hpp"
 #include "utils.hpp"
 
-namespace {
-struct PTWorkspace {
-    MechanicalState start;
-    VelocityConstraints constraints;
-    tensor_t lagged_stress;
-    array_t old_velocity, undamped;
-    double_vec stress_fraction, mobility;
-    PTWorkspace(int ne, int nn) : start(ne), constraints(nn), lagged_stress(ne),
-        old_velocity(nn), undamped(nn), stress_fraction(ne), mobility(nn) {}
-};
-}
-
 double pt_residual_rms(const Variables& var, const VelocityConstraints& constraints,
-                    const array_t& force)
+                       const array_t& force)
 {
     double scale = 0;
     long long rank = 0;
@@ -60,6 +48,19 @@ double pt_residual_rms(const Variables& var, const VelocityConstraints& constrai
 }
 
 namespace {
+
+struct PTWorkspace {
+    MechanicalState start;
+    VelocityConstraints constraints;
+    tensor_t lagged_stress;
+    array_t old_velocity, undamped;
+    double_vec stress_fraction, mobility;
+
+    PTWorkspace(int nelem, int nnode)
+        : start(nelem), constraints(nnode), lagged_stress(nelem),
+          old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode) {}
+};
+
 // Upper magnitude estimate in the free subspace, from the already assembled
 // element cache. Absolute projector coefficients avoid cancellation in oblique
 // constraints. This is a roundoff scale, not a physical error bound.
@@ -89,7 +90,7 @@ double absolute_force_rms(const Variables& var, const VelocityConstraints& const
     return pt_residual_rms(var, constraints, magnitude);
 }
 
-bool finite_candidate(const Variables& var)
+bool is_finite_candidate(const Variables& var)
 {
     int bad = 0;
 #ifndef ACC
@@ -107,7 +108,35 @@ bool finite_candidate(const Variables& var)
     return !bad;
 }
 
-PTResult solve(const Param& param, Variables& var, bool initial)
+void evaluate_mechanical_trial(const Param& param, Variables& var,
+                               const MechanicalState& physical_start, bool initial_equilibrium)
+{
+    physical_start.restore(var);
+    update_strain_rate(var, *var.strain_rate);
+    compute_dvoldt(var, *var.ntmp, *var.etmp);
+    compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+    update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
+                  *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
+                  *var.strain_rate, *var.ppressure, *var.dppressure, *var.vel,
+                  *var.dyn_fric_coeff, *var.state_variable, true, initial_equilibrium);
+    if (param.control.is_using_mixed_stress)
+        NMD_stress(var, *var.stress, *var.ntmp, *var.etmp,
+                   param.mat.is_plane_strain ? var.stressyy : nullptr);
+    #pragma acc wait
+}
+
+const char* pt_status_name(PTStatus status)
+{
+    switch (status) {
+    case PTStatus::converged: return "converged";
+    case PTStatus::max_iterations: return "max_iterations";
+    case PTStatus::stagnated: return "stagnated";
+    case PTStatus::nonfinite: return "nonfinite";
+    }
+    return "unknown";
+}
+
+PTResult solve_pt(const Param& param, Variables& var, bool initial)
 {
     #pragma acc wait
     // Heap ownership also keeps the workspace's nested arrays available to the
@@ -155,7 +184,7 @@ PTResult solve(const Param& param, Variables& var, bool initial)
                 result.threshold = std::max(1e-6*trial_reference, roundoff_floor);
             }
         }
-        if (!std::isfinite(result.residual) || !std::isfinite(roundoff_floor) || !finite_candidate(var)) {
+        if (!std::isfinite(result.residual) || !std::isfinite(roundoff_floor) || !is_finite_candidate(var)) {
             result.status = PTStatus::nonfinite;
             break;
         }
@@ -230,28 +259,13 @@ PTResult solve(const Param& param, Variables& var, bool initial)
     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     return result;
 }
-}
 
-void evaluate_mechanical_trial(const Param& param, Variables& var,
-                               const MechanicalState& physical_start, bool initial_equilibrium)
-{
-    physical_start.restore(var);
-    update_strain_rate(var, *var.strain_rate);
-    compute_dvoldt(var, *var.ntmp, *var.etmp);
-    compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-    update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                  *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                  *var.strain_rate, *var.ppressure, *var.dppressure, *var.vel,
-                  *var.dyn_fric_coeff, *var.state_variable, true, initial_equilibrium);
-    if (param.control.is_using_mixed_stress)
-        NMD_stress(var, *var.stress, *var.ntmp, *var.etmp,
-                   param.mat.is_plane_strain ? var.stressyy : nullptr);
-    #pragma acc wait
-}
+} // anonymous namespace
+
 
 PTResult run_physical_step_pt(const Param& param, Variables& var)
 {
-    return solve(param, var, false);
+    return solve_pt(param, var, false);
 }
 
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
@@ -272,19 +286,9 @@ PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
         refresh_rsf_friction(initial, var, *var.dyn_fric_coeff, *var.state_variable);
         #pragma acc wait
     }
-    return solve(initial, var, true);
+    return solve_pt(initial, var, true);
 }
 
-const char* pt_status_name(PTStatus status)
-{
-    switch (status) {
-    case PTStatus::converged: return "converged";
-    case PTStatus::max_iterations: return "max_iterations";
-    case PTStatus::stagnated: return "stagnated";
-    case PTStatus::nonfinite: return "nonfinite";
-    }
-    return "unknown";
-}
 
 void require_pt_convergence(const Variables& var, const PTResult& result)
 {

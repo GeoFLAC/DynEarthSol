@@ -405,8 +405,6 @@ static void declare_parameters(po::options_description &cfg,
          "Does the model have Pseudo-transient (PT) loop?\n")
         ("control.PT_use_running_scale", po::value<bool>(&p.control.PT_use_running_scale)->default_value(false),
          "Use running physical initial-residual scale with a roundoff floor (epsilon=1e-6, C=1000)")
-        ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
-         "Skip certain processes in PT loop to avoid accumulative effects. For example, surface diffusion.\n")
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
@@ -1602,8 +1600,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                 !(p.control.PT_absolute_tolerance >= 0 && std::isfinite(p.control.PT_absolute_tolerance)) ||
                 (p.control.PT_relative_tolerance == 0 && p.control.PT_absolute_tolerance == 0))
                 die(EXIT_CONFIG_VALUE, "Invalid PT iteration, tolerance or relaxation parameters.");
-            if (p.control.PT_jump)
-                die(EXIT_CONFIG_VALUE, "PT_jump is internal solver state; configure it as false.");
         }
         if (p.control.rsf_dtheta_max > 0) {
             if (p.control.fixed_dt != 0.0) {

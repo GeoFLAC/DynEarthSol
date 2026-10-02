@@ -8,6 +8,10 @@ With `control.has_PT=yes`, mechanics starts from the physical-step baseline,
 solves on fixed reference geometry, and leaves one accepted constitutive state.
 The no-PT path keeps its existing constitutive and velocity-update ordering.
 
+The obsolete `control.PT_jump` option has been removed; delete it from older
+input files. Initial equilibrium uses explicit homogeneous velocity constraints,
+and mesh motion and surface processes run outside the PT iterations.
+
 `MechanicalState` captures stress, strain, out-of-plane stress, plastic history,
 per-step plastic increment, pressure correction, viscosity and RSF history.
 `evaluate_mechanical_trial` restores that baseline in place before computing the

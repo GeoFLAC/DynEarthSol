@@ -37,8 +37,8 @@ enum ExitCode {
 
     EXIT_RUNTIME_NAN          = 50,  // NaN or non-finite state
     EXIT_RUNTIME_LOOKUP       = 51,  // marker/geometry lookup failed
-    EXIT_RUNTIME_NONCONVERGENCE = 53, // mechanical solve did not converge
     EXIT_RUNTIME_RESOURCE     = 52,  // resource exhausted
+    EXIT_RUNTIME_NONCONVERGENCE = 53, // mechanical solve did not converge
 
     EXIT_INTERNAL_ASSERT      = 60,  // assertion / invariant violated
     EXIT_INTERNAL_UNREACHABLE = 61   // unreachable branch

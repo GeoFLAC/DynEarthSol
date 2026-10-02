@@ -527,12 +527,9 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
-    if(!param.control.PT_jump)
-    {
-        surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                      *var.plstrain, *var.volume, *var.volume_n, \
+    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate,
+                      *var.plstrain, *var.volume, *var.volume_n,
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
-    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
@@ -704,7 +701,6 @@ int main(int argc, const char* argv[])
         restart(param, var);
     }
 
-    // var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11

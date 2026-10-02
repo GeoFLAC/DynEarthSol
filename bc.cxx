@@ -379,7 +379,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     double bc_vy0_l = bc.vbc_val_y0_l;
     double bc_vy1_l = bc.vbc_val_y1_l;
 
-    if (param.control.PT_jump || homogeneous) {
+    if (homogeneous) {
         bc_vx0 = 0.0;
         bc_vx1 = 0.0;
 #ifdef THREED
