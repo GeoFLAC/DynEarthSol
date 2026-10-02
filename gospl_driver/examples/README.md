@@ -27,7 +27,7 @@ are chosen to match the ASPECT + FastScape reference model
 
 Key settings:
 - **Flow direction**: multi-flow (`flowdir: 6`, equivalent to FastScape `p=-1`)
-- **Boundary conditions**: east and west boundaries open, north and south closed (`bc: '1010'`)
+- **Boundary conditions**: east and west boundaries open, north and south fixed base-level outlets (`bc: 'fofo'`)
 - **Stream power law**: K = 1×10⁻⁵ m^(1-2m)/yr, m = 0.4, n = 1
 - **Hillslope diffusion**: Ka = 1×10⁻² m²/yr
 - **Sea level**: −2000 m (prevents marine flooding of the initial surface)
@@ -44,7 +44,28 @@ conda activate gospl
 ```
 
 GoSPL is driven automatically by the coupling layer; no separate GoSPL invocation
-is needed.
+is needed. Watch for the coupling messages in the log. DES output is written to
+this directory and GoSPL output to `output_gaussian_weakzone_3D/`, every 20 kyr.
+As the run proceeds, look for a rift valley opening above the weak zone with
+uplifted flanks, channels organizing down those flanks as relief grows, and
+sediment accumulating in the axial low.
+
+## Experiments
+
+Changing the YAML needs no rebuild. Change one parameter at a time:
+
+| Run | `spl: K` | Expected result |
+|-----|----------|-----------------|
+| Reference | `1.0e-5` | Rivers keep pace with uplift; moderate flank relief |
+| Weak erosion | `1.0e-6` | Tectonics dominates: higher, sharper flanks, little sediment |
+| Strong erosion | `1.0e-4` | Flanks worn down as they rise; the valley fills faster |
+
+Setting `gospl_coupling_frequency = 50` in the cfg tests the coupling interval:
+if the result changes, 200 steps was too coarse.
+
+The tutorial
+[Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+walks through this example with figures.
 
 ## Known Issues
 

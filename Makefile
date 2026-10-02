@@ -381,7 +381,7 @@ endif
 ifeq ($(use_gospl), 1)
 	# GoSPL extensions library configuration
 	# Path to locally built gospl_extensions (clone from GitHub)
-	GOSPL_EXT_DIR = $(HOME)/opt/gospl_extensions
+	GOSPL_EXT_DIR ?= $(HOME)/opt/gospl_extensions
 	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
 	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
 	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
@@ -397,7 +397,7 @@ ifeq ($(use_gospl), 1)
 	
 	# Python include/lib dirs — override on the command line for non-conda builds:
 	#   make use_gospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
-	CONDA_ENV_PATH = $(HOME)/miniconda3/envs/gospl
+	CONDA_ENV_PATH ?= $(HOME)/miniforge3/envs/gospl
 	PYTHON_VERSION     ?= 3.11
 	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
 	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
