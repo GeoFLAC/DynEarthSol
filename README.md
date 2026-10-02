@@ -174,7 +174,7 @@ defaults are not what you want.
     make install-local
     ```
   * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
-    (`~/opt/gospl_extensions` and `~/miniconda3/envs/gospl`). `make use_gospl=1`
+    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make use_gospl=1`
     also generates the `dynearthsol-gospl` wrapper script.
   * Coupling is 3D only, so build with `make ndims=3 use_gospl=1`, outside the
     conda environment to keep the compiler off conda's libraries.

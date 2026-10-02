@@ -21,7 +21,7 @@ This file is the reference kept with the code.
 To skip the setup below, use the Docker image ([Run with Docker](#run-with-docker)).
 
 1. **GoSPL in a conda environment with Python 3.11**, by default at
-   `~/miniconda3/envs/gospl`. Follow
+   `~/miniforge3/envs/gospl`. Follow
    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html).
 
 2. **gospl_extensions**, the bridge between GoSPL (Python) and DES (C++). It
@@ -55,8 +55,9 @@ make ndims=3 use_gospl=1 usemmg=1 -j4
 - `ndims=3` is required; `usemmg=1` (MMG mesh optimization during remeshing) is
   recommended but optional.
 - `GOSPL_EXT_DIR` (default `~/opt/gospl_extensions`) and `CONDA_ENV_PATH`
-  (default `~/miniconda3/envs/gospl`) locate the two prerequisites; set them on
-  the command line or in the Makefile if yours are elsewhere.
+  (default `~/miniforge3/envs/gospl`) locate the two prerequisites; set them on
+  the command line, in the Makefile or as exported variables if yours are
+  elsewhere.
   `PYTHON_VERSION`, `PYTHON_INCLUDE_DIR` and `PYTHON_LIB_DIR` cover a
   non-conda Python.
 - The build also writes `dynearthsol-gospl`, a wrapper that puts
@@ -247,7 +248,7 @@ Makefile or by changing directory before running.
 
 | Message | Cause and fix |
 |---------|---------------|
-| `cannot find -lpython3.11` | The gospl environment is not at `~/miniconda3/envs/gospl` with Python 3.11. Set `CONDA_ENV_PATH` |
+| `cannot find -lpython3.11` | The gospl environment is not at `~/miniforge3/envs/gospl` with Python 3.11. Set `CONDA_ENV_PATH` |
 | `cannot find -lgospl_extensions` | gospl_extensions is not built at `~/opt/gospl_extensions`. Set `GOSPL_EXT_DIR` |
 | `gospl-driver.hpp: No such file` | The `gospl_driver` directory is missing from the source tree |
 
