@@ -7,8 +7,10 @@
 # FastScape n   : 1     -> GoSPL default
 # FastScape K_d : 1e-2  -> diffusion.hillslopeKa
 # FastScape flow: multi-direction (p=-1) -> flowdir: 6
-# FastScape bc  : Left=1, Right=1 (i.e., open) -> bc: '1010' (SN: closed, EW: open)
-#                 In gospl, the order is SENW and 0 for and 1 for closed.) 
+# FastScape bc  : Left=1, Right=1 (i.e., open) -> E and W 'o' (open)
+#                 gospl reads bc as NESW: o open, f fixed outlet, w wall (closed).
+#                 N and S are 'f': 'fofo' is the earlier '1010' in the current
+#                 notation, the setting of the published comparison figure.
 # Output        : every 20,000 yr (matching ASPECT visualization output interval)
 
 name: Gaussian weakzone 3D rift (DES-GoSPL)
@@ -17,7 +19,7 @@ domain:
     npdata: ['./gospl_mesh','v','c','z']
     flowdir: 6          # multi-flow direction (matches FastScape p=-1)
     seadepo: True       # True because G=1 in FastScape?
-    bc: '1010'          # SENW, 0 open, 1 closed. W and E boundaries open (base level)
+    bc: 'fofo'          # NESW: N and S fixed outlets, E and W open (base level)
 
 output:
     dir: 'output_gaussian_weakzone_3D'

@@ -27,7 +27,7 @@ are chosen to match the ASPECT + FastScape reference model
 
 Key settings:
 - **Flow direction**: multi-flow (`flowdir: 6`, equivalent to FastScape `p=-1`)
-- **Boundary conditions**: east and west boundaries open, north and south closed (`bc: '1010'`)
+- **Boundary conditions**: east and west boundaries open, north and south fixed base-level outlets (`bc: 'fofo'`)
 - **Stream power law**: K = 1×10⁻⁵ m^(1-2m)/yr, m = 0.4, n = 1
 - **Hillslope diffusion**: Ka = 1×10⁻² m²/yr
 - **Sea level**: −2000 m (prevents marine flooding of the initial surface)
