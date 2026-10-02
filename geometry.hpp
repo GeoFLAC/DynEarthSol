@@ -115,4 +115,9 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 void compute_pt_factors(const Param& param, const Variables& var,
                         double_vec& stress_fraction, double_vec& mobility,
                         double_vec& height, double_vec& effective_viscosity);
+
+// Gershgorin fictitious mass for PT_option=1, from compute_pt_factors'
+// effective viscosity. elem_rows holds nelem*NODES_PER_ELEM*NDIMS entries.
+void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,
+                     double_vec& elem_rows, array_t& mass);
 #endif

@@ -411,6 +411,11 @@ static void declare_parameters(po::options_description &cfg,
          "Relative tolerance on projected physical-force RMS, scaled by initial imbalance")
         ("control.PT_absolute_tolerance", po::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
          "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
+        ("control.PT_option", po::value<int>(&p.control.PT_option)->default_value(0),
+         "PT iteration scheme. Both accept the same physical residual.\n"
+         "0: accelerated pseudo-transient relaxation (Rass et al. 2022), uses PT_CFL and PT_Re.\n"
+         "1: adaptive dynamic relaxation: Gershgorin fictitious mass and damping from a\n"
+         "   Rayleigh-quotient estimate of the lowest mode (Underwood 1983; Papadrakakis 1981).\n")
         ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.25),
          "Pseudo-wave CFL factor for local dual-time relaxation (0 < CFL <= 0.5)")
         ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(14.90188239869415),
@@ -1594,6 +1599,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                           << "they still apply to initial equilibrium. Physical steps use "
                           << "epsilon=1e-6 and C=1000.\n";
             if (p.control.PT_max_iter < 1 || p.control.PT_stagnation_window < 0 ||
+                p.control.PT_option < 0 || p.control.PT_option > 1 ||
                 !(p.control.PT_CFL > 0 && p.control.PT_CFL <= 0.5) ||
                 !(p.control.PT_Re > 0 && std::isfinite(p.control.PT_Re)) ||
                 !(p.control.PT_relative_tolerance >= 0 && std::isfinite(p.control.PT_relative_tolerance)) ||

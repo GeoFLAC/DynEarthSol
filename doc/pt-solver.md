@@ -104,6 +104,31 @@ The factor construction follows the effective-viscosity/dual-time approach in
 [Räss et al. (2022)](https://gmd.copernicus.org/articles/15/5757/2022/); convergence
 remains dependent on the material response, mesh, loading and requested tolerance.
 
+`PT_option=1` replaces this relaxation with adaptive dynamic relaxation
+(Underwood 1983, "Dynamic relaxation", in *Computational Methods for Transient
+Analysis*; Papadrakakis 1981, *Comput. Methods Appl. Mech. Eng.* 25). Each node
+receives a fictitious mass equal to the Gershgorin row sum of its elastic/viscous
+velocity stiffness (`compute_pt_mass`), so the mass-scaled spectrum lies in (0, 1]
+on any mesh and material contrast; the upper bound is not estimated. The damping
+comes from the lowest eigenvalue, estimated each iteration as the Rayleigh quotient
+of the secant stiffness along the latest velocity increment, and the update is the
+corresponding second-order (heavy-ball) step. Momentum is dropped when it opposes
+the current force, as in kinetic damping (Cundall 1976) and gradient restart
+(O'Donoghue & Candès 2015, *Found. Comput. Math.* 15). There is
+no lagged stress and one force assembly per iteration. `PT_CFL` and `PT_Re` are
+not used; the tolerance, acceptance and failure handling are unchanged.
+
+Measured against `PT_option=0` at the same tolerance (serial CPU): Terzaghi 2D/3D
+and Mandel need 8–10 times fewer iterations, with analytical errors unchanged to
+< 1e-8 of the load; Maxwell and the EP/RSF shear benchmark are identical. In the
+core-complex example, 100 steps need 44 times fewer iterations, and a solve that
+reached `PT_max_iter=50000` with `PT_option=0` converges.
+
+Neither scheme can converge where no stable quasi-static equilibrium exists.
+Rate-independent strain softening (for example a mature core-complex shear band)
+gives directions of negative stiffness, along which both schemes diverge; such
+models need a regularised rheology (e.g. viscoplastic) or the inertial no-PT path.
+
 Physical mesh motion, stress rotation, transport and remeshing remain outside the
 trial loop. Equilibrium is established on the reference geometry; it does not
 claim equilibrium after moving that geometry. No live baseline crosses a remesh.
@@ -182,6 +207,7 @@ convergence for every material/loading combination.
   full hydraulic GPU qualification and realistic-size GPU performance are not
   claimed. Small-mesh launch overhead remains a known cost.
 
-No experimental secant extrapolation, adaptive coefficient tuning or new plastic
-corner-return algorithm is part of this implementation. Such changes require
+No experimental secant extrapolation, tuned coefficients or new plastic
+corner-return algorithm is part of this implementation; `PT_option=1` derives its
+mass and damping from the assembled operator. Such changes require
 separate numerical contracts and validation.

@@ -55,12 +55,64 @@ struct PTWorkspace {
     tensor_t lagged_stress;
     array_t old_velocity, undamped;
     double_vec stress_fraction, mobility, height, effective_viscosity;
+    // Adaptive dynamic relaxation only (PT_option=1); empty otherwise.
+    double_vec mass_rows;
+    array_t mass, momentum, previous_force;
 
-    PTWorkspace(int nelem, int nnode)
+    PTWorkspace(int nelem, int nnode, bool adaptive)
         : start(nelem), constraints(nnode), lagged_stress(nelem),
           old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode),
-          height(nelem), effective_viscosity(nelem) {}
+          height(nelem), effective_viscosity(nelem),
+          mass_rows(adaptive ? static_cast<std::size_t>(nelem)*NODES_PER_ELEM*NDIMS : 0),
+          mass(adaptive ? nnode : 0), momentum(adaptive ? nnode : 0),
+          previous_force(adaptive ? nnode : 0) {}
 };
+
+// One adaptive dynamic relaxation update (Underwood 1983; Papadrakakis 1981).
+// The Gershgorin mass bounds the scaled spectrum by 1, so only the lowest
+// eigenvalue is estimated: a Rayleigh quotient of the secant stiffness along
+// the latest increment, F_prev - F = K dv. Momentum is dropped when it opposes
+// the current force (kinetic damping; gradient restart, O'Donoghue & Candes 2015).
+// Only the route to equilibrium changes; acceptance uses the physical residual.
+void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, double& lowest)
+{
+    double num = 0, den = 0, drive = 0;
+    if (iteration > 0) {
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, w) reduction(+:num,den,drive)
+#endif
+        #pragma acc parallel loop gang vector reduction(+:num,den,drive)
+        for (int n=0; n<var.nnode; ++n)
+            for (int d=0; d<NDIMS; ++d) {
+                const double dv = w.momentum[n][d];
+                num += dv*(w.previous_force[n][d] - w.undamped[n][d]);
+                den += w.mass[n][d]*dv*dv;
+                drive += dv*w.undamped[n][d];
+            }
+        if (num > 0 && den > 0)
+            lowest = std::max(1e-12, std::min(1.0, num/den));
+    }
+    const double s = std::sqrt(lowest);
+    const double alpha = 4/((1+s)*(1+s));
+    const double beta = (iteration > 0 && drive >= 0) ? ((1-s)/(1+s))*((1-s)/(1+s)) : 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, w) firstprivate(alpha, beta)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) {
+            w.momentum[n][d] = (beta > 0 ? beta*w.momentum[n][d] : 0.0) +
+                alpha*w.undamped[n][d]/w.mass[n][d];
+            w.previous_force[n][d] = w.undamped[n][d];
+        }
+    project_free_vectors(var, w.constraints, w.momentum);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, w)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n)
+        for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] += w.momentum[n][d];
+}
 
 // Upper magnitude estimate in the free subspace, from the already assembled
 // element cache. Absolute projector coefficients avoid cancellation in oblique
@@ -141,7 +193,8 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     #pragma acc wait
     // Heap ownership also keeps the workspace's nested arrays available to the
     // managed-memory accelerator path. No snapshot survives mesh motion/remesh.
-    std::unique_ptr<PTWorkspace> owner(new PTWorkspace(var.nelem, var.nnode));
+    const bool adaptive = param.control.PT_option == 1;
+    std::unique_ptr<PTWorkspace> owner(new PTWorkspace(var.nelem, var.nnode, adaptive));
     PTWorkspace& w = *owner;
     w.start.capture(var);
     for (int n=0; n<var.nnode; ++n)
@@ -163,6 +216,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     double best = std::numeric_limits<double>::infinity();
     int last_improvement = 0;
     bool stagnation_reported = false;
+    double lowest_mode = 1;
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
         evaluate_mechanical_trial(param, var, w.start, initial);
@@ -228,6 +282,12 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
             compute_pt_factors(param, var, w.stress_fraction, w.mobility,
                                w.height, w.effective_viscosity);
+        if (adaptive) {
+            if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
+                compute_pt_mass(var, w.effective_viscosity, w.mass_rows, w.mass);
+            update_adaptive_dr(var, w, iteration, lowest_mode);
+            continue;
+        }
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, w)
 #endif

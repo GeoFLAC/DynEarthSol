@@ -258,6 +258,7 @@ struct Control {
     double PT_relative_tolerance;
     double PT_absolute_tolerance;
     double PT_CFL, PT_Re;
+    int PT_option;
     int PT_stagnation_window;
 
     bool has_moving_mesh;

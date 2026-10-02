@@ -2008,3 +2008,55 @@ void compute_pt_factors(const Param& param, const Variables& var,
     if (bad)
         die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
 }
+
+void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,
+                     double_vec& elem_rows, array_t& mass)
+{
+    // Fictitious mass for adaptive dynamic relaxation (Underwood 1983): the
+    // Gershgorin row sum of the elastic/viscous velocity stiffness, so every
+    // eigenvalue of the mass-scaled stiffness lies in (0, 1]. The bulk part
+    // uses the elastic volumetric response, as in compute_pt_factors.
+    #pragma acc wait
+    const int nrow = NODES_PER_ELEM*NDIMS;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, effective_viscosity, elem_rows) firstprivate(nrow)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e=0; e<var.nelem; ++e) {
+        double grad[NDIMS][NODES_PER_ELEM];
+#ifdef THREED
+        get_local_shape_fn(var, e, grad[0], grad[1], grad[2]);
+#else
+        get_local_shape_fn(var, e, grad[0], grad[1]);
+#endif
+        const double eta = effective_viscosity[e];
+        const double lambda = var.mat->bulkm(e)*var.dt - 2*eta/3;
+        const double volume = (*var.volume)[e];
+        for (int a=0; a<NODES_PER_ELEM; ++a)
+            for (int i=0; i<NDIMS; ++i) {
+                double sum = 0;
+                for (int b=0; b<NODES_PER_ELEM; ++b) {
+                    double dot = 0;
+                    for (int k=0; k<NDIMS; ++k) dot += grad[k][a]*grad[k][b];
+                    for (int j=0; j<NDIMS; ++j)
+                        sum += std::fabs(lambda*grad[i][a]*grad[j][b] +
+                                         eta*((i == j ? dot : 0) + grad[j][a]*grad[i][b]));
+                }
+                elem_rows[e*nrow + a*NDIMS + i] = volume*sum;
+            }
+    }
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, elem_rows, mass) firstprivate(nrow)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n) {
+        const int* patch = var.support.patch(n);
+        const int* local = var.support.local(n);
+        for (int d=0; d<NDIMS; ++d) {
+            double sum = 0;
+            for (int k=0; k<var.support.size(n); ++k)
+                sum += elem_rows[patch[k]*nrow + local[k]*NDIMS + d];
+            mass[n][d] = sum;
+        }
+    }
+}
