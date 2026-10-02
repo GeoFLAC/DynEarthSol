@@ -146,8 +146,6 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     w.start.capture(var);
     for (int n=0; n<var.nnode; ++n)
         for (int d=0; d<NDIMS; ++d) w.old_velocity[n][d] = (*var.vel)[n][d];
-    for (int e=0; e<var.nelem; ++e)
-        for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
     build_velocity_constraints(param, var, w.constraints, initial);
     if (initial)
         for (int n=0; n<var.nnode; ++n)
@@ -173,6 +171,9 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         result.residual = pt_residual_rms(var, w.constraints, w.undamped);
         var.l2_residual = result.residual;
         if (iteration == 0) {
+            // Match the auxiliary solver stress to the first constitutive trial.
+            for (int e=0; e<var.nelem; ++e)
+                for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
             result.initial_residual = result.residual;
             result.threshold = param.control.PT_absolute_tolerance +
                 param.control.PT_relative_tolerance*result.initial_residual;
