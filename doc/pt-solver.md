@@ -82,9 +82,11 @@ geometry, or irreversible state evolution. This criterion does not define a
 dynamic-mode or inertia policy. The default is `PT_use_running_scale=no`, which
 retains the existing tolerance and checkpoint behavior.
 
-Absolute tolerance has nodal-force units: N/m in 2D, N in 3D. Stagnation is failure,
-not convergence. Results distinguish `converged`, `max_iterations`, `stagnated` and
-`nonfinite`; a failed solve restores mechanical history and stops before output,
+Absolute tolerance has nodal-force units: N/m in 2D, N in 3D. Stagnation is diagnostic, not convergence.
+`PT_stagnation_window` (default 500) warns once per solve without changing the
+tolerance or stopping the iterations; 0 disables this warning. This replaces
+the previous fatal stagnation behavior, which could interrupt recovering
+transients. Results distinguish `converged`, `max_iterations` and `nonfinite`; a failed solve restores mechanical history and stops before output,
 transport or mesh movement can consume the candidate.
 
 Boundary constraints use the same ordered dispatch as `apply_vbcs`, evaluated in
@@ -166,7 +168,7 @@ opt-in PT mode. Maxwell relaxation has also been checked against its discrete
 update and continuum time-convergence reference. Those checks do not establish
 convergence for every material/loading combination.
 
-- A solve may reach the iteration limit or stagnate. Retain its failed status;
+- A solve that reaches the iteration limit or a nonfinite state fails;
   it must not commit a discarded candidate or silently relax its tolerance.
 - A relative-only target can fall below floating-point cancellation accuracy near
   equilibrium. No automatic residual floor or time-step retry is introduced.

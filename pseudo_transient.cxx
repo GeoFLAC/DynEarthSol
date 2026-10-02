@@ -130,7 +130,6 @@ const char* pt_status_name(PTStatus status)
     switch (status) {
     case PTStatus::converged: return "converged";
     case PTStatus::max_iterations: return "max_iterations";
-    case PTStatus::stagnated: return "stagnated";
     case PTStatus::nonfinite: return "nonfinite";
     }
     return "unknown";
@@ -162,6 +161,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
     int last_improvement = 0;
+    bool stagnation_reported = false;
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
         evaluate_mechanical_trial(param, var, w.start, initial);
@@ -192,9 +192,6 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         if (result.residual <= result.threshold) {
             result.status = PTStatus::converged;
             if (running_scale) {
-                std::printf("PT scale step=%d initial=%.17g reference=%.17g floor=%.17g threshold=%.17g skipped=%d\n",
-                            var.steps, result.initial_residual, trial_reference, roundoff_floor,
-                            result.threshold, static_cast<int>(var.PT_skip_scale_update));
                 var.PT_initial_residual_max = trial_reference;
                 var.PT_skip_scale_update = false;
             }
@@ -217,10 +214,12 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         if (result.residual < best*(1-1e-12)) {
             best = result.residual;
             last_improvement = iteration;
-        } else if (param.control.PT_stagnation_window > 0 &&
+        } else if (!stagnation_reported && param.control.PT_stagnation_window > 0 &&
                    iteration-last_improvement >= param.control.PT_stagnation_window) {
-            result.status = PTStatus::stagnated;
-            break;
+            std::fprintf(stderr, "Warning: PT step=%d has not improved its best residual for %d iterations; "
+                         "continuing (residual=%.17g, best=%.17g, threshold=%.17g).\n",
+                         var.steps, param.control.PT_stagnation_window, result.residual, best, result.threshold);
+            stagnation_reported = true;
         }
         if (iteration+1 == param.control.PT_max_iter) break;
         // Geometry, physical dt and elastic moduli are fixed during this solve.
@@ -291,13 +290,17 @@ PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
 }
 
 
-void require_pt_convergence(const Variables& var, const PTResult& result)
+void require_pt_convergence(const Param& param, const Variables& var, const PTResult& result)
 {
-    std::printf("PT step=%d status=%s iterations=%d residual=%.17g initial=%.17g\n",
-                var.steps, pt_status_name(result.status), result.iterations, result.residual, result.initial_residual);
+    // Keep failures visible even between ordinary progress reports.
+    if (result.status != PTStatus::converged || var.steps == 0 ||
+        (var.steps >= var.info_display_next_step &&
+         var.steps % param.mesh.quality_check_step_interval == 0))
+        std::fprintf(result.status == PTStatus::converged ? stdout : stderr,
+                     "PT step=%d status=%s iterations=%d residual=%.17g initial=%.17g threshold=%.17g\n",
+                     var.steps, pt_status_name(result.status), result.iterations,
+                     result.residual, result.initial_residual, result.threshold);
     if (result.status != PTStatus::converged) {
-        std::fprintf(stderr, "PT stopping threshold=%.17g; no candidate was accepted.\n",
-                     result.threshold);
         die(result.status == PTStatus::nonfinite ? EXIT_RUNTIME_NAN : EXIT_RUNTIME_NONCONVERGENCE,
             "PT mechanical equilibrium failed; physical-start mechanical history restored.");
     }

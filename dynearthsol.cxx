@@ -785,7 +785,7 @@ int main(int argc, const char* argv[])
     // candidate. The first checkpoint therefore records initialization as done.
     if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
         if (param.control.has_PT)
-            require_pt_convergence(var, run_initial_equilibrium_pt(param, var));
+            require_pt_convergence(param, var, run_initial_equilibrium_pt(param, var));
     }
     var.initial_equilibrium_done = true;
     param.ic.has_body_force_adjustment = false;
@@ -842,7 +842,7 @@ int main(int argc, const char* argv[])
             update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
 
         if (param.control.has_PT) {
-            require_pt_convergence(var, run_physical_step_pt(param, var));
+            require_pt_convergence(param, var, run_physical_step_pt(param, var));
         } else {
             update_strain_rate(var, *var.strain_rate);
             compute_dvoldt(var, *var.ntmp, *var.etmp);

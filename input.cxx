@@ -416,7 +416,7 @@ static void declare_parameters(po::options_description &cfg,
         ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(14.90188239869415),
          "Positive pseudo Reynolds number for dual-time relaxation")
         ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(500),
-         "Stop with failure after this many iterations without residual improvement; 0 disables")
+         "Warn once per solve after this many iterations without best-residual improvement; 0 disables warning")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")

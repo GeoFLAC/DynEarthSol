@@ -9,7 +9,7 @@ struct VelocityConstraints;
 double pt_residual_rms(const Variables& var, const VelocityConstraints& constraints,
                        const array_t& force);
 
-enum class PTStatus { converged, max_iterations, stagnated, nonfinite };
+enum class PTStatus { converged, max_iterations, nonfinite };
 
 struct PTResult {
     PTStatus status = PTStatus::max_iterations;
@@ -26,6 +26,6 @@ PTResult run_physical_step_pt(const Param& param, Variables& var);
 // no physical aging, transport or pressure increment consumption.
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var);
 
-void require_pt_convergence(const Variables& var, const PTResult& result);
+void require_pt_convergence(const Param& param, const Variables& var, const PTResult& result);
 
 #endif
