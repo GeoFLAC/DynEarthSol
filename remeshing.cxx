@@ -2283,11 +2283,6 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, min_dist);
         break;
-    case 2:
-        excl_func = &is_boundary;
-        new_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
-        break;
     case 10:
         excl_func = &is_corner;
         break;
@@ -2539,11 +2534,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         excl_func = &is_boundary;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, min_dist);
-        break;
-    case 2:
-        excl_func = &is_boundary;
-        new_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
         break;
     case 10:
         excl_func = &is_corner;

@@ -232,7 +232,8 @@ static void declare_parameters(po::options_description &cfg,
          " 0: no modification on any boundary.\n"
          " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact.\n"
-         " 2: create a new bottom boundary at the initial depth, other boundaries are intact (2D only).\n"
+         " 2: create a new bottom boundary at the initial depth, other boundaries are intact "
+         "(2D only, not with MMG remeshing).\n"
          "10: no modification on any boundary, except small boundary segments might get merged.\n"
          "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact, except small boundary segments might "
@@ -1282,6 +1283,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.remeshing_option == 2) {
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
+#endif
+#ifdef USEMMG
+    // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
+    if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available with MMG remeshing "
+            "(usemmg=1, mesh.meshing_elem_shape = 0); use 1 or 11, or a build without MMG.");
 #endif
 
 #ifndef USEMMG
