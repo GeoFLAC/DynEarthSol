@@ -1008,6 +1008,10 @@ int main(int argc, const char* argv[])
                 std::cout << ", wt = ";
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
+#ifdef HAS_GOSPL_CPP_INTERFACE
+                if (var.gospl_driver != nullptr)
+                    var.gospl_driver->print_coupling_summary();
+#endif
 
 
                 var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
