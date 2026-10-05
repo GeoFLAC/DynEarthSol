@@ -545,17 +545,20 @@ static void declare_parameters(po::options_description &cfg,
          "Ratio of the velocity at the bottom of the left boundary width (for option = 1 and 3)")
 
         ("bc.num_vbc_period_x0", po::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
-         "Number of velocity period at x0")
+         "Number of points in the x0 velocity period table")
         ("bc.num_vbc_period_x1", po::value<int>(&p.bc.num_vbc_period_x1)->default_value(1),
-         "Number of velocity period at x1")
+         "Number of points in the x1 velocity period table")
         ("bc.vbc_period_x0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x0 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x0 velocity period table '[t0, t1, ...]' (num_vbc_period_x0 of them, in yr, "
+         "non-decreasing): the ratio is linear between them and constant outside; repeat a time "
+         "for a step")
         ("bc.vbc_period_x1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x1 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x1 velocity period table (in yr), as for x0")
         ("bc.vbc_period_x0_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x0 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x0 at each time of the x0 period table '[r0, r1, r2, ...]'. It scales "
+         "the normal velocity only: tangential values (types 4 and 5, vbc_val_x0_l) stay constant")
         ("bc.vbc_period_x1_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x1 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x1 at each time of the x1 period table, as for x0")
 
         ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
@@ -586,6 +589,18 @@ static void declare_parameters(po::options_description &cfg,
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
          "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
+        ("bc.num_vbc_period_y0", po::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
+         "Number of points in the y0 velocity period table (3D only)")
+        ("bc.num_vbc_period_y1", po::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
+         "Number of points in the y1 velocity period table (3D only)")
+        ("bc.vbc_period_y0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y0 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y1 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y0_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y0 at each time of the y0 period table (3D only), as for x0")
+        ("bc.vbc_period_y1_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y1 at each time of the y1 period table (3D only), as for x0")
 
         ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
@@ -1527,10 +1542,32 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
 
-        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, 1);
-        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, 1);
+        // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
+        // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.
+        if (std::min({p.bc.num_vbc_period_x0, p.bc.num_vbc_period_x1,
+                      p.bc.num_vbc_period_y0, p.bc.num_vbc_period_y1}) < 1) {
+            die(EXIT_CONFIG_VALUE, "bc.num_vbc_period_* must be positive.");
+        }
+        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0);
+        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1);
+        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0);
+        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1);
+        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0);
+        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1);
+        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0);
+        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1);
+        const std::pair<const char*, const double_vec*> period_times[] = {
+            {"vbc_period_x0_time_in_yr", &p.bc.vbc_period_x0_time_in_yr},
+            {"vbc_period_x1_time_in_yr", &p.bc.vbc_period_x1_time_in_yr},
+            {"vbc_period_y0_time_in_yr", &p.bc.vbc_period_y0_time_in_yr},
+            {"vbc_period_y1_time_in_yr", &p.bc.vbc_period_y1_time_in_yr},
+        };
+        for (const auto& t : period_times) {
+            if (! std::is_sorted(t.second->begin(), t.second->end())) {
+                std::cerr << "Error: bc." << t.first << " must be non-decreasing.\n";
+                die(EXIT_CONFIG_VALUE);
+            }
+        }
 
         get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, 1);
         if (p.ic.radiogenic_heat_boundry[0] == -1)

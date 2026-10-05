@@ -224,6 +224,27 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
 }
 
 
+// Normal velocity apply_vbcs prescribes on side wall t (0 = x0, 1 = x1, 2 = y0, 3 = y1) at
+// time_in_yr, before the 2D depth profile and the PT_jump hold: vbc_val_* times the wall's
+// period table; 0 for a code that leaves it free or holds it at 0 (1, 3, 6 set it, and 7 in 3D).
+double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
+{
+    const bool lo = (t % 2 == 0), y = (t >= 2);
+    const int code = y ? (lo ? bc.vbc_y0 : bc.vbc_y1) : (lo ? bc.vbc_x0 : bc.vbc_x1);
+#ifdef THREED
+    if (code != 1 && code != 3 && code != 6 && code != 7) return 0.;
+#else
+    if (code != 1 && code != 3 && code != 6) return 0.;
+#endif
+    const double v = y ? (lo ? bc.vbc_val_y0 : bc.vbc_val_y1)
+                       : (lo ? bc.vbc_val_x0 : bc.vbc_val_x1);
+    const double_vec &time = y ? (lo ? bc.vbc_period_y0_time_in_yr : bc.vbc_period_y1_time_in_yr)
+                               : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
+    const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
+                                : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
+    return v * interp1(time, ratio, time_in_yr);
+}
+
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 {
 #ifdef NPROF
@@ -240,15 +261,14 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
 
     const BC &bc = param.bc;
+    // normal velocity of each side wall, after its period table
+    const double t_now = var.time / YEAR2SEC;
+    double vbc_applied_x0 = side_wall_normal_vbc(bc, 0, t_now);
+    double vbc_applied_x1 = side_wall_normal_vbc(bc, 1, t_now);
 #ifdef THREED
-    // vel period is not ready for 3D
-
+    double vbc_applied_y0 = side_wall_normal_vbc(bc, 2, t_now);
+    double vbc_applied_y1 = side_wall_normal_vbc(bc, 3, t_now);
 #else
-
-    // new way to find vbc_applied_x
-    double t_now = var.time / YEAR2SEC;
-    double vbc_applied_x0 = bc.vbc_val_x0 * interp1(bc.vbc_period_x0_time_in_yr,bc.vbc_period_x0_ratio, t_now);
-    double vbc_applied_x1 = bc.vbc_val_x1 * interp1(bc.vbc_period_x1_time_in_yr,bc.vbc_period_x1_ratio, t_now);
 
     // find max and min coordinate for BOUNDX0
     double BOUNDX0_max = 0.;
@@ -334,13 +354,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         // Only 3D has y boundaries to hold at rest; in 2D y is not a boundary direction.
         bc_vy0 = 0.0;
         bc_vy1 = 0.0;
+        vbc_applied_y0 = 0.0;
+        vbc_applied_y1 = 0.0;
 #endif
         bc_vz0 = 0.0;
         bc_vz1 = 0.0;
-#ifndef THREED
         vbc_applied_x0 = 0.0;
         vbc_applied_x1 = 0.0;
-#endif
     }
 
     if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
@@ -354,14 +374,16 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 
 #ifdef THREED
     // Each lateral face is described by: boundary mask, normal component index (ni),
-    // lateral-shear component index (li), bc type, normal value (val), and lateral
-    // shear value (val_l). The vertical shear (v[2]) is always either free or fixed at 0.
-    struct LateralFace { uint mask; int ni; int li; int type; double val; double val_l; };
+    // lateral-shear component index (li), bc type, normal value (val_n, after the period table),
+    // tangential value of types 4 and 5 (val) and lateral shear value (val_l), both unscaled as
+    // in 2D. The vertical shear (v[2]) is always either free or fixed at 0.
+    struct LateralFace { uint mask; int ni; int li; int type;
+                         double val_n; double val; double val_l; };
     const LateralFace lateral_faces[] = {
-        {BOUNDX0, 0, 1, bc_x0, bc_vx0, bc_vx0_l},
-        {BOUNDX1, 0, 1, bc_x1, bc_vx1, bc_vx1_l},
-        {BOUNDY0, 1, 0, bc_y0, bc_vy0, bc_vy0_l},
-        {BOUNDY1, 1, 0, bc_y1, bc_vy1, bc_vy1_l},
+        {BOUNDX0, 0, 1, bc_x0, vbc_applied_x0, bc_vx0, bc_vx0_l},
+        {BOUNDX1, 0, 1, bc_x1, vbc_applied_x1, bc_vx1, bc_vx1_l},
+        {BOUNDY0, 1, 0, bc_y0, vbc_applied_y0, bc_vy0, bc_vy0_l},
+        {BOUNDY1, 1, 0, bc_y1, vbc_applied_y1, bc_vy1, bc_vy1_l},
     };
 #else
     double zmin = 0;
@@ -413,13 +435,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
             if (!(flag & f.mask)) continue;
             switch (f.type) {
             case 0: break;
-            case 1: v[f.ni] = f.val; break;
+            case 1: v[f.ni] = f.val_n; break;
             case 2: v[f.li] = 0; v[2] = 0; break;
-            case 3: v[f.ni] = f.val; v[f.li] = 0; v[2] = 0; break;
+            case 3: v[f.ni] = f.val_n; v[f.li] = 0; v[2] = 0; break;
             case 4: v[f.li] = f.val; v[2] = 0; break;
             case 5: v[f.ni] = 0; v[f.li] = f.val; v[2] = 0; break;
-            case 6: v[f.ni] = f.val; v[f.li] = f.val_l; break;
-            case 7: v[f.ni] = f.val; v[f.li] = 0; break;
+            case 6: v[f.ni] = f.val_n; v[f.li] = f.val_l; break;
+            case 7: v[f.ni] = f.val_n; v[f.li] = 0; break;
             }
         }
 #else

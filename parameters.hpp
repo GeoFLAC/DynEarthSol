@@ -323,12 +323,18 @@ struct BC {
 
     int num_vbc_period_x0;
     int num_vbc_period_x1;
+    int num_vbc_period_y0;
+    int num_vbc_period_y1;
 
     double_vec vbc_period_x0_time_in_yr;
     double_vec vbc_period_x1_time_in_yr;
+    double_vec vbc_period_y0_time_in_yr;
+    double_vec vbc_period_y1_time_in_yr;
 
     double_vec vbc_period_x0_ratio;
     double_vec vbc_period_x1_ratio;
+    double_vec vbc_period_y0_ratio;
+    double_vec vbc_period_y1_ratio;
 
     double vbc_val_z1_loading_period;
 
