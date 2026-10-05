@@ -1171,10 +1171,15 @@ namespace {
         const int_vec& top_nodes = *var.bnodes[iboundz1];
         const std::size_t ntop = top_nodes.size();
 
-        std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
-                  << ntop << " surface nodes, vel_coupling="
-                  << (var.gospl_driver->velocity_coupling ? "on" : "off")
-                  << std::endl;
+        // Only the first event is logged in full, as a check on the setup; later
+        // ones go into the summary printed with DES's progress line.
+        const bool log_event = (var.gospl_driver->total_events == 0);
+
+        if (log_event)
+            std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
+                      << ntop << " surface nodes, vel_coupling="
+                      << (var.gospl_driver->velocity_coupling ? "on" : "off")
+                      << std::endl;
 
         // Build coordinate array for current DES surface nodes
         std::vector<double> coords(ntop * 3);
@@ -1248,11 +1253,21 @@ namespace {
             double vy_max = *std::max_element(vy_yr.begin(), vy_yr.end());
             double vz_min = *std::min_element(vz_yr.begin(), vz_yr.end());
             double vz_max = *std::max_element(vz_yr.begin(), vz_yr.end());
-            std::cout << "  vel DES->GoSPL (" << (use_time_avg ? "time-avg" : "instantaneous") << ", m/yr):"
-                      << " vx=[" << vx_min << ", " << vx_max << "]"
-                      << " vy=[" << vy_min << ", " << vy_max << "]"
-                      << " vz=[" << vz_min << ", " << vz_max << "]"
-                      << std::endl;
+            const double vmin[3] = {vx_min, vy_min, vz_min};
+            const double vmax[3] = {vx_max, vy_max, vz_max};
+            var.gospl_driver->record_velocity(vmin, vmax, !use_time_avg);
+            if (log_event)
+                std::cout << "  vel DES->GoSPL (" << (use_time_avg ? "time-avg" : "instantaneous") << ", m/yr):"
+                          << " vx=[" << vx_min << ", " << vx_max << "]"
+                          << " vy=[" << vy_min << ", " << vy_max << "]"
+                          << " vz=[" << vz_min << ", " << vz_max << "]"
+                          << std::endl;
+            else if (!use_time_avg)
+                // The fallback after the first event means the surface node count
+                // changed, i.e. a remesh; the docs ask users to watch for it.
+                std::cout << "GoSPL: instantaneous velocity at t=" << var.time / YEAR2SEC
+                          << " yr: surface node count changed since the last coupling"
+                          << std::endl;
         }
 
         // Run GoSPL and get net dh in one call.
@@ -1288,8 +1303,10 @@ namespace {
         surface_coords_start = coords;
         has_surface_start = true;
 
-        std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
-                  << " mean=" << sum_dh / ntop << std::endl;
+        var.gospl_driver->record_coupling(total_dt, min_dh, max_dh, sum_dh / ntop);
+        if (log_event)
+            std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
+                      << " mean=" << sum_dh / ntop << std::endl;
     }
 #endif
 

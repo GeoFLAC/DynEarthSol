@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 #include <sstream>
 
 // Constructor
@@ -16,8 +17,10 @@ GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initia
                              mesh_bounds_valid(false),
                              coupling_by_time(false), coupling_frequency(1), coupling_interval_in_yr(0.0),
                              step_counter(0), accumulated_dt(0.0),
-                             needs_elevation_reset(true), velocity_coupling(true) {
+                             needs_elevation_reset(true), velocity_coupling(true),
+                             total_events(0) {
     mesh_bounds[0] = mesh_bounds[1] = mesh_bounds[2] = mesh_bounds[3] = 0.0;
+    reset_coupling_summary();
 }
 
 // Destructor
@@ -40,6 +43,34 @@ bool GoSPLDriver::init_python() {
     // KeyboardInterrupt the next time bytecode runs -- never, between coupling
     // events -- so Ctrl-C was swallowed. Restore the default so it kills the run.
     std::signal(SIGINT, SIG_DFL);
+
+    // GoSPL prints "--- step done in ..." after every runProcesses() step, which
+    // here is once per coupling event; DES summarises the coupling at its own
+    // display frequency instead (print_coupling_summary). Drop only those lines:
+    // GoSPL's "+++ Output" lines and anything on stderr pass through.
+    PyRun_SimpleString(
+        "import sys\n"
+        "class _DropGosplStepLines:\n"
+        "    _prefix = '--- step done'\n"
+        "    def __init__(self, stream):\n"
+        "        self._stream = stream\n"
+        "        self._partial = ''\n"
+        "    def write(self, text):\n"
+        "        *lines, self._partial = (self._partial + text).split('\\n')\n"
+        "        for line in lines:\n"
+        "            if not line.startswith(self._prefix):\n"
+        "                self._stream.write(line + '\\n')\n"
+        "        return len(text)\n"
+        "    def flush(self):\n"
+        "        p = self._partial\n"
+        "        if p and not p.startswith(self._prefix) and not self._prefix.startswith(p):\n"
+        "            self._stream.write(p)\n"
+        "            self._partial = ''\n"
+        "        self._stream.flush()\n"
+        "    def __getattr__(self, name):\n"
+        "        return getattr(self._stream, name)\n"
+        "if not isinstance(sys.stdout, _DropGosplStepLines):\n"
+        "    sys.stdout = _DropGosplStepLines(sys.stdout)\n");
 
     python_initialized = true;
     std::cout << "GoSPL Driver: Python/gospl_extensions initialized" << std::endl;
@@ -100,6 +131,63 @@ int GoSPLDriver::run_and_get_erosion(double dt, const double* coords, int num_po
                                      double* erosion, int k, double power) {
     if (!initialized) return -1;
     return ::run_and_get_erosion(model_handle, dt, coords, num_points, erosion, k, power);
+}
+
+void GoSPLDriver::reset_coupling_summary() {
+    summary_events = 0;
+    summary_years = 0.0;
+    summary_dh_min = std::numeric_limits<double>::max();
+    summary_dh_max = std::numeric_limits<double>::lowest();
+    summary_dh_net = 0.0;
+    summary_vel_events = 0;
+    summary_vel_instant = 0;
+    for (int d = 0; d < 3; ++d) {
+        summary_vmin[d] = std::numeric_limits<double>::max();
+        summary_vmax[d] = std::numeric_limits<double>::lowest();
+    }
+}
+
+void GoSPLDriver::record_coupling(double dt_yr, double dh_min, double dh_max, double dh_mean) {
+    ++total_events;
+    ++summary_events;
+    summary_years += dt_yr;
+    summary_dh_min = std::min(summary_dh_min, dh_min);
+    summary_dh_max = std::max(summary_dh_max, dh_max);
+    summary_dh_net += dh_mean;
+}
+
+void GoSPLDriver::record_velocity(const double vmin[3], const double vmax[3], bool instantaneous) {
+    ++summary_vel_events;
+    if (instantaneous) ++summary_vel_instant;
+    for (int d = 0; d < 3; ++d) {
+        summary_vmin[d] = std::min(summary_vmin[d], vmin[d]);
+        summary_vmax[d] = std::max(summary_vmax[d], vmax[d]);
+    }
+}
+
+void GoSPLDriver::print_coupling_summary() {
+    std::ostringstream ss;
+    ss << "              GoSPL: ";
+    if (summary_events == 0) {
+        ss << "no coupling since the last report";
+    }
+    else {
+        ss << std::scientific << std::setprecision(3)
+           << summary_events << (summary_events == 1 ? " coupling" : " couplings")
+           << " over " << summary_years << " yr"
+           << ", dh [" << summary_dh_min << ", " << summary_dh_max << "] m"
+           << ", net mean " << std::showpos << summary_dh_net << std::noshowpos << " m";
+        if (summary_vel_events > 0) {
+            const char* comp[3] = {"vx", "vy", "vz"};
+            ss << ", vel (m/yr)";
+            for (int d = 0; d < 3; ++d)
+                ss << " " << comp[d] << " [" << summary_vmin[d] << ", " << summary_vmax[d] << "]";
+            if (summary_vel_instant > 0)
+                ss << " (" << summary_vel_instant << " instantaneous)";
+        }
+    }
+    std::cout << ss.str() << std::endl;
+    reset_coupling_summary();
 }
 
 double GoSPLDriver::run_processes_for_dt(double dt, bool verbose, bool skip_tectonics) {
