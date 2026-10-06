@@ -2014,7 +2014,8 @@ void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity
 {
     // Fictitious mass for adaptive dynamic relaxation (Underwood 1983): the
     // Gershgorin row sum of the elastic/viscous velocity stiffness, so every
-    // eigenvalue of the mass-scaled stiffness lies in (0, 1]. The bulk part
+    // eigenvalue of that mass-scaled reference has magnitude at most 1.
+    // This does not bound the full nonlinear constrained operator. The bulk part
     // uses the elastic volumetric response, as in compute_pt_factors.
     #pragma acc wait
     const int nrow = NODES_PER_ELEM*NDIMS;

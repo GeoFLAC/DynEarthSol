@@ -17,6 +17,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Physical-step PT trial/commit mechanics with projected undamped-force
+  convergence, rollback on failure, and optional adaptive dynamic relaxation
+  (`control.PT_option=1`; the default remains 0). See `doc/pt-solver.md`.
+- Optional `control.PT_use_running_scale` convergence history, including
+  restart persistence and exclusion of the first post-remesh scale update.
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
@@ -27,6 +32,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
+  existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
+- PT stagnation warns once and continues to the iteration cap; failed or
+  nonfinite solves restore mechanical history and stop before physical updates.
 - Failed PT solves report the requested stopping threshold alongside the
   residual, without changing convergence criteria.
 - `README.md` matches the current build and tools again: several statements
@@ -40,6 +49,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- Darcy flux uses pressure-form mobility, avoiding division by fluid specific
+  weight when gravity is zero while retaining the existing density convention.
 - PT initial equilibrium preserves hydraulic sidewall support when physical
   stepping begins, avoiding a spurious pore-pressure transient without an
   applied top load.

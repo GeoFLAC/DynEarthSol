@@ -11,6 +11,18 @@ OMP_NUM_THREADS=4 python3 tests/functional/pt_initial_checkpoint.py ./dynearthso
 Use new output directories for each run. Omit `--restart-frame` to check the
 initial equilibrium checkpoint; use `--restart-frame 2` to restart after a prior
 mesh change. Logs, inputs and compared outputs remain in the output directory.
+Use `--timeout SECONDS` to extend the per-process wall-clock limit on slower
+backends; the default is 240 seconds. This does not change solver tolerances or
+the iteration cap.
+
+To exercise adaptive dynamic relaxation, add `PT_option = 1` to the fixture's
+`[control]` section. Use `OMP_NUM_THREADS=1` for its byte-exact restart check:
+the adaptive damping uses floating-point reductions whose OpenMP summation
+order is not deterministic. In the 2026-10-06 four-thread remesh/hydrostatic
+fixtures, exact comparisons failed while the largest field-relative difference
+was 1.36e-14. Keep the exact checker strict; do not interpret that measurement as
+a guarantee for other models or thread counts. See the finalization record in
+`../../doc/pt-validation-20261006.md` for the tested scope.
 
 The test checks the restored velocity before the next solve and compares every
 subsequent save/checkpoint payload exactly, excluding wall

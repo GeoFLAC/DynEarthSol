@@ -69,8 +69,8 @@ struct PTWorkspace {
 };
 
 // One adaptive dynamic relaxation update (Underwood 1983; Papadrakakis 1981).
-// The Gershgorin mass bounds the scaled spectrum by 1, so only the lowest
-// eigenvalue is estimated: a Rayleigh quotient of the secant stiffness along
+// The Gershgorin mass bounds the linear reference operator, not the full
+// nonlinear response. Estimate a low mode with a Rayleigh quotient along
 // the latest increment, F_prev - F = K dv. Momentum is dropped when it opposes
 // the current force (kinetic damping; gradient restart, O'Donoghue & Candes 2015).
 // Only the route to equilibrium changes; acceptance uses the physical residual.

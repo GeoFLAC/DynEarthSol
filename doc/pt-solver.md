@@ -108,9 +108,11 @@ remains dependent on the material response, mesh, loading and requested toleranc
 (Underwood 1983, "Dynamic relaxation", in *Computational Methods for Transient
 Analysis*; Papadrakakis 1981, *Comput. Methods Appl. Mech. Eng.* 25). Each node
 receives a fictitious mass equal to the Gershgorin row sum of its elastic/viscous
-velocity stiffness (`compute_pt_mass`), so the mass-scaled spectrum lies in (0, 1]
-on any mesh and material contrast; the upper bound is not estimated. The damping
-comes from the lowest eigenvalue, estimated each iteration as the Rayleigh quotient
+velocity stiffness (`compute_pt_mass`). The row-sum construction bounds the
+magnitude of the mass-scaled eigenvalues of that linear reference operator by 1;
+it does not establish a positive lower bound or a stability bound for the full
+nonlinear, constrained, mixed-stress or height-dependent boundary-load response.
+The damping uses an estimate of a low mode, obtained each iteration as the Rayleigh quotient
 of the secant stiffness along the latest velocity increment, and the update is the
 corresponding second-order (heavy-ball) step. Momentum is dropped when it opposes
 the current force, as in kinetic damping (Cundall 1976) and gradient restart
@@ -124,10 +126,18 @@ and Mandel need 8–10 times fewer iterations, with analytical errors unchanged 
 core-complex example, 100 steps need 44 times fewer iterations, and a solve that
 reached `PT_max_iter=50000` with `PT_option=0` converges.
 
+These are implementation-stage measurements recorded in the ADR commit, not
+general performance guarantees. The separate [finalization record](pt-validation-20261006.md)
+distinguishes checks rerun for submission from those earlier measurements.
+OpenMP ADR reductions can change the last bits across restarts; use one thread
+when byte-exact continuation is required. Multi-thread comparisons need an
+explicit numerical tolerance and cannot be described as bit-exact.
+
 Neither scheme can converge where no stable quasi-static equilibrium exists.
 Rate-independent strain softening (for example a mature core-complex shear band)
-gives directions of negative stiffness, along which both schemes diverge; such
-models need a regularised rheology (e.g. viscoplastic) or the inertial no-PT path.
+can introduce directions of negative stiffness; successful convergence before
+localization does not qualify the later response. Regularised rheology (e.g.
+viscoplastic) or an inertial formulation requires a separate physical assessment.
 
 Physical mesh motion, stress rotation, transport and remeshing remain outside the
 trial loop. Equilibrium is established on the reference geometry; it does not
@@ -195,7 +205,7 @@ convergence for every material/loading combination.
 
 - A solve that reaches the iteration limit or a nonfinite state fails;
   it must not commit a discarded candidate or silently relax its tolerance.
-- A relative-only target can fall below floating-point cancellation accuracy near
+- In the default tolerance mode, a relative-only target can fall below floating-point cancellation accuracy near
   equilibrium. No automatic residual floor or time-step retry is introduced.
 - Weak volumetric modes in some 2D viscous cases require more than the default
   iteration cap. Difficult finite-increment 3D plastic cases can also fail.
@@ -209,5 +219,5 @@ convergence for every material/loading combination.
 
 No experimental secant extrapolation, tuned coefficients or new plastic
 corner-return algorithm is part of this implementation; `PT_option=1` derives its
-mass and damping from the assembled operator. Such changes require
+mass from a linear reference stiffness and damping from successive residuals. Such changes require
 separate numerical contracts and validation.
