@@ -140,6 +140,8 @@ static void build_mesh(Fixture& m) {
     m.var.vel = &m.vel;
     m.var.force = &m.force;
     m.var.force_residual = &m.force_residual;
+    m.var.tmp_result = &m.tmp_result;
+    m.var.strain_rate = &m.strain_rate;
 
     for (int i = 0; i < nbdrytypes; ++i) {
         m.var.vbc_types[i] = 0;
@@ -622,7 +624,8 @@ static void test_material_trials() {
                 m->var.surfinfo.dh=dh;
                 m->var.surfinfo.dhacc=dhacc;
                 auto* after=new MechanicalState(ne);
-                for(bool running : {false,true}) for(int cap : {1,3}) {
+                for(int option : {0,1}) for(bool running : {false,true}) for(int cap : {1,3}) {
+                    m->param.control.PT_option=option;
                     m->param.control.PT_use_running_scale=running;
                     m->var.PT_initial_residual_max=0;
                     m->var.PT_skip_scale_update=true;

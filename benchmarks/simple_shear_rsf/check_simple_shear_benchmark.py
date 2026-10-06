@@ -106,6 +106,8 @@ def main() -> None:
     )
     parser.add_argument("--exe", default=None, help="Path to dynearthsol2d. If omitted, auto-detect.")
     parser.add_argument("--pt", action="store_true", help="Check PT mechanics against the same reference solutions.")
+    parser.add_argument("--pt-option", type=int, choices=(0, 1), default=0,
+                        help="With --pt, select existing relaxation (0) or adaptive DR (1).")
     parser.add_argument(
         "--cases",
         nargs="+",
@@ -158,7 +160,7 @@ def main() -> None:
         if args.exe:
             run_cmd.extend(["--exe", str(Path(args.exe).expanduser().resolve())])
         if args.pt:
-            run_cmd.append("--pt")
+            run_cmd.extend(["--pt", "--pt-option", str(args.pt_option)])
         subprocess.run(run_cmd, cwd=script_dir, check=True)
 
         failures: list[str] = []

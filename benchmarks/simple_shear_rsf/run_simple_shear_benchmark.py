@@ -109,14 +109,15 @@ def format_float(value: float) -> str:
     return f"{value:.17g}"
 
 
-def render_cfg(template_text: str, spec: RunSpec, *, pseudo_transient: bool = False) -> str:
+def render_cfg(template_text: str, spec: RunSpec, *, pseudo_transient: bool = False,
+               pt_option: int = 0) -> str:
     case = spec.case
     replacements = {
         "__MODELNAME__": "result",
         "__MAX_STEPS__": str(spec.max_steps),
         "__OUTPUT_STEP_INTERVAL__": str(spec.output_step_interval),
         "__FIXED_DT__": format_float(spec.fixed_dt_s),
-        "__PT_CONTROL__": "has_PT = true" if pseudo_transient else "",
+        "__PT_CONTROL__": f"has_PT = true\nPT_option = {pt_option}" if pseudo_transient else "",
         "__CHARACTERISTIC_SPEED_CONTROL__": spec.characteristic_speed_line,
         "__UPPER_BOUNDARY_X_MODE__": str(spec.upper_boundary_x_mode),
         "__UPPER_BOUNDARY_X_VELOCITY__": format_float(spec.upper_boundary_x_velocity),
@@ -241,6 +242,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the paper's local EP/RSF benchmark suite.")
     parser.add_argument("--exe", default=None, help="Path to dynearthsol2d. If omitted, auto-detect.")
     parser.add_argument("--pt", action="store_true", help="Use PT mechanical updates with the same physical time steps.")
+    parser.add_argument("--pt-option", type=int, choices=(0, 1), default=0,
+                        help="With --pt, select existing relaxation (0) or adaptive DR (1).")
     parser.add_argument(
         "--groups",
         nargs="+",
@@ -332,7 +335,8 @@ def main() -> None:
             cleanup_case_dir(case_dir)
             case_dir.mkdir(parents=True, exist_ok=True)
 
-        cfg_path = write_case_cfg(case_dir, render_cfg(template_text, spec, pseudo_transient=args.pt))
+        cfg_path = write_case_cfg(case_dir, render_cfg(template_text, spec, pseudo_transient=args.pt,
+                                                     pt_option=args.pt_option))
         print(f"[prep] {index:02d}/{len(specs)} {spec.name} -> {cfg_path}")
         if not args.skip_run:
             subprocess.run([str(exe), str(cfg_path)], cwd=case_dir, check=True)

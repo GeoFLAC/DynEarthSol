@@ -68,7 +68,8 @@ python3 check_simple_shear_benchmark.py --all
 ~~~
 
 Add `--pt` to the runner or checker to exercise PT mechanical updates with the
-same physical steps and reference tolerances. The RSF auxiliary GVS controls
+same physical steps and reference tolerances. Add `--pt --pt-option 1` to check
+adaptive dynamic relaxation; `--pt-option 0` is the default. The RSF auxiliary GVS controls
 remain enabled. These prescribed-motion cells satisfy force balance on the first
 candidate; they verify accepted constitutive histories, not convergence through
 multiple PT iterations. Use a separate traction-driven case for that check.
