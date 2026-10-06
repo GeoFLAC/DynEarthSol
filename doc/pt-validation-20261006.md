@@ -18,9 +18,9 @@ time is fixed within a solve, and only an accepted trial commits material
 history. Failure restores the physical-start state. Reference geometry and
 physical mesh/transport stages retain the ownership described in [pt-solver.md](pt-solver.md).
 
-The public master was checked at `7cd88a1`; its newer provenance changes have
-not been replayed into this branch. The three-way textual merge check found no
-conflict. Integration with those changes remains a PR/CI review item.
+The initial submission did not include master's newer provenance changes.
+The follow-up described below merges public master `7cd88a1` without rewriting
+the shared PT history; the merge had no textual conflicts.
 
 ## Environment and acceptance criteria
 
@@ -126,6 +126,43 @@ Both options pass in 2D/3D. The largest history-normalized difference is
 scales and per-field results are retained in `gpu-history-comparison.json` in
 the local evidence directory.
 
+## Follow-up cleanup and master integration
+
+ADR no longer allocates or initializes the original relaxation's `lagged_stress`
+array. Obsolete commented-out force and main-loop code is removed. The shared
+factor calculation and its material/mesh guards remain unchanged, as do the
+relaxation arithmetic, acceptance criteria and rollback state.
+
+The merged master adds per-process provenance to binary output/checkpoints and
+HDF5 attributes. PT restart and schedule checkers exclude the binary provenance
+record, alongside wall time, from physical-state equality. They continue to
+compare all physical fields exactly. This matches their existing HDF5 behavior,
+where provenance attributes are outside the physical datasets.
+
+The pre-cleanup submission binaries (`b6d233f`, with the same production code
+as the recorded finalization builds) provide the comparison baseline. Both PT
+options, 2D/3D serial dynamic and hydraulic-remesh cases, retain byte-identical
+physical payloads across all 64 saved/checkpoint files. The dry non-PT
+`make set/cmp` checks also remain BIT-EXACT for `test-rect-tiny.cfg` and
+`test-3d-equ-tiny.cfg`, using OpenMP executables with one thread.
+
+The integrated sources build in 2D/3D serial debug, OpenMP and OpenACC modes.
+Focused ASan/UBSan, four-thread OpenMP and OpenACC checks again pass 5,740 / 8,547
+assertions. Both options pass serial initial hydrostatic equilibrium, dynamic
+restart, hydraulic remesh, all four output schedules and 2D oblique constraints;
+one-thread OpenMP dynamic restart and hydraulic remesh also pass in 2D/3D.
+Additional 2D/3D HDF5 OpenMP builds pass both options' dynamic restart and mixed
+output-schedule checks. Physical continuation remains byte-exact throughout.
+
+OpenACC passes both options' 2D/3D dynamic restart, both 2D oblique cases and
+ADR dry remesh in both dimensions. The corresponding 64 pre/post-cleanup GPU
+save/checkpoint files also have byte-identical physical payloads. A separate
+audit checks the fresh/restarted source identity in 1,238 binary/HDF5 provenance
+records across the 54 functional runs; all agree with their run configuration.
+
+Follow-up commands, binaries, source hashes and comparison records are retained
+locally under `DynEarthSol-worktrees/test-runs/pt-cleanup-20261006/`.
+
 ## Earlier measurements and limits
 
 The performance numbers in the original reference/ADR commits are historical
@@ -133,8 +170,9 @@ implementation measurements. Their H100 and serial CPU timings were not
 reproduced here, and should not be interpreted as RTX 4070 SUPER measurements.
 This submission does not qualify large-mesh performance, general nonlinear
 convergence, full hydraulic GPU coupling, or long-time core-complex morphology.
-HDF5, MMG, Exodus and GoSPL were not rerun in this finalization; earlier coverage
-is described separately in the solver documentation. Earthquake-event history
+MMG, Exodus and GoSPL were not rerun in this finalization or follow-up; earlier
+coverage is described separately in the solver documentation. HDF5 follow-up
+coverage is limited to the output/restart cases above. Earthquake-event history
 and averaged-output accumulator restart remain outside the checkpoint fixtures.
 
 The reference stiffness row-sum bound does not prove stability of the full

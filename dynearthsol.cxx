@@ -817,8 +817,6 @@ int main(int argc, const char* argv[])
         var.steps % param.mesh.quality_check_step_interval == 0)
         remesh_if_needed(param, var);
 
-    // int rheol_type_old = param.mat.rheol_type;
-
     if (param.control.has_PT && !var.output_schedule_restored) {
         var.output_start_time = var.reference_frame_time;
         var.output_start_step = var.steps;
@@ -849,7 +847,6 @@ int main(int argc, const char* argv[])
         var.time += var.dt;
         // Pick up what the previous step's phase changes and remeshing moved.
         var.mat->refresh_elem_cache();
-        // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 

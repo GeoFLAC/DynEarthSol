@@ -638,15 +638,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
     apply_stress_bcs(param, var, force, displacement_dt);
 
-    // if(var.time <= 1.0)
-    // {
-    //     apply_stress_bcs_neumann(param, var, force);
-    // }
-
-    // if (param.control.is_quasi_static) {
-    //     apply_damping(param, var, force);
-    // }
-
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
     if (force_undamped) {
         // Same accelerator queue as assembly and damping; the wait below makes

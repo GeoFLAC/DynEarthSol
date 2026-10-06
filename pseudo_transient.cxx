@@ -60,7 +60,7 @@ struct PTWorkspace {
     array_t mass, momentum, previous_force;
 
     PTWorkspace(int nelem, int nnode, bool adaptive)
-        : start(nelem), constraints(nnode), lagged_stress(nelem),
+        : start(nelem), constraints(nnode), lagged_stress(adaptive ? 0 : nelem),
           old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode),
           height(nelem), effective_viscosity(nelem),
           mass_rows(adaptive ? static_cast<std::size_t>(nelem)*NODES_PER_ELEM*NDIMS : 0),
@@ -227,8 +227,9 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         var.l2_residual = result.residual;
         if (iteration == 0) {
             // Match the auxiliary solver stress to the first constitutive trial.
-            for (int e=0; e<var.nelem; ++e)
-                for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
+            if (!adaptive)
+                for (int e=0; e<var.nelem; ++e)
+                    for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
             result.initial_residual = result.residual;
             result.threshold = param.control.PT_absolute_tolerance +
                 param.control.PT_relative_tolerance*result.initial_residual;
