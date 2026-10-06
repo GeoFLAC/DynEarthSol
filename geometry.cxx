@@ -1943,6 +1943,7 @@ void compute_pt_factors(const Param& param, const Variables& var,
     // The physical constitutive target is evaluated elsewhere; these factors
     // affect the route to equilibrium, never the stored physical history.
     #pragma acc wait
+    const bool adaptive = param.control.PT_option == 1;
     double length = std::max(param.mesh.xlength, param.mesh.zlength);
 #ifdef THREED
     length = std::max(length, param.mesh.ylength);
@@ -1951,9 +1952,9 @@ void compute_pt_factors(const Param& param, const Variables& var,
         die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
     int bad = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length, adaptive) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:bad)
+    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
     for (int e=0; e<var.nelem; ++e) {
         double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
 #ifdef THREED
@@ -1970,7 +1971,7 @@ void compute_pt_factors(const Param& param, const Variables& var,
 #endif
             maxgrad2 = std::max(maxgrad2, g2);
         }
-        height[e] = 1/std::sqrt(maxgrad2);
+        const double h = 1/std::sqrt(maxgrad2);
         const double shear = var.mat->shearm(e);
         const double bulk = var.mat->bulkm(e);
         double effective = shear*var.dt;
@@ -1982,28 +1983,34 @@ void compute_pt_factors(const Param& param, const Variables& var,
         // Include compressional stiffness in the pseudo-wave bound, including
         // the elastic volumetric response of the pure viscous branch.
         const double ratio = std::max(1.0, bulk*var.dt/effective);
-        const double theta = param.control.PT_Re*param.control.PT_CFL*height[e]/((ratio+2)*length);
+        const double theta = param.control.PT_Re*param.control.PT_CFL*h/((ratio+2)*length);
         bad |= !(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta));
         effective_viscosity[e] = effective;
-        stress_fraction[e] = theta/(1+theta);
+        // Retain the same material/mesh checks for both options; ADR only
+        // consumes effective viscosity and supplies no legacy-factor arrays.
+        if (!adaptive) {
+            height[e] = h;
+            stress_fraction[e] = theta/(1+theta);
+        }
     }
     if (bad)
         die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length, adaptive) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:bad)
+    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
     for (int n=0; n<var.nnode; ++n) {
         double h = std::numeric_limits<double>::max(), visc = 0, volume = 0;
         const int* patch = var.support.patch(n);
         for (int k=0; k<var.support.size(n); ++k) {
             const int e = patch[k];
-            h = std::min(h, height[e]);
+            if (!adaptive) h = std::min(h, height[e]);
             visc = std::max(visc, effective_viscosity[e]);
             volume += (*var.volume)[e]/NODES_PER_ELEM;
         }
         bad |= !(visc > 0 && volume > 0);
-        mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
+        if (!adaptive)
+            mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
     }
     if (bad)
         die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");

@@ -112,6 +112,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 
 // Local dual-time factors on the fixed mechanical reference mesh.
 // Caller-owned element scratch arrays are reused for the lifetime of a solve.
+// ADR only writes effective_viscosity; the three legacy-factor arrays may be empty.
 void compute_pt_factors(const Param& param, const Variables& var,
                         double_vec& stress_fraction, double_vec& mobility,
                         double_vec& height, double_vec& effective_viscosity);

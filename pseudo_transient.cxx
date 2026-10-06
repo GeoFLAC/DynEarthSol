@@ -61,8 +61,8 @@ struct PTWorkspace {
 
     PTWorkspace(int nelem, int nnode, bool adaptive)
         : start(nelem), constraints(nnode), lagged_stress(adaptive ? 0 : nelem),
-          old_velocity(nnode), undamped(nnode), stress_fraction(nelem), mobility(nnode),
-          height(nelem), effective_viscosity(nelem),
+          old_velocity(nnode), undamped(nnode), stress_fraction(adaptive ? 0 : nelem),
+          mobility(adaptive ? 0 : nnode), height(adaptive ? 0 : nelem), effective_viscosity(nelem),
           mass_rows(adaptive ? static_cast<std::size_t>(nelem)*NODES_PER_ELEM*NDIMS : 0),
           mass(adaptive ? nnode : 0), momentum(adaptive ? nnode : 0),
           previous_force(adaptive ? nnode : 0) {}
@@ -280,12 +280,13 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         if (iteration+1 == param.control.PT_max_iter) break;
         // Geometry, physical dt and elastic moduli are fixed during this solve.
         // Only a viscous rheology adds candidate-dependent viscosity to factors.
-        if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
+        if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous)) {
             compute_pt_factors(param, var, w.stress_fraction, w.mobility,
                                w.height, w.effective_viscosity);
-        if (adaptive) {
-            if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous))
+            if (adaptive)
                 compute_pt_mass(var, w.effective_viscosity, w.mass_rows, w.mass);
+        }
+        if (adaptive) {
             update_adaptive_dr(var, w, iteration, lowest_mode);
             continue;
         }

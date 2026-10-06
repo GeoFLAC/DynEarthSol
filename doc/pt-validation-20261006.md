@@ -128,9 +128,9 @@ the local evidence directory.
 
 ## Follow-up cleanup and master integration
 
-ADR no longer allocates or initializes the original relaxation's `lagged_stress`
-array. Obsolete commented-out force and main-loop code is removed. The shared
-factor calculation and its material/mesh guards remain unchanged, as do the
+The first cleanup removes ADR's unused `lagged_stress` allocation and initialization,
+along with obsolete commented-out force and main-loop code. It leaves the shared
+factor calculation and its material/mesh guards unchanged, as well as the
 relaxation arithmetic, acceptance criteria and rollback state.
 
 The merged master adds per-process provenance to binary output/checkpoints and
@@ -162,6 +162,34 @@ records across the 54 functional runs; all agree with their run configuration.
 
 Follow-up commands, binaries, source hashes and comparison records are retained
 locally under `DynEarthSol-worktrees/test-runs/pt-cleanup-20261006/`.
+
+The subsequent cleanup, based on `c66634c`, also leaves ADR's `stress_fraction`,
+`mobility` and `height` arrays empty and skips their unused coefficient outputs.
+Element-height/theta and nodal-support calculations needed for the existing
+validation remain; the rejection conditions and effective-viscosity arithmetic
+are unchanged. One shared refresh condition now covers factors and ADR mass.
+No new solver controls or helper functions are introduced.
+
+The factor cleanup repeats 2D/3D serial, OpenMP and OpenACC builds and focused
+checks (5,740 / 8,547 assertions for each backend, including ASan/UBSan).
+Dry `make set/cmp` remains BIT-EXACT. Both options' small serial Maxwell cases
+retain identical physical payloads, iteration counts, residuals and thresholds
+in both dimensions. This is a short regression, not a Maxwell/Rayleigh–Taylor
+qualification. The 25 completed CPU/GPU comparison cases retain byte-identical
+physical state across 200 save/checkpoint files. Binary CPU restart/remesh and
+GPU fresh dynamic/ADR-remesh comparisons are retained under
+`test-runs/pt-factors-cleanup-20261006/`.
+
+One initial 3D serial ADR restart aborted with a stack-smashing diagnostic in
+pending remeshing, before the next PT solve. Its eight fresh physical payloads
+match the parent exactly. The same checkpoint then passed ten restart attempts
+with each of the parent and changed binaries, all with exact continuation.
+A full AddressSanitizer build also passes fresh/remesh/restart and matches the
+parent's physical output. The original abort has not been reproduced or assigned
+a cause; its failed log/result remains in the evidence and is not counted as a
+passing restart. A separate full ASan/UBSan attempt stops earlier in unchanged
+TetGen (`tetgen.h:3225`, left shift of negative value during initial meshing).
+That full UBSan check is incomplete; the focused PT ASan/UBSan suite passes.
 
 ## Earlier measurements and limits
 
