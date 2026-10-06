@@ -46,10 +46,14 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--restart-frame', type=int, default=0)
     parser.add_argument('--steps', type=int, default=3)
+    parser.add_argument('--timeout', type=float, default=240,
+                        help='Maximum seconds for each fresh/restart process (default: 240)')
     parser.add_argument('--require-remesh', action='store_true')
     parser.add_argument('--require-stationary', action='store_true',
                         help='Require a no-load hydrostatic fixture to retain stress and pressure')
     args = parser.parse_args()
+    if not args.timeout > 0:
+        parser.error('--timeout must be positive')
     if not 0 <= args.restart_frame < args.steps:
         parser.error('require 0 <= restart-frame < steps')
     executable, source, output = args.executable, args.source, args.output
@@ -78,7 +82,7 @@ def main():
             cfg.write(stream)
         with (output / (phase + '.log')).open('w') as stream:
             subprocess.run([str(executable), phase + '.cfg'], cwd=output,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=240)
+                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=args.timeout)
         if phase == 'fresh':
             initial = fields(output / 'fresh.chkpt.000000')
             assert struct.unpack('i', initial['initial equilibrium done'])[0] == 1
