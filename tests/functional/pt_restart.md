@@ -25,8 +25,8 @@ a guarantee for other models or thread counts. See the finalization record in
 `../../doc/pt-validation-20261006.md` for the tested scope.
 
 The test checks the restored velocity before the next solve and compares every
-subsequent save/checkpoint payload exactly, excluding wall
-clock duration. HDF5 datasets must also have matching shapes and types and finite
+subsequent save/checkpoint physical payload exactly, excluding wall-clock duration
+and per-process provenance. HDF5 datasets must also have matching shapes and types and finite
 numeric values. `--require-remesh` requires completed remeshing in both runs and
 changed connectivity. The fixture deliberately triggers existing mesh-quality
 loop-limit warnings; a pass does not establish acceptable mesh quality. The

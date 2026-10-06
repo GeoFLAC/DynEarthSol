@@ -101,8 +101,10 @@ def main():
             a = fields(output / f'fresh.{suffix}.{frame:06d}')
             b = fields(output / f'resumed.{suffix}.{frame:06d}')
             assert a.keys() == b.keys()
-            # Wall-clock duration is observational metadata, not physical state.
-            differences[f'{suffix}.{frame}'] = [key for key in a if key.split('/')[-1] != 'walltime_sec' and a[key] != b[key]]
+            # Runtime/provenance records differ between fresh and restarted
+            # processes. All physical state still requires byte equality.
+            differences[f'{suffix}.{frame}'] = [key for key in a
+                if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]]
     (output / 'comparison.json').write_text(json.dumps(differences, indent=2) + '\n')
     assert not any(differences.values()), differences
     if args.require_stationary:

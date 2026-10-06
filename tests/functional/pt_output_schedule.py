@@ -62,7 +62,7 @@ def main():
                 a = fields(output / f'fresh.{suffix}.{frame:06d}')
                 b = fields(output / f'resumed.{suffix}.{frame:06d}')
                 differences[f'{suffix}.{frame}'] = [key for key in a.keys() | b.keys()
-                    if key.split('/')[-1] != 'walltime_sec' and a.get(key) != b.get(key)]
+                    if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a.get(key) != b.get(key)]
     result = {'schedule': args.schedule, 'histories': histories, 'differences': differences}
     (output / 'comparison.json').write_text(json.dumps(result, indent=2) + '\n')
     assert histories['fresh'] == histories['resumed'], result
