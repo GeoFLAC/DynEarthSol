@@ -29,6 +29,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   templates, and `AGENTS.md` for coding assistants ([#96]).
 - Frames embed their step, counts and time, so a run restarts and is read
   without its `.info` index; `utils/recreate_info.py` rebuilds the index ([#96]).
+- Provenance records: the executable embeds its build identity, each run writes
+  `<modelname>.manifest` (build, host, device, threads, and how the run ended),
+  and each frame and checkpoint names the build and machine that wrote it.
+  `doc/provenance.md` describes the fields ([#97]).
+- `2vtk.py -g` converts a restarted model's whole series, found through the
+  runs' `.manifest`, and links the earlier frames under the model's name; the
+  new `-hdf` writes updated `.vtkhdf` copies, and `-u` and `-hdf` list the
+  frames in a `.vtkhdf.series` for ParaView ([#97]).
 
 ### Changed
 
@@ -46,6 +54,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   predates the 2D executable ([#96]).
 - `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
   run instead of 12047 ([#96]).
+- **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
+  `-hdf -c` writes the updated copies into the current directory instead
+  ([#97]).
 
 ### Fixed
 
@@ -72,6 +83,10 @@ For a release, the full auto-generated list of merged pull requests is in its
   Two runs sharing a `modelname` are no longer refused ([#96]).
 - Every `mat.mattype_*` is range-checked against `num_materials` at startup;
   an out-of-range index used to read past the per-material arrays ([#96]).
+- Every restart cuts `.info` to the rows before its restart frame, keeping the
+  old file as `.info.old`; a repeated restart appended duplicate rows. The
+  parent frame a restart overwrites is backed up however the two model names
+  are spelled ([#97]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -235,3 +250,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
+[#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97

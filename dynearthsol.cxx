@@ -644,13 +644,16 @@ static double remesh_if_needed(const Param& param, Variables& var)
 
 int main(int argc, const char* argv[])
 {
+    // Only main() can tell its own default from the operator's (omp_wait_policy_src).
+    bool wait_policy_from_des = false;
 #if defined(__APPLE__) && defined(_OPENMP)
     // macOS/LLVM libomp sets blocktime=0 on Apple Silicon (hybrid CPU detection),
     // causing threads to immediately yield between parallel regions. This hurts
     // throughput in tight time loops with many short parallel regions.
     // OMP_WAIT_POLICY=active restores spin-wait behavior. No-op if already set.
-    if (!getenv("OMP_WAIT_POLICY") && !getenv("KMP_BLOCKTIME")) {
-        setenv("OMP_WAIT_POLICY", "active", 0);
+    if (!env_sets_wait_policy()) {
+        setenv("OMP_WAIT_POLICY", "active", 1);   // 1: overwrite an empty export
+        wait_policy_from_des = true;
         std::cout << "[OpenMP] macOS: OMP_WAIT_POLICY=active set to avoid libomp "
                      "zero-blocktime regression on Apple Silicon.\n"
                      "         Override: export OMP_WAIT_POLICY=passive | KMP_BLOCKTIME=<ms>\n";
@@ -669,10 +672,22 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
+    const BuildInfo build = probe_build_info();
+    const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
     // Selects the offload device, so it must precede any compute.
-    init_offload_device();
-    report_host_runtime_status();
-    report_device_runtime_status();
+    const DeviceInfo dev = init_offload_device();
+    const Manifest manifest = compose_manifest(param, build, cpu, dev);
+    if (param.sim.has_runtime_info_display)
+        report_build_and_runtime_info(manifest);
+    // An -acc=gpu binary cannot compute on the host (its managed allocations need a
+    // device): stop here, not in the first Array2D with a bare exit 1.
+    if (dev.acc_build && !dev.using_gpu) {
+        std::cerr << "Error: this is an OpenACC (GPU) build and no usable device was "
+                     "found; check CUDA_VISIBLE_DEVICES and ACC_DEVICE_TYPE, or run a "
+                     "CPU build\n";
+        write_manifest(param, manifest, true);
+        die(EXIT_RUNTIME_RESOURCE);
+    }
 
     //
     // run simulation
@@ -680,7 +695,7 @@ int main(int argc, const char* argv[])
     static Variables var; // declared as static to silence valgrind's memory leak detection
     init_var(param, var);
 
-    var.output = new Output(param, var.func_time.start_time,
+    var.output = new Output(param, build, cpu, dev, manifest, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
     if (! param.sim.is_restarting) {
@@ -976,6 +991,9 @@ int main(int argc, const char* argv[])
 
     monitor_finalize(var);
 
+    // Before end() deletes the Output that keeps the run's peak.
+    const double peak_rss_gib = var.output->update_peak_rss_gib();
+
     // at end of code, clean up lost memory reported by valgrind
     end(var);
 
@@ -1019,5 +1037,8 @@ int main(int argc, const char* argv[])
         }
 #endif
     }
+
+    write_manifest_end(param, manifest, var, var.steps - static_cast<int>(starting_step),
+                       duration_ns, init_time, computation_time, peak_rss_gib);
     return 0;
 }

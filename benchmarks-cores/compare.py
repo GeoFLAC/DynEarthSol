@@ -21,9 +21,10 @@ Exit codes
 Restart troubleshooting
 -----------------------
 If a restarted run produces unexpected results, use compare.py to isolate
-which field first diverges from the original run.  A same-name restart
-(``modelname == restarting_from_modelname``) backs up the restart frame's
-save file to ``<model>.<frame>.save.vtkhdf.old`` before overwriting it.
+which field first diverges from the original run.  A restart whose
+``restarting_from_modelname`` resolves to the model itself backs up the
+restart frame's save file as ``<file>.old`` (``.old2``, ... on later
+restarts) before overwriting it.
 To compare that backed-up frame against the restarted output, rename or
 copy the ``.old`` file to the expected name in a separate directory, then::
 
