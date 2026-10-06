@@ -254,9 +254,13 @@ struct Control {
     double hydration_migration_speed;
 
     bool has_PT;
-    mutable bool PT_jump;
+    bool PT_use_running_scale;
     int PT_max_iter;
     double PT_relative_tolerance;
+    double PT_absolute_tolerance;
+    double PT_CFL, PT_Re;
+    int PT_option;
+    int PT_stagnation_window;
 
     bool has_moving_mesh;
     bool use_global_velocity_scaling;
@@ -684,9 +688,15 @@ struct Variables {
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
-    // double dt_PT;
     double l2_residual;
+    double PT_initial_residual_max;
+    bool PT_skip_scale_update;
     double reference_frame_time;
+    // PT regular-output continuation; the checkpoint index refers to the next step.
+    double output_start_time;
+    int output_start_step;
+    int output_next_regular_frame;
+    bool output_schedule_restored;
     int steps;
     int nremesh;
     int noutput;
@@ -822,6 +832,8 @@ struct Variables {
 
     int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
+
+    bool initial_equilibrium_done = false;
 
     Variables()
     {

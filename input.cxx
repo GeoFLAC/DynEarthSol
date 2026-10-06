@@ -407,12 +407,25 @@ static void declare_parameters(po::options_description &cfg,
 
         ("control.has_PT", po::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
-        ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
-         "Skip certain processes in PT loop to avoid accumulative effects. For example, surface diffusion.\n")
+        ("control.PT_use_running_scale", po::value<bool>(&p.control.PT_use_running_scale)->default_value(false),
+         "Use running physical initial-residual scale with a roundoff floor (epsilon=1e-6, C=1000)")
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
-         "tolerance for relative change for breaking PT loop")
+         "Relative tolerance on projected physical-force RMS, scaled by initial imbalance")
+        ("control.PT_absolute_tolerance", po::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
+         "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
+        ("control.PT_option", po::value<int>(&p.control.PT_option)->default_value(0),
+         "PT iteration scheme. Both accept the same physical residual.\n"
+         "0: accelerated pseudo-transient relaxation (Rass et al. 2022), uses PT_CFL and PT_Re.\n"
+         "1: adaptive dynamic relaxation: Gershgorin fictitious mass and damping from a\n"
+         "   Rayleigh-quotient estimate of the lowest mode (Underwood 1983; Papadrakakis 1981).\n")
+        ("control.PT_CFL", po::value<double>(&p.control.PT_CFL)->default_value(0.25),
+         "Pseudo-wave CFL factor for local dual-time relaxation (0 < CFL <= 0.5)")
+        ("control.PT_Re", po::value<double>(&p.control.PT_Re)->default_value(14.90188239869415),
+         "Positive pseudo Reynolds number for dual-time relaxation")
+        ("control.PT_stagnation_window", po::value<int>(&p.control.PT_stagnation_window)->default_value(500),
+         "Warn once per solve after this many iterations without best-residual improvement; 0 disables warning")
 
          ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
@@ -1580,6 +1593,23 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
+        }
+        if (p.control.has_PT) {
+            if (p.control.PT_use_running_scale &&
+                (!vm["control.PT_relative_tolerance"].defaulted() ||
+                 !vm["control.PT_absolute_tolerance"].defaulted()))
+                std::cerr << "Warning: PT_use_running_scale ignores explicitly configured "
+                          << "PT_relative_tolerance/PT_absolute_tolerance for physical steps; "
+                          << "they still apply to initial equilibrium. Physical steps use "
+                          << "epsilon=1e-6 and C=1000.\n";
+            if (p.control.PT_max_iter < 1 || p.control.PT_stagnation_window < 0 ||
+                p.control.PT_option < 0 || p.control.PT_option > 1 ||
+                !(p.control.PT_CFL > 0 && p.control.PT_CFL <= 0.5) ||
+                !(p.control.PT_Re > 0 && std::isfinite(p.control.PT_Re)) ||
+                !(p.control.PT_relative_tolerance >= 0 && std::isfinite(p.control.PT_relative_tolerance)) ||
+                !(p.control.PT_absolute_tolerance >= 0 && std::isfinite(p.control.PT_absolute_tolerance)) ||
+                (p.control.PT_relative_tolerance == 0 && p.control.PT_absolute_tolerance == 0))
+                die(EXIT_CONFIG_VALUE, "Invalid PT iteration, tolerance or relaxation parameters.");
         }
         if (p.control.rsf_dtheta_max > 0) {
             if (p.control.fixed_dt != 0.0) {

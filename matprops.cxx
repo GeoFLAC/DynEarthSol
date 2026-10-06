@@ -428,7 +428,7 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
                                  double &cohesion, double &dynamic_friction_angle,
                                  double &dilation_angle, double &hardening, double &slip_rate,
                                  double& dyn_fric_coeff, double& state_variable,
-                                 int state_model, double dt) const
+                                 int state_model, double dt, bool frozen_history) const
 {
     (void) dt;
 
@@ -494,6 +494,16 @@ void MatProps::plastic_weakening_rsf(int e, double pls,
     e_b_avg /= n;
     c_v_avg /= n;
     d_c_avg /= n;
+
+    if (frozen_history) {
+        // Initialization solves an instantaneous skeleton correction. Its
+        // numerical correction velocity is not a physical RSF slip rate.
+        dynamic_friction_angle = std::atan(dyn_fric_coeff) / DEG2RAD;
+        cohesion = c / n;
+        dilation_angle = d / n;
+        hardening = h / n;
+        return;
+    }
 
     const double static_friction_angle = f / n;
     const double mu_0 = std::tan(DEG2RAD * static_friction_angle);
@@ -618,13 +628,13 @@ void MatProps::plastic_props_rsf(int e, double pls,
                              double& amc, double& anphi, double& anpsi,
                              double& hardn, double& ten_max, double& slip_rate,
                              double& dyn_fric_coeff, double& state_variable,
-                             double dt, int state_model) const
+                             double dt, int state_model, bool frozen_history) const
 {
     double cohesion, phi, psi;
 
-    update_state_variable(e, slip_rate, state_variable, dt, state_model);
+    if (!frozen_history) update_state_variable(e, slip_rate, state_variable, dt, state_model);
     plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
-                          dyn_fric_coeff, state_variable, state_model, dt);
+                          dyn_fric_coeff, state_variable, state_model, dt, frozen_history);
 
     // derived variables
     double sphi = std::sin(phi * DEG2RAD);

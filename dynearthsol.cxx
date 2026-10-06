@@ -20,6 +20,7 @@
 #include "monitor.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
+#include "pseudo_transient.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "runtime_info.hpp"
@@ -37,6 +38,8 @@ void init_var(const Param& param, Variables& var)
 {
     var.time = 0;
     var.last_remesh_time = 0;
+    var.PT_initial_residual_max = 0;
+    var.PT_skip_scale_update = false;
     var.steps = 0;
     var.nremesh = 0;
     var.noutput = 0;
@@ -45,6 +48,10 @@ void init_var(const Param& param, Variables& var)
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
     var.reference_frame_time = 0.0;
+    var.output_start_time = 0.0;
+    var.output_start_step = 0;
+    var.output_next_regular_frame = 1;
+    var.output_schedule_restored = false;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -363,6 +370,38 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        if (param.control.has_PT && param.control.PT_use_running_scale) {
+            const int fields = bin_chkpt.has_array("PT initial residual maximum") +
+                bin_chkpt.has_array("PT skip scale update");
+            if (fields != 2)
+                die(EXIT_IO_RESTART, "Running-scale PT restart requires its complete checkpoint state.");
+            int skip = 0;
+            bin_chkpt.read_scalar(var.PT_initial_residual_max, "PT initial residual maximum");
+            bin_chkpt.read_scalar(skip, "PT skip scale update");
+            if (!std::isfinite(var.PT_initial_residual_max) || var.PT_initial_residual_max < 0 ||
+                (skip != 0 && skip != 1))
+                die(EXIT_IO_RESTART, "Invalid running-scale PT checkpoint state.");
+            var.PT_skip_scale_update = skip != 0;
+        }
+
+        if (param.control.has_PT) {
+            const int fields = bin_chkpt.has_array("PT output start time") +
+                bin_chkpt.has_array("PT output start step") +
+                bin_chkpt.has_array("PT next regular frame");
+            if (fields != 0 && fields != 3)
+                die(EXIT_IO_RESTART, "Incomplete PT output schedule in checkpoint.");
+            if (fields == 3) {
+                bin_chkpt.read_scalar(var.output_start_time, "PT output start time");
+                bin_chkpt.read_scalar(var.output_start_step, "PT output start step");
+                bin_chkpt.read_scalar(var.output_next_regular_frame, "PT next regular frame");
+                if (!std::isfinite(var.output_start_time) || var.output_start_step < 0 ||
+                    var.output_start_step > var.steps || var.output_next_regular_frame < 1)
+                    die(EXIT_IO_RESTART, "Invalid PT output schedule in checkpoint.");
+                var.output_schedule_restored = true;
+            } else if (var.steps > 0) {
+                std::cerr << "Warning: checkpoint lacks PT output schedule; using legacy restart scheduling.\n";
+            }
+        }
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
@@ -378,6 +417,22 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
+        if (param.control.has_hydraulic_diffusion) {
+            if (!bin_chkpt.has_array("pending pore pressure increment"))
+                die(EXIT_IO_RESTART, "Hydraulic checkpoint lacks the pending pressure increment; exact continuation is not recoverable.");
+            bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
+        }
+        if (param.control.has_PT) {
+            if (bin_chkpt.has_array("initial equilibrium done")) {
+                int complete = 0;
+                bin_chkpt.read_scalar(complete, "initial equilibrium done");
+                var.initial_equilibrium_done = complete != 0;
+            } else {
+                // Legacy output is written before adjustment at step zero and
+                // after the accepted physical step at positive step counts.
+                var.initial_equilibrium_done = var.steps > 0;
+            }
+        }
         // previous-step volume for volumetric strain rate.
         bin_chkpt.read_array(*var.volume_old, "volume_old");
 
@@ -408,7 +463,10 @@ void restart(const Param& param, Variables& var)
 
     create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    apply_vbcs(param, var, *var.vel);
+    // PT checkpoints carry the accepted velocity. The legacy boundary map can
+    // change it (notably on oblique boundaries); the next PT solve imposes its
+    // own constraints at the next physical time.
+    if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
@@ -440,9 +498,10 @@ void restart(const Param& param, Variables& var)
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
-    // For some reason, the following is added by Denis
-    // However, it is not clear why this is needed.
-    if (param.control.use_global_velocity_scaling) {
+    // Preserve the saved next-step dt and velocity scale for PT. Recomputing
+    // here would select a different interval than uninterrupted execution,
+    // which selects dt at mesh/slow-update stages. Mass was rebuilt above.
+    if (param.control.use_global_velocity_scaling && !param.control.has_PT) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
@@ -468,12 +527,9 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
-    if(!param.control.PT_jump)
-    {
-        surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                      *var.plstrain, *var.volume, *var.volume_n, \
+    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate,
+                      *var.plstrain, *var.volume, *var.volume_n,
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
-    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
@@ -558,51 +614,32 @@ void isostasy_adjustment(const Param &param, Variables &var)
 #endif
 }
 
-void initial_body_force_adjustment(const Param &param, Variables &var)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    
-    // pseudo transient (PT) loop
-    var.l2_residual = calculate_residual_force(var, *var.force_residual);
-    residual_old = var.l2_residual;
-    if (param.control.has_PT)
-    {   
-        // var.dt = compute_dt_PT(param, var);
-        param.control.PT_jump = true;
-        for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
-        {
-            apply_vbcs(param, var, *var.vel);
-            if (param.control.has_moving_mesh)
-                update_mesh(param, var);
-            update_strain_rate(var, *var.strain_rate);
-            compute_dvoldt(var, *var.ntmp, *var.etmp);
-            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                *var.strain_rate,
-                *var.ppressure, *var.dppressure, *var.vel,
-                *var.dyn_fric_coeff, *var.state_variable);
-            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-            // update_velocity_PT(var, *var.vel);
-            update_velocity(var, *var.vel);
-            var.l2_residual = calculate_residual_force(var, *var.force_residual);
-            double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-            if (relative_change < param.control.PT_relative_tolerance) {
-            break;  // Exit the loop if relative change is small enough
-            }
-            residual_old = var.l2_residual;
-        }
-        param.control.PT_jump = false;
-    }
 
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
+// Complete the mesh stage after an accepted physical step. Checkpoints precede
+// this stage, so a restart at a quality-check boundary must also execute it.
+static double remesh_if_needed(const Param& param, Variables& var)
+{
+    double min_quality = 1.0;
+    if (param.control.has_moving_mesh)
+    {
+        int quality_is_bad, bad_quality_index;
+        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
+        if (quality_is_bad) {
+
+            if (param.sim.has_output_during_remeshing) {
+                var.output->write_exact(var);
+            }
+
+            monitor_before_remesh(param, var);
+            remesh(param, var, quality_is_bad);
+            monitor_remesh_update(param, var);
+
+            if (param.sim.has_output_during_remeshing) {
+                var.output->write_exact(var);
+            }
+        }
+    }
+    return min_quality;
 }
 
 int main(int argc, const char* argv[])
@@ -672,14 +709,13 @@ int main(int argc, const char* argv[])
 
         var.dt = compute_dt(param, var);
 
-        if (param.sim.has_initial_checkpoint)
+        if (param.sim.has_initial_checkpoint && !param.control.has_PT)
             var.output->write_checkpoint(param, var);
     }
     else {
         restart(param, var);
     }
 
-    // var.dt_PT = var.dt;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Initialize GoSPL driver if surface process option is 11
@@ -760,35 +796,42 @@ int main(int argc, const char* argv[])
     }
 #endif
 
+    // Publish and monitor the accepted initial state, not the pre-equilibrium
+    // candidate. The first checkpoint therefore records initialization as done.
+    if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
+        if (param.control.has_PT)
+            require_pt_convergence(param, var, run_initial_equilibrium_pt(param, var));
+    }
+    var.initial_equilibrium_done = true;
+    param.ic.has_body_force_adjustment = false;
+
+    if (!param.sim.is_restarting && param.control.has_PT && param.sim.has_initial_checkpoint)
+        var.output->write_checkpoint(param, var);
+
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
     monitor_initialize(param, var);
 
-    // int rheol_type_old = param.mat.rheol_type;
+    if (param.sim.is_restarting && param.control.has_PT && var.steps > 0 &&
+        var.steps % param.mesh.quality_check_step_interval == 0)
+        remesh_if_needed(param, var);
 
-    const double starting_time = var.reference_frame_time;
+    if (param.control.has_PT && !var.output_schedule_restored) {
+        var.output_start_time = var.reference_frame_time;
+        var.output_start_step = var.steps;
+        var.output_next_regular_frame = 1;
+    }
+    const double starting_time = param.control.has_PT ? var.output_start_time : var.reference_frame_time;
     var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
-    const double starting_step = var.steps;
-    int next_regular_frame = 1;  // excluding frames due to output_during_remeshing
+    const double starting_step = param.control.has_PT ? var.output_start_step : var.steps;
+    int next_regular_frame = param.control.has_PT ? var.output_next_regular_frame : 1;
+    if (param.control.has_PT && !param.control.use_global_velocity_scaling)
+        var.reference_frame_time = starting_time +
+            next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
 
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
-
-    double residual_old = std::numeric_limits<double>::max();
-    double relative_change = 1.0;
-    double dt_copy = 0.0;
-    bool hydraulic_diffusion_switch = false;
-
-    if(param.ic.has_body_force_adjustment)
-    {
-        if(param.control.has_hydraulic_diffusion) {param.control.has_hydraulic_diffusion = false; hydraulic_diffusion_switch = true;}
-        // this is similar to isostasy_adjustment(param, var); so maybe should be merged to it later.
-        // Only works with PT loop
-        initial_body_force_adjustment(param, var); 
-        if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
-        param.ic.has_body_force_adjustment = false;
-    }
 
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "
@@ -804,95 +847,33 @@ int main(int argc, const char* argv[])
         var.time += var.dt;
         // Pick up what the previous step's phase changes and remeshing moved.
         var.mat->refresh_elem_cache();
-        // dt_copy = 0.0; dt_copy += var.dt;
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
         if (param.control.has_hydraulic_diffusion)
             update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
 
-        update_strain_rate(var, *var.strain_rate);
-        compute_dvoldt(var, *var.ntmp, *var.etmp);
-        compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-        update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-            *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-            *var.strain_rate,
-            *var.ppressure, *var.dppressure, *var.vel,
-            *var.dyn_fric_coeff, *var.state_variable);
+        if (param.control.has_PT) {
+            require_pt_convergence(param, var, run_physical_step_pt(param, var));
+        } else {
+            update_strain_rate(var, *var.strain_rate);
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
+            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
+                *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
+                *var.strain_rate,
+                *var.ppressure, *var.dppressure, *var.vel,
+                *var.dyn_fric_coeff, *var.state_variable);
 
-        // Nodal Mixed Discretization For Stress
-        if (param.control.is_using_mixed_stress)
-            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
-            
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-        update_velocity(var, *var.vel);
+            // Nodal Mixed Discretization For Stress
+            if (param.control.is_using_mixed_stress)
+                NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
 
-        // pseudo transient (PT) loop
-        var.l2_residual = calculate_residual_force(var, *var.force_residual);
-        residual_old = var.l2_residual;
-        if (param.control.has_PT)
-        {   
-            // var.dt = compute_dt_PT(param, var);
-            if (param.control.has_hydraulic_diffusion) {
-                param.control.has_hydraulic_diffusion = false;
-                hydraulic_diffusion_switch = true;
-            }
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+            update_velocity(var, *var.vel);
 
-            param.control.PT_jump = true;
-            for (int pt_step = 0; pt_step < param.control.PT_max_iter; ++pt_step) 
-            {
-                apply_vbcs(param, var, *var.vel);
-                if (param.control.has_moving_mesh)
-                    update_mesh(param, var);
-                update_strain_rate(var, *var.strain_rate);
-                compute_dvoldt(var, *var.ntmp, *var.etmp);
-                compute_edvoldt(var, *var.ntmp, *var.edvoldt);
-                update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
-                    *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
-                    *var.strain_rate,
-                    *var.ppressure, *var.dppressure, *var.vel,
-                    *var.dyn_fric_coeff, *var.state_variable);
-                update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-                // update_velocity_PT(var, *var.vel);
-                update_velocity(var, *var.vel);
-                var.l2_residual = calculate_residual_force(var, *var.force_residual);
-                double relative_change = std::fabs((var.l2_residual - residual_old) / residual_old);
-                if (relative_change < param.control.PT_relative_tolerance) {
-                    // std::cout << "tolerance reached " << pt_step << std::endl;
-                break;  // Exit the loop if relative change is small enough
-                }
-                residual_old = var.l2_residual;
-                // var.dt = std::min({var.dt*1.01, dt_copy});
-
-                if (pt_step % param.mesh.quality_check_step_interval == 0) {
-                    if (param.control.has_moving_mesh)
-                    {
-                        int quality_is_bad, bad_quality_index;
-                        double min_quality;
-                        quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
-                        if (quality_is_bad) {
-
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
-                            }
-
-                            monitor_before_remesh(param, var);
-                            remesh(param, var, quality_is_bad);
-                            monitor_remesh_update(param, var);
-
-                            if (param.sim.has_output_during_remeshing) {
-                                var.output->write_exact(var);
-                            }
-                        }
-                    }
-                }
-            }
-            if(hydraulic_diffusion_switch) {param.control.has_hydraulic_diffusion = true;}
-            // var.dt = dt_copy;
-            param.control.PT_jump = false;
-
+            var.l2_residual = calculate_residual_force(var, *var.force_residual);
         }
-
 
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
@@ -900,7 +881,7 @@ int main(int argc, const char* argv[])
         // Objective rotation still belongs to the current physical step, even
         // if the update below selects var.dt for the next step.
         const double rotation_dt = var.dt;
-        apply_vbcs(param, var, *var.vel);
+        if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
         else if (param.control.rsf_dtheta_max > 0.0) {
@@ -963,6 +944,8 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
+                if (param.control.has_PT)
+                    var.output_next_regular_frame = next_regular_frame + 1;
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
 
@@ -976,26 +959,7 @@ int main(int argc, const char* argv[])
         }
 
         if (var.steps % param.mesh.quality_check_step_interval == 0) {
-            double min_quality = 1.0;
-            if (param.control.has_moving_mesh)
-            {
-                int quality_is_bad, bad_quality_index;
-                quality_is_bad = bad_mesh_quality(param, var, bad_quality_index, min_quality);
-                if (quality_is_bad) {
-
-                    if (param.sim.has_output_during_remeshing) {
-                        var.output->write_exact(var);
-                    }
-
-                    monitor_before_remesh(param, var);
-                    remesh(param, var, quality_is_bad);
-                    monitor_remesh_update(param, var);
-
-                    if (param.sim.has_output_during_remeshing) {
-                        var.output->write_exact(var);
-                    }
-                }
-            }
+            double min_quality = remesh_if_needed(param, var);
 
             if (var.steps >= var.info_display_next_step) {
                 int64_t now_ns = get_nanoseconds();
