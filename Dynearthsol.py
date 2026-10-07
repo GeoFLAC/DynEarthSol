@@ -131,11 +131,17 @@ class Dynearthsol:
     def get_fn(self, frame):
         filename = '{0}.{1}.{2:0=6}'.format(self.modelname, self.suffix, frame)
         if self.format == '':
+            # Take the format from a file that exists: a checkpoint is written
+            # only every sim.checkpoint_frame_interval frames.
             if os.path.isfile(filename):
                 self.format = 'binary'
-            else:
+            elif os.path.isfile(filename + '.vtkhdf'):
                 filename += '.vtkhdf'
                 self.format = 'hdf5'
+            else:
+                raise IOError('frame {0} has no {1} file: neither {2} nor '
+                              '{2}.vtkhdf exists'.format(frame, self.suffix,
+                                                         filename))
             return filename
         elif self.format == 'binary':
             return filename
@@ -378,6 +384,7 @@ class DynearthsolCheckpoint(Dynearthsol):
     def __init__(self, modelname, frame):
         self.suffix = 'chkpt'
         self.modelname = modelname
+        self.format = ''
         self.read_info()
         self.read_header(frame)
         return
@@ -399,39 +406,23 @@ class DynearthsolCheckpoint(Dynearthsol):
 
 
     def read_markers(self, frame, markername):
-        'Read and return marker data'
-        if frame != self._header_frame: read_header(frame)
+        '''Read and return the marker data a checkpoint holds: last_id, reserved_space and
+        genesis. Positions, element, mattype and time are in the save frame
+        (Dynearthsol.read_markers).'''
+        if frame != self._header_frame: self.read_header(frame)
         fname = self.get_fn(frame)
-        with open(fname) as f:
-
-            pos = self.field_pos[markername+' size']
-            f.seek(pos)
-            nmarkers = np.fromfile(f, dtype=np.int32, count=1)[0]
-
-            marker_data = {'size': nmarkers}
-
-            # floating point
-            for name in (markername+'.eta',):
-                pos = self.field_pos[name]
-                f.seek(pos)
-                tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*(self.ndims+1))
-                marker_data[name] = tmp.reshape(-1, self.ndims+1)
-                #print(marker_data[name].shape, marker_data[name])
-
-            # int
-            for name in (markername+'.elem', markername+'.mattype', markername+'.id'):
-                pos = self.field_pos[name]
-                f.seek(pos)
-                marker_data[name] = np.fromfile(f, dtype=np.int32, count=nmarkers)
-                #print(marker_data[name].shape, marker_data[name])
-
-            # float
-            for name in (markername+'.time',markername+'.z',markername+'.distance',markername+'.slope'):
-                try:
-                    pos = self.field_pos[name]
-                    f.seek(pos)
-                    marker_data[name] = np.fromfile(f, dtype=np.float64, count=nmarkers)
-                except:
-                    pass
-
-        return marker_data
+        if self.format == 'hdf5':
+            import h5py
+            with h5py.File(fname, 'r') as f:
+                last_id = f[markername+'.last_id'][0]
+                reserved_space = f[markername+'.reserved_space'][0]
+                genesis = f[markername+'.genesis'][:]
+        else:
+            with open(fname, 'rb') as f:
+                # "<markername> size" = (nmarkers, last_id, reserved_space)
+                f.seek(self.field_pos[markername+' size'])
+                nmarkers, last_id, reserved_space = np.fromfile(f, dtype=np.int32, count=3)
+                f.seek(self.field_pos[markername+'.genesis'])
+                genesis = np.fromfile(f, dtype=np.int32, count=nmarkers)
+        return {'size': len(genesis), markername+'.last_id': int(last_id),
+                markername+'.reserved_space': int(reserved_space), markername+'.genesis': genesis}
