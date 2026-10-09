@@ -975,6 +975,16 @@ static void read_parameters_from_file
         std::cerr << e.what() << " from option: " << e.get_option_name() << '\n';
         die(EXIT_CONFIG_VALUE);
     }
+    catch (const boost::program_options::unknown_option& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << " (a misspelled or retired key)\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+    catch (const boost::program_options::validation_error& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << "\n";
+        die(EXIT_CONFIG_VALUE);
+    }
     catch (std::exception& e) {
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
