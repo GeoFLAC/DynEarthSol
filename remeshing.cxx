@@ -19,7 +19,6 @@
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
-// ADAPT-based optimization and related VTK/Adaptivity usage removed.
 
 #ifdef USEMMG
 #ifdef THREED
@@ -2694,11 +2693,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 }
 #endif  // end of if THREED
 #endif // end of if USEMMG
-
-/* ADAPT (libadaptivity) optimize_mesh implementation removed. */
-#if 0
-// ADAPT implementation removed
-#endif
 
 } // anonymous namespace
 
