@@ -723,16 +723,14 @@ void delete_points_and_merge_segments(const int_vec &points_to_delete, int &npoi
             points[(*i)*NDIMS + d] = points[end*NDIMS + d];
         }
 
-        // if the last point is also a segment point, the segment point index
-        // needs to be updated as well
-        if (is_boundary(flag)) {
-            std::replace(segment, endsegment, end, *i);
-            // std::cout << *i << " <- " << end << "\n";
-            if (DEBUG) {
-                std::cout << "segment after replace: ";
-                print(std::cout, segment, nseg*NODES_PER_FACET);
-                std::cout << '\n';
-            }
+        // if the last point is also a segment point, the segment point index needs to be
+        // updated as well. Not gated on is_boundary(flag): a node of a kept internal segment
+        // (is_discarding_internal_segments = no) has bcflag 0.
+        std::replace(segment, endsegment, end, *i);
+        if (DEBUG) {
+            std::cout << "segment after replace: ";
+            print(std::cout, segment, nseg*NODES_PER_FACET);
+            std::cout << '\n';
         }
 
         end --;
