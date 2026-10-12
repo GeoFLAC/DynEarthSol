@@ -749,7 +749,7 @@ static void declare_parameters(po::options_description &cfg,
         "The layer boundry of radiogenic heating from the top to the bottom (depth -> positive, in meters).\n"
         "Using -1 to indicate the top and bottom of the model.\n")
         ("ic.radiogenic_heat_mat_in_layer",  po::value<std::string>()->default_value("[0]"),
-        "The material type of radiogenic heating in each layer.\n")
+        "The material type of radiogenic heating in each layer (one value: the same in every layer).\n")
         // for temperature_option = 1 and 2
         ("ic.radiogenic_folding_depth", po::value<double>(&p.ic.radiogenic_folding_depth)->default_value(10.e3),
          "Radiogenic folding depth (in meters), used for the temperature profile on the plate.\n")
@@ -1031,30 +1031,38 @@ static int read_numbers(const std::string &input, std::vector<T> &vec, int len)
 }
 
 
+// Read exactly len numbers from key name; len_name says what sets len.
+// With one_for_all, a single number is also accepted and repeated len times.
 template<class T>
 static void get_numbers(const po::variables_map &vm, const char *name,
-                        std::vector<T> &values, int len, int optional_size=0)
+                        std::vector<T> &values, int len, const char *len_name,
+                        bool one_for_all=false)
 {
     if ( ! vm.count(name) ) {
         std::cerr << "Error: " << name << " is not provided.\n";
         die(EXIT_CONFIG_VALUE);
     }
+    if (len < 0) {
+        std::cerr << "Error: " << name << " cannot list " << len << " numbers ("
+                  << len_name << ").\n";
+        die(EXIT_CONFIG_VALUE);
+    }
 
     std::string str = vm[name].as<std::string>();
     int err = read_numbers(str, values, len);
-    if (err && optional_size > 0) {
-        err = read_numbers(str, values, optional_size);
-    } else if (err && optional_size == -1) {
+    if (err && one_for_all) {
         err = read_numbers(str, values, 1);
         if (!err) {
-            values.resize(len);
-            std::fill(values.begin(), values.end(), values[0]);
+            const T v = values[0];
+            values.assign(len, v);
         }
     }
 
     if (err) {
-        std::cerr << "Error: incorrect format for " << name << ",\n"
-                  << "       must be '[d0, d1, d2, ...]'\n";
+        std::cerr << "Error: " << name << " must list " << len
+                  << (len == 1 ? " number (" : " numbers (") << len_name << ")"
+                  << (one_for_all && len != 1 ? " or 1 for all" : "")
+                  << " as '[d0, d1, ...]', got '" << str << "'.\n";
         die(EXIT_CONFIG_VALUE);
     }
 }
@@ -1203,20 +1211,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "monitor.num_points must be >= 0.");
         }
 
-        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
+        const char *npts = "monitor.num_points";
+        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points, npts);
 #ifdef THREED
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
-        const std::string points_y_raw = vm["monitor.points_y"].as<std::string>();
-        const std::string points_z_raw = vm["monitor.points_z"].as<std::string>();
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y,
-                    (points_y_raw == "[]") ? 0 : p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z,
-                    (points_z_raw == "[]") ? 0 : p.monitor.num_points);
-        if (points_z_raw == "[]") {
-            p.monitor.points_z = p.monitor.points_y; // 2D legacy alias: points_y means z
-        }
+        // 2D legacy alias: points_y means z when points_z is not given
+        const bool z_from_y = vm["monitor.points_z"].as<std::string>() == "[]" &&
+                              vm["monitor.points_y"].as<std::string>() != "[]";
+        get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
+                    p.monitor.num_points, npts);
 #endif
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
@@ -1387,25 +1392,29 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     {
         if ( p.ic.weakzone_option == 5 ) {
             int n = p.ic.weakzone_num_segments;
-            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, -1);
-            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, -1);
+            const char *nseg = "ic.weakzone_num_segments";
+            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, nseg, true);
 #ifdef THREED
-            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, nseg, true);
 #endif
         }
 
         if ( p.ic.mattype_option == 1) {
-            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers);
-            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1);
+            if (p.ic.num_mattype_layers < 1) {
+                die(EXIT_CONFIG_VALUE, "ic.num_mattype_layers must be >= 1.");
+            }
+            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers, "ic.num_mattype_layers");
+            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1, "ic.num_mattype_layers - 1");
             // mattype_layer_depths must be already sorted
             if (! std::is_sorted(p.ic.mattype_layer_depths.begin(), p.ic.mattype_layer_depths.end())) {
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
@@ -1419,7 +1428,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE,
                 "ic.initial_stress_option must be 0 or 1.");
         }
-        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR);
+        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR, "one per stress component");
         if (p.ic.initial_stress_option == 1) {
             if (p.control.gravity != 0.0) {
                 die(EXIT_CONFIG_VALUE,
@@ -1558,14 +1567,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                       p.bc.num_vbc_period_y0, p.bc.num_vbc_period_y1}) < 1) {
             die(EXIT_CONFIG_VALUE, "bc.num_vbc_period_* must be positive.");
         }
-        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0);
-        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1);
-        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0);
-        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1);
-        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0);
-        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1);
-        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0);
-        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1);
+        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
+        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
         const std::pair<const char*, const double_vec*> period_times[] = {
             {"vbc_period_x0_time_in_yr", &p.bc.vbc_period_x0_time_in_yr},
             {"vbc_period_x1_time_in_yr", &p.bc.vbc_period_x1_time_in_yr},
@@ -1579,52 +1588,56 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             }
         }
 
-        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, 1);
+        if (p.ic.nhlayer < 0) {
+            die(EXIT_CONFIG_VALUE, "ic.num_radiogenic_heat_layer must be >= 0.");
+        }
+        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, "ic.num_radiogenic_heat_layer + 1");
         if (p.ic.radiogenic_heat_boundry[0] == -1)
             p.ic.radiogenic_heat_boundry[0] = 0;
         if (p.ic.radiogenic_heat_boundry[p.ic.nhlayer] == -1)
             p.ic.radiogenic_heat_boundry[p.ic.nhlayer] = p.mesh.zlength;
 
-        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, 1);
+        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, "ic.num_radiogenic_heat_layer", true);
 
-        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, -1);
+        const char *nmat_key = "mat.num_materials";
+        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, -1);
+        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, -1);
-        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, -1);
+        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, nmat_key, true);
 
         // Hydraulic parameters
-        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, -1);
-        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, -1);
-        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, -1);
+        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, nmat_key, true);
         // Rate-and-state friction parameters
-        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
-        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
+        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, nmat_key, true);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }
