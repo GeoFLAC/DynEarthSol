@@ -140,9 +140,14 @@ the coupling interval, so it trails DES time by whatever has accumulated since
 the last event.
 
 - **Outputs snap to coupling events.** A file is written at the first coupling
-  event at or after each multiple of `tout`. If the coupling interval divides
-  `tout`, as `gospl_coupling_mode = time` makes easy, outputs are exactly `tout`
-  apart; otherwise the spacing is uneven.
+  event at or after each multiple of `tout`, so outputs are exactly `tout` apart
+  only when the actual coupling times land on those multiples. A configured
+  interval that divides `tout` does not guarantee it. In `time` mode an event
+  fires once the accumulated DES time reaches `gospl_coupling_interval_in_yr`,
+  usually overshooting it by part of a DES step that is not carried over (see
+  [Known Limitations](#known-limitations)); in `steps` mode the interval in
+  years follows DES's adaptive `dt`. Expect spacing near `tout`, off by up to
+  one coupling interval.
 - **A coupling interval longer than `tout` mislabels outputs.** Every event then
   writes, but the time stamped in the XDMF is the nominal output time,
   `start + k·tout`, which falls further behind the model time with each write.
