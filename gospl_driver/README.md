@@ -20,8 +20,9 @@ This file is the reference kept with the code.
 
 To skip the setup below, use the Docker image ([Run with Docker](#run-with-docker)).
 
-1. **GoSPL in a conda environment with Python 3.11**, by default at
-   `~/miniforge3/envs/gospl`. Follow
+1. **GoSPL 2026.6.30 or later in a conda environment with Python 3.11**, by
+   default at `~/miniforge3/envs/gospl`. Earlier releases do not read the
+   letter boundary codes the example uses (see [GoSPL YAML](#gospl-yaml)). Follow
    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html).
 
 2. **gospl_extensions**, the bridge between GoSPL (Python) and DES (C++). It
@@ -122,7 +123,7 @@ often changed:
 | `spl: m`, `spl: n` | Drainage-area and slope exponents of the stream power law (`n` defaults to 1) |
 | `diffusion: hillslopeKa` | Hillslope diffusivity, m²/yr |
 | `domain: flowdir` | Flow routing (`6` is multi-direction) |
-| `domain: bc` | Boundaries in the order N, E, S, W: `o` open, `f` fixed, `w` wall. `'wowo'` opens east and west and closes north and south |
+| `domain: bc` | Boundaries in the order N, E, S, W: `o` open, `f` fixed, `w` wall. `'wowo'` opens east and west and closes north and south. The letters need GoSPL 2026.6.30 or later; earlier releases read only the digits `0` and `1`, in the order S, E, N, W |
 | `domain: seadepo` | Marine deposition on or off |
 | `sea: position` | Sea level in metres relative to the initial surface |
 

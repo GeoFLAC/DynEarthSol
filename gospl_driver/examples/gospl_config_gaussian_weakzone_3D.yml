@@ -11,6 +11,8 @@
 #                 gospl reads bc as NESW: o open, f fixed outlet, w wall (closed).
 #                 N and S are 'f': 'fofo' is the earlier '1010' in the current
 #                 notation, the setting of the published comparison figure.
+#                 The letters need gospl 2026.6.30 or later; on older releases
+#                 write '1010'.
 # Output        : every 20,000 yr (matching ASPECT visualization output interval)
 
 name: Gaussian weakzone 3D rift (DES-GoSPL)
