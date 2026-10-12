@@ -1026,6 +1026,12 @@ int main(int argc, const char* argv[])
               (param.sim.is_outputting_averaged_fields &&
                var.steps % param.mesh.quality_check_step_interval != 0)));
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Report the coupling events since the last progress line, if any.
+    if (var.gospl_driver != nullptr && var.gospl_driver->summary_events > 0)
+        var.gospl_driver->print_coupling_summary();
+#endif
+
     monitor_finalize(var);
 
     // Before end() deletes the Output that keeps the run's peak.
