@@ -46,6 +46,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
   ([#97]).
+- **Breaking.** `make use_gospl=1` looks for the gospl environment in
+  `~/miniforge3/envs/gospl`, where GoSPL's install now puts it; a Miniconda
+  install sets `CONDA_ENV_PATH`, which, like `GOSPL_EXT_DIR`, may now also be
+  exported ([#104]).
+- The GoSPL docs follow the des3d coupling tutorial and explain when GoSPL
+  writes output; the example's `bc` comments now say north and south are
+  fixed outlets, as GoSPL reads them ([#104]).
 
 ### Fixed
 
@@ -230,3 +237,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
+[#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104

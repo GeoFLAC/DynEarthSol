@@ -174,11 +174,16 @@ defaults are not what you want.
     make install-local
     ```
   * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
-    (`~/opt/gospl_extensions` and `~/miniconda3/envs/gospl`). `make use_gospl=1`
+    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make use_gospl=1`
     also generates the `dynearthsol-gospl` wrapper script.
-  * See `gospl_driver/README.md` for build, runtime and coupling details, and
-    `gospl_driver/examples/` for example configs. The Docker image below ships
-    the whole stack ready to run.
+  * Coupling is 3D only, so build with `make ndims=3 use_gospl=1`, outside the
+    conda environment to keep the compiler off conda's libraries.
+  * The tutorial
+    [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+    walks through setup and a worked example; `gospl_driver/README.md` is the
+    reference for build, runtime and coupling details, and
+    `gospl_driver/examples/` holds the example configs. The Docker image below
+    ships the whole stack ready to run.
 
 <div id="llvm"></div>
 
@@ -347,7 +352,10 @@ make openacc=1 GPU_CC=90
   conda activate gospl
   ./dynearthsol-gospl your_input.cfg
   ```
-  See `gospl_driver/README.md` and `gospl_driver/examples/` for the details.
+  Run from the directory holding the GoSPL YAML, whose path is resolved from
+  the working directory. See the
+  [GoSPL tutorial](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+  and `gospl_driver/README.md` for the details.
 
 # Visualizing DES outputs
 * Run `2vtk.py modelname` to convert the binary output to VTK files; `2vtk.py -h`
