@@ -329,7 +329,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 }
 
 
-void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp)
+void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp, double_vec* stressyy)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -360,7 +360,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, dp_nd, stress)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy)
 #endif
     #pragma acc parallel loop gang vector async
     for (int e=0; e<var.nelem; ++e) {
@@ -375,9 +375,10 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     	TensorAccessor s = stress[e];
 
 	    double dp_orig = (*var.dpressure)[e];
-        double ddp = ( - dp_orig + dp_el ) / NDIMS;
+        double ddp = ( - dp_orig + dp_el ) / (stressyy ? 3 : NDIMS);
 	    for (int i=0; i<NDIMS; ++i)
             s[i] += ddp;
+        if (stressyy) (*stressyy)[e] += ddp;
     }
 
 #ifdef NPROF
@@ -1744,100 +1745,6 @@ double compute_dt(const Param& param, Variables& var,
     return dt;
 }
 
-// double compute_dt_PT(const Param& param, const Variables& var)
-// {
-// #ifdef NPROF_DETAIL
-//     nvtxRangePush(__FUNCTION__);
-// #endif
-//     // constant dt
-//     if (param.control.fixed_dt != 0) return param.control.fixed_dt;
-
-//     // dynamic dt
-//     double dt_maxwell = std::numeric_limits<double>::max();
-//     double dt_diffusion = std::numeric_limits<double>::max();
-//     double dt_hydro_diffusion = std::numeric_limits<double>::max();
-//     double minl = std::numeric_limits<double>::max();
-
-//     #pragma omp parallel for reduction(min:minl,dt_maxwell,dt_diffusion,dt_hydro_diffusion) default(none) shared(param,var)
-//     // #pragma acc parallel loop reduction(min:minl, dt_maxwell, dt_diffusion,dt_hydro_diffusion)
-//     for (int e=0; e<var.nelem; ++e) {
-//         int n0 = (*var.connectivity)[e][0];
-//         int n1 = (*var.connectivity)[e][1];
-//         int n2 = (*var.connectivity)[e][2];
-
-//         ConstArrayAccessor a = (*var.coord)[n0];
-//         ConstArrayAccessor b = (*var.coord)[n1];
-//         ConstArrayAccessor c = (*var.coord)[n2];
-
-//         // min height of this element
-//         double minh;
-// #ifdef THREED
-//         {
-//             int n3 = (*var.connectivity)[e][3];
-//             ConstArrayAccessor d = (*var.coord)[n3];
-
-//             // max facet area of this tet
-//             double maxa = std::max(std::max(triangle_area(a, b, c),
-//                                             triangle_area(a, b, d)),
-//                                    std::max(triangle_area(c, d, a),
-//                                             triangle_area(c, d, b)));
-//             minh = 3 * (*var.volume)[e] / maxa;
-//         }
-// #else
-//         {
-//             // max edge length of this triangle
-//             double maxl = std::sqrt(std::max(std::max(dist2(a, b),
-//                                                       dist2(b, c)),
-//                                              dist2(a, c)));
-//             minh = 2 * (*var.volume)[e] / maxl;
-//         }
-// #endif
-//         dt_maxwell = std::min(dt_maxwell,
-//                               0.5 * var.mat->visc_min / (1e-40 + var.mat->shearm(e)));
-//         // if (param.control.has_thermal_diffusion)
-//         //     dt_diffusion = std::min(dt_diffusion,
-//         //                             0.5 * minh * minh / var.mat->therm_diff_max);
-        
-//         // // Compute dt_hydro_diffusion (hydraulic)
-//         // if (var.mat->hydro_diff_max > 0) {
-//         //     dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-//         //                                   0.5 * minh * minh / var.mat->hydro_diff_max);
-//         // }
-//         minl = std::min(minl, minh);
-//     }
-
-
-//     // max_vbc_val is maximum boundary velocity
-//     double max_vbc_val;
-//     if (param.control.characteristic_speed == 0) {
-//         max_vbc_val = var.max_vbc_val; 
-
-//         if (param.control.surface_process_option > 0)
-//             max_vbc_val = std::max(max_vbc_val, var.surfinfo.max_surf_vel*5e-1);
-//     }
-//     else
-//         max_vbc_val = param.control.characteristic_speed;
-
-//     double dt_advection = 0.5 * minl / max_vbc_val;
-//     double dt_elastic = (param.control.is_quasi_static) ?
-//         0.5 * minl / (max_vbc_val * param.control.inertial_scaling) :
-//         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
-
-//     double dt = std::min({dt_elastic, dt_maxwell, dt_advection}) * param.control.dt_fraction;
-//     if (param.debug.dt) {
-//         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " " << dt_advection << " " << dt_elastic << " sec\n";
-//     }
-//     if (dt <= 0) {
-//         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " "  << dt_advection << " " << dt_elastic << "\n";
-//         var.output->write_exact_error(var);
-//         std::exit(11);
-//     }
-// #ifdef NPROF_DETAIL
-//     nvtxRangePop();
-// #endif
-//     return dt;
-// }
-
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
@@ -2026,4 +1933,138 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
         }
     }
     return q;
+}
+
+void compute_pt_factors(const Param& param, const Variables& var,
+                        double_vec& stress_fraction, double_vec& mobility,
+                        double_vec& height, double_vec& effective_viscosity)
+{
+    // Localized Räss et al. (2022), effective viscosity and dual-time factors.
+    // The physical constitutive target is evaluated elsewhere; these factors
+    // affect the route to equilibrium, never the stored physical history.
+    #pragma acc wait
+    const bool adaptive = param.control.PT_option == 1;
+    double length = std::max(param.mesh.xlength, param.mesh.zlength);
+#ifdef THREED
+    length = std::max(length, param.mesh.ylength);
+#endif
+    if (!(length > 0 && var.dt > 0 && std::isfinite(var.dt)))
+        die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
+    int bad = 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length, adaptive) reduction(|:bad)
+#endif
+    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
+    for (int e=0; e<var.nelem; ++e) {
+        double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+#ifdef THREED
+        double dy[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, dx, dy, dz);
+#else
+        get_local_shape_fn(var, e, dx, dz);
+#endif
+        double maxgrad2 = 0;
+        for (int k=0; k<NODES_PER_ELEM; ++k) {
+            double g2 = dx[k]*dx[k] + dz[k]*dz[k];
+#ifdef THREED
+            g2 += dy[k]*dy[k];
+#endif
+            maxgrad2 = std::max(maxgrad2, g2);
+        }
+        const double h = 1/std::sqrt(maxgrad2);
+        const double shear = var.mat->shearm(e);
+        const double bulk = var.mat->bulkm(e);
+        double effective = shear*var.dt;
+        if (param.mat.rheol_type & MatProps::rh_viscous) {
+            const double visc = (*var.viscosity)[e];
+            effective = (param.mat.rheol_type & MatProps::rh_elastic)
+                ? 1/(1/effective + 1/visc) : visc;
+        }
+        // Include compressional stiffness in the pseudo-wave bound, including
+        // the elastic volumetric response of the pure viscous branch.
+        const double ratio = std::max(1.0, bulk*var.dt/effective);
+        const double theta = param.control.PT_Re*param.control.PT_CFL*h/((ratio+2)*length);
+        bad |= !(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta));
+        effective_viscosity[e] = effective;
+        // Retain the same material/mesh checks for both options; ADR only
+        // consumes effective viscosity and supplies no legacy-factor arrays.
+        if (!adaptive) {
+            height[e] = h;
+            stress_fraction[e] = theta/(1+theta);
+        }
+    }
+    if (bad)
+        die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length, adaptive) reduction(|:bad)
+#endif
+    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
+    for (int n=0; n<var.nnode; ++n) {
+        double h = std::numeric_limits<double>::max(), visc = 0, volume = 0;
+        const int* patch = var.support.patch(n);
+        for (int k=0; k<var.support.size(n); ++k) {
+            const int e = patch[k];
+            if (!adaptive) h = std::min(h, height[e]);
+            visc = std::max(visc, effective_viscosity[e]);
+            volume += (*var.volume)[e]/NODES_PER_ELEM;
+        }
+        bad |= !(visc > 0 && volume > 0);
+        if (!adaptive)
+            mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
+    }
+    if (bad)
+        die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
+}
+
+void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,
+                     double_vec& elem_rows, array_t& mass)
+{
+    // Fictitious mass for adaptive dynamic relaxation (Underwood 1983): the
+    // Gershgorin row sum of the elastic/viscous velocity stiffness, so every
+    // eigenvalue of that mass-scaled reference has magnitude at most 1.
+    // This does not bound the full nonlinear constrained operator. The bulk part
+    // uses the elastic volumetric response, as in compute_pt_factors.
+    #pragma acc wait
+    const int nrow = NODES_PER_ELEM*NDIMS;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, effective_viscosity, elem_rows) firstprivate(nrow)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e=0; e<var.nelem; ++e) {
+        double grad[NDIMS][NODES_PER_ELEM];
+#ifdef THREED
+        get_local_shape_fn(var, e, grad[0], grad[1], grad[2]);
+#else
+        get_local_shape_fn(var, e, grad[0], grad[1]);
+#endif
+        const double eta = effective_viscosity[e];
+        const double lambda = var.mat->bulkm(e)*var.dt - 2*eta/3;
+        const double volume = (*var.volume)[e];
+        for (int a=0; a<NODES_PER_ELEM; ++a)
+            for (int i=0; i<NDIMS; ++i) {
+                double sum = 0;
+                for (int b=0; b<NODES_PER_ELEM; ++b) {
+                    double dot = 0;
+                    for (int k=0; k<NDIMS; ++k) dot += grad[k][a]*grad[k][b];
+                    for (int j=0; j<NDIMS; ++j)
+                        sum += std::fabs(lambda*grad[i][a]*grad[j][b] +
+                                         eta*((i == j ? dot : 0) + grad[j][a]*grad[i][b]));
+                }
+                elem_rows[e*nrow + a*NDIMS + i] = volume*sum;
+            }
+    }
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, elem_rows, mass) firstprivate(nrow)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n) {
+        const int* patch = var.support.patch(n);
+        const int* local = var.support.local(n);
+        for (int d=0; d<NDIMS; ++d) {
+            double sum = 0;
+            for (int k=0; k<var.support.size(n); ++k)
+                sum += elem_rows[patch[k]*nrow + local[k]*NDIMS + d];
+            mass[n][d] = sum;
+        }
+    }
 }

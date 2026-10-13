@@ -38,6 +38,7 @@ enum ExitCode {
     EXIT_RUNTIME_NAN          = 50,  // NaN or non-finite state
     EXIT_RUNTIME_LOOKUP       = 51,  // marker/geometry lookup failed
     EXIT_RUNTIME_RESOURCE     = 52,  // resource exhausted
+    EXIT_RUNTIME_NONCONVERGENCE = 53, // mechanical solve did not converge
 
     EXIT_INTERNAL_ASSERT      = 60,  // assertion / invariant violated
     EXIT_INTERNAL_UNREACHABLE = 61   // unreachable branch
@@ -228,6 +229,20 @@ static double second_invariant2(T t)
              + t[3]*t[3] + t[4]*t[4] + t[5]*t[5] );
 #else
     return 0.25*(t[0]-t[1])*(t[0]-t[1]) + t[2]*t[2];
+#endif
+}
+
+// Plane-strain tensor invariant including the stored out-of-plane stress.
+#pragma acc routine seq
+template <typename T>
+static double second_invariant2(T t, double syy)
+{
+#ifdef THREED
+    return second_invariant2(t);
+#else
+    const double mean = (t[0] + t[1] + syy)/3;
+    return 0.5*((t[0]-mean)*(t[0]-mean) + (t[1]-mean)*(t[1]-mean) +
+                (syy-mean)*(syy-mean)) + t[2]*t[2];
 #endif
 }
 

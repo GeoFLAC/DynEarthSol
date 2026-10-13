@@ -68,7 +68,7 @@ public:
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max, double& slip_rate,
                        double& dyn_fric_coeff, double& state_variable,
-                       double dt, int state_model) const;
+                       double dt, int state_model, bool frozen_history = false) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
@@ -159,7 +159,7 @@ private:
                            double &cohesion, double &dynamic_friction_angle,
                            double &dilation_angle, double &hardening,
                            double &slip_rate, double& dyn_fric_coeff,
-                           double& state_variable, int state_model, double dt) const;
+                           double& state_variable, int state_model, double dt, bool frozen_history = false) const;
     #pragma acc routine seq
     void update_state_variable(int e, double slip_rate, double& state_variable,
                                double dt, int state_model) const;

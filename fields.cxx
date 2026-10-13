@@ -281,12 +281,15 @@ void update_pore_pressure(const Param &param, const Variables &var,
         rho_f = 1000.0; 
         double gamma_w = rho_f * param.control.gravity; // specific weight
         
-        // Hydraulic conductivity using permeability and viscosity
-        double hydraulic_conductivity = perm_e * gamma_w / mu_e;
-        double kv = hydraulic_conductivity * (*var.volume)[e];
+        // Pressure-form Darcy mobility remains well-defined when gravity is zero.
+        // This is algebraically equivalent to the former head-form expression:
+        //   (k * gamma_w / mu) * grad(p / gamma_w + z).
+        const double mobility = perm_e / mu_e;
+        const double kv_pressure = mobility * (*var.volume)[e];
+        const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
 
         // Compute element diffusivity and update max using reduction
-        double diff_e = hydraulic_conductivity / (phi_e * comp_fluid + alpha_b * matrix_comp) / gamma_w;
+        const double diff_e = mobility / (phi_e * comp_fluid + alpha_b * matrix_comp);
         diff_max_local = std::max(diff_max_local, diff_e);
 
         // volume term (poroelastic effect)
@@ -300,21 +303,23 @@ void update_pore_pressure(const Param &param, const Variables &var,
 #endif
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double diffusion = 0.0;
+            double pressure_diffusion = 0.0;
+            double gravity_drive = 0.0;
             for (int j = 0; j < NODES_PER_ELEM; ++j) {
 #ifdef THREED
-                diffusion += (shpdx[i] * shpdx[j] +
-                             shpdy[i] * shpdy[j] +
-                             shpdz[i] * shpdz[j]) * (ppressure[conn[j]]/gamma_w + (*var.coord)[conn[j]][NDIMS-1]); 
+                const double grad_dot = shpdx[i] * shpdx[j] +
+                                        shpdy[i] * shpdy[j] +
+                                        shpdz[i] * shpdz[j];
 #else
-                diffusion += (shpdx[i] * shpdx[j] +
-                             shpdz[i] * shpdz[j]) * (ppressure[conn[j]]/gamma_w + (*var.coord)[conn[j]][NDIMS-1]);
+                const double grad_dot = shpdx[i] * shpdx[j] +
+                                        shpdz[i] * shpdz[j];
 #endif
-                }
+                pressure_diffusion += grad_dot * ppressure[conn[j]];
+                gravity_drive += grad_dot * (*var.coord)[conn[j]][NDIMS-1];
+            }
 
             // Add diffusion, compressibility, poroelastic effects, and source term
-            tr[i] = kv * diffusion + pe;
-            // tr[i] = kv * diffusion;
+            tr[i] = kv_pressure * pressure_diffusion + kv_gravity * gravity_drive + pe;
         }
     }
 
@@ -560,7 +565,8 @@ static double rho(const conn_t &var_connectivity, \
 }
 */
 
-void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual, elem_cache& tmp_result)
+void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -630,18 +636,20 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
         }
     }
 
-    apply_stress_bcs(param, var, force);
-
-    // if(var.time <= 1.0)
-    // {
-    //     apply_stress_bcs_neumann(param, var, force);
-    // }
-
-    // if (param.control.is_quasi_static) {
-    //     apply_damping(param, var, force);
-    // }
+    apply_stress_bcs(param, var, force, displacement_dt);
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
+    if (force_undamped) {
+        // Same accelerator queue as assembly and damping; the wait below makes
+        // both outputs visible to the caller. Constraint projection is separate.
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, force, force_undamped)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int n=0; n<var.nnode; ++n)
+            for (int d=0; d<NDIMS; ++d)
+                (*force_undamped)[n][d] = force[n][d];
+    }
     apply_damping(param, var, force);
     
     #pragma acc wait
@@ -694,23 +702,6 @@ void update_velocity(const Variables& var, array_t& vel)
     nvtxRangePop();
 #endif
 }
-
-// void update_velocity_PT(const Variables& var, array_t& vel)
-// {
-// #ifdef NPROF_DETAIL
-//     nvtxRangePush(__FUNCTION__);
-// #endif
-
-//     #pragma omp parallel for default(none) shared(var, vel)
-//     // #pragma acc parallel loop
-//     for (int i=0; i<var.nnode; ++i)
-//         for (int j=0;j<NDIMS;j++)
-//             vel[i][j] += var.dt_PT * (*var.force)[i][j] / (*var.mass)[i];
-
-// #ifdef NPROF_DETAIL
-//     nvtxRangePop();
-// #endif
-// }
 
 void update_coordinate(const Variables& var, array_t& coord)
 {

@@ -3186,6 +3186,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing finished.\n";
 
+    if (param.control.has_PT && param.control.PT_use_running_scale)
+        var.PT_skip_scale_update = true;
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;
 #ifdef NPROF

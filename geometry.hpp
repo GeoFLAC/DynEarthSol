@@ -18,7 +18,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt);
 
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd,
-                double_vec &etmp);
+                double_vec &etmp, double_vec* stressyy = nullptr);
 
 // Surface-relative reference pressure for SPR remeshing: ref_pressure is evaluated
 // at the effective depth below the CURRENT surface instead of the fixed datum z = 0,
@@ -96,7 +96,6 @@ void restore_stress_from_ref(const Param& param, const Variables& var,
 double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit = true);
 
-// double compute_dt_PT(const Param& param, const Variables& var);
 
 void compute_mass(const Param &param, const Variables &var,
                   double max_vbc_val, double_vec &volume_n,
@@ -111,4 +110,15 @@ double elem_quality(const array_t &coord, const conn_t &connectivity,
 double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
                           const double_vec &volume, int &worst_elem);
 
+// Local dual-time factors on the fixed mechanical reference mesh.
+// Caller-owned element scratch arrays are reused for the lifetime of a solve.
+// ADR only writes effective_viscosity; the three legacy-factor arrays may be empty.
+void compute_pt_factors(const Param& param, const Variables& var,
+                        double_vec& stress_fraction, double_vec& mobility,
+                        double_vec& height, double_vec& effective_viscosity);
+
+// Gershgorin fictitious mass for PT_option=1, from compute_pt_factors'
+// effective viscosity. elem_rows holds nelem*NODES_PER_ELEM*NDIMS entries.
+void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,
+                     double_vec& elem_rows, array_t& mass);
 #endif
