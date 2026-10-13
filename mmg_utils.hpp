@@ -24,6 +24,8 @@ struct MMGInput {
     // sentinel ref, dropped from out.seg). nullptr/0 => none.
     const int *req_edges;
     int n_req_edges;
+    // Optional, nnode: 1 = MMG starts from the metric at this node even on a required edge.
+    const char *keep_metric;
     // Optional ELEMENT references, nelem (nullptr => none; 2D only): MMG gives each new element
     // its parent's, returned in MMGOutput::elem_ref (mesh.cxx: the initial wall band's regions).
     // MMG keeps an edge between different references as an internal boundary; out.seg drops it.
@@ -40,13 +42,14 @@ struct MMGOutput {
     std::vector<int>    elem_ref; // nelem when MMGInput::elem_ref is set, else empty
 };
 
-// Run one MMG (2D or 3D, per build) adaptation of `in` into `out`. The size band and solver
-// parameters come from `mesh` (largest_size/smallest_size/mmg_remesh_defensive_tiny_ratio/
-// mmg_hausd_factor/resolution/mmg_verbose/mmg_debug; hmax = largest_size^(1/NDIMS) * resolution,
-// hmin = (smallest_size * ratio)^(1/NDIMS) * resolution); ref=0 facets are dropped, so out.seg
-// holds boundary facets only. The single owner of the MMG lifecycle, shared by mesh init and
-// remeshing. Dies with EXIT_MESH_MMG on any MMG failure, except MMG5_LOWFAILURE when
-// in.tolerate_low_failure (init).
+// Run one MMG adaptation (2D or 3D, per build) of `in` into `out`, for mesh init and remeshing.
+// Size band from `mesh`: hmax = largest_size^(1/NDIMS) x resolution, hmin = (smallest_size x
+// mmg_remesh_defensive_tiny_ratio)^(1/NDIMS) x resolution (MMG's floor above the tiny-element
+// trigger), hausd = mmg_hausd_factor x resolution; optim 0. Every node of a required element must
+// be required (asserted). At a node on a required edge (a required element's or req_edges) MMG
+// starts from the mean length of the required edges there, unless keep_metric marks the node
+// (apply_required_edge_size). out.seg holds boundary facets only (drop_unflagged_facets). Dies
+// with EXIT_MESH_MMG on any MMG failure, except MMG5_LOWFAILURE under tolerate_low_failure.
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out);
 
 #endif // USEMMG

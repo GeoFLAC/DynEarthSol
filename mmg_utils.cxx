@@ -80,6 +80,58 @@ void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &s
     segflag.resize(ns);
 }
 
+// MMG's own size at a node on a required edge (nosizreq = 0, its default): the mean length of the
+// required edges through it (the required elements' edges and req_edges, each once), as an
+// isotropic tensor for metric_aniso. MMG applies it at all such nodes or none, so when a
+// keep_metric node lies on a required edge this applies it to met (msize values per node) at the
+// other such nodes and returns the number of kept nodes (mmg_adapt then sets nosizreq = 1).
+// Returns 0 with met untouched otherwise.
+int apply_required_edge_size(const MMGInput &in, int msize, std::vector<double> &met)
+{
+    if (!in.keep_metric) return 0;
+    std::vector<std::array<int, 2>> edges;
+    for (int e = 0; in.required_elem && e < in.nelem; ++e) {
+        if (!in.required_elem[e]) continue;
+        const int *c = in.conn + (std::size_t)e * NODES_PER_ELEM;
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int j = i + 1; j < NODES_PER_ELEM; ++j)
+                edges.push_back({{std::min(c[i], c[j]), std::max(c[i], c[j])}});
+    }
+    for (int k = 0; in.req_edges && k < in.n_req_edges; ++k) {
+        const int a = in.req_edges[2*k], b = in.req_edges[2*k + 1];
+        edges.push_back({{std::min(a, b), std::max(a, b)}});
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+
+    std::vector<double> len_sum(in.nnode, 0.0);
+    std::vector<int> n_edge(in.nnode, 0);
+    for (const auto &ed : edges) {
+        double l2 = 0.0;
+        for (int d = 0; d < NDIMS; ++d) {
+            const double dx = in.coord[(std::size_t)ed[1]*NDIMS + d]
+                              - in.coord[(std::size_t)ed[0]*NDIMS + d];
+            l2 += dx * dx;
+        }
+        const double len = std::sqrt(l2);
+        for (int k = 0; k < 2; ++k) { len_sum[ed[k]] += len; ++n_edge[ed[k]]; }
+    }
+
+    int n_kept = 0;
+    for (int n = 0; n < in.nnode; ++n)
+        if (n_edge[n] && in.keep_metric[n]) ++n_kept;
+    if (n_kept == 0) return 0;
+    for (int n = 0; n < in.nnode; ++n) {
+        if (!n_edge[n] || in.keep_metric[n]) continue;
+        double *m = &met[(std::size_t)n * msize];
+        if (msize == 1) { m[0] = len_sum[n] / n_edge[n]; continue; }
+        const double lm = n_edge[n] / len_sum[n];   // MMG's form: 1/h, squared on the diagonal
+        for (int i = 0, k = 0; i < NDIMS; ++i)
+            for (int j = i; j < NDIMS; ++j, ++k) m[k] = (i == j) ? lm * lm : 0.0;
+    }
+    return n_kept;
+}
+
 } // anonymous namespace
 
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
@@ -92,7 +144,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
                          * std::pow(mesh.mmg_remesh_defensive_tiny_ratio, 1.0 / NDIMS);
     const double hausd = mesh.mmg_hausd_factor * res;
 
-    // A required element is carried verbatim, so each of its nodes must be required too.
+    // The contract: a required element's nodes are required.
     for (int e = 0; in.required_elem && e < in.nelem; ++e) {
         if (!in.required_elem[e]) continue;
         const int *c = in.conn + (std::size_t)e * NODES_PER_ELEM;
@@ -115,6 +167,15 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     drop_unflagged_facets(nseg_in, seg1, segref);   // initial-mesh internal segments
     for (int &v : seg1) ++v;
 
+    // The metric handed to MMG: the caller's, adjusted by apply_required_edge_size.
+    const int msize = in.metric_aniso ? NDIMS * (NDIMS + 1) / 2 : 1;
+    const double *msrc = in.metric_aniso ? in.metric_aniso : in.metric;
+    std::vector<double> met(msrc, msrc + (std::size_t)in.nnode * msize);
+    const int n_kept = apply_required_edge_size(in, msize, met);
+    if (n_kept)
+        std::printf("      [mmg] kept the metric at %d node(s) on a required edge (keep_metric); "
+                    "MMG's required-edge size at the others.\n", n_kept);
+
     MMG5_pMesh mmgMesh = NULL;
     MMG5_pSol  mmgSol  = NULL;
 
@@ -136,10 +197,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     if (in.metric_aniso) {
         // metric_aniso's layout is MMG3D_Set_tensorSols' own: one call
         MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
-        MMG_OK(MMG3D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+        MMG_OK(MMG3D_Set_tensorSols(mmgSol, met.data()));
     } else {
         MMG_OK(MMG3D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-        MMG_OK(MMG3D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+        MMG_OK(MMG3D_Set_scalarSols(mmgSol, met.data()));
     }
 
     MMG_OK(MMG3D_Chk_meshData(mmgMesh, mmgSol));
@@ -154,6 +215,9 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG_OK(MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_optim,   0));
     MMG_OK(MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_verbose, mesh.mmg_verbose));
     MMG_OK(MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_debug,   mesh.mmg_debug));
+    // nosizreq 1 only with a kept node (apply_required_edge_size). MMG never splits or swaps a
+    // required edge either way.
+    MMG_OK(MMG3D_Set_iparameter(mmgMesh, mmgSol, MMG3D_IPARAM_nosizreq, n_kept > 0 ? 1 : 0));
     MMG_OK(MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmax,  hmax));
     MMG_OK(MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hmin,  hmin));
     MMG_OK(MMG3D_Set_dparameter(mmgMesh, mmgSol, MMG3D_DPARAM_hausd, hausd));
@@ -221,10 +285,10 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     if (in.metric_aniso) {
         // metric_aniso's layout is MMG2D_Set_tensorSols' own: one call
         MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Tensor));
-        MMG_OK(MMG2D_Set_tensorSols(mmgSol, const_cast<double*>(in.metric_aniso)));
+        MMG_OK(MMG2D_Set_tensorSols(mmgSol, met.data()));
     } else {
         MMG_OK(MMG2D_Set_solSize(mmgMesh, mmgSol, MMG5_Vertex, in.nnode, MMG5_Scalar));
-        MMG_OK(MMG2D_Set_scalarSols(mmgSol, const_cast<double*>(in.metric)));
+        MMG_OK(MMG2D_Set_scalarSols(mmgSol, met.data()));
     }
 
     MMG_OK(MMG2D_Chk_meshData(mmgMesh, mmgSol));
@@ -239,6 +303,8 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0));
     MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose, mesh.mmg_verbose));
     MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_debug,   mesh.mmg_debug));
+    // nosizreq: see the 3D branch.
+    MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_nosizreq, n_kept > 0 ? 1 : 0));
     MMG_OK(MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmax,  hmax));
     MMG_OK(MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hmin,  hmin));
     MMG_OK(MMG2D_Set_dparameter(mmgMesh, mmgSol, MMG2D_DPARAM_hausd, hausd));

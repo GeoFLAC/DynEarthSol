@@ -1236,7 +1236,7 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
                      "initial wall band handed to MMG as required.\n";
     MMGInput  mmg_in = { in_nnode, in_nelem, nseg, in_coord.data(), in_conn.data(), pseg, psegflag,
                          metric.data(), req_node.data(), req_elem.data(), true, nullptr,
-                         iface.empty() ? nullptr : iface.data(), (int)iface.size() / 2,
+                         iface.empty() ? nullptr : iface.data(), (int)iface.size() / 2, nullptr,
                          keep_regions ? eref.data() : nullptr };
 #else
     MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,

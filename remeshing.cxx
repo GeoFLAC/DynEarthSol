@@ -2408,17 +2408,14 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
     for (int e = 0; e < var.nelem; e++)
         etmp[e] = (*var.volume)[e] / (1.0 + coeff * (*var.plstrain)[e]);
 
-    // SURFACE-MOTION ANTICIPATION for the top elements: inflate a top element's target volume by
-    // the deformation expected over one remesh interval, so it is rebuilt with room to be crushed.
-    // Movers: the surface-process dh (bc.cxx) and the nodal velocity u. u's part of the rate is the
-    // element's div u (P1 gradient identity): compaction inflates, dilatation does not, and
-    // translation, rotation, shear or an isochoric slide give 0.
-    //   rate    = d(ln measure)/dt from (u + dh/dt e_z): shoelace (2D) / 6V gradient (3D), exact.
-    //   inflate = exp(-rate * tau), tau = time since the last remesh, capped at 8x volume.
-    // dh is the last surface-process step's (zero right after a remesh, restored on a restart). A
-    // repeat remesh within one step (tau = 0) skips this: no time has passed to extrapolate over,
-    // so the elements it rebuilds get no inflation.
-    // *var.coord / *var.connectivity are EMPTY here (steal_ref'd before the meshing phase).
+    // SURFACE-MOTION ANTICIPATION: inflate each shrinking top element's target volume by its volume
+    // loss expected over one remesh interval, so it is rebuilt with room to be crushed.
+    //   rate    = d(ln measure)/dt under the nodal motion u + dh/dt e_z (shoelace in 2D, 6V
+    //             gradient in 3D; exact). u's part is the element's div u: compaction inflates;
+    //             translation, rotation, shear and isochoric slides give 0.
+    //   inflate = min(cap, exp(-rate * tau)) for rate < 0, tau = time since the last remesh.
+    // dh is the last surface-process step's (bc.cxx): zero right after a remesh, restored on a
+    // restart. A repeat remesh within one step (tau = 0) gets no inflation.
     const double tau = var.time - var.last_remesh_time;
     if (var.top_elems && var.surfinfo.dh && var.dt > 0.0 && tau > 0.0) {
         // global node id -> last step's surface-process rate dh/dt (m/s)
@@ -2533,12 +2530,16 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 // policy forbids it explicitly: MMG never moves or deletes a required VERTEX and never touches a
 // required ELEMENT.
 //
-// Per-entity freedom; the complement is handed to MMG as constraints:
-//   node : MOVABLE, or PINNED (required vertex, nodal fields carried verbatim).
-//   elem : FREE   -- split/collapse/swap AND its nodes MOVABLE (full repair);
-//          SPLIT  -- split/swap only, nodes NOT freed (refinement inserts nodes without moving
-//                    the old ones, so the band's plastic strain is carried verbatim);
-//          FROZEN -- MMG-required IF all its nodes ended up PINNED (DERIVED REQUIRED).
+// Grades:
+//   node : MOVABLE, or PINNED (MMG-required; its nodal fields are carried verbatim).
+//   elem : FREE   -- split, collapse and swap, with the nodes its rule frees (full repair);
+//          SPLIT  -- split and swap only; R2 frees no node, so refinement carries the band's
+//                    plastic strain verbatim. MMG never splits or swaps an edge it shares with a
+//                    required element;
+//          FROZEN -- MMG-required when all its nodes are pinned, else a HINGE: an element with a
+//                    movable node is never required (derive_required).
+// At a node on a required edge MMG starts from the required edges' length, not the metric,
+// except at a SPLIT element's node (mmg_adapt).
 //
 // Rules, in order; each may only raise freedom (details at each function):
 //   R1 REPAIR, R2 REFINE  rule_repair_and_refine: distorted or tiny -> FREE; yielding -> SPLIT.
@@ -2635,14 +2636,11 @@ int free_wall_band(int nnode, int nelem, const conn_t &conn, int nrings,
 }
 
 // R1 REPAIR + R2 REFINE (one pass):
-//   REPAIR = distorted (quality < min_quality * defensive ratio) or tiny (below MMG's floor)
-//            -> FREE. The tiny term is mandatory (the return-3 trigger is a hard failure). The
-//            quality term keeps a node pinned where disjoint material bodies meet (moving it drags
-//            the boundary).
-//   REFINE = yielded since the last remesh -> SPLIT: MMG adds resolution without moving the
-//            existing nodes, so their plastic strain is carried verbatim.
-// Do not give the quality term SPLIT instead of FREE: MMG cannot fix distortion without node
-// motion, the badness survives to the gate's blunter unfreeze, and preservation does not improve.
+//   REPAIR: quality < min_quality * mmg_remesh_defensive_quality_ratio, or volume below MMG's
+//           floor -> FREE. The tiny term frees every node (bad_mesh_quality's return 3 is a hard
+//           failure); the quality term keeps a node pinned where disjoint material bodies meet,
+//           since moving it drags the boundary.
+//   REFINE: plstrain - plstrain_remesh > mmg_remesh_active_plstrain -> SPLIT.
 void rule_repair_and_refine(const Param &param, const Variables &var,
                             const array_t &coord, const conn_t &connectivity,
                             int nelem, FreezeMask &m)
@@ -2920,11 +2918,11 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         const int m = nn++;
         coord.push_back(0.5*(coord[a*2]   + coord[b*2]));
         coord.push_back(0.5*(coord[a*2+1] + coord[b*2+1]));
-        // Size the divided line to the SMALLEST target of its surrounding nodes (endpoints + the
-        // two apexes) and pull those nodes down to it: the fine wall size then propagates along
-        // the in-band interface as it advects inland instead of creeping upward. Monotone (min
-        // only, floored where compute_metric_field floored it). Scalar metric only: with
-        // mmg_aniso_wall_ratio > 0 only the new midpoints get the reduced (isotropic) size.
+        // Size the midpoint to the smallest target of the endpoints and the two apexes. At a remesh
+        // (pull_down) those nodes take it too, to carry the fine wall size along the interface as
+        // it advects inland (min only, so compute_metric_field's floor holds). Where mmg_adapt's
+        // required-edge size applies (always at the midpoint) it replaces this size. The pull-down
+        // changes the scalar metric only; the mmg_aniso_wall_ratio tensor keeps the old sizes.
         const int c0 = tris[0].second, c1 = tris[1].second;
         const double h = std::min({metric[a], metric[b], metric[c0], metric[c1]});
         if (!(h > 0.0))   // positive: compute_metric_field's output, mesh.cxx's graded wall size
@@ -3196,16 +3194,21 @@ FreezeMask compute_active_mask(const Param &param, const Variables &var,
     return m;
 }
 
-// DERIVED REQUIRED: required_node = pinned; required_elem = FROZEN grade with all nodes
-// pinned. An element with any movable node is left non-required (the one-element hinge/
-// transition layer), so MMG can adjust it when the neighbour moves.
+// MMG's required arrays from the grades (FREEZE / REQUIRED POLICY); split_node = the nodes of
+// SPLIT elements (mmg_adapt's keep_metric).
 void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
                      std::vector<char> &required_node, std::vector<char> &required_elem,
-                     int &n_req_node, int &n_req_elem)
+                     std::vector<char> &split_node, int &n_req_node, int &n_req_elem)
 {
     required_node.assign(mnode, 0);
     required_elem.assign(melem, 0);
+    split_node.assign(mnode, 0);
     n_req_node = n_req_elem = 0;
+    for (int e = 0; e < melem; ++e) {
+        if (m.elem_grade[e] != ELEM_SPLIT) continue;
+        const int *el = conn + (std::size_t)e*NODES_PER_ELEM;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) split_node[el[i]] = 1;
+    }
     for (int n = 0; n < mnode; ++n)
         if (!m.node_movable[n]) { required_node[n] = 1; ++n_req_node; }
     for (int e = 0; e < melem; ++e) {
@@ -3325,7 +3328,8 @@ void mark_quiet_required(const Param &param, const Variables &var,
                          const int *mconn,   // mnode/melem mesh, 0-based row-major (conn_t is SoA)
                          const std::vector<char> &flatten_broken,
                          const CollapseRemap *remap,
-                         std::vector<char> &required_node, std::vector<char> &required_elem)
+                         std::vector<char> &required_node, std::vector<char> &required_elem,
+                         std::vector<char> &split_node)
 {
     const int old_nnode = old_coord.size();
     const int old_nelem = old_connectivity.size();
@@ -3349,7 +3353,7 @@ void mark_quiet_required(const Param &param, const Variables &var,
             for (int i = 0; i < NODES_PER_ELEM; ++i) m.node_movable[conn[i]] = 1;
         }
         derive_required(m, mnode, melem, mconn,
-                        required_node, required_elem, n_req_node, n_req_elem);
+                        required_node, required_elem, split_node, n_req_node, n_req_elem);
         report_freeze_summary("direct path", m.counts, m.elem_grade, n_r6_free,
                               "R6 flatten-broken", "", mnode, n_req_node, n_req_elem);
     }
@@ -3391,7 +3395,7 @@ void mark_quiet_required(const Param &param, const Variables &var,
         }
         // (4) derive required on the NEW connectivity
         derive_required(t, mnode, melem, mconn,
-                        required_node, required_elem, n_req_node, n_req_elem);
+                        required_node, required_elem, split_node, n_req_node, n_req_elem);
         // R1-R5 attribution was counted on the pre-collapse mesh (m); the totals are the
         // translated mask actually handed to MMG.
         report_freeze_summary("collapse path", m.counts, t.elem_grade, n_r67_free,
@@ -4361,17 +4365,15 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         mmetric = c_metric.data();
     }
 
-    // Adapt with the shared MMG driver: detect_flatten_broken supplies R6, mark_quiet_required
-    // applies R1-R7 and derives the required arrays, mmg_adapt_quality_gated runs MMG under the
-    // post-output gate. See the FREEZE / REQUIRED POLICY section.
+    // The freeze masks and the gated MMG run: FREEZE / REQUIRED POLICY.
     std::vector<char> flatten_broken =
         detect_flatten_broken(param, var, original_coord, qcoord, qconn,
                               old_nnode, old_nelem, points_to_delete);
-    std::vector<char> req_node, req_elem;
+    std::vector<char> req_node, req_elem, split_node;
     CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
     mark_quiet_required(param, var, original_coord, original_connectivity, mnode, melem, mconn1,
                         flatten_broken, collapse_needed ? &remap : nullptr,
-                        req_node, req_elem);
+                        req_node, req_elem, split_node);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
@@ -4386,7 +4388,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         mmetric_aniso = wall_aniso.data();
     }
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, nullptr, 0 };
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, nullptr, 0, split_node.data() };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
@@ -4555,17 +4557,15 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         }
     }
 
-    // Adapt with the shared MMG driver: detect_flatten_broken supplies R6, mark_quiet_required
-    // applies R1-R7 and derives the required arrays, mmg_adapt_quality_gated runs MMG under the
-    // post-output gate. See the FREEZE / REQUIRED POLICY section.
+    // The freeze masks and the gated MMG run: FREEZE / REQUIRED POLICY.
     std::vector<char> flatten_broken =
         detect_flatten_broken(param, var, original_coord, qcoord, qconn,
                               old_nnode, old_nelem, points_to_delete);
-    std::vector<char> req_node, req_elem;
+    std::vector<char> req_node, req_elem, split_node;
     CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
     mark_quiet_required(param, var, original_coord, original_connectivity, mnode, melem, mconn1,
                         flatten_broken, collapse_needed ? &remap : nullptr,
-                        req_node, req_elem);
+                        req_node, req_elem, split_node);
     const char *rn = req_node.data();
     const char *re = req_elem.data();
 
@@ -4604,11 +4604,9 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             }
             iface_edges.swap(tr);
         }
-        // BOTH paths: pre-subdivide over-long interface edges (MMG cannot split a required edge).
-        // Grows the local mesh buffers, the required masks and the aniso tensor, and repoints the
-        // mesh handed to MMG. Either path may run at any remesh, and at each one flatten_x0/x1
-        // snap the wall end of a wall-attached edge back out to the receiving wall's plane, so the
-        // edge grows with the wall's inward motion until it is split here.
+        // Both paths: every remesh's flatten_x0/x1 stretch a wall-attached edge back out to the
+        // wall, so presubdivide_interface_edges splits the over-long ones here. The mesh buffers,
+        // the required and SPLIT-node masks and the aniso tensor grow; the MMG input is repointed.
         if (!iface_edges.empty()) {
             const int mnode0 = mnode;
             aug_coord.assign(mcoord, mcoord + (std::size_t)mnode*NDIMS);
@@ -4626,6 +4624,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                     }
                     mmetric_aniso = wall_aniso.data();
                 }
+                split_node.resize(nn, 0);   // a new midpoint is no SPLIT element's node
                 mnode = nn; melem = ne;
                 mcoord = aug_coord.data(); mconn1 = aug_conn.data(); mmetric = aug_metric.data();
                 rn = req_node.data(); re = req_elem.data();
@@ -4638,7 +4637,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         }
     }
 
-    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie };
+    MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie, split_node.data() };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
