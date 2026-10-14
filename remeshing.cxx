@@ -48,10 +48,9 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
-// Size floors derived from mesh.smallest_size, shared by the Triangle/TetGen decimation, the
-// tiny-element trigger, the MMG metric floor and the boundary-merge distance (mesh units).
-// mmg_adapt (mmg_utils.cxx) derives MMG's hmin/hmax on its own (hmin raised by
-// mmg_remesh_defensive_tiny_ratio): keep the two in step.
+// Size floors from mesh.smallest_size, in mesh units: every remesh size test built on
+// smallest_size reads them here, except MMG's edge floor: mmg_adapt (mmg_utils.cxx) derives
+// MMG's hmin/hmax itself, hmin raised by mmg_remesh_defensive_tiny_ratio. Keep the two in step.
 struct RefineFloors {
     double hmin;          // trigger edge length  = smallest_size^(1/NDIMS) * resolution
     double smallest_vol;  // min element measure  = smallest_size * sizefactor * resolution^NDIMS
@@ -136,7 +135,7 @@ bool is_bottom_corner(uint flag)
 }
 
 void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
-                    double bottom, int_vec &points_to_delete, double min_dist)
+                    double bottom, int_vec &points_to_delete, const RefineFloors &floors)
 {
     // find old nodes that are on or close to the bottom boundary
 
@@ -146,17 +145,18 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
             // restore edge nodes to initial depth
             qcoord[i*NDIMS + NDIMS-1] = bottom;
         }
-        else if (flag & BOUNDZ1 && qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
-            // A TOP node within min_dist of (or below) the restored bottom: the domain has necked
-            // through. Collapsing it would weld the free surface onto the floor (garbage mesh, NaN);
-            // stop instead.
+        else if (flag & BOUNDZ1 && qcoord[i*NDIMS + NDIMS-1] < bottom + floors.hmin) {
+            // A top node within hmin of (or below) the restored bottom: the domain has necked
+            // through. Stop: MMG could keep tiny elements there and remesh at every quality check,
+            // and within min_dist the collapse would weld the free surface onto the floor (NaN).
             std::cerr << "Error: top-surface node " << i << " (z = "
-                      << qcoord[i*NDIMS + NDIMS-1] << ") has reached the bottom boundary (z = "
-                      << bottom << ").\n       The model domain has necked through; the mesh "
-                      "can no longer represent the model. Stopping.\n";
+                      << qcoord[i*NDIMS + NDIMS-1] << ") is within " << floors.hmin
+                      << " m (smallest_size^(1/NDIMS) * resolution) of, or below, the bottom"
+                      << " boundary (z = " << bottom << ").\n       The model domain has necked "
+                      "through; the mesh can no longer represent the model. Stopping.\n";
             die(EXIT_MESH_QUALITY);   // terminal physical state reached in the mesh-repair path
         }
-        else if (qcoord[i*NDIMS + NDIMS-1] < bottom + min_dist) {
+        else if (qcoord[i*NDIMS + NDIMS-1] < bottom + floors.min_dist) {
             // Delete every non-bottom node within min_dist of (or below) the bottom: an interior
             // one inverts its elements once the bottom snaps back up, a side-wall one below the
             // corner degenerates the corner elements. The MMG collapse or
@@ -1328,7 +1328,8 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
     /* choosing which way to remesh the boundary */
     int_vec points_to_delete;
-    const double min_dist = refine_floors(param.mesh).min_dist;
+    const RefineFloors floors = refine_floors(param.mesh);
+    const double min_dist = floors.min_dist;
     switch (param.mesh.remeshing_option) {
     case 0:
     case 10:
@@ -1337,7 +1338,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 1:
     case 11:
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         break;
     case 2:
         new_bottom(old_bcflag, qcoord, -param.mesh.zlength,
@@ -1464,7 +1465,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 
         #pragma acc wait
 
-        const double smallest_vol = refine_floors(param.mesh).smallest_vol;
+        const double smallest_vol = floors.smallest_vol;
         bad_quality = 0;
         for (int e=0; e<new_nelem; e++) {
             if (new_volume[e] < smallest_vol) {
@@ -4255,7 +4256,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = refine_floors(param.mesh).min_dist;
+    const RefineFloors floors = refine_floors(param.mesh);
+    const double min_dist = floors.min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -4301,7 +4303,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 1:
         excl_func = &is_boundary;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         break;
     case 10:
         excl_func = &is_corner;
@@ -4309,12 +4311,12 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         break;
     case 13:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist);
+                       points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
         flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
         flatten_y0(old_bcflag, qcoord, points_to_delete, min_dist);
@@ -4420,7 +4422,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // so using negative size as the max area
     const double max_elem_size = -1;
     const int vertex_per_polygon = 3;
-    const double min_dist = refine_floors(param.mesh).min_dist;
+    const RefineFloors floors = refine_floors(param.mesh);
+    const double min_dist = floors.min_dist;
     Mesh mesh_param = param.mesh;
     mesh_param.poly_filename = "";
 
@@ -4466,7 +4469,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     case 1:
         excl_func = &is_boundary;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         break;
     case 10:
         excl_func = &is_corner;
@@ -4474,7 +4477,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     case 11:
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         break;
     case 12:
         flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
@@ -4483,7 +4486,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         // restore the bottom AND both side walls to their initial planes
         excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, min_dist);
+                       points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
         flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
         break;
@@ -4540,7 +4543,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         // hausd-constrained surface and produced more bad outputs.
         int n_surf = collapse_short_boundary_segments_2d(old_nnode, old_nelem, old_nseg,
                          qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                         refine_floors(param.mesh).hmin,
+                         floors.hmin,
                          c_coord, c_conn, c_seg, c_segflag, c_metric,
                          c_new_to_old_node, c_new_to_old_elem, removed, cn, ce, cs);
         if (n_surf > 0) {

@@ -172,19 +172,21 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.resolution", po::value<double>(&p.mesh.resolution)->required(),
          "Spatial resolution (in meters)")
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
-         "The size of smallest element relative to an element with typical resolution. With MMG "
-         "it also sets the minimum edge length, (smallest_size*mmg_remesh_defensive_tiny_ratio)"
-         "^(1/NDIMS) * resolution (and the other MMG thresholds listed under that ratio), and in "
-         "2D the length, smallest_size^(1/NDIMS) * resolution, below which a remesh without "
-         "outside material merges a boundary segment's two nodes before MMG (never removing a "
-         "domain corner; a node joins "
-         "at most one such merge per remesh, and every merge is skipped when together they "
-         "would leave a flat or inverted element). "
-         "With Triangle/TetGen remeshing (a build without MMG, "
-         "meshing_elem_shape = 0) it also sets the node-spacing floor: a remesh deletes interior "
-         "nodes closer than smallest_size^(1/NDIMS) * resolution to a retained node (the floor "
-         "never deletes a boundary node, nor with is_discarding_internal_segments = no a node of "
-         "an internal segment).")
+         "The size of smallest element relative to an element with typical resolution. It sets the "
+         "tiny-element remesh trigger smallest_vol = smallest_size * sizefactor * resolution^NDIMS "
+         "(sizefactor 0.433 in 2D, 0.118 in 3D: a unit-edge equilateral element's measure) and two "
+         "lengths, hmin = smallest_size^(1/NDIMS) * resolution and min_dist = (smallest_size * "
+         "sizefactor)^(1/NDIMS) * resolution. hmin is the Triangle/TetGen node-spacing floor (a "
+         "remesh deletes interior nodes closer than hmin to a retained node), with MMG in 2D the "
+         "boundary-segment length below which a remesh without outside material merges the "
+         "segment's two nodes (never a domain corner), and the necking-stop distance of remeshing_option 1, 11 and 13 (see "
+         "remeshing_option). With options 1, 11 and 13 a remesh removes the nodes off a restored "
+         "boundary that lie past it or within min_dist of it, and option 2 the interior nodes within "
+         "min_dist of the new bottom; with options 1 and 10-12 Triangle keeps a boundary node whose "
+         "two segments are both longer than min_dist, and in 3D TetGen's boundary edge flips move a "
+         "boundary by at most min_dist; at a receiving wall, option 13 gives the side profile to new "
+         "material up to min_dist inland of the old wall. With MMG it also sets MMG's size floors "
+         "(see mmg_remesh_defensive_tiny_ratio).")
         ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
          "The size of largest element relative to an element with typical resolution, which also "
          "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
@@ -249,9 +251,7 @@ static void declare_parameters(po::options_description &cfg,
          " 2: create a new bottom boundary at the initial depth, other boundaries are intact "
          "(2D only, not with MMG remeshing).\n"
          "10: no modification on any boundary, except small boundary segments might get merged "
-         "(in 3D with TetGen, when a remesh deletes a boundary node, only the facets around it are "
-         "re-triangulated and edge flips then move that boundary's surface by at most "
-         "(smallest_size * 0.118)^(1/3) * resolution in all).\n"
+         "(in 3D with TetGen, see smallest_size).\n"
          "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact, except small boundary segments might "
          "get merged.\n"
@@ -279,9 +279,8 @@ static void declare_parameters(po::options_description &cfg,
          "every remesh caps the size target at every restored-wall node at resolution (see "
          "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
          "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
-         "remesh (exit 42) when a top-surface node is within (smallest_size*sizefactor)^(1/NDIMS) "
-         "* resolution (sizefactor 0.433 in 2D, 0.118 in 3D) of the restored bottom, or below it: "
-         "the domain has necked through.\n")
+         "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
+         "of the restored bottom, or below it: the domain has necked through.\n")
 
         ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
          "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
@@ -303,20 +302,17 @@ static void declare_parameters(po::options_description &cfg,
          "Default 0.01, heuristic: above the increment of incidental yielding, below a localizing "
          "band's increment over a remesh interval.")
         ("mesh.mmg_remesh_defensive_tiny_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
-         "Gap, in element measure, between the tiny-element remesh trigger and the smallest "
-         "elements MMG builds (MMG remeshing and MMG-built initial meshes: usemmg=1 and "
-         "meshing_elem_shape = 0). The trigger is smallest_vol = "
-         "smallest_size*sizefactor*resolution^NDIMS for every mesher. MMG's minimum edge length is "
-         "raised to hmin*ratio^(1/NDIMS) (hmin = smallest_size^(1/NDIMS)*resolution), so MMG aims "
-         "to build every element at smallest_vol*ratio or more, which must shrink by that factor "
-         "before it re-triggers; a remesh also rebuilds any element below smallest_vol*ratio. "
-         "ratio=1: MMG builds at the trigger, so a just-remeshed element re-triggers under any "
-         "compression (remesh thrash). The same ratio places MMG's metric floor one step higher, "
-         "at hmin*ratio^(2/NDIMS) (at most MMG's hmax), and the post-remesh quality gate at "
-         "smallest_vol*sqrt(ratio). A ratio at or above largest_size/smallest_size (MMG's size "
-         "ceiling) is capped just below it, with a warning; when largest_size equals "
-         "smallest_size the cap is 1 - 1e-9 (round-off, in effect 1). Default 1.5: a 2/3 "
-         "measure gap, heuristic. Must be >= 1 as set.")
+         "Gap, in element measure, between the tiny-element remesh trigger smallest_vol (see "
+         "smallest_size) and the smallest elements MMG builds (usemmg=1, meshing_elem_shape = 0; "
+         "remeshing and MMG-built initial meshes). MMG's minimum edge length is hmin * "
+         "ratio^(1/NDIMS) (hmin: see smallest_size), so MMG aims to build every element at "
+         "smallest_vol * ratio or more, which must shrink by this factor before it re-triggers, and "
+         "a remesh rebuilds any element below "
+         "smallest_vol * ratio. The ratio also sets MMG's metric floor one step higher, hmin * "
+         "ratio^(2/NDIMS) (at most MMG's hmax), and the post-remesh quality gate at smallest_vol * "
+         "sqrt(ratio). Must be >= 1 (at 1 a just-remeshed element re-triggers under any "
+         "compression); a ratio at or above largest_size / smallest_size is capped just below it, "
+         "with a warning. Default 1.5 (a 2/3 measure gap), heuristic.")
         ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
          "MMG remeshing repairs (unfreezes, with its nodes movable except where disjoint material "
          "bodies meet) every element of quality below "
