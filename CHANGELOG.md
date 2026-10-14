@@ -35,6 +35,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- A GoSPL-coupled run prints its coupling as one summary line after each DES
+  progress line, after the first event, instead of four lines per event,
+  GoSPL's `--- step done` among them ([#105]).
 - `README.md` matches the current build and tools again: several statements
   were stale, among them exported `BOOST_ROOT_DIR` being ignored, a default
   input file, and MMG built from a hand clone rather than the submodule ([#96]).
@@ -238,3 +241,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104
+[#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105

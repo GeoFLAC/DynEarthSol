@@ -1008,6 +1008,10 @@ int main(int argc, const char* argv[])
                 std::cout << ", wt = ";
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
+#ifdef HAS_GOSPL_CPP_INTERFACE
+                if (var.gospl_driver != nullptr)
+                    var.gospl_driver->print_coupling_summary();
+#endif
 
 
                 var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
@@ -1021,6 +1025,12 @@ int main(int argc, const char* argv[])
              (var.time <= param.sim.max_time_in_yr * YEAR2SEC ||
               (param.sim.is_outputting_averaged_fields &&
                var.steps % param.mesh.quality_check_step_interval != 0)));
+
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Report the coupling events since the last progress line, if any.
+    if (var.gospl_driver != nullptr && var.gospl_driver->summary_events > 0)
+        var.gospl_driver->print_coupling_summary();
+#endif
 
     monitor_finalize(var);
 
