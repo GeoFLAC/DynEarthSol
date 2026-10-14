@@ -3260,11 +3260,10 @@ std::vector<char> detect_flatten_broken(const Param &param, Variables &var,
 //  R6/R7 + derived required: the required arrays handed to MMG
 // ----------------------------------------------------------------------------
 
-// Renumbering info for the collapse path (collapse_outside_nodes /
-// collapse_short_boundary_segments_2d rebuilt the mesh handed to MMG, so old and MMG entity
-// ids no longer match 1:1). All arrays describe the NEW (collapsed) mesh except
-// collapsed_pts, which lists the OLD node ids marked for the collapse (merged away unless no target
-// keeps their elements oriented).
+// Renumbering of the collapse path, where collapse_outside_nodes and/or
+// collapse_short_boundary_segments_2d (maps composed) rebuilt the mesh handed to MMG. The maps
+// index the NEW mesh; collapsed_pts lists the OLD nodes marked for the collapse (merged away
+// unless no target keeps their elements oriented).
 struct CollapseRemap {
     const int_vec *new_to_old_node;   // [mnode] -> old node id
     const int_vec *new_to_old_elem;   // [melem] -> old elem id
@@ -4037,20 +4036,17 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
     }
 }
 
-// Under strong convergence the free surface piles boundary nodes into a short near-vertical
-// "cliff" (a boundary segment below hmin). MMG will not collapse a boundary edge (its corner
-// detection pins the ends; turning it off wrecks the box corners), so the sliver re-fires the
-// tiny-element trigger forever. Collapse every boundary segment below hmin BEFORE MMG (the
-// cliffs, and short bottom and side-wall segments too) by merging the removable endpoint onto its
-// segment PARTNER (deterministic), like the Triangle/TetGen path's boundary merge
-// (delete_points_and_merge_boundary).
-// Rules: never remove a domain corner; each node joins at most one collapse per call (depth-1);
-// the connectivity rebuild drops degenerate elements and backs out (returns 0) if an element with a
-// merged or repositioned node would be near-null/inverted (a fold); an element flatten_* already
-// left flat or inverted is kept and handed to MMG, as on the direct path; the segments follow the
-// survivors (rebuild_collapsed_segments).
-// AREA CONSERVATION: a plain snap sweeps the triangle (p, rem, keep) out of / into the domain.
-// For pure TOP collapses the target is repositioned along n = rot90(q - p):
+// Collapse every boundary segment shorter than min_len BEFORE MMG by merging its removable endpoint
+// onto its segment partner, as delete_points_and_merge_boundary does on the Triangle/TetGen path.
+// Why: strong convergence piles the free surface into a short near-vertical "cliff"; MMG pins both
+// ends as corners (a turn above its default 45-degree ridge angle) and never collapses it, so the
+// sliver re-fires the tiny-element trigger forever.
+// Rules: a domain corner is never removed; each node joins at most one collapse per call; the
+// rebuild drops degenerate elements and backs out (returns 0) if an element with a merged or
+// repositioned node would be flat or inverted (a fold); an element flatten_* already left flat or
+// inverted is kept for MMG, as on the direct path; rebuild_collapsed_segments redoes the segments.
+// AREA CONSERVATION: a plain snap sweeps the triangle (p, rem, keep) out of or into the domain, so
+// on a pure TOP collapse the target moves along n = rot90(q - p):
 //     keep' = keep + (2 * signed_area(p, rem, keep) / |q - p|^2) * n
 // and p->keep'->q has the shoelace area of p->rem->keep->q. Plain snap otherwise: a corner, a
 // non-top segment, a degenerate chord or chain, or a p or q an earlier collapse in this call uses
@@ -4534,22 +4530,40 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         msegflag = c_segflag.data();
         mmetric = c_metric.data();
     }
-    // Otherwise collapse the boundary segments below hmin MMG cannot fix (free-surface cliffs above
-    // all, which persist as tiny slivers), via the same renumber-aware collapse path.
-    else {
-        int cn = 0, ce = 0, cs = 0;
-        int_vec removed;
+    // Then, on either path, collapse_short_boundary_segments_2d; on the collapse path it runs on
+    // that output, so the two renumberings compose (new -> old id).
+    {
+        // collapse_outside_nodes' node flags, built as create_boundary_flags2 builds old_bcflag:
+        // a merge target also carries the segments re-pointed onto it
+        uint_vec c_bcflag;
+        if (outside_material) {
+            c_bcflag.assign(mnode, 0);
+            for (int s = 0; s < mseg; ++s)
+                for (int k = 0; k < NODES_PER_FACET; ++k)
+                    c_bcflag[mseg1[s*NODES_PER_FACET + k]] |= static_cast<uint>(msegflag[s]);
+        }
+        double_vec s_coord, s_metric;
+        int_vec s_conn, s_seg, s_segflag, s_new_to_old_node, s_new_to_old_elem, removed;
+        int sn = 0, se = 0, ss = 0;
         // Collapse at hmin, not at the metric floor: the more aggressive collapse perturbed the
         // hausd-constrained surface and produced more bad outputs.
-        int n_surf = collapse_short_boundary_segments_2d(old_nnode, old_nelem, old_nseg,
-                         qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                         floors.hmin,
-                         c_coord, c_conn, c_seg, c_segflag, c_metric,
-                         c_new_to_old_node, c_new_to_old_elem, removed, cn, ce, cs);
+        int n_surf = collapse_short_boundary_segments_2d(mnode, melem, mseg, mcoord,
+                         outside_material ? c_bcflag : old_bcflag, mconn1, mseg1, msegflag,
+                         outside_material ? c_metric : *var.ntmp, floors.hmin,
+                         s_coord, s_conn, s_seg, s_segflag, s_metric,
+                         s_new_to_old_node, s_new_to_old_elem, removed, sn, se, ss);
         if (n_surf > 0) {
             std::cout << "      [collapse] boundary segments below hmin: collapsing " << n_surf
-                      << " node(s) that MMG cannot fix itself (collapse path).\n";
-            mnode = cn; melem = ce; mseg = cs;
+                      << " node(s) before MMG (collapse path).\n";
+            if (outside_material) {   // old id = c_new_to_old[s_new_to_old[id]]
+                for (int &n : s_new_to_old_node) n = c_new_to_old_node[n];
+                for (int &e : s_new_to_old_elem) e = c_new_to_old_elem[e];
+                for (int &n : removed) n = c_new_to_old_node[n];
+            }
+            c_coord.swap(s_coord); c_conn.swap(s_conn); c_seg.swap(s_seg);
+            c_segflag.swap(s_segflag); c_metric.swap(s_metric);
+            c_new_to_old_node.swap(s_new_to_old_node); c_new_to_old_elem.swap(s_new_to_old_elem);
+            mnode = sn; melem = se; mseg = ss;
             mcoord = c_coord.data();
             mconn1 = c_conn.data();
             mseg1 = c_seg.data();
