@@ -190,6 +190,15 @@ def calculate_derived_data(des, frame):
     horizon = np.zeros((nnode), dtype=coord.dtype)
     horizon[:] = coord0[:,-1]
     point_data['horizon'] = (horizon, 1)
+
+    # location
+    map0 = np.zeros((nnode), dtype=coord.dtype)
+    map0[:] = coord0[:,0]
+    point_data['location_x'] = (map0, 1)
+    if des.ndims == 3:
+        map1 = np.zeros((nnode), dtype=coord.dtype)
+        map1[:] = coord0[:,1]
+        point_data['location_y'] = (map1, 1)    
     
     # Element-based
     # Strain Rate

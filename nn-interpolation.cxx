@@ -303,7 +303,11 @@ namespace {
                 if (elem_size == 1) {
                     // This happens when the new is completely within the old element.
                     // Mark the element as unchanged instead to keep the result
-                    // of nearest neighbor interpolation.
+                    // of nearest neighbor interpolation. Record the single ancestor
+                    // anyway (inert for fields -- inject_field skips is_changed <= 0):
+                    // the marker replenishment's parent-mattype map reads it.
+                    elems_vec[i][0] = elem_keys[0];
+                    ratios_vec[i][0] = 1.0;
                     is_changed[e] = -1;
                     continue;
                 }
@@ -700,6 +704,31 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
 
         prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
+
+        // Parent-mattype map for the marker replenishment (remap_markers): a new element with
+        // exactly ONE old ancestor (pure split child, or unmoved copy) whose markers were all one
+        // mattype records it, so the replenisher assigns it directly instead of guessing from
+        // nearest markers across an interface. Multi-ancestor/mixed elements and elements outside
+        // the old mesh (incoming wall band) record nothing. var.elemmarkers is still the OLD mesh.
+        if (!is_surface) {
+            var.remesh_elem_split_mat.assign(var.nelem, -1);
+            for (int e = 0; e < var.nelem; ++e) {
+                int parent = -1;
+                if (!is_changed[e]) {
+                    parent = idx[e];
+                } else {
+                    const int row = idx_changed[e];
+                    if (elems_vec[row][0] >= 0 && elems_vec[row][1] < 0)   // exactly 1 ancestor
+                        parent = elems_vec[row][0];
+                }
+                if (parent < 0) continue;
+                const int_vec &em = (*var.elemmarkers)[parent];
+                int mt = -1, nnz = 0;
+                for (int t = 0; t < (int)em.size(); ++t)
+                    if (em[t] > 0) { ++nnz; mt = t; }
+                if (nnz == 1) var.remesh_elem_split_mat[e] = mt;
+            }
+        }
 
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
