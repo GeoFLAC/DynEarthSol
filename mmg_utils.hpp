@@ -26,10 +26,12 @@ struct MMGInput {
     int n_req_edges;
     // Optional, nnode: 1 = MMG starts from the metric at this node even on a required edge.
     const char *keep_metric;
-    // Optional ELEMENT references, nelem (nullptr => none; 2D only): MMG gives each new element
-    // its parent's, returned in MMGOutput::elem_ref (mesh.cxx: the initial wall band's regions).
-    // MMG keeps an edge between different references as an internal boundary; out.seg drops it.
+    // Optional, nelem, 2D only: element references; each new element gets its parent's
+    // (out.elem_ref), and an edge between two references stays as an internal boundary.
     const int *elem_ref;
+    // Optional, nnode, 2D only: corners, never moved or removed; a boundary or reference curve
+    // runs straight into one.
+    const char *corner_node;
 };
 
 // Adapted mesh returned by mmg_adapt (0-indexed, flat buffers ready for load_from_buffer).

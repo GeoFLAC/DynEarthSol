@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -974,8 +975,7 @@ static void mmg_refine_init_mesh_3d(
 
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     // Propagate coarse REGION INDICES (from cra) to fine elements, then project to nodes.
-    // This gives a zone-aware per-node desired edge length that precisely reflects the
-    // user's zone definition, avoiding the smoothing introduced by MMG's transition region.
+    // This gives a zone-aware per-node desired edge length free of MMG's transition smoothing.
     if (!cra.empty()) {
         if (max_elem_size <= 0 && n_regions > 0) {
             // Per-region case: propagate region indices to fine elements, then compute metric
@@ -992,6 +992,8 @@ static void mmg_refine_init_mesh_3d(
     }
 
     // --- Propagate regattr via nearest-centroid from coarse ---
+    // mmg_adapt takes element references in 2D only, so a zone boundary here lands on the bisector
+    // of two coarse centroids, up to about half a coarse element off, as the hint's above does.
     // When per-region volumes were used (max_elem_size<=0 and n_regions>0),
     // cra contains region indices (temporarily encoded by the use_mmg_init coarse pass of
     // points_to_mesh or of the 3D .poly path).
@@ -1020,6 +1022,9 @@ static void mmg_refine_init_mesh_3d(
 #ifndef THREED
 static void mmg_refine_init_mesh_2d(
     const Mesh &mesh,
+    bool keep_regions,           // mattype_option 0: the coarse mattype boundaries stay put
+    int npoints, const double *points,   // the input vertices; those on a mattype
+                                         // boundary become MMG corners
     double max_elem_size,        // original TetGen target (for metric)
     int n_regions, const double *regattr,   // original region attrs (for metric)
     // In/out mesh arrays (replaced with fine arrays on return)
@@ -1043,8 +1048,45 @@ static void mmg_refine_init_mesh_2d(
     compute_init_metric(cn, ce, cc.data(), ck.data(), cra.data(),
                         n_regions, regattr, max_elem_size, mesh.resolution, metric);
 
+    // --- Coarse mattypes: per-region volumes stamped region indices, decoded here ---
+    double_vec cmat(cra);
+    if (!cra.empty() && max_elem_size <= 0 && n_regions > 0)
+        for (int e = 0; e < ce; ++e) cmat[e] = regattr[(int)cra[e] * (NDIMS + 2) + NDIMS];
+    // Under mattype_option 0, regattr's only reader, the mattype (truncated, as markerset reads it)
+    // rides through MMG as the element reference, and each input vertex on a mattype boundary is
+    // an MMG corner, so MMG keeps the boundary on its straight segments between them.
+    std::vector<int> eref;
+    std::vector<char> corner;
+    if (keep_regions && !cmat.empty()) {
+        eref.resize(ce);
+        for (int e = 0; e < ce; ++e) eref[e] = (int)cmat[e];
+        std::vector<int> node_ref(cn, 0);   // the reference of one element through the node
+        for (int e = 0; e < ce; ++e)
+            for (int k = 0; k < NODES_PER_ELEM; ++k) node_ref[ck[e*NODES_PER_ELEM + k]] = eref[e];
+        std::vector<char> on_iface(cn, 0);  // another element through it has another reference
+        for (int e = 0; e < ce; ++e)
+            for (int k = 0; k < NODES_PER_ELEM; ++k) {
+                const int n = ck[e*NODES_PER_ELEM + k];
+                if (node_ref[n] != eref[e]) on_iface[n] = 1;
+            }
+        typedef std::array<double, NDIMS> Point;
+        auto point_at = [](const double *x) -> Point {
+            Point p; std::copy(x, x + NDIMS, p.begin()); return p; };
+        std::set<Point> vertex;   // exact: Triangle copies the input coordinates
+        for (int i = 0; i < npoints; ++i) vertex.insert(point_at(points + i*NDIMS));
+        corner.assign(cn, 0);
+        for (int n = 0; n < cn; ++n)
+            corner[n] = on_iface[n] && vertex.count(point_at(&cc[n*NDIMS]));
+        const long n_corner = std::count(corner.begin(), corner.end(), 1);
+        if (n_corner)
+            std::cout << "      [corner] " << n_corner << " input vertex(es) on a material "
+                         "interface of the initial mesh handed to MMG as corners.\n";
+    }
+
     // --- Adapt the coarse mesh (mmg_adapt) ---
-    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr, true, nullptr };
+    MMGInput  mmg_in = { cn, ce, cs, pcoord, pconn, pseg, psegflag, metric.data(), nullptr, nullptr,
+                         true, nullptr, nullptr, 0, nullptr, eref.empty() ? nullptr : eref.data(),
+                         corner.empty() ? nullptr : corner.data() };
     MMGOutput mmg_out;
     mmg_adapt(mesh, mmg_in, mmg_out);
 
@@ -1065,6 +1107,8 @@ static void mmg_refine_init_mesh_2d(
     // --- Compute fine-mesh init metric hint (for init_elem_size_n) ---
     if (fine_init_metric_n && !cra.empty()) {
         if (max_elem_size <= 0 && n_regions > 0) {
+            // The hint's zone boundaries sit on the bisector of two coarse centroids (up to about
+            // half a coarse element off); regattr's are exact under mattype_option 0 (eref).
             std::vector<double> fine_region_idx(nelem);
             propagate_regattr_nearest(ce, cc.data(), ck.data(), cra.data(),
                                         nelem, pcoord, pconn, fine_region_idx.data());
@@ -1076,21 +1120,12 @@ static void mmg_refine_init_mesh_2d(
         }
     }
 
-    // --- Propagate regattr ---
-    // Decode region indices back to actual mattypes when per-region volumes are used.
-    if (!cra.empty()) {
-        const double *mattype_src = cra.data();
-        std::vector<double> coarse_actual_mattype;
-        if (max_elem_size <= 0 && n_regions > 0) {
-            const int attr_stride = NDIMS + 2;
-            coarse_actual_mattype.resize(ce);
-            for (int e = 0; e < ce; ++e)
-                coarse_actual_mattype[e] = regattr[(int)cra[e] * attr_stride + NDIMS];
-            mattype_src = coarse_actual_mattype.data();
-        }
-        propagate_regattr_nearest(ce, cc.data(), ck.data(), mattype_src,
+    // --- Propagate regattr: the MMG element references when set, else nearest coarse centroid ---
+    if (!mmg_out.elem_ref.empty())
+        for (int e = 0; e < nelem; ++e) pregattr[e] = mmg_out.elem_ref[e];
+    else if (!cra.empty())
+        propagate_regattr_nearest(ce, cc.data(), ck.data(), cmat.data(),
                                     nelem, pcoord, pconn, pregattr);
-    }
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
@@ -1497,7 +1532,8 @@ void points_to_mesh(const Param &param, Variables &var,
                                 pcoord, pconnectivity, psegment, psegflag, pregattr,
                                 var.init_elem_size_n);
 #else
-        mmg_refine_init_mesh_2d(param.mesh, max_elem_size, nregions, regattr,
+        mmg_refine_init_mesh_2d(param.mesh, param.ic.mattype_option == 0, npoints, points,
+                                max_elem_size, nregions, regattr,
                                 var.nnode, var.nelem, var.nseg,
                                 pcoord, pconnectivity, psegment, psegflag, pregattr,
                                 var.init_elem_size_n);

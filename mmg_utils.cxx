@@ -180,12 +180,11 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     MMG5_pSol  mmgSol  = NULL;
 
 #ifdef THREED
-    // MMG3D drops an interior triangle between tetrahedra of equal reference (none carry a ref
-    // here), so a required interface triangle would be discarded: front tracking is 2D only.
-    // Element references are not wired in 3D either (MMG3D_Set_tetrahedra gets NULL, and
-    // out.elem_ref stays empty).
-    if (in.req_edges || in.elem_ref)
-        die(EXIT_INTERNAL_ASSERT, "mmg_adapt: interface edges and element references are 2D only");
+    // 2D only: MMG3D drops an interior triangle between tetrahedra of equal reference, so a
+    // required interface triangle would be lost; references and corners are not wired in 3D.
+    if (in.req_edges || in.elem_ref || in.corner_node)
+        die(EXIT_INTERNAL_ASSERT, "mmg_adapt: interface edges, element references and corners "
+                                  "are 2D only");
     MMG3D_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mmgMesh,
                     MMG5_ARG_ppMet, &mmgSol, MMG5_ARG_end);
 
@@ -299,6 +298,9 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     if (in.required_elem)
         for (int e = 0; e < in.nelem; ++e)
             if (in.required_elem[e]) MMG_OK(MMG2D_Set_requiredTriangle(mmgMesh, e + 1));
+    if (in.corner_node)
+        for (int n = 0; n < in.nnode; ++n)
+            if (in.corner_node[n]) MMG_OK(MMG2D_Set_corner(mmgMesh, n + 1));
 
     MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_optim,   0));
     MMG_OK(MMG2D_Set_iparameter(mmgMesh, mmgSol, MMG2D_IPARAM_verbose, mesh.mmg_verbose));

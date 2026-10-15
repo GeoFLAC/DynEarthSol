@@ -385,7 +385,10 @@ static void declare_parameters(po::options_description &cfg,
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
          "(remeshing_option 13 still refines the restored walls of the initial mesh with MMG in "
-         "the cases remeshing_option lists).")
+         "the cases remeshing_option lists). Under mattype_option 0, which reads the regional "
+         "attributes as mattypes, a boundary between them stays on the .poly line in 2D; in 3D a "
+         "refined element takes the nearest coarse element centroid's attribute, which moves such "
+         "a boundary by up to about half a coarse element (see mmg_init_coarsening_factor).")
         ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
          "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
          "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
