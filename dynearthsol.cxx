@@ -45,6 +45,7 @@ void init_var(const Param& param, Variables& var)
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.refined_elem_size_n = new double_vec(0);
     var.reference_frame_time = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
@@ -230,6 +231,9 @@ void init(const Param& param, Variables& var)
 #ifdef USEMMG
     // After compute_mass: it fills var.volume_n, which this divides by.
     initialize_elem_size_n(var, *var.init_elem_size_n);
+    // No refinement reached yet; the wait covers initialize_elem_size_n's async node kernel.
+    #pragma acc wait
+    *var.refined_elem_size_n = *var.init_elem_size_n;
 #endif
 
     report_mesh_info(var, "initial");
@@ -348,6 +352,7 @@ void restart(const Param& param, Variables& var)
     allocate_variables(param, var);
 #ifdef USEMMG
     var.init_elem_size_n->resize(var.nnode);
+    var.refined_elem_size_n->resize(var.nnode);
 #endif
 
     create_top_elems(var);
@@ -391,6 +396,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
+        bin_chkpt.read_array(*var.refined_elem_size_n, "refined_elem_size_n");
         {   // the last surface-process dh, stored per node (Output::write_checkpoint)
             double_vec dh_n(var.nnode);
             bin_chkpt.read_array(dh_n, "surface dh");

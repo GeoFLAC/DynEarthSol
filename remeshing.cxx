@@ -2384,18 +2384,36 @@ static double mmg_metric_floor(const Mesh &m)
                     std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
 }
 
+// A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
+// 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
+// compute_metric_field records it in refined_elem_size_n: the minimum over remeshes, or with
+// mmg_metric_refine_recover = yes the latest.
+static double plastic_size_target(const Variables &var, double coeff, int n)
+{
+    double vol_ratio = 0.0;
+    const int npatch = var.support.size(n);
+    const int* patch = var.support.patch(n);
+    for (int i=0; i<npatch; ++i)
+        vol_ratio += (*var.volume)[patch[i]] / (1.0 + coeff * (*var.plstrain)[patch[i]]);
+    vol_ratio /= (*var.volume_n)[n];
+#ifdef THREED
+    return (*var.init_elem_size_n)[n] * std::cbrt(vol_ratio);
+#else
+    return (*var.init_elem_size_n)[n] * std::sqrt(vol_ratio);
+#endif
+}
+
 void compute_metric_field(const Param &param, const Variables &var, double_vec &metric, double_vec &etmp,
+                          double_vec &refined_size,
                           const array_t &old_coord, const conn_t &old_connectivity)
 {
-    /* Desired element size (nodal metric = edge length) for MMG remeshing.
-     *
-     * Base = init_elem_size_n (initial nodal size, fixed at t = 0), so sizes are MAINTAINED away from
-     * any trigger. The target VOLUME is scaled by 1/(1 + coeff*plstrain) and the edge length
-     * MMG consumes is that ratio^(1/NDIMS) (aggregation at the end); scaling the edge by the
-     * volume ratio is ~NDIMS times too aggressive. Do not re-anchor the base to the CURRENT
-     * size: at coeff=0 it leaves the band coarse, at coeff>0 the element count ratchets.
-     *
-     * old_connectivity must be the PRE-remesh one: var.connectivity is empty (steal_ref'd) here.
+    /* Desired element size (nodal metric = edge length) for MMG remeshing, from
+     * plastic_size_target. Its base, init_elem_size_n, is fixed at t = 0, so sizes are MAINTAINED
+     * away from any trigger. Do not re-anchor the base to the CURRENT size (at coeff = 0 the band
+     * stays coarse, at coeff > 0 the element count ratchets), and do not scale the edge by the
+     * volume ratio itself (~NDIMS times too aggressive).
+     * old_coord / old_connectivity must be the PRE-remesh mesh: *var.coord and *var.connectivity
+     * are empty (steal_ref'd) here, so never read them (nor pass them to side_inflow_state).
      */
     // Not const-qualified on purpose: a const scalar is predetermined-shared in OpenMP and
     // may not appear in a shared() clause on some toolchains -- a plain local sidesteps that.
@@ -2484,7 +2502,17 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
                         n_inflated, max_inflate);
     }
 
-    #pragma omp parallel for default(none) shared(var, metric, etmp)
+    // KEPT REFINEMENT: refined_size records each node's pre-inflation target t (the floor and wall
+    // cap stay per-remesh). With mmg_metric_refine_recover = no it is the finest t the node had at
+    // a remesh, and a node with t > refined_size is scaled by refined_size/t. With yes it is this
+    // remesh's t, so a restart that switches to no keeps the refinement from that remesh on.
+    if ((int)refined_size.size() != var.nnode)
+        die(EXIT_INTERNAL_ASSERT, "compute_metric_field: refined_elem_size_n is not per node");
+    bool keep = !param.mesh.mmg_metric_refine_recover;   // not const: see coeff
+    int n_kept = 0;
+    double min_ratio = 1.0;   // smallest refined_size/t, for the log
+    #pragma omp parallel for default(none) shared(var, metric, etmp, refined_size, coeff, keep) \
+        reduction(+:n_kept) reduction(min:min_ratio)
     for (int n = 0; n < var.nnode; n++) {
         double vol_ratio = 0.0;
         const int npatch = var.support.size(n);
@@ -2497,7 +2525,17 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 #else
         metric[n] = (*var.init_elem_size_n)[n] * std::sqrt(vol_ratio);
 #endif
+        const double t = plastic_size_target(var, coeff, n);   // metric[n] without the inflation
+        if (!keep || t <= refined_size[n]) { refined_size[n] = t; continue; }
+        const double r = refined_size[n] / t;   // < 1; the inflation factor stays on top
+        metric[n] *= r;
+        ++n_kept;
+        min_ratio = std::min(min_ratio, r);
     }
+    // printf, as above
+    if (n_kept)
+        std::printf("      [metric] kept refinement at %d node(s), the finest at %.3f of its "
+                    "current plastic-strain target.\n", n_kept, min_ratio);
     // FLOOR (mmg_metric_floor): a target at MMG's hmin puts the band where MMG's output scatter
     // reaches the tiny-element trigger, and every remesh re-fires.
     {
@@ -2957,11 +2995,14 @@ namespace {
 
 // R5 SIZE RECOVERY: free fossil-fine quiet elements so MMG can coarsen them back. The wall clamp
 // (option 13) and the plstrain refinement create elements finer than init_elem_size_n; once quiet
-// and inland they would be carried verbatim forever, so the fine area could only grow. The
-// criterion is the GRADATION ENVELOPE, not the hint: freeing everything undersized vs the hint
-// re-frees the hgrad transition that MMG itself forces.
+// and inland they would be carried verbatim forever, so the fine area could only grow (with
+// mmg_metric_refine_recover = no the plstrain refinement is held on purpose, and only what is
+// finer than the kept size is freed). The criterion is the GRADATION ENVELOPE, not the hint:
+// freeing everything undersized vs the hint re-frees the hgrad transition that MMG itself forces.
 //   1. per-node fine target t(n), mirroring compute_metric_field (hint reduced by the plstrain
-//      refinement, floored, clamped at restored walls);
+//      refinement and, with mmg_metric_refine_recover = no, scaled by the kept factor
+//      refined_elem_size_n/t that compute_metric_field applies to the metric; floored, clamped at
+//      restored walls);
 //   2. achievable(n) = min over nodes s of t(s) * hgrad^rings(n,s), by fixpoint relaxation;
 //   3. FOSSIL EXCESS iff esize * ratio < achievable at all its nodes -> FREE (nodes deletable).
 //      ratio (mmg_remesh_size_recovery_ratio > 1) is the hysteresis; 0 disables the rule
@@ -3013,7 +3054,13 @@ void rule_size_recovery(const Param &param, const Variables &var,
             if (t < achievable[n]) achievable[n] = t;
         }
     }
+    const bool keep = !param.mesh.mmg_metric_refine_recover;
     for (int n = 0; n < nnode; ++n) {
+        if (keep) {   // the kept factor compute_metric_field applied to this node's metric
+            const double t = plastic_size_target(var, coeff, n);
+            if (t > (*var.refined_elem_size_n)[n])
+                achievable[n] *= (*var.refined_elem_size_n)[n] / t;
+        }
         if ((*var.bcflag)[n] & clamp_side_bits)
             achievable[n] = std::min(achievable[n], param.mesh.resolution);  // wall clamp
         achievable[n] = std::max(achievable[n], metric_floor);
@@ -4325,7 +4372,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(param, var, *var.ntmp, *var.etmp, original_coord, original_connectivity);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp, *var.refined_elem_size_n,
+                         original_coord, original_connectivity);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -4335,10 +4383,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
-    // Material outside a restored boundary (sunk below the fixed bottom; with option 13 also past
-    // a side wall): flatten_* snaps the boundary back and the elements beyond invert, which MMG
-    // cannot adapt. Collapse the marked nodes onto their boundary plane and let MMG adapt
-    // the result; no fallback to a whole-domain Triangle/TetGen remesh.
+    // Material outside a restored boundary (below the bottom; with option 13 past a side wall too)
+    // would leave inverted elements MMG cannot adapt: collapse_outside_nodes removes it first.
     double_vec c_coord, c_metric;
     int_vec c_conn, c_seg, c_segflag;
     int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
@@ -4493,7 +4539,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     // --- Prepare the mesh + metric handed to MMG ---------------------------------
     // Compute the nodal metric (target element size) on the current mesh.
-    compute_metric_field(param, var, *var.ntmp, *var.etmp, original_coord, original_connectivity);
+    compute_metric_field(param, var, *var.ntmp, *var.etmp, *var.refined_elem_size_n,
+                         original_coord, original_connectivity);
 
     // By default MMG adapts the current mesh in place.
     int   mnode = old_nnode, melem = old_nelem, mseg = old_nseg;
@@ -4503,10 +4550,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     int    *msegflag = qsegflag;
     double *mmetric  = (*var.ntmp).data();
 
-    // Material outside a restored boundary (sunk below the fixed bottom; with option 13 also past
-    // a side wall): flatten_* snaps the boundary back and the elements beyond invert, which MMG
-    // cannot adapt. Collapse the marked nodes onto their boundary plane and let MMG adapt
-    // the result; no fallback to a whole-domain Triangle/TetGen remesh.
+    // Material outside a restored boundary (below the bottom; with option 13 past a side wall too)
+    // would leave inverted elements MMG cannot adapt: collapse_outside_nodes removes it first.
     double_vec c_coord, c_metric;
     int_vec c_conn, c_seg, c_segflag;
     int_vec c_new_to_old_node, c_new_to_old_elem;   // collapse renumbering maps (new id -> old id)
@@ -5513,18 +5558,14 @@ int nearest_patch_node(const Variables &var, int n, int nd, Use use)
     return m;
 }
 
-// Give material that entered through a RESTORED side wall its recorded field structure. Its new
-// nodes lie OUTSIDE the old mesh (var.remesh_node_outside: nearest-node fallback) and get, from the
-// profile at their position (side_profile_locate: depth below the side's column top,
-// SideProfile::top_rise, and in 3D the along-strike coordinate): temperature, init_elem_size_n
-// (re-pinned on the whole wall too) and coord0 (depth interpolated; wall-normal = plane +
-// wall_shift, a distinct Lagrangian entry per inflow generation; along strike in 3D: the
-// displacement of the nearest connected node inside the old mesh).
-// Band elements get zero plstrain/delta_plstrain/strain and the profile radiogenic source; stress
-// and RSF keep their remap. Inflow-gated per side (sis). At every option-13 remesh, inflow or not,
-// outside top and side-wall bottom nodes beyond every band get coord0 from a neighbour (end of
-// the function). MUST run before the plstrain_remesh snapshot so the zeroed plstrain seeds the
-// freeze baseline.
+// Re-impose the recorded profile (SideProfile) on the material that entered through each
+// receiving restored wall (sis.in) since the last remesh. The band's new nodes outside the old mesh
+// (var.remesh_node_outside) get temperature, init_elem_size_n and the coord0 depth from the profile
+// at their position, the wall-normal coord0 from SideProfile::wall_shift and, in 3D, the
+// along-strike coord0 from a neighbour. The band's elements get zero strain and the profile
+// radiogenic source; stress and RSF keep their remap. Then, inflow or not, the coord0 that the
+// nearest-node fallback copied at the other outside top and side-wall bottom nodes is re-seated.
+// MUST run before the plstrain_remesh snapshot, so the zeroed plstrain seeds the freeze baseline.
 void restore_side_fields(const Param &param, Variables &var,
                          const SideInflowState &sis)
 {
@@ -5576,8 +5617,10 @@ void restore_side_fields(const Param &param, Variables &var,
             (*var.temperature)[n] = side_profile_value(at, prof.node_temperature);
             (*var.coord0)[n][axis] = entry;
             (*var.coord0)[n][NDIMS-1] = side_profile_value(at, prof.node_coord0_z);
-            if (!prof.node_init_elem_size.empty())   // empty without USEMMG
+            if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
                 (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n];   // pristine: unrefined
+            }
             if (!node_done[n]) ++count_n;
             node_done[n] |= 1 << axis;   // bit = the horizontal component this band set
         }
@@ -5590,7 +5633,11 @@ void restore_side_fields(const Param &param, Variables &var,
                 if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
                 const double rel = ref_z - (*var.coord)[n][NDIMS-1];
                 side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
+                const double old_init = (*var.init_elem_size_n)[n];
                 (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+                // the same refined fraction of the re-pinned base: 1 for the band set above
+                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n]
+                                                * ((*var.refined_elem_size_n)[n] / old_init);
             }
         }
 

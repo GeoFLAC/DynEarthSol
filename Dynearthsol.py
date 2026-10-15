@@ -400,7 +400,8 @@ class DynearthsolCheckpoint(Dynearthsol):
         if name in set(['volume_old', 'plstrain_remesh']):
             count = nelem
             shape = (nelem, )
-        elif name in set(['init_elem_size_n', 'surface dh']):   # MMG builds only
+        elif name in set(['init_elem_size_n', 'refined_elem_size_n',
+                          'surface dh']):   # MMG builds only
             count = nnode
             shape = (nnode, )
         else:

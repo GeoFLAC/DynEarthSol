@@ -212,6 +212,7 @@ struct Mesh {
     double mmg_hausd_factor;
     double mmg_init_coarsening_factor;
     double mmg_metric_refine_coeff;
+    bool mmg_metric_refine_recover;
     bool use_mmg_init;
     double mmg_aniso_wall_ratio;
 };
@@ -888,6 +889,10 @@ struct Variables {
     double_vec *old_mean_stress;
     double_vec *ntmp;
     double_vec *init_elem_size_n;   // frozen initial nodal element size for MMG metric
+    // MMG only: each node's plastic-strain size-target record (KEPT REFINEMENT in
+    // compute_metric_field). Only its ratio to init_elem_size_n counts: a writer that re-pins
+    // init_elem_size_n must rescale it, as restore_side_fields does.
+    double_vec *refined_elem_size_n;
     double_vec *radiogenic_source;
 
     // For hyraulic proceses

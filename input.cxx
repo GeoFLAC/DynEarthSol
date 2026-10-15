@@ -390,25 +390,30 @@ static void declare_parameters(po::options_description &cfg,
          "refined element takes the nearest coarse element centroid's attribute, which moves such "
          "a boundary by up to about half a coarse element (see mmg_init_coarsening_factor).")
         ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
-         "Plastic-strain sensitivity of the MMG remeshing metric. The target element volume "
-         "is scaled by 1/(1 + coeff*plastic_strain) (a volume target, like Triangle's max_area), so the "
-         "target edge length scales as that ratio^(1/NDIMS). 0 disables plastic refinement "
-         "(the target is then the initial size except for the metric floor, the surface-motion "
-         "inflation of shrinking top elements and the option-13 restored-wall sizing). "
-         "MMG starts from this target except at a node on a required edge (an edge of a frozen, "
-         "MMG-required element or, in 2D, a remeshing_option-13 material-interface edge) that is "
-         "no node of a REFINED element (see mmg_remesh_active_plstrain): there it starts from the "
-         "mean length of the required edges through the node, MMG's own rule. A REFINED element "
-         "that is also distorted or tiny, lies in the band beside a receiving or outward-drifted "
-         "restored wall, or lies where restoring the boundaries reshaped the mesh is remeshed "
-         "freely instead and does not count. "
-         "Default 5, kept from the formerly hard-coded factor 1 + 5*plastic_strain, which scaled "
-         "the edge length rather than the volume: at a given plastic strain the same 5 now "
-         "targets larger elements. Larger values mesh a plastically strained zone finer where MMG "
-         "rebuilds it from the target (a frozen element is carried as it is), down to "
-         "the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
-         "narrower, at more elements and, where an elastic, advection or diffusion limit sets "
-         "dt, a shorter time step. Smaller values refine less.")
+         "Plastic-strain sensitivity of the MMG remeshing metric: the target element volume is "
+         "scaled by 1/(1 + coeff*plastic_strain), so the target edge length by that ratio^(1/NDIMS) "
+         "(whether a node keeps its finest target: see mmg_metric_refine_recover). 0 disables "
+         "plastic refinement from "
+         "a fresh start (the metric floor, the surface-motion inflation of shrinking top elements "
+         "and the option-13 restored-wall cap still apply). MMG starts from this target except at a "
+         "node on a required edge (an edge of a frozen element or, in 2D, an option-13 "
+         "material-interface edge) that belongs to no refined element (see "
+         "mmg_remesh_active_plstrain): there it starts from the mean length of the required edges "
+         "through the node, MMG's own rule. Larger values mesh a plastically strained zone finer, "
+         "down to the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
+         "narrower, at more elements and, where an elastic, advection or diffusion limit sets dt, a "
+         "shorter time step. Default 5.")
+        ("mesh.mmg_metric_refine_recover",
+         po::value<bool>(&p.mesh.mmg_metric_refine_recover)->default_value(false),
+         "no (default): each node keeps the finest plastic-strain size target (see "
+         "mmg_metric_refine_coeff) it has had at a remesh, so a refined zone stays refined where the "
+         "target coarsens, chiefly where plastic strain drops (the remap of rebuilt elements, the 2D "
+         "top-element plastic-strain decay, a growing top element); the mesh can then hold more "
+         "elements. Size recovery (mmg_remesh_size_recovery_ratio) measures against the kept size, and "
+         "material entering through a restored side wall starts unrefined. yes: the target follows "
+         "the current plastic strain. The record is checkpointed: with no, a restart that lowers "
+         "mmg_metric_refine_coeff (even to 0) keeps the sizes recorded before it, and a restart that "
+         "switches from yes to no holds from the last remesh's targets.")
         ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
          "Anisotropic MMG metric at inflow restored side walls (remeshing_option 13). 0 (default): "
          "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
@@ -1523,7 +1528,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
             "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
             "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
-            "mesh.mmg_metric_refine_coeff", "mesh.mmg_aniso_wall_ratio",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_metric_refine_recover",
+            "mesh.mmg_aniso_wall_ratio",
             "mesh.mmg_remesh_defensive_tiny_ratio",
         };
         for (const char *name : mmg_only)
