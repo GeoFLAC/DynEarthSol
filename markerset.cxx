@@ -54,17 +54,31 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         break;
     }
 
+    // An element the placement left without a marker (one smaller than the init_marker_spacing grid)
+    // gets min_num_markers_in_element markers of its initial material, by the placement's own rule
+    // (initial_mattype), at seeded random positions.
+    const int nfill = std::max(1, param.markers.min_num_markers_in_element);
+    int nempty = 0;
     for( int e = 0; e < var.nelem; e++ ) {
         int num_markers_in_elem = 0;
         for( int i = 0; i < param.mat.nmat; i++ )
             num_markers_in_elem += (*(var.elemmarkers))[e][i];
+        if (num_markers_in_elem > 0) continue;
 
-        if (num_markers_in_elem <= 0) {
-            std::cerr << "Error: no marker in element #" << e
-                      << ". Please increase the number of markers.\n";
-            die(EXIT_RUNTIME_RESOURCE);
+        ++nempty;
+        for (int k = 0; k < nfill; ++k) {
+            double eta[NODES_PER_ELEM];
+            random_eta_seed(eta, e + k);
+            const int mt = initial_mattype(param, var, e, eta);
+            append_marker(eta, e, mt, 0., 0., 0., 0., 0);
+            ++(*var.elemmarkers)[e][mt];
+            (*var.markers_in_elem)[e].push_back(_nmarkers-1);
         }
     }
+    if (nempty)
+        std::cerr << "Warning: the initial marker placement left " << nempty
+                  << " element(s) without a marker; each got " << nfill
+                  << " marker(s) of its initial material.\n";
 }
 
 #ifdef HDF5

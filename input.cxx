@@ -431,7 +431,9 @@ static void declare_parameters(po::options_description &cfg,
         ("markers.markers_per_element", po::value<int>(&p.markers.markers_per_element)->default_value(4),
          "Number of markers per element. Used when init_marker_option=1.")
         ("markers.init_marker_spacing", po::value<double>(&p.markers.init_marker_spacing)->default_value(0.3),
-         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2.")
+         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2. An "
+         "element the grid misses gets min_num_markers_in_element (at least 1) markers of its "
+         "initial material, with a warning.")
         ("markers.min_num_markers_in_element", po::value<int>(&p.markers.min_num_markers_in_element)->default_value(3),
          "When the number of markers in an element is less than this number, a new marker will be replenished in the element.")
         ("markers.replenishment_option", po::value<int>(&p.markers.replenishment_option)->default_value(2),
