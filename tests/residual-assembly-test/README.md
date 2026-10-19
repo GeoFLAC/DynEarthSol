@@ -23,7 +23,8 @@ entry point replaces only application `main`; all physical routines are real.
 Two positively oriented simplices share one vertex. Checks cover cancellation,
 Neumann traction, gravity with porous bulk density, and artificial damping.
 The optional output is the unprojected assembled physical force before damping.
-Supplying it must preserve both existing outputs bit for bit. Analytic assertions
+Supplying it must preserve both existing outputs bit for bit. The PT damping
+bypass must return the raw force; damping it once must recover the legacy result. Analytic assertions
 use `abs(x-y) <= 1e-9 + 1e-14*abs(x) + 1e-14*abs(y)` in the fixture's force units.
 
 `mode=BASE` calls the old five-argument API and measures the legacy residual

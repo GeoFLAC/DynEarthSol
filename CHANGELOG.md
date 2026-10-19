@@ -17,6 +17,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- PT save files expose the accepted projected undamped `PT residual force`
+  separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
+  demonstrates both PT options in 2D and 3D.
+
 - Physical-step PT trial/commit mechanics with projected undamped-force
   convergence, rollback on failure, and optional adaptive dynamic relaxation
   (`control.PT_option=1`; the default remains 0). See `doc/pt-solver.md`.

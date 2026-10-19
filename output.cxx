@@ -272,6 +272,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(tmp, "material", tmp.size());
 
     bin.write_nodal_vec_array(*var.force, "force", var.force->size());
+    if (param_.control.has_PT && var.PT_force_residual_valid)
+        bin.write_nodal_vec_array(*var.force_residual, "PT residual force", var.force_residual->size());
 
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 

@@ -60,8 +60,11 @@ void update_pore_pressure(const Param &param, const Variables &var,
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 // Optional caller-owned nnode-sized output includes physical loads but excludes
 // artificial damping. It must not alias force, force_residual or assembly inputs.
+// damp_force=false skips artificial damping; existing callers retain damped force.
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-    elem_cache& tmp_result, array_t* force_undamped = nullptr, double displacement_dt = 0);
+    elem_cache& tmp_result, array_t* force_undamped = nullptr, double displacement_dt = 0, bool damp_force = true);
+// Artificial damping only; OpenACC work is queued asynchronously.
+void apply_damping(const Param& param, const Variables& var, array_t& force);
 double calculate_residual_force(const Variables& var, array_t& force_residual);
 void update_velocity(const Variables& var, array_t& vel);
 void update_coordinate(const Variables& var, array_t& coord);

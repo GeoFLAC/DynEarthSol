@@ -65,6 +65,7 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.force = new array_t(n, 0);
     var.force_residual = new array_t(n, 0);
+    if (param.control.has_PT) var.PT_force_residual_valid = false;
 
     var.strain_rate = new tensor_t(e, 0);
 
@@ -126,6 +127,7 @@ void reallocate_variables(const Param& param, Variables& var)
 
     delete var.force_residual;
     var.force_residual = new array_t(n, 0);
+    if (param.control.has_PT) var.PT_force_residual_valid = false;
 
     delete var.strain_rate;
     var.strain_rate = new tensor_t(e, 0);
@@ -439,7 +441,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 }
 
 
-static void apply_damping(const Param& param, const Variables& var, array_t& force)
+void apply_damping(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -566,7 +568,7 @@ static double rho(const conn_t &var_connectivity, \
 */
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt)
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -650,7 +652,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             for (int d=0; d<NDIMS; ++d)
                 (*force_undamped)[n][d] = force[n][d];
     }
-    apply_damping(param, var, force);
+    if (damp_force) apply_damping(param, var, force);
     
     #pragma acc wait
 

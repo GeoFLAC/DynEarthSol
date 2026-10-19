@@ -3,6 +3,22 @@
 
 #include "parameters.hpp"
 
+// One physical-start baseline; owned by the mechanical solve, never remapped
+// while trials are live. Restore in place to preserve MatProps aliases.
+struct MechanicalState {
+    int nnode = 0;
+    double physical_dt = 0, physical_time = 0;
+    const conn_t* connectivity = nullptr;
+    tensor_t stress, strain;
+    double_vec stressyy, dpressure, viscosity;
+    double_vec plstrain, delta_plstrain, dyn_fric_coeff, state_variable;
+    explicit MechanicalState(int nelem) : stress(nelem), strain(nelem),
+          stressyy(nelem), dpressure(nelem), viscosity(nelem),
+          plstrain(nelem), delta_plstrain(nelem), dyn_fric_coeff(nelem), state_variable(nelem) {}
+    void capture(const Variables& var);
+    void restore(Variables& var) const;
+};
+
 struct VelocityConstraints;
 
 // Force must already be projected into the admissible velocity subspace.

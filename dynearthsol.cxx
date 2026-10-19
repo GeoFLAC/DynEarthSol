@@ -423,6 +423,11 @@ void restart(const Param& param, Variables& var)
             bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
         }
         if (param.control.has_PT) {
+            // Optional save diagnostic, not a new checkpoint requirement.
+            if (bin_save.has_array("PT residual force")) {
+                bin_save.read_array(*var.force_residual, "PT residual force");
+                var.PT_force_residual_valid = true;
+            }
             if (bin_chkpt.has_array("initial equilibrium done")) {
                 int complete = 0;
                 bin_chkpt.read_scalar(complete, "initial equilibrium done");

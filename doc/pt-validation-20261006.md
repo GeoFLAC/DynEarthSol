@@ -209,3 +209,77 @@ equilibrium. Running-scale convergence remains opt-in and is not a general
 qualification of history-dependent materials. The separate pressure-unit Darcy
 flux correction in this series changes hydraulic behavior; the dry non-PT
 BIT-EXACT results do not claim unchanged hydraulic results.
+
+
+## Review follow-up: force output, state ownership and example (2026-10-19)
+
+This follow-up addresses unused PT damping, the indexed mechanical snapshot,
+and the missing runnable example. Trial force assembly skips artificial damping;
+the legacy damped `force` is computed once on acceptance. The accepted projected
+undamped vector is saved as optional `PT residual force`. Diagnostic validity is
+cleared on failure and buffer reallocation; save files may restore it without
+adding a checkpoint requirement. The existing hydraulic restart policy is not
+changed by this follow-up. `MechanicalState` now lives in the PT module and uses
+seven named scalar arrays rather than numbered columns.
+
+The new `examples/pt-elastic-load.cfg` is a dry, fixed-mesh elastic compression
+with a nonzero initial imbalance, three 0.01 s physical steps, and both PT options.
+For 2D, the computed equivalent shortening is approximately 4.286 mm and the
+vertical stress is approximately -100 kPa. See the solver notes for the setup,
+reference modulus and fixed-mesh displacement interpretation.
+
+Validation used GNU 11.4, NVHPC 25.9 and an RTX 4070 SUPER (cc89):
+
+- Both dimensions compile in serial debug (binary output), OpenMP O2
+  (binary/HDF5), and OpenACC (HDF5) configurations.
+- The focused assembly/material/rollback suite passes 6,832 assertions in 2D
+  and 9,639 in 3D for each of OpenMP (four threads), serial ASan/UBSan, and
+  OpenACC. These sanitizer results cover the focused suite, not a new full
+  application sanitizer qualification.
+- The new force-output regression passes in both dimensions and both PT options
+  for serial debug, OpenMP binary, OpenMP HDF5 and GPU HDF5. It independently
+  removes damping, applies the example's axis constraints, checks free-rank RMS
+  against the reported residual (`rtol=1e-12`, `atol=1e-14`), and checks exact
+  diagnostic persistence on restart.
+- Compared with the parent executable, all existing physical save/checkpoint
+  payloads, legacy force fields, PT iteration counts and residual reports are
+  bit-exact for the four single-thread elastic examples. Only runtime and
+  provenance records are excluded.
+- Parent `make set` then changed `make cmp` passes BIT-EXACT for
+  `NDIMS=2 CASE=test-rect-tiny.cfg` and
+  `NDIMS=3 CASE=test-3d-equ-tiny.cfg`. Additional full-payload comparisons of
+  their six and ten save/checkpoint files also find no physical differences.
+- Twelve single-thread binary lifecycle cases pass: both dimensions and both
+  options, each with dynamic dt, remesh/restart, and stationary hydrostatic
+  initialization. Separate checks confirm diagnostic presence before remeshing
+  and omission immediately afterward. Parent dry saves without the new field
+  restart successfully for both dimensions/options with bit-exact continuation
+  of existing fields. This does not change or qualify older hydraulic restart
+  compatibility.
+- CPU/GPU examples use identical reference coordinates and connectivity.
+  Across all four examples and saved frames, the maximum normalized difference
+  in stress, strain or velocity is 2.91e-16. Normalizers are 1e5 Pa, 0.01, and
+  1 m/s respectively; the declared acceptance limit was 1e-5. Both backends
+  independently satisfy their residual criteria.
+- Binary-to-VTK conversion handles the optional vector, including its absence
+  from the unsolved initial frame.
+
+Reproduce the new output check from the repository root, using fresh output
+paths and the appropriate executable for each build:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-review-2d-0 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-review-2d-1 --option 1
+```
+
+Repeat with `dynearthsol3d`. GPU checks use `dynearthsol2d.gpu` or
+`dynearthsol3d.gpu` and `--timeout 180`; the initial 60 s 2D GPU check exceeded
+its wall-clock limit, while all final checks passed. This changes only the test
+process timeout, not the model's iteration cap or convergence settings.
+Focused-suite commands and lifecycle commands are in
+`tests/residual-assembly-test/README.md` and `tests/functional/pt_restart.md`.
+
+No long runs or new acceleration experiments are part of this follow-up.
+The short elastic results do not qualify general nonlinear convergence,
+long-time plastic/RSF behavior or hydraulic accuracy. MMG, Exodus and GoSPL
+configurations were not rerun for this follow-up.

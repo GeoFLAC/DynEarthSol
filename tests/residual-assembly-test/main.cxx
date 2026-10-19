@@ -300,6 +300,12 @@ static void test_damping() {
     snprintf(name, sizeof name, "damping u1[0]");
     check(name, m->force_undamped[1][0], undamped);
 #endif
+    update_force(m->param, m->var, m->force, m->force_residual,
+                 m->tmp_result, nullptr, 0, false);
+    check("PT damping bypass", m->force[1][0], undamped);
+    apply_damping(m->param, m->var, m->force);
+    #pragma acc wait
+    check("accepted legacy damping", m->force[1][0], damped);
     delete m;
 }
 
@@ -536,6 +542,16 @@ static void test_material_trials() {
                     // Deliberately contaminate every snapshot scalar to check restore.
                     (*yy)[e]=(*dp)[e]=(*visc)[e]=(*pls)[e]=(*dpls)[e]=(*friction)[e]=(*state)[e]=99;
                 }
+                baseline->restore(m->var);
+                for(int e=0;e<ne;++e) {
+                    check("restore stressyy exact",(*m->var.stressyy)[e]==baseline->stressyy[e],1);
+                    check("restore dpressure exact",(*m->var.dpressure)[e]==baseline->dpressure[e],1);
+                    check("restore viscosity exact",(*m->var.viscosity)[e]==baseline->viscosity[e],1);
+                    check("restore plstrain exact",(*m->var.plstrain)[e]==baseline->plstrain[e],1);
+                    check("restore delta_plstrain exact",(*m->var.delta_plstrain)[e]==baseline->delta_plstrain[e],1);
+                    check("restore dyn_fric_coeff exact",(*m->var.dyn_fric_coeff)[e]==baseline->dyn_fric_coeff[e],1);
+                    check("restore state_variable exact",(*m->var.state_variable)[e]==baseline->state_variable[e],1);
+                }
             }
             // Nonzero shear increment: a discarded trial must not accumulate
             // total strain, while Maxwell/EVP use one physical relaxation interval.
@@ -633,9 +649,11 @@ static void test_material_trials() {
                     for(int n=0;n<nn;++n) for(int d=0;d<NDIMS;++d)
                         m->vel[n][d]=d==0 ? 2*m->coord[n][NDIMS-1] : 0;
                     m->param.control.PT_max_iter=cap;
+                    m->var.PT_force_residual_valid=true;
                     const PTResult result=run_physical_step_pt(m->param,m->var);
                     #pragma acc wait
                     check("failed solve status",result.status==PTStatus::max_iterations,1);
+                    check("failed solve invalidates diagnostic",!m->var.PT_force_residual_valid,1);
                     check("failed solve iterations",result.iterations,cap);
                     check("failed solve has imbalance",result.residual>0,1);
                     if (!running) check("failed solve threshold",result.threshold,0);
@@ -648,8 +666,13 @@ static void test_material_trials() {
                             check("rollback stress exact",after->stress[e][d]==baseline->stress[e][d],1);
                             check("rollback strain exact",after->strain[e][d]==baseline->strain[e][d],1);
                         }
-                        for(int k=0;k<7;++k)
-                            check("rollback history exact",after->scalars[e][k]==baseline->scalars[e][k],1);
+                        check("rollback stressyy exact",after->stressyy[e]==baseline->stressyy[e],1);
+                        check("rollback dpressure exact",after->dpressure[e]==baseline->dpressure[e],1);
+                        check("rollback viscosity exact",after->viscosity[e]==baseline->viscosity[e],1);
+                        check("rollback plstrain exact",after->plstrain[e]==baseline->plstrain[e],1);
+                        check("rollback delta_plstrain exact",after->delta_plstrain[e]==baseline->delta_plstrain[e],1);
+                        check("rollback dyn_fric_coeff exact",after->dyn_fric_coeff[e]==baseline->dyn_fric_coeff[e],1);
+                        check("rollback state_variable exact",after->state_variable[e]==baseline->state_variable[e],1);
                     }
                     for(int n=0;n<nn;++n) {
                         for(int d=0;d<NDIMS;++d)

@@ -305,6 +305,10 @@ def process_single_frame(args):
             convert_field(des, frame, 'velocity', fvtu)
 
         convert_field(des, frame, 'force', fvtu)
+        try:
+            convert_field(des, frame, 'PT residual force', fvtu)
+        except KeyError:
+            pass
         
         # Calculate derived data
         point_data, cell_data = calculate_derived_data(des, frame)
@@ -827,7 +831,7 @@ def output_vtp_file(des, frame, filename, markersetname, time_in_yr, step):
 
 def convert_field(des, frame, name, fvtu):
     field = des.read_field(frame, name)
-    if name in ('coordinate', 'velocity', 'velocity averaged', 'force'):
+    if name in ('coordinate', 'velocity', 'velocity averaged', 'force', 'PT residual force'):
         if des.ndims == 2:
             # VTK requires vector field (velocity, coordinate) has 3 components.
             # Allocating a 3-vector tmp array for VTK data output.

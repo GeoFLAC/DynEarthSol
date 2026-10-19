@@ -47,6 +47,57 @@ double pt_residual_rms(const Variables& var, const VelocityConstraints& constrai
     return scale*std::sqrt(sum/rank);
 }
 
+void MechanicalState::capture(const Variables& var)
+{
+    #pragma acc wait
+    nnode = var.nnode;
+    physical_dt = var.dt;
+    physical_time = var.time;
+    connectivity = var.connectivity;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e=0; e<var.nelem; ++e) {
+        for (int d=0; d<NSTR; ++d) {
+            stress[e][d] = (*var.stress)[e][d];
+            strain[e][d] = (*var.strain)[e][d];
+        }
+        stressyy[e] = (*var.stressyy)[e];
+        dpressure[e] = (*var.dpressure)[e];
+        viscosity[e] = (*var.viscosity)[e];
+        plstrain[e] = (*var.plstrain)[e];
+        delta_plstrain[e] = (*var.delta_plstrain)[e];
+        dyn_fric_coeff[e] = (*var.dyn_fric_coeff)[e];
+        state_variable[e] = (*var.state_variable)[e];
+    }
+}
+
+void MechanicalState::restore(Variables& var) const
+{
+    if (var.nelem != static_cast<int>(stress.size()) || var.nnode != nnode ||
+        var.connectivity != connectivity || var.dt != physical_dt || var.time != physical_time)
+        die(EXIT_INTERNAL_ASSERT, "Mechanical baseline requires fixed topology and physical dt.");
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int e=0; e<var.nelem; ++e) {
+        for (int d=0; d<NSTR; ++d) {
+            (*var.stress)[e][d] = stress[e][d];
+            (*var.strain)[e][d] = strain[e][d];
+        }
+        (*var.stressyy)[e] = stressyy[e];
+        (*var.dpressure)[e] = dpressure[e];
+        (*var.viscosity)[e] = viscosity[e];
+        (*var.plstrain)[e] = plstrain[e];
+        (*var.delta_plstrain)[e] = delta_plstrain[e];
+        (*var.dyn_fric_coeff)[e] = dyn_fric_coeff[e];
+        (*var.state_variable)[e] = state_variable[e];
+    }
+    #pragma acc wait
+}
+
 namespace {
 
 struct PTWorkspace {
@@ -196,6 +247,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     const bool adaptive = param.control.PT_option == 1;
     std::unique_ptr<PTWorkspace> owner(new PTWorkspace(var.nelem, var.nnode, adaptive));
     PTWorkspace& w = *owner;
+    var.PT_force_residual_valid = false;
     w.start.capture(var);
     for (int n=0; n<var.nnode; ++n)
         for (int d=0; d<NDIMS; ++d) w.old_velocity[n][d] = (*var.vel)[n][d];
@@ -220,7 +272,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
         evaluate_mechanical_trial(param, var, w.start, initial);
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt);
+        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt, false);
         project_free_vectors(var, w.constraints, w.undamped);
         result.iterations = iteration+1;
         result.residual = pt_residual_rms(var, w.constraints, w.undamped);
@@ -255,6 +307,10 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             // solver's lagged stress. No second constitutive update follows.
             for (int n=0; n<var.nnode; ++n)
                 for (int d=0; d<NDIMS; ++d) (*var.force_residual)[n][d] = w.undamped[n][d];
+            var.PT_force_residual_valid = true;
+            // Preserve the legacy damped force field, but only once per solve.
+            apply_damping(param, var, *var.force);
+            #pragma acc wait
             if (initial) {
                 for (int n=0; n<var.nnode; ++n)
                     for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = w.old_velocity[n][d];
@@ -301,7 +357,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             }
         // Existing assembly supplies exactly the same physical loads to the
         // lagged solver stress. Artificial damping is excluded from the update.
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt);
+        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt, false);
         project_free_vectors(var, w.constraints, w.undamped);
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, w)

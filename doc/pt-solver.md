@@ -12,8 +12,9 @@ The obsolete `control.PT_jump` option has been removed; delete it from older
 input files. Initial equilibrium uses explicit homogeneous velocity constraints,
 and mesh motion and surface processes run outside the PT iterations.
 
-`MechanicalState` captures stress, strain, out-of-plane stress, plastic history,
-per-step plastic increment, pressure correction, viscosity and RSF history.
+`MechanicalState`, declared and implemented in the PT module, captures stress,
+strain, out-of-plane stress, plastic history, per-step plastic increment,
+pressure correction, viscosity and RSF history.
 `evaluate_mechanical_trial` restores that baseline in place before computing the
 candidate; material-property aliases remain valid. The physical dt and current
 pressure inputs are fixed during each mechanical solve. NMD applies to every
@@ -37,6 +38,17 @@ excluded. All-constrained models have zero free residual. Convergence requires
 ```
 R <= PT_absolute_tolerance + PT_relative_tolerance * R_initial
 ```
+
+Regular save files expose the accepted projected undamped vector as
+`PT residual force` (N/m in 2D, N in 3D). Its RMS over the free rank is the
+reported PT residual; the legacy `force` field retains artificial damping and
+constrained reactions. PT skips damping during trials and computes the legacy
+field once on acceptance. The diagnostic records the accepted reference-geometry
+solve, before physical mesh motion or stress rotation, even with averaged output.
+It is omitted before any accepted solve, after remeshing and at failed solves.
+New save files retain it on restart; older saves remain readable and omit it
+until the next accepted solve. It creates no checkpoint requirement. Both the
+Python reader and `2vtk.py` support the optional vector.
 
 The relative scale is the first candidate's imbalance, not the gross prestress.
 An opt-in alternative, `control.PT_use_running_scale=yes`, uses for physical steps:
@@ -221,3 +233,43 @@ No experimental secant extrapolation, tuned coefficients or new plastic
 corner-return algorithm is part of this implementation; `PT_option=1` derives its
 mass from a linear reference stiffness and damping from successive residuals. Such changes require
 separate numerical contracts and validation.
+
+## Short runnable example
+
+`examples/pt-elastic-load.cfg` applies a -1e5 Pa top traction to a unit elastic
+cell with roller sides and a clamped base. It runs three 0.01 s physical steps
+on a fixed mesh without hydraulic diffusion. From the repository root:
+
+```sh
+make ndims=2
+OMP_NUM_THREADS=1 ./dynearthsol2d examples/pt-elastic-load.cfg
+```
+
+The supplied configuration uses `PT_option=0` (localized stress/velocity
+relaxation). Change that line to `PT_option=1` for adaptive dynamic relaxation;
+change `sim.modelname` to keep both outputs. The same config also runs with
+`make ndims=3` and `./dynearthsol3d`. Each physical step reports its iteration
+count, residual and threshold. The applied traction gives a nonzero initial
+imbalance, so this example exercises relaxation rather than an already balanced
+state. Absolute tolerance is a nodal force, not a stress tolerance in Pa. This
+short elastic example does not qualify long-term plastic or hydraulic models.
+
+For the 2D example, the laterally constrained elastic modulus is
+`K + 4G/3 = 23.3333 MPa`. A 100 kPa compressive load therefore gives
+`epsilon_zz = -0.004285714`, or about 4.286 mm shortening over the 1 m height.
+Both PT options recover this response: the first physical step applies the
+compression, and the next two retain approximately the same stress and strain
+under the constant load. The vertical stress is approximately -100 kPa.
+Because mesh motion is disabled, the shortening is an equivalent displacement
+reconstructed as `sum(velocity * physical_dt)`, not a change in saved coordinates.
+
+The output regression independently removes legacy damping, projects the known
+axis constraints, and checks the new vector and reported free-rank RMS, then
+checks that a restart retains the accepted diagnostic:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-0 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-1 --option 1
+```
+
+Use distinct output directories; repeat with the 3D executable as needed.

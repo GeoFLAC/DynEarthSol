@@ -803,6 +803,9 @@ struct Variables {
 
     array_t *vel, *force, *coord0;
     array_t *force_residual;
+    // Accepted PT diagnostic in force_residual; invalid after buffer reallocation
+    // or before acceptance. It is not constitutive/restart history.
+    bool PT_force_residual_valid = false;
     tensor_t *strain_rate, *strain, *stress;
     elem_cache *tmp_result;
     double_vec *etmp;
