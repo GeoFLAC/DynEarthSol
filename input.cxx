@@ -321,24 +321,20 @@ static void declare_parameters(po::options_description &cfg,
          "trigger itself stays at min_quality. Must be >= 1 (1: repair only below the trigger). "
          "Default 1.5, heuristic.")
         ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
-         "Fossil-fine mesh recovery (USEMMG). During remeshing, a quiet element is unfrozen when its "
-         "size times this ratio is below the GRADATION ENVELOPE -- the smallest size MMG's gradation "
-         "(hgrad) could legally assign there given every intentionally-fine metric target (side-wall "
-         "clamp, plastic-strain refinement, size floors). Recovers e.g. the ~resolution elements that "
-         "enter at a restored inflow wall (remeshing_option 13) and would otherwise stay frozen at "
-         "wall size forever as they advect inland. Elements within the envelope (the legal size "
-         "transition around fine regions, the refined shear band) are never touched. Never freed "
-         "either: an element refined for plastic-strain growth (mmg_remesh_active_plstrain); one "
-         "touching the top surface; one at a material interface (mixed or no markers, or a node "
-         "shared with an element whose markers are mixed, absent or of another material), so "
-         "wall-size elements on a layer boundary of the incoming column stay fine; and the "
-         "elements touching a restored wall that receives no "
-         "material plus 4 rings around them. The remesh log's '[unfreeze] size recovery' line "
-         "counts the top-surface, interface and fixed-side-band skips. Size recovery never "
-         "unpins a restored-wall or bottom node. "
-         "0 disables (also the split of elements >= 2x their target); otherwise must be > 1 (hysteresis "
-         "against re-freeing the legal transition). Default 1.4 ~ sqrt(2) in edge length: one "
-         "bisection (area-halving) level in 2D, heuristic.")
+         "Size recovery in MMG remeshing. A quiet element (e.g. one that entered at ~resolution "
+         "through a restored inflow wall and advected inland) is freed to coarsen when it is finer "
+         "by more than this factor than the gradation envelope, the smallest size MMG's gradation "
+         "(hgrad) allows there given every intentionally fine size target; an element at least 2x "
+         "its own plastic-strain size target is freed to split. Neither frees an element refined for "
+         "plastic-strain growth (mmg_remesh_active_plstrain), one on the top surface, one at a "
+         "material interface (by its own and its neighbours' markers) or one within 4 rings of a "
+         "restored wall that receives no material, and neither unpins a restored-wall or bottom "
+         "node; the remesh log's '[unfreeze] size recovery' line counts the top-surface, interface "
+         "and wall-band skips. On a moving "
+         "mesh, a Triangle/TetGen initial mesh also gets the 2x split in its weak zone before any "
+         "field exists, except on a top-surface node or a region boundary ('[weakzone]' log lines). "
+         "0 disables all three; otherwise must be > 1 (a margin against re-freeing the legal size "
+         "transition). Default 1.4 ~ sqrt(2) in edge length (one 2D bisection level), heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -384,11 +380,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
-         "(remeshing_option 13 still refines the restored walls of the initial mesh with MMG in "
-         "the cases remeshing_option lists). Under mattype_option 0, which reads the regional "
-         "attributes as mattypes, a boundary between them stays on the .poly line in 2D; in 3D a "
-         "refined element takes the nearest coarse element centroid's attribute, which moves such "
-         "a boundary by up to about half a coarse element (see mmg_init_coarsening_factor).")
+         "(MMG still refines its restored walls under remeshing_option 13 and, on a moving mesh, "
+         "its weak zone: see mmg_remesh_size_recovery_ratio). Under "
+         "mattype_option 0, which reads the regional attributes as mattypes, a boundary between "
+         "them stays on the .poly line in 2D and can move by up to about half a coarse element in "
+         "3D (see mmg_init_coarsening_factor).")
         ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
          "Plastic-strain sensitivity of the MMG remeshing metric: the target element volume is "
          "scaled by 1/(1 + coeff*plastic_strain), so the target edge length by that ratio^(1/NDIMS) "

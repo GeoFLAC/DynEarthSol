@@ -48,6 +48,7 @@
 #include "mmg_utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
+#include "ic.hpp"
 
 #ifdef WIN32
 #ifndef _MSC_VER
@@ -1178,8 +1179,8 @@ static void transfer_nearest_node(int old_nnode, const double *old_coord,
 }
 
 // Adopt the output of an MMG pass over the raw initial mesh: var.init_elem_size_n = the
-// nearest-old-node transfer of hint; the regions from the MMG element references when set (2D,
-// mattype_option 0), else from the nearest old element centroid; the mesh buffers are replaced.
+// nearest-old-node transfer of hint; the regions from the MMG element references when set (2D
+// only), else from the nearest old element centroid; the mesh buffers are replaced.
 static void adopt_initial_mmg_output(Variables &var, const std::vector<double> &hint,
         const MMGOutput &mmg_out, int &nnode, int &nelem, int &nseg,
         double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
@@ -1209,6 +1210,266 @@ static void adopt_initial_mmg_output(Variables &var, const std::vector<double> &
     std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
     std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
     std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
+}
+
+// Weak-zone plastic strain of a raw mesh's elements (initial_weak_zone), zero outside the zone. Heap
+// copies of the mesh and the result: initial_weak_zone's loop is an OpenACC kernel.
+static double_vec *raw_weak_zone(const Param &param, int nnode, int nelem, const double *pcoord,
+                                 const int *pconn)
+{
+    array_t *coord = new array_t(pcoord, nnode);
+    conn_t *conn = new conn_t(pconn, nelem);
+    double_vec *pls = new double_vec(nelem, 0.0);
+    initial_weak_zone(param, nelem, *coord, *conn, *pls);
+    delete coord;
+    delete conn;
+    return pls;
+}
+
+#ifdef THREED
+// Six times the signed volume of tetrahedron (a, b, c, d).
+static double signed_vol6(const double *a, const double *b, const double *c, const double *d)
+{
+    const double u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    const double v[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    const double w[3] = { d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+    return u[0] * (v[1]*w[2] - v[2]*w[1]) - u[1] * (v[0]*w[2] - v[2]*w[0])
+         + u[2] * (v[0]*w[1] - v[1]*w[0]);
+}
+
+// 3D regions after an initial MMG pass: the nearest old centroid (adopt_initial_mmg_output) can
+// lie across a region boundary beside a flat element, so each element takes the region of the old
+// element containing its centroid, searched among the 64 nearest old centroids (heuristic: the
+// containing one ranked at most 26 in the meshes measured); none found keeps the nearest one's.
+static void regions_by_containing_element(const std::vector<double> &old_coord,
+                                          const std::vector<int> &old_conn,
+                                          const std::vector<double> &old_reg,
+                                          int nelem, const double *pcoord, const int *pconn,
+                                          double *pregattr)
+{
+    const int old_nelem = (int)(old_conn.size() / NODES_PER_ELEM);
+    std::vector<double> cents((std::size_t)old_nelem * NDIMS, 0.0);
+    for (int e = 0; e < old_nelem; ++e)
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int d = 0; d < NDIMS; ++d)
+                cents[e*NDIMS + d] += old_coord[old_conn[e*NODES_PER_ELEM + i]*NDIMS + d]
+                                      / NODES_PER_ELEM;
+    CentroidCloud cloud(cents.data(), old_nelem);
+    CentroidKDTree kdtree(NDIMS, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+    kdtree.buildIndex();
+    const int k = std::min(64, old_nelem);
+    std::vector<std::size_t> idx(k);
+    std::vector<double> dist_sq(k);
+    for (int e = 0; e < nelem; ++e) {
+        const int *c = pconn + e*NODES_PER_ELEM;
+        double p[NDIMS] = { 0 };
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            for (int d = 0; d < NDIMS; ++d) p[d] += pcoord[c[i]*NDIMS + d] / NODES_PER_ELEM;
+        nanoflann::KNNResultSet<double> result(k);
+        result.init(idx.data(), dist_sq.data());
+        kdtree.findNeighbors(result, p, nanoflann::SearchParameters());
+        for (std::size_t j = 0; j < result.size(); ++j) {
+            const int o = (int)idx[j];
+            const double *x[4];
+            for (int i = 0; i < 4; ++i) x[i] = &old_coord[old_conn[o*NODES_PER_ELEM + i]*NDIMS];
+            const double v = signed_vol6(x[0], x[1], x[2], x[3]);
+            // inside (or on a face) when replacing any vertex by p keeps the volume's sign
+            bool inside = true;
+            for (int i = 0; i < 4 && inside; ++i) {
+                const double *y[4] = { x[0], x[1], x[2], x[3] };
+                y[i] = p;
+                // a barycentric coordinate; its round-off is ~1e-16 x the element's aspect, so
+                // -1e-12 admits points on a face (both sides then match; the first wins)
+                inside = signed_vol6(y[0], y[1], y[2], y[3]) / v >= -1e-12;
+            }
+            if (inside) { pregattr[e] = old_reg[o]; break; }
+        }
+    }
+}
+#endif
+
+// Refine the raw initial mesh's weak zone as the first MMG remesh's R5 would, before any field
+// exists, so that remesh does not remap the prescribed plastic strain. Free: a zone element that
+// is r5_oversized against the largest of its nodes' floored plastic_size_targets, with no
+// top-surface node and no node between two regions (R5's other skips do not apply). Its nodes
+// move, except those on the bottom, the top, a restored side wall (option 13) or a domain edge or
+// corner, and those of a region-boundary element. MMG rebuilds the free elements and their hinges
+// at the first remesh's metric, and a region the quality gate frees around a bad output element,
+// but no region-boundary element: a pass whose gate frees one is discarded. So the regions come
+// back exactly (2D element references, 3D regions_by_containing_element). A pass that leaves no
+// fewer free elements is undone. The size base (the use_mmg_init hint, else the measured size) stays
+// var.init_elem_size_n, so the refinement does not count twice.
+static void refine_initial_weak_zone(const Param &param, Variables &var,
+        int &nnode, int &nelem, int &nseg,
+        double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
+{
+    if (!param.control.has_moving_mesh || param.mesh.mmg_remesh_size_recovery_ratio <= 0) return;
+    if (!pregattr)   // Triangle/TetGen stamp a region attribute (nregions >= 1), MMG copies it
+        die(EXIT_INTERNAL_ASSERT, "refine_initial_weak_zone: the initial mesh has no regions");
+    const double floor = mmg_metric_floor(param.mesh);
+    const int max_passes = 2;   // heuristic: the second takes what MMG's gradation left
+    // The mesh before the last pass, for the undo (MMG's coordinate scaling rounds every node).
+    int prev_nfree = -1, prev_ntop = 0, prev_nmixed = 0;
+    std::vector<double> prev_coord, prev_regattr, prev_size;
+    std::vector<int> prev_conn, prev_seg, prev_segflag;
+
+    for (int pass = 1; ; ++pass) {
+        std::vector<double> size_n, esize;
+        measured_size_n(nnode, nelem, pcoord, pconn, esize, size_n);
+        const double_vec hint = ((int)var.init_elem_size_n->size() == nnode)
+                                ? *var.init_elem_size_n : size_n;
+
+        double_vec *pls = raw_weak_zone(param, nnode, nelem, pcoord, pconn);
+        double_vec volume(nelem), target;
+        for (int e = 0; e < nelem; ++e) volume[e] = elem_measure(pcoord, pconn, e);
+        const conn_t conn(pconn, nelem);
+        plastic_size_targets(param.mesh.mmg_metric_refine_coeff, conn, volume, *pls, hint,
+                             nnode, nelem, esize, target);
+        for (int n = 0; n < nnode; ++n) target[n] = std::max(target[n], floor);
+
+        std::vector<uint> bflag(nnode, 0);
+        for (int s = 0; s < nseg; ++s)
+            for (int i = 0; i < NODES_PER_FACET; ++i)
+                bflag[pseg[s*NODES_PER_FACET + i]] |= psegflag[s];
+        std::vector<char> mixed(nnode, 0), seen(nnode, 0), on_iface(nelem, 0);
+        std::vector<double> node_reg(nnode, 0.0);
+        for (int e = 0; e < nelem; ++e)
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                const int n = pconn[e*NODES_PER_ELEM + i];
+                if (!seen[n]) { seen[n] = 1; node_reg[n] = pregattr[e]; }
+                else if (node_reg[n] != pregattr[e]) mixed[n] = 1;
+            }
+        for (int e = 0; e < nelem; ++e)
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (mixed[pconn[e*NODES_PER_ELEM + i]]) on_iface[e] = 1;
+
+        std::vector<char> free_elem(nelem, 0);
+        int nfree = 0, ntop = 0, nmixed = 0;
+        for (int e = 0; e < nelem; ++e) {
+            if ((*pls)[e] <= 0) continue;
+            const int *c = pconn + e*NODES_PER_ELEM;
+            double tmax = 0;
+            bool on_top = false;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                tmax = std::max(tmax, target[c[i]]);
+                on_top = on_top || (bflag[c[i]] & BOUNDZ1);
+            }
+            if (!r5_oversized(esize[e], tmax)) continue;
+            if (on_top) { ++ntop; continue; }
+            if (on_iface[e]) { ++nmixed; continue; }
+            free_elem[e] = 1;
+            ++nfree;
+        }
+        // what stays due at t = 0, logged on every return
+        auto report = [](const char *why, int f, int t, int m) {
+            if (f + t + m)
+                std::cout << "  [weakzone] " << why << "due at t = 0: " << f << " free, " << t
+                          << " on a top-surface node, " << m << " on a region boundary.\n";
+        };
+        if (prev_nfree >= 0 && nfree >= prev_nfree) {
+            delete pls;
+            delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+            delete [] pregattr;
+            nnode = (int)(prev_coord.size() / NDIMS);
+            nelem = (int)(prev_conn.size() / NODES_PER_ELEM);
+            nseg = (int)prev_segflag.size();
+            pcoord = new double[prev_coord.size()];
+            pconn = new int[prev_conn.size()];
+            pseg = new int[prev_seg.size()];
+            psegflag = new int[nseg];
+            pregattr = new double[nelem];
+            std::copy(prev_coord.begin(), prev_coord.end(), pcoord);
+            std::copy(prev_conn.begin(), prev_conn.end(), pconn);
+            std::copy(prev_seg.begin(), prev_seg.end(), pseg);
+            std::copy(prev_segflag.begin(), prev_segflag.end(), psegflag);
+            std::copy(prev_regattr.begin(), prev_regattr.end(), pregattr);
+            *var.init_elem_size_n = prev_size;
+            std::cout << "  [weakzone] pass " << pass - 1 << " undone: it left " << nfree
+                      << " free element(s).\n";
+            report("", prev_nfree, prev_ntop, prev_nmixed);
+            return;
+        }
+        if (!nfree || pass > max_passes) {
+            delete pls;
+            report(nfree ? "after the passes, " : "", nfree, ntop, nmixed);
+            return;
+        }
+
+        // The first remesh's metric: plastic_size_target (remeshing.cxx), floored; keep them equal.
+        std::vector<double> metric(nnode, 0.0), vol_n(nnode, 0.0);
+        for (int e = 0; e < nelem; ++e)
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                const int n = pconn[e*NODES_PER_ELEM + i];
+                metric[n] += volume[e] / (1.0 + param.mesh.mmg_metric_refine_coeff * (*pls)[e]);
+                vol_n[n] += volume[e];
+            }
+        delete pls;
+        for (int n = 0; n < nnode; ++n)
+            metric[n] = std::max(hint[n] * std::pow(metric[n] / vol_n[n], 1.0 / NDIMS), floor);
+
+        uint pinned = BOUNDZ0 | BOUNDZ1;
+        if (param.mesh.remeshing_option == 13)
+            for (int t = 0; t < NSIDEWALL; ++t) pinned |= SIDEWALL_FLAG[t];
+        std::vector<char> req_node(nnode, 1), req_elem(nelem, 1);
+        for (int e = 0; e < nelem; ++e)
+            if (free_elem[e])
+                for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                    const int n = pconn[e*NODES_PER_ELEM + i];
+                    const uint b = bflag[n] & BOUND_ANY;
+                    if (!(b & pinned) && !(b & (b - 1))) req_node[n] = 0;
+                }
+        for (int e = 0; e < nelem; ++e)
+            if (on_iface[e])
+                for (int i = 0; i < NODES_PER_ELEM; ++i) req_node[pconn[e*NODES_PER_ELEM + i]] = 1;
+        for (int e = 0; e < nelem; ++e)
+            for (int i = 0; i < NODES_PER_ELEM; ++i)
+                if (!req_node[pconn[e*NODES_PER_ELEM + i]]) req_elem[e] = 0;
+        const long nrebuild = std::count(req_elem.begin(), req_elem.end(), 0);
+#ifndef THREED
+        std::vector<int> eref(nelem);
+        for (int e = 0; e < nelem; ++e) eref[e] = (int)pregattr[e];
+        MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
+                             metric.data(), req_node.data(), req_elem.data(), true, nullptr,
+                             nullptr, 0, nullptr, eref.data() };
+#else
+        MMGInput  mmg_in = { nnode, nelem, nseg, pcoord, pconn, pseg, psegflag,
+                             metric.data(), req_node.data(), req_elem.data(), true, nullptr };
+#endif
+        MMGOutput mmg_out;
+        // Gated as refine_initial_side_walls is; the gate edits req_node/req_elem in place.
+        mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
+        bool iface_freed = false;   // the gate drops req_elem wherever it frees a node
+        for (int e = 0; e < nelem && !iface_freed; ++e)
+            iface_freed = on_iface[e] && !req_elem[e];
+        if (iface_freed) {
+            std::cout << "  [weakzone] pass " << pass << " discarded: the quality gate freed an "
+                         "element on a region boundary.\n";
+            report("", nfree, ntop, nmixed);
+            return;
+        }
+
+        prev_nfree = nfree;
+        prev_ntop = ntop;
+        prev_nmixed = nmixed;
+        prev_coord.assign(pcoord, pcoord + (std::size_t)nnode*NDIMS);
+        prev_conn.assign(pconn, pconn + (std::size_t)nelem*NODES_PER_ELEM);
+        prev_seg.assign(pseg, pseg + (std::size_t)nseg*NODES_PER_FACET);
+        prev_segflag.assign(psegflag, psegflag + nseg);
+        prev_regattr.assign(pregattr, pregattr + nelem);
+        prev_size = *var.init_elem_size_n;
+        const int nnode0 = nnode, nelem0 = nelem;
+        adopt_initial_mmg_output(var, hint, mmg_out, nnode, nelem, nseg,
+                                 pcoord, pconn, pseg, psegflag, pregattr);
+#ifdef THREED
+        regions_by_containing_element(prev_coord, prev_conn, prev_regattr, nelem, pcoord, pconn,
+                                      pregattr);
+#endif
+        std::cout << "  [weakzone] pass " << pass << ": " << nfree << " free weak-zone element(s) "
+                  << "(" << ntop << " on a top-surface node and " << nmixed << " on a region "
+                  << "boundary stay), " << nrebuild << " element(s) MMG may rebuild at the first "
+                  << "remesh's metric: " << nnode0 << " -> " << nnode << " nodes, " << nelem0
+                  << " -> " << nelem << " elements.\n";
+    }
 }
 
 // Refine the restored side walls of the initial mesh to ~mesh.resolution (remeshing_option 13):
@@ -1249,9 +1510,8 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
     }
     if (!needs_refining) return;
 
-    // The cfg-intended size hint that must survive the refinement: the zone-aware hint the
-    // use_mmg_init path already computed, or the actual (pre-refinement) sizes otherwise.
-    // Copied, not referenced: init_elem_size_n itself is reassigned below.
+    // The cfg-intended size: the one use_mmg_init or refine_initial_weak_zone set, else the
+    // measured one. A copy: init_elem_size_n is reassigned below.
     const double_vec hint = ((int)var.init_elem_size_n->size() == nnode)
                             ? *var.init_elem_size_n : size_n;
 
@@ -1467,15 +1727,16 @@ void tetrahedralize_polyhedron
 #endif
 
 
-// Shared tail of every Triangle/TetGen-built initial mesh (points_to_mesh and the 3D .poly path of
-// new_mesh_from_polyfile): the option-13 initial wall refinement, then var copies the mesh
-// buffers, which are freed. An imported .exo mesh (meshing_option 95) does not come through
-// here and keeps its own wall spacing.
+// Shared tail of every Triangle/TetGen-built initial mesh (points_to_mesh, the 3D .poly path):
+// refine_initial_weak_zone, refine_initial_side_walls (option 13), then var copies the buffers and
+// this function frees them. An imported .exo mesh (meshing_option 95) skips it.
 void adopt_initial_mesh(const Param &param, Variables &var,
                         double *pcoord, int *pconnectivity, int *psegment, int *psegflag,
                         double *pregattr)
 {
 #ifdef USEMMG
+    refine_initial_weak_zone(param, var, var.nnode, var.nelem, var.nseg,
+                             pcoord, pconnectivity, psegment, psegflag, pregattr);
     if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
         refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
                                   pcoord, pconnectivity, psegment, psegflag, pregattr);
@@ -1566,7 +1827,7 @@ void points_to_mesh(const Param &param, Variables &var,
     } else {
         // Plain triangle/tetgen path — init_elem_size_n left empty;
         // initialize_elem_size_n() will compute it from the mesh at step 0, unless
-        // refine_initial_side_walls (remeshing_option 13, adopt_initial_mesh) fills it.
+        // adopt_initial_mesh's refinements fill it.
         points_to_new_mesh(param.mesh, npoints, points,
                            n_init_segments, init_segments, init_segflags,
                            nregions, regattr,

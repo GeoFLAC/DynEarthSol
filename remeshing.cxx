@@ -2377,8 +2377,8 @@ double packed_elem_quality(const double *coord, const int *elem)
 #ifdef USEMMG
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
 // 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
-// compute_metric_field records it in refined_elem_size_n: the minimum over remeshes, or with
-// mmg_metric_refine_recover = yes the latest.
+// compute_metric_field's aggregation and refine_initial_weak_zone (mesh.cxx, on the raw initial
+// mesh) repeat the formula: keep them equal.
 static double plastic_size_target(const Variables &var, double coeff, int n)
 {
     double vol_ratio = 0.0;
@@ -2579,15 +2579,13 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //   R6 FLATTEN-BROKEN     detect_flatten_broken, mark_quiet_required: what flatten_* broke -> FREE.
 //   R7 COLLAPSE-REGION    mark_quiet_required (collapse path): the collapse region + 1 ring.
 //
-// POST-OUTPUT QUALITY GATE (mmg_adapt_quality_gated): if MMG's output contains an element that
-// would re-trigger remeshing, unfreeze a graded region around it (CORE: full freedom, grown to
-// frozen contact + `attempt` rings; HINGE: bordering elements lose required-element status but
-// keep pinned nodes) and re-run MMG. Bounded attempts.
+// POST-OUTPUT QUALITY GATE: mmg_adapt_quality_gated, with unfreeze_near_bad_output.
+// INIT-TIME (mesh.cxx): refine_initial_weak_zone and refine_initial_side_walls free part of the
+// initial mesh in the same way, under the same gate.
 //
-// INIT-TIME (mesh.cxx refine_initial_side_walls, option 13): the same idea at t=0 --
-// everything required except the wall band + 2 rings -- under the same post-output gate; in 2D
-// under mattype_option 0 the band's region boundaries are required interface edges, bisected
-// to MMG's graded size first.
+// KNOBS ([mesh]): min_quality, mmg_remesh_defensive_quality_ratio (R1), mmg_remesh_active_plstrain
+// (R2), smallest_size and resolution (floors), mmg_remesh_defensive_tiny_ratio (MMG floor, metric
+// floor, gate, R1 tiny), mmg_remesh_size_recovery_ratio (R5; 0 = off).
 //
 // Rejected (measured), do not retry:
 //   an unbounded undersized flood-fill unfreeze, or R5 against init_elem_size_n instead of the
@@ -3609,9 +3607,8 @@ double mmg_metric_floor(const Mesh &m)
                     std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
 }
 
-// R5's element size and per-node plastic-strain size target (rule_size_recovery):
-// esize[e] = the edge of an equilateral element of e's volume,
-// target[n] = min over n's elements of init_size[n] * (1/(1 + coeff*plstrain[e]))^(1/NDIMS).
+// esize[e] = the edge of an equilateral element of e's volume; target[n] = min over n's elements
+// of init_size[n] * (1/(1 + coeff*plstrain[e]))^(1/NDIMS).
 void plastic_size_targets(double coeff, const conn_t &connectivity, const double_vec &volume,
                           const double_vec &plstrain, const double_vec &init_size,
                           int nnode, int nelem, double_vec &esize, double_vec &target)

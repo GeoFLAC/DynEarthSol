@@ -54,9 +54,9 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         break;
     }
 
-    // An element the placement left without a marker (one smaller than the init_marker_spacing grid)
-    // gets min_num_markers_in_element markers of its initial material, by the placement's own rule
-    // (initial_mattype), at seeded random positions.
+    // An element the placement left without a marker (one smaller than the init_marker_spacing grid,
+    // e.g. refined around the initial weak zone) gets min_num_markers_in_element markers of its
+    // initial material, by the placement's own rule (initial_mattype), at seeded random positions.
     const int nfill = std::max(1, param.markers.min_num_markers_in_element);
     int nempty = 0;
     for( int e = 0; e < var.nelem; e++ ) {
