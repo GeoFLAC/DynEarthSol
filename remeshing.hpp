@@ -33,6 +33,14 @@ void side_profile_index_elems(SideProfile&);
 #ifdef USEMMG
 struct MMGInput;
 struct MMGOutput;
+// The floor of the size targets in the metric handed to MMG.
+double mmg_metric_floor(const Mesh&);
+// R5's element size and per-node plastic-strain size target (remeshing.cxx).
+void plastic_size_targets(double coeff, const conn_t &connectivity, const double_vec &volume,
+                          const double_vec &plstrain, const double_vec &init_size,
+                          int nnode, int nelem, double_vec &esize, double_vec &target);
+// R5's oversized test: an element at least twice its own size target.
+inline bool r5_oversized(double esize, double target) { return esize >= 2.0 * target; }
 // mmg_adapt, re-run with the frozen entities around each bad output element unfrozen while the
 // output has an element below min_quality or the gate's tiny test (remeshing.cxx): at most 4 MMG
 // passes, keeping the last mesh (logged when still bad). Used by remesh() and the initial wall

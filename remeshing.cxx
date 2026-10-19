@@ -2375,15 +2375,6 @@ double packed_elem_quality(const double *coord, const int *elem)
 
 
 #ifdef USEMMG
-// MMG metric floor: one mmg_remesh_defensive_tiny_ratio step (in measure) above MMG's hmin, two
-// above the tiny-element trigger; at most MMG's hmax (largest_size).
-static double mmg_metric_floor(const Mesh &m)
-{
-    const double r = m.mmg_remesh_defensive_tiny_ratio;
-    return std::min(refine_floors(m).hmin * std::pow(r, 2.0 / NDIMS),
-                    std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
-}
-
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
 // 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
 // compute_metric_field records it in refined_elem_size_n: the minimum over remeshes, or with
@@ -2993,25 +2984,20 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
 namespace {
 #endif  // !THREED
 
-// R5 SIZE RECOVERY: free fossil-fine quiet elements so MMG can coarsen them back. The wall clamp
-// (option 13) and the plstrain refinement create elements finer than init_elem_size_n; once quiet
-// and inland they would be carried verbatim forever, so the fine area could only grow (with
-// mmg_metric_refine_recover = no the plstrain refinement is held on purpose, and only what is
-// finer than the kept size is freed). The criterion is the GRADATION ENVELOPE, not the hint:
-// freeing everything undersized vs the hint re-frees the hgrad transition that MMG itself forces.
-//   1. per-node fine target t(n), mirroring compute_metric_field (hint reduced by the plstrain
-//      refinement and, with mmg_metric_refine_recover = no, scaled by the kept factor
-//      refined_elem_size_n/t that compute_metric_field applies to the metric; floored, clamped at
-//      restored walls);
-//   2. achievable(n) = min over nodes s of t(s) * hgrad^rings(n,s), by fixpoint relaxation;
-//   3. FOSSIL EXCESS iff esize * ratio < achievable at all its nodes -> FREE (nodes deletable).
-//      ratio (mmg_remesh_size_recovery_ratio > 1) is the hysteresis; 0 disables the rule
-//      (both branches).
-//   4. OVERSIZED iff esize >= 2 x its own pre-gradation target -> FREE to split.
-// Band and transition elements sit on the envelope and are never freed. Also skipped: R2
-// elements, top-surface-connected elements (surface guard), material-interface elements
-// (interface guard), and the wall band + 4 rings of a FIXED (not receiving) side. A freed
-// element's wall (clamp_side_bits) and bottom nodes are never unpinned.
+// R5 SIZE RECOVERY: free a quiet element whose size left the range MMG would build. The wall clamp
+// (option 13) and the plastic-strain refinement make elements finer than init_elem_size_n; frozen
+// once quiet, the fine area could only grow (with mmg_metric_refine_recover = no the refinement is
+// kept on purpose, so only what is finer than the kept size is freed).
+//   1. t(n): plastic_size_targets (init_elem_size_n reduced by the plastic strain), times
+//      compute_metric_field's kept factor, floored, clamped to resolution on a restored wall;
+//   2. achievable(n) = min over nodes s of t(s) * hgrad^rings(n,s): the gradation envelope;
+//   3. FOSSIL-FINE: esize * ratio < achievable at all its nodes -> FREE to coarsen;
+//   4. OVERSIZED: esize >= 2 x the largest t of its nodes (r5_oversized) -> FREE to split, since
+//      MMG cannot split a required element.
+// ratio = mmg_remesh_size_recovery_ratio > 1 (the hysteresis); 0 disables both branches. Elements
+// on the envelope (the band and its hgrad transition) are never freed. Skipped: R2 elements,
+// top-surface-connected elements, material-interface elements and the wall band + 4 rings of a
+// side that does not receive. A freed element's restored-wall and bottom nodes stay pinned.
 void rule_size_recovery(const Param &param, const Variables &var,
                         const conn_t &connectivity,
                         int nnode, int nelem, uint clamp_side_bits,
@@ -3037,23 +3023,9 @@ void rule_size_recovery(const Param &param, const Variables &var,
     const double metric_floor = mmg_metric_floor(param.mesh);
 
     // (1) per-node fine target
-    std::vector<double> achievable(nnode, std::numeric_limits<double>::max());
-    std::vector<double> esize(nelem);
-    for (int e = 0; e < nelem; ++e) {
-        ConstConnAccessor conn = connectivity[e];
-#ifdef THREED
-        esize[e] = std::cbrt((*var.volume)[e] / sizefactor);
-        const double red = std::cbrt(1.0 / (1.0 + coeff * (*var.plstrain)[e]));
-#else
-        esize[e] = std::sqrt((*var.volume)[e] / sizefactor);
-        const double red = std::sqrt(1.0 / (1.0 + coeff * (*var.plstrain)[e]));
-#endif
-        for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            const int n = conn[i];
-            const double t = (*var.init_elem_size_n)[n] * red;
-            if (t < achievable[n]) achievable[n] = t;
-        }
-    }
+    std::vector<double> achievable, esize;
+    plastic_size_targets(coeff, connectivity, *var.volume, *var.plstrain, *var.init_elem_size_n,
+                         nnode, nelem, esize, achievable);
     const bool keep = !param.mesh.mmg_metric_refine_recover;
     for (int n = 0; n < nnode; ++n) {
         if (keep) {   // the kept factor compute_metric_field applied to this node's metric
@@ -3123,7 +3095,7 @@ void rule_size_recovery(const Param &param, const Variables &var,
             tgt = std::max(tgt, target_raw[conn[i]]);
         }
         const bool fossil_fine = (esize[e] * ratio < ach);   // finer than envelope -> coarsen
-        const bool oversized   = (esize[e] >= 2.0 * tgt);     // >= 2x its target -> split
+        const bool oversized   = r5_oversized(esize[e], tgt);  // >= 2x its target -> split
         if (!fossil_fine && !oversized) continue;             // within the legal size band
         if (is_top_elem[e]) { ++n_top_skipped; continue; }
         if (fixed_band_elem[e]) { ++n_fixed_skipped; continue; }  // wall + 4 rings of a fixed side
@@ -3627,6 +3599,41 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
 }
 
 } // anonymous namespace
+
+// MMG metric floor: one mmg_remesh_defensive_tiny_ratio step (in measure) above MMG's hmin, two
+// above the tiny-element trigger; at most MMG's hmax (largest_size).
+double mmg_metric_floor(const Mesh &m)
+{
+    const double r = m.mmg_remesh_defensive_tiny_ratio;
+    return std::min(refine_floors(m).hmin * std::pow(r, 2.0 / NDIMS),
+                    std::pow(m.largest_size, 1.0 / NDIMS) * m.resolution);
+}
+
+// R5's element size and per-node plastic-strain size target (rule_size_recovery):
+// esize[e] = the edge of an equilateral element of e's volume,
+// target[n] = min over n's elements of init_size[n] * (1/(1 + coeff*plstrain[e]))^(1/NDIMS).
+void plastic_size_targets(double coeff, const conn_t &connectivity, const double_vec &volume,
+                          const double_vec &plstrain, const double_vec &init_size,
+                          int nnode, int nelem, double_vec &esize, double_vec &target)
+{
+    target.assign(nnode, std::numeric_limits<double>::max());
+    esize.resize(nelem);
+    for (int e = 0; e < nelem; ++e) {
+        ConstConnAccessor conn = connectivity[e];
+#ifdef THREED
+        esize[e] = std::cbrt(volume[e] / sizefactor);
+        const double red = std::cbrt(1.0 / (1.0 + coeff * plstrain[e]));
+#else
+        esize[e] = std::sqrt(volume[e] / sizefactor);
+        const double red = std::sqrt(1.0 / (1.0 + coeff * plstrain[e]));
+#endif
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            const int n = conn[i];
+            const double t = init_size[n] * red;
+            if (t < target[n]) target[n] = t;
+        }
+    }
+}
 
 // mmg_adapt under the post-output gate: while the output has an element that would re-trigger
 // remeshing, unfreeze around it (unfreeze_near_bad_output) and re-run MMG on the same input; the
