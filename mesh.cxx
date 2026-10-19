@@ -1135,6 +1135,82 @@ static void mmg_refine_init_mesh_2d(
 
 #endif // !THREED
 
+// Per-node element size of a raw mesh: esize[e] = the edge of the equilateral element of e's measure;
+// size_n = its measure-weighted average over each node's elements (initialize_elem_size_n's
+// convention).
+static void measured_size_n(int nnode, int nelem, const double *pcoord, const int *pconn,
+                            std::vector<double> &esize, std::vector<double> &size_n)
+{
+    std::vector<double> wsum(nnode, 0.0);
+    size_n.assign(nnode, 0.0);
+    esize.assign(nelem, 0.0);
+    for (int e = 0; e < nelem; ++e) {
+        const int *c = pconn + e*NODES_PER_ELEM;
+        const double measure = elem_measure(pcoord, pconn, e);
+        esize[e] = std::pow(measure / sizefactor, 1.0 / NDIMS);
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            size_n[c[k]] += esize[e] * measure;
+            wsum [c[k]] += measure;
+        }
+    }
+    for (int n = 0; n < nnode; ++n)
+        if (wsum[n] > 0) size_n[n] /= wsum[n];
+}
+
+// out[n] = old_val at the old node nearest to new node n.
+static void transfer_nearest_node(int old_nnode, const double *old_coord,
+                                  const std::vector<double> &old_val,
+                                  int new_nnode, const double *new_coord, double_vec &out)
+{
+    CentroidCloud cloud(old_coord, old_nnode);   // plain AoS point cloud; works for nodes too
+    CentroidKDTree kdtree(NDIMS, cloud,
+        nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+    kdtree.buildIndex();
+    out.assign(new_nnode, 0.0);
+    for (int n = 0; n < new_nnode; ++n) {
+        std::size_t nearest_idx;
+        double dist_sq;
+        nanoflann::KNNResultSet<double> result(1);
+        result.init(&nearest_idx, &dist_sq);
+        kdtree.findNeighbors(result, &new_coord[(std::size_t)n*NDIMS], nanoflann::SearchParameters());
+        out[n] = old_val[nearest_idx];
+    }
+}
+
+// Adopt the output of an MMG pass over the raw initial mesh: var.init_elem_size_n = the
+// nearest-old-node transfer of hint; the regions from the MMG element references when set (2D,
+// mattype_option 0), else from the nearest old element centroid; the mesh buffers are replaced.
+static void adopt_initial_mmg_output(Variables &var, const std::vector<double> &hint,
+        const MMGOutput &mmg_out, int &nnode, int &nelem, int &nseg,
+        double *&pcoord, int *&pconn, int *&pseg, int *&psegflag, double *&pregattr)
+{
+    transfer_nearest_node(nnode, pcoord, hint, mmg_out.nnode, mmg_out.coord.data(),
+                          *var.init_elem_size_n);
+
+    double *fine_regattr = new double[mmg_out.nelem];
+    if (!mmg_out.elem_ref.empty())
+        for (int e = 0; e < mmg_out.nelem; ++e) fine_regattr[e] = mmg_out.elem_ref[e];
+    else if (pregattr)
+        propagate_regattr_nearest(nelem, pcoord, pconn, pregattr,
+                                  mmg_out.nelem, mmg_out.coord.data(), mmg_out.conn.data(),
+                                  fine_regattr);
+    else
+        std::fill(fine_regattr, fine_regattr + mmg_out.nelem, 0.0);
+
+    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
+    if (pregattr) delete [] pregattr;
+    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
+    pcoord   = new double[(std::size_t)nnode * NDIMS];
+    pconn    = new int   [(std::size_t)nelem * NODES_PER_ELEM];
+    pseg     = new int   [(std::size_t)nseg  * NODES_PER_FACET];
+    psegflag = new int   [nseg];
+    pregattr = fine_regattr;
+    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
+    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
+    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
+    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
+}
+
 // Refine the restored side walls of the initial mesh to ~mesh.resolution (remeshing_option 13):
 // the incoming-material profile is sampled at wall-node spacing, so a coarse wall would freeze a
 // kinked profile for the whole run. MMG rebuilds the wall band (each element touching a wall node
@@ -1149,20 +1225,9 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
 {
     const double res = param.mesh.resolution;
 
-    // Per-node actual element size (edge length of the equilateral element of the same measure,
-    // measure-weighted nodal average -- the same convention as initialize_elem_size_n).
-    std::vector<double> size_n(nnode, 0.0), wsum(nnode, 0.0), esize(nelem, 0.0);
-    for (int e = 0; e < nelem; ++e) {
-        const int *c = pconn + e*NODES_PER_ELEM;
-        const double measure = elem_measure(pcoord, pconn, e);
-        esize[e] = std::pow(measure / sizefactor, 1.0 / NDIMS);
-        for (int k = 0; k < NODES_PER_ELEM; ++k) {
-            size_n[c[k]] += esize[e] * measure;
-            wsum [c[k]] += measure;
-        }
-    }
-    for (int n = 0; n < nnode; ++n)
-        if (wsum[n] > 0) size_n[n] /= wsum[n];
+    // Per-node actual element size.
+    std::vector<double> size_n, esize;
+    measured_size_n(nnode, nelem, pcoord, pconn, esize, size_n);
 
     // Clamp at every restored wall, whatever its BC: a static wall keeps a full-resolution profile
     // should the flow turn inward.
@@ -1282,48 +1347,8 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
     // gate scans the whole output, so it also repairs a bad element left from the initial mesh.
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
 
-    {
-        CentroidCloud cloud(pcoord, nnode);   // plain AoS point cloud; works for nodes too
-        CentroidKDTree kdtree(NDIMS, cloud,
-            nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
-        kdtree.buildIndex();
-        var.init_elem_size_n->assign(mmg_out.nnode, 0.0);
-        for (int n = 0; n < mmg_out.nnode; ++n) {
-            std::size_t nearest_idx;
-            double dist_sq;
-            nanoflann::KNNResultSet<double> result(1);
-            result.init(&nearest_idx, &dist_sq);
-            kdtree.findNeighbors(result, &mmg_out.coord[(std::size_t)n*NDIMS],
-                                 nanoflann::SearchParameters());
-            (*var.init_elem_size_n)[n] = hint[nearest_idx];
-        }
-    }
-
-    // Material regions: the MMG element references when set (2D, mattype_option 0), else the
-    // nearest old element centroid's.
-    double *fine_regattr = new double[mmg_out.nelem];
-    if (!mmg_out.elem_ref.empty())
-        for (int e = 0; e < mmg_out.nelem; ++e) fine_regattr[e] = mmg_out.elem_ref[e];
-    else if (pregattr)
-        propagate_regattr_nearest(nelem, pcoord, pconn, pregattr,
-                                  mmg_out.nelem, mmg_out.coord.data(), mmg_out.conn.data(),
-                                  fine_regattr);
-    else
-        std::fill(fine_regattr, fine_regattr + mmg_out.nelem, 0.0);
-
-    // Replace the mesh buffers with the refined mesh.
-    delete [] pcoord;   delete [] pconn;   delete [] pseg;   delete [] psegflag;
-    if (pregattr) delete [] pregattr;
-    nnode = mmg_out.nnode;  nelem = mmg_out.nelem;  nseg = mmg_out.nseg;
-    pcoord   = new double[(std::size_t)nnode * NDIMS];
-    pconn    = new int   [(std::size_t)nelem * NODES_PER_ELEM];
-    pseg     = new int   [(std::size_t)nseg  * NODES_PER_FACET];
-    psegflag = new int   [nseg];
-    pregattr = fine_regattr;
-    std::memcpy(pcoord,   mmg_out.coord.data(),   mmg_out.coord.size()   * sizeof(double));
-    std::memcpy(pconn,    mmg_out.conn.data(),    mmg_out.conn.size()    * sizeof(int));
-    std::memcpy(pseg,     mmg_out.seg.data(),     mmg_out.seg.size()     * sizeof(int));
-    std::memcpy(psegflag, mmg_out.segflag.data(), mmg_out.segflag.size() * sizeof(int));
+    adopt_initial_mmg_output(var, hint, mmg_out, nnode, nelem, nseg,
+                             pcoord, pconn, pseg, psegflag, pregattr);
 
     std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
               << nnode << " nodes, " << nelem << " elements\n";
