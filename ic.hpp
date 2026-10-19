@@ -9,6 +9,8 @@ void initial_stress_state(const Param &param, const Variables &var,
 void initial_stress_state_1d_load(const Param &param, const Variables &var,
                           tensor_t &stress, double_vec &stressyy, double_vec &old_mean_stress, tensor_t &strain,
                           double &compensation_pressure);
+void initial_weak_zone(const Param &param, int nelem, const array_t &coord,
+                       const conn_t &connectivity, double_vec &plstrain);
 void initial_weak_zone(const Param &param, const Variables &var,
                        double_vec &plstrain);
 void initial_temperature(const Param &param, const Variables &var,
