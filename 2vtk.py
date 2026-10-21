@@ -277,6 +277,7 @@ def unlinked(filename):
 
 def process_single_frame(args):
     des, output_prefix, i = args
+    pt_residual_missing = False
 
     frame = des.frames[i]
     nnode = des.nnode_list[i]
@@ -308,7 +309,9 @@ def process_single_frame(args):
         try:
             convert_field(des, frame, 'PT residual force', fvtu)
         except KeyError:
-            pass
+            # Optional in legacy, unsolved and post-remesh frames. The parent
+            # reports this once across all workers and selected frame ranges.
+            pt_residual_missing = True
         
         # Calculate derived data
         point_data, cell_data = calculate_derived_data(des, frame)
@@ -469,7 +472,7 @@ def process_single_frame(args):
             filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
             output_vtp_file(des, frame, filename, 'hydrous-markerset', time_in_yr, step)
 
-    return suffix
+    return suffix, pt_residual_missing
 
 
 def process_vtkhdf_update(args):
@@ -673,9 +676,16 @@ def convert_batches(batches, prefix, target_func, imap, names):
     of the given names as ours.'''
     nout = sum(len(b) for b in batches)
     width, ndone = len(str(nout)), 0
+    pt_residual_notice = False
     for batch in batches:
         announce_model(batch, ndone, prefix, names)
         for result in imap(target_func, batch):
+            if target_func is process_single_frame:
+                result, pt_residual_missing = result
+                if pt_residual_missing and not pt_residual_notice:
+                    print("\nInfo: 'PT residual force' is not part of one or more selected save files; "
+                          "skipped for those frames.", file=sys.stderr)
+                    pt_residual_notice = True
             ndone += 1
             print(f'Frame #{result} converted ({ndone:{width}d}/{nout}).', end='\r', file=sys.stderr)
         link_frames(batch, prefix, names)

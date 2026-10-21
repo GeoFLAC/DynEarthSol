@@ -71,6 +71,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- `2vtk.py` reports a missing optional PT residual once per conversion, including
+  parallel conversion and selected frame ranges.
+
 - Physical-step PT can retain equilibrium under a held load without replaying
   the preceding deformation rate. The elastic example uses the existing
   running force scale to preserve its load-relative accuracy across steps.

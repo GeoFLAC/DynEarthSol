@@ -396,3 +396,14 @@ GPU Maxwell runs add `--steps 6 --timeout 240`; GPU elastic runs use
 are archived at `/home/slee91/work/des-pt-stationary-20261021` (`CONTRACT.txt`,
 `SUMMARY.json`, `FINDINGS.txt`). No long core-complex runs, new acceleration,
 MMG/Exodus/GoSPL builds or full hydraulic GPU qualification are included.
+
+### Optional residual conversion notice
+
+`2vtk.py` now reports once per conversion invocation when selected VTU frames
+lack the optional `PT residual force` field. The parent process aggregates worker
+flags, including multiple frame ranges; HDF5 update workers retain their existing
+return type. Tests with one and four workers cover legacy all-missing frames,
+mixed initial/accepted frames, and accepted-only ranges. Notice counts are
+respectively 1, 1 and 0; available residual fields are retained, and legacy frames
+are converted without inventing a residual. Raw converter logs and VTU outputs
+are in the same local evidence directory under `vtk-{1,4}-{old,mixed,accepted}`.
