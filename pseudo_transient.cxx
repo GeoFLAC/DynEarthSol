@@ -212,10 +212,11 @@ bool is_finite_candidate(const Variables& var)
     return !bad;
 }
 
-void evaluate_mechanical_trial(const Param& param, Variables& var,
-                               const MechanicalState& physical_start, bool initial_equilibrium)
+double evaluate_mechanical_trial(const Param& param, Variables& var,
+                                 PTWorkspace& w, bool initial_equilibrium,
+                                 double displacement_dt)
 {
-    physical_start.restore(var);
+    w.start.restore(var);
     update_strain_rate(var, *var.strain_rate);
     compute_dvoldt(var, *var.ntmp, *var.etmp);
     compute_edvoldt(var, *var.ntmp, *var.edvoldt);
@@ -227,6 +228,10 @@ void evaluate_mechanical_trial(const Param& param, Variables& var,
         NMD_stress(var, *var.stress, *var.ntmp, *var.etmp,
                    param.mat.is_plane_strain ? var.stressyy : nullptr);
     #pragma acc wait
+    update_force(param, var, *var.force, *var.force_residual, *var.tmp_result,
+                 &w.undamped, displacement_dt, false);
+    project_free_vectors(var, w.constraints, w.undamped);
+    return pt_residual_rms(var, w.constraints, w.undamped);
 }
 
 const char* pt_status_name(PTStatus status)
@@ -271,17 +276,10 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     double lowest_mode = 1;
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
-        evaluate_mechanical_trial(param, var, w.start, initial);
-        update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt, false);
-        project_free_vectors(var, w.constraints, w.undamped);
         result.iterations = iteration+1;
-        result.residual = pt_residual_rms(var, w.constraints, w.undamped);
+        result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt);
         var.l2_residual = result.residual;
         if (iteration == 0) {
-            // Match the auxiliary solver stress to the first constitutive trial.
-            if (!adaptive)
-                for (int e=0; e<var.nelem; ++e)
-                    for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
             result.initial_residual = result.residual;
             result.threshold = param.control.PT_absolute_tolerance +
                 param.control.PT_relative_tolerance*result.initial_residual;
@@ -296,6 +294,47 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         if (!std::isfinite(result.residual) || !std::isfinite(roundoff_floor) || !is_finite_candidate(var)) {
             result.status = PTStatus::nonfinite;
             break;
+        }
+        if (iteration == 0 && !initial && result.residual > result.threshold) {
+            // The previous rate can replay a completed load increment. Compare
+            // it with zero free motion using the full physical-dt constitutive
+            // trial: viscous relaxation, pressure and aging must still occur.
+            int free_motion = 0;
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(var, w) reduction(|:free_motion)
+#endif
+            #pragma acc parallel loop gang vector reduction(|:free_motion)
+            for (long long k=0; k<static_cast<long long>(var.nnode)*NDIMS; ++k) {
+                const int n = k/NDIMS, d = k%NDIMS;
+                free_motion |= (*var.vel)[n][d] != w.constraints.prescribed[n][d];
+            }
+            if (free_motion) {
+                const double warm_residual = result.residual;
+#ifndef ACC
+                #pragma omp parallel for default(none) shared(var, w)
+#endif
+                #pragma acc parallel loop gang vector async
+                for (int n=0; n<var.nnode; ++n)
+                    for (int d=0; d<NDIMS; ++d)
+                        (*var.vel)[n][d] = w.constraints.prescribed[n][d];
+                const double stationary_residual =
+                    evaluate_mechanical_trial(param, var, w, false, displacement_dt);
+                if (std::isfinite(stationary_residual) && is_finite_candidate(var) &&
+                    stationary_residual < warm_residual) {
+                    result.residual = stationary_residual;
+                } else {
+#ifndef ACC
+                    #pragma omp parallel for default(none) shared(var, w)
+#endif
+                    #pragma acc parallel loop gang vector async
+                    for (int n=0; n<var.nnode; ++n)
+                        for (int d=0; d<NDIMS; ++d)
+                            (*var.vel)[n][d] = w.old_velocity[n][d];
+                    project_free_vectors(var, w.constraints, *var.vel, true);
+                    result.residual = evaluate_mechanical_trial(param, var, w, false, displacement_dt);
+                }
+                var.l2_residual = result.residual;
+            }
         }
         if (result.residual <= result.threshold) {
             result.status = PTStatus::converged;
@@ -337,6 +376,9 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         // Geometry, physical dt and elastic moduli are fixed during this solve.
         // Only a viscous rheology adds candidate-dependent viscosity to factors.
         if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous)) {
+            if (iteration == 0 && !adaptive)
+                for (int e=0; e<var.nelem; ++e)
+                    for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
             compute_pt_factors(param, var, w.stress_fraction, w.mobility,
                                w.height, w.effective_viscosity);
             if (adaptive)

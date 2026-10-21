@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check accepted PT force output on the dry elastic example, including restart."""
+"""Check fixed-load PT equilibrium, force output, restart and a changed load."""
 import argparse
 import configparser
 import json
@@ -51,11 +51,17 @@ def main():
         pass
     else:
         raise AssertionError('Unsolved initial frame must not claim a PT residual')
-    reports = {int(step): (float(residual), float(initial), float(threshold))
-               for step, residual, initial, threshold in re.findall(
-                   r'PT step=(\d+) status=converged iterations=\d+ residual=(\S+) initial=(\S+) threshold=(\S+)',
+    reports = {int(step): dict(iterations=int(iterations), residual=float(residual),
+                              initial=float(initial), threshold=float(threshold))
+               for step, iterations, residual, initial, threshold in re.findall(
+                   r'PT step=(\d+) status=converged iterations=(\d+) residual=(\S+) initial=(\S+) threshold=(\S+)',
                    (output / 'fresh.log').read_text())}
-    assert reports[1][1] > 1, 'Example must exercise a nonzero force imbalance'
+    assert reports[1]['initial'] > 1, 'Example must exercise a nonzero force imbalance'
+    if cfg.getboolean('control', 'PT_use_running_scale', fallback=False):
+        for step in (2, 3):
+            assert reports[step]['iterations'] == 1, 'Held equilibrium must not require relaxation updates'
+            np.testing.assert_array_equal(des.read_field(step, 'velocity'), 0)
+            np.testing.assert_array_equal(des.read_field(step, 'strain'), des.read_field(1, 'strain'))
     checked = {}
     for frame in des.frames[1:]:
         force = des.read_field(frame, 'force')
@@ -73,16 +79,30 @@ def main():
         np.testing.assert_allclose(residual, expected, rtol=1e-12, atol=1e-14)
         assert np.all(residual[~free] == 0)
         rms = float(np.sqrt(np.sum(residual * residual) / free.sum()))
-        reported, _, threshold = reports[des.steps[des.frames.index(frame)]]
+        report = reports[des.steps[des.frames.index(frame)]]
+        reported, threshold = report['residual'], report['threshold']
         np.testing.assert_allclose(rms, reported, rtol=1e-12, atol=1e-14)
         assert rms <= threshold and np.isfinite(residual).all()
-        checked[int(frame)] = {'rms': rms, 'threshold': threshold}
+        checked[int(frame)] = {'rms': rms, 'threshold': threshold, 'iterations': report['iterations']}
     resumed = Dynearthsol(str(output / 'resumed'))
     for frame in resumed.frames:
         np.testing.assert_array_equal(des.read_field(frame, 'PT residual force'),
                                       resumed.read_field(frame, 'PT residual force'))
+    # A cached equilibrium must not suppress a new load after restarting from
+    # a held step with zero velocity. Re-evaluate the complete physical problem.
+    cfg['sim'].update(modelname='reloaded', is_restarting='yes', restarting_from_frame='2')
+    load = 2 * cfg.getfloat('bc', 'stress_val_z1')
+    cfg['bc']['stress_val_z1'] = str(load)
+    with (output / 'reloaded.cfg').open('w') as stream:
+        cfg.write(stream)
+    with (output / 'reloaded.log').open('w') as stream:
+        subprocess.run([str(executable), 'reloaded.cfg'], cwd=output,
+                       stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=args.timeout)
+    reloaded = Dynearthsol(str(output / 'reloaded'))
+    np.testing.assert_allclose(reloaded.read_field(3, 'stress')[:, des.ndims-1], load, rtol=1e-5)
+    assert np.max(np.abs(reloaded.read_field(3, 'strain') - des.read_field(2, 'strain'))) > 1e-4
     (output / 'residual-check.json').write_text(json.dumps(checked, indent=2) + '\n')
-    print(f'PASS: PT_option={args.option}, {des.ndims}D accepted force/RMS and restarted diagnostic')
+    print(f'PASS: PT_option={args.option}, {des.ndims}D force/RMS, held equilibrium, restart and changed load')
 
 
 if __name__ == '__main__':

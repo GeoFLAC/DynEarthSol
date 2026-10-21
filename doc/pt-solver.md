@@ -51,6 +51,23 @@ until the next accepted solve. It creates no checkpoint requirement. Both the
 Python reader and `2vtk.py` support the optional vector.
 
 The relative scale is the first candidate's imbalance, not the gross prestress.
+
+The first candidate uses the preceding physical velocity. If it does not meet
+this stopping criterion, a physical-step solve also checks the affine prescribed
+velocity with zero free motion. It keeps the finite candidate with the smaller
+projected force residual. Each candidate restores the same mechanical baseline
+and evaluates the complete physical-dt constitutive update, including viscous
+relaxation, pending pressure and aging; old stress alone is not an equilibrium
+test. An already accepted warm candidate is left unchanged. This avoids replaying
+a completed load increment while retaining warm starts for ongoing flow. A rejected
+stationary candidate is replaced by re-evaluating the warm candidate. No second
+history snapshot is allocated.
+
+The printed `initial`, relative reference and roundoff scale still refer to the
+first warm trial, before the candidate comparison. The threshold formulas and
+defaults are unchanged. A solve accepted with `iterations=1` needs no relaxation
+update, but may have evaluated both velocity candidates. Initial instantaneous
+equilibration retains its existing zero-velocity initialization.
 An opt-in alternative, `control.PT_use_running_scale=yes`, uses for physical steps:
 
 ```
@@ -250,9 +267,15 @@ relaxation). Change that line to `PT_option=1` for adaptive dynamic relaxation;
 change `sim.modelname` to keep both outputs. The same config also runs with
 `make ndims=3` and `./dynearthsol3d`. Each physical step reports its iteration
 count, residual and threshold. The applied traction gives a nonzero initial
-imbalance, so this example exercises relaxation rather than an already balanced
-state. Absolute tolerance is a nodal force, not a stress tolerance in Pa. This
-short elastic example does not qualify long-term plastic or hydraulic models.
+imbalance, so the first physical step requires relaxation. The example explicitly
+uses `PT_use_running_scale=yes` to keep its force precision tied to the applied
+load across subsequent physical steps; the solver default remains `no`. With
+this setting and the candidate comparison, steps 2 and 3 are accepted in their
+first loop pass without further velocity updates. Per-step relative scaling
+remains available and can intentionally demand a tighter residual as the next
+step's initial imbalance shrinks. Absolute tolerance has nodal-force units,
+not stress units in Pa. This short elastic example does not qualify long-term
+plastic or hydraulic models.
 
 For the 2D example, the laterally constrained elastic modulus is
 `K + 4G/3 = 23.3333 MPa`. A 100 kPa compressive load therefore gives
@@ -273,3 +296,18 @@ OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d
 ```
 
 Use distinct output directories; repeat with the 3D executable as needed.
+
+A companion Maxwell creep regression keeps the same traction and constraints,
+uses a 3D constitutive state (plane strain in 2D), and checks continued deformation
+against an independent homogeneous Crank-Nicolson reference. The default run is
+100 steps, spanning ten shear relaxation times; stress, strain and velocity are
+checked throughout, including nonzero motion after loading:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-0 --ndims 2 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-1 --ndims 2 --option 1
+```
+
+For 3D, replace the executable with `./dynearthsol3d` and use `--ndims 3`.
+The elastic regression also doubles the traction after restarting from a held
+step, so a stale equilibrium cannot suppress a genuinely changed load.

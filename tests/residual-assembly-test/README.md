@@ -74,3 +74,10 @@ must diffuse with zero net fluid change on the closed two-element mesh. Adding a
 hydrostatic background at nonzero gravity must leave the pressure increments and
 diffusivity unchanged. These checks run in both dimensions and all test backends;
 they do not establish the accuracy of the coupled consolidation time integration.
+
+The constant-load integration regression in `../functional/pt_residual_output.py`
+checks both held equilibrium and a load doubled on restart. With the supplied
+running-scale elastic example, steps 2/3 must be accepted without relaxation
+updates. `../functional/pt_maxwell_creep.py` checks continued traction-driven
+Maxwell creep for 100 steps against a homogeneous discrete reference. Commands
+and the meaning of candidate evaluations are in `../../doc/pt-solver.md`.

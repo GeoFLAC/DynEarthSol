@@ -283,3 +283,116 @@ No long runs or new acceleration experiments are part of this follow-up.
 The short elastic results do not qualify general nonlinear convergence,
 long-time plastic/RSF behavior or hydraulic accuracy. MMG, Exodus and GoSPL
 configurations were not rerun for this follow-up.
+
+## Held-load initial guess and broader regressions (2026-10-21)
+
+The parent for this follow-up is `13517704986f`. A physical-step PT solve now
+compares an unsuccessful warm trial against the affine prescribed velocity
+with zero free motion. Both trials restore the same mechanical baseline and
+apply the full physical-dt constitutive update. The smaller finite projected
+residual supplies the initial guess; acceptance, rollback and the convergence
+formulas/defaults are unchanged. Already accepted warm trials are untouched.
+This is not an old-stress equilibrium shortcut: Maxwell relaxation, pressure
+increments and RSF aging still enter every physical trial.
+
+The elastic example explicitly selects the existing running-scale criterion.
+With the default per-step criterion, a shrinking first residual can still tighten
+the next step's target; the predictor alone does not remove that effect. A
+factorial comparison separates the two changes:
+
+| Dimension / option | Parent, per-step | Changed, per-step | Parent, running | Changed, running |
+| --- | --- | --- | --- | --- |
+| 2D / 0 | 299, 299, 201 | 299, 1, 178 | 299, 299, 25 | 299, 1, 1 |
+| 2D / 1 | 25, 25, 18 | 25, 1, 16 | 25, 25, 5 | 25, 1, 1 |
+| 3D / 0 | 519, 519, 308 | 519, 1, 267 | 519, 519, 42 | 519, 1, 1 |
+| 3D / 1 | 31, 31, 20 | 31, 1, 18 | 31, 31, 5 | 31, 1, 1 |
+
+Entries are loop counts for steps 1/2/3. Count 1 means no relaxation update;
+it can include two constitutive/residual evaluations. A rejected stationary
+trial requires re-evaluation of the warm trial. Printed `initial` and the force
+reference still describe the first warm trial. No timing speedup is claimed.
+
+Validation used GNU 11.4, NVHPC 25.9 and an RTX 4070 SUPER (cc89), with one CPU
+thread for application comparisons unless stated otherwise:
+
+- Both dimensions compile as serial debug, OpenMP binary/HDF5, and OpenACC
+  HDF5. All four dimension/option combinations pass the elastic force/RMS,
+  held-equilibrium, restart and doubled-load regression on each backend/output
+  combination. Held steps have exactly zero velocity and unchanged strain;
+  doubling traction after restart produces a new deformation. The parent fails
+  the new held-step loop-count assertion as expected.
+- Confined Maxwell creep runs 100 physical steps at `dt=0.01 s`,
+  `K=G=1e7 Pa`, `eta=1e6 Pa s`, and axial traction `-1e5 Pa`, in both dimensions
+  and both options. The 2D case uses plane strain. An independent homogeneous
+  Crank-Nicolson recurrence checks every step, including continued motion after
+  loading. The maximum normalized stress/strain/velocity error is `2.171e-6`,
+  below the predeclared `5e-5` limit. Stress is normalized by `1e5 Pa`, strain by
+  `0.01`, and velocity by the first reference response. The run spans ten shear
+  relaxation times; reference final axial strain is approximately `-0.00991968`.
+- The established simple-shear EP/RSF suite passes all nine 200,000-step cases
+  plus healing for each PT option. Maximum fractional stress error is
+  `1.156e-5`, imposed-rate error `5e-8`, and healing relative error zero
+  (linear-growth deficit `2.027e-6`). These prescribed-motion cases are
+  supplemented by traction-driven hardening EP and EVP tests: 20 steps each,
+  2D/3D and both options, with positive plastic strain. All eight parent/changed
+  pairs pass; maximum history-normalized physical-field difference is
+  `4.129e-6`, below the declared `1e-4` limit. These are hardening tests, not
+  general softening or core-complex qualification.
+- The focused elastic/Maxwell/viscous/EP/EVP, pressure, trial-state and rollback
+  suite passes 6,832 assertions in 2D and 9,639 in 3D, each on four-thread
+  OpenMP, serial ASan/UBSan and OpenACC. Sanitizer coverage is the focused suite.
+- Parent `make set` followed by changed `make cmp` passes BIT-EXACT on dry DR
+  `test-rect-tiny.cfg` (2D) and `test-3d-equ-tiny.cfg` (3D). PT trajectories and
+  iteration counts intentionally can differ in this follow-up; the exact PT
+  comparison reported for October 19 does not apply to this new change.
+- Twelve dynamic-dt/remesh/hydrostatic-initial-equilibrium restart cases, sixteen
+  step/time/mixed/catch-up output-schedule cases, four eight-step Maxwell
+  restarts and two oblique-constraint restarts pass the existing strict payload
+  comparison. An initial Maxwell restart fixture exposed an infinite output-clock
+  anchor from the default enormous time-output interval. Repeating with an
+  explicit finite interval passes; the elastic example now also sets a finite
+  interval. No C++ output-scheduling change is included. An early nonlinear
+  fixture used an invalid parameter name and stopped at input parsing; only the
+  corrected fixtures above count as physics tests.
+- GPU Maxwell checks cover six steps per dimension/option, not the CPU's
+  100-step duration, and independently meet the same reference error limit.
+  CPU/GPU elastic and six-step Maxwell comparisons use exactly equal coordinates
+  and connectivity; the maximum normalized stress/strain/velocity difference is
+  `5.821e-16`, below the declared `5e-5` limit. Elastic normalizers are
+  `1e5 Pa`, `0.01`, `1 m/s`; Maxwell uses its first reference velocity.
+
+### Consolidation regression limits
+
+The existing 2D/3D Terzaghi and 2D Mandel inputs were rerun against both parent
+and changed executables, for both PT options. All six original configurations
+hit a convergence limit in both versions (exit 53); these are not counted as
+passing benchmarks. Some relative-only targets fall near `1e-11` nodal-force
+units and below the attainable roundoff residual. Failure steps need not match:
+Mandel option 0 stops at step 167 in the parent and 168 after this change.
+
+A separate comparison adds the same explicit `PT_absolute_tolerance=1e-6` to
+both versions, without changing production defaults or iteration caps. Five
+pairs complete all 101 saved frames: 2D Terzaghi options 0/1, 3D Terzaghi option 1,
+and Mandel options 0/1. Saved physical times match exactly; maximum
+history-normalized physical-field difference is `1.736e-11`. This demonstrates
+regression preservation under the stated tolerance, not a new analytical
+qualification of hydraulic accuracy. In 3D Terzaghi option 0, both versions still
+reach 5,000 iterations at step 1 with exactly the same residual
+`1.8631423225117433e-5` and target `1.0028306925853615e-6`. That existing convergence
+limit remains unresolved; no additional acceleration or raised iteration cap is
+part of this follow-up.
+
+Reproduce held-load and Maxwell checks using the commands in
+[the solver notes](pt-solver.md), both executables and both `--option` values.
+For the EP/RSF suite:
+
+```sh
+OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 0 --keep-output
+OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 1 --keep-output
+```
+
+GPU Maxwell runs add `--steps 6 --timeout 240`; GPU elastic runs use
+`--timeout 180`. Local raw inputs, scripts, binaries, logs and comparison metrics
+are archived at `/home/slee91/work/des-pt-stationary-20261021` (`CONTRACT.txt`,
+`SUMMARY.json`, `FINDINGS.txt`). No long core-complex runs, new acceleration,
+MMG/Exodus/GoSPL builds or full hydraulic GPU qualification are included.

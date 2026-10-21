@@ -71,6 +71,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- Physical-step PT can retain equilibrium under a held load without replaying
+  the preceding deformation rate. The elastic example uses the existing
+  running force scale to preserve its load-relative accuracy across steps.
+
 - Darcy flux uses pressure-form mobility, avoiding division by fluid specific
   weight when gravity is zero while retaining the existing density convention.
 - PT initial equilibrium preserves hydraulic sidewall support when physical
