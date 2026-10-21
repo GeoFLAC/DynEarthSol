@@ -226,7 +226,7 @@ void init(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
-    // After compute_mass: it is the only writer of var.volume_n, which this divides by.
+    // After compute_mass: it fills var.volume_n, which this divides by.
     initialize_elem_size_n(var, *var.init_elem_size_n);
 #endif
 
