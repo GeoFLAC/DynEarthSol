@@ -828,12 +828,16 @@ int main(int argc, const char* argv[])
         var.output_next_regular_frame = 1;
     }
     const double starting_time = param.control.has_PT ? var.output_start_time : var.reference_frame_time;
-    var.reference_frame_time = starting_time + param.sim.output_time_interval_in_yr * YEAR2SEC;
+    // The disabled-time sentinel must not overflow into a PT checkpoint clock.
+    const double reference_interval_in_yr = param.control.has_PT &&
+        param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
+        ? 0 : param.sim.output_time_interval_in_yr;
+    var.reference_frame_time = starting_time + reference_interval_in_yr * YEAR2SEC;
     const double starting_step = param.control.has_PT ? var.output_start_step : var.steps;
     int next_regular_frame = param.control.has_PT ? var.output_next_regular_frame : 1;
     if (param.control.has_PT && !param.control.use_global_velocity_scaling)
         var.reference_frame_time = starting_time +
-            next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
+            next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
@@ -958,7 +962,7 @@ int main(int argc, const char* argv[])
 
                 next_regular_frame ++;
                 var.reference_frame_time = starting_time +
-                    next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC;
+                    next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
             }
         }

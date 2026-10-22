@@ -3,6 +3,7 @@
 import argparse
 import configparser
 import json
+import math
 from pathlib import Path
 import struct
 import subprocess
@@ -15,7 +16,7 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('config', type=Path)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--schedule', choices=('step', 'time', 'mixed', 'catchup'), required=True)
+    parser.add_argument('--schedule', choices=('step', 'step-default', 'time', 'mixed', 'catchup'), required=True)
     args = parser.parse_args()
     executable = args.executable.resolve()
     output = args.output.resolve()
@@ -32,9 +33,11 @@ def main():
     cfg['sim'].update(max_steps='18', max_time_in_yr='1', has_initial_checkpoint='yes',
                       checkpoint_frame_interval='1', is_outputting_averaged_fields='no',
                       has_output_during_remeshing='no',
-                      output_step_interval='3' if args.schedule == 'step' else
+                      output_step_interval='3' if args.schedule in ('step', 'step-default') else
                       ('4' if args.schedule == 'mixed' else '2147483647'),
                       output_time_interval_in_yr='1' if args.schedule == 'step' else repr(interval))
+    if args.schedule == 'step-default':
+        cfg['sim'].pop('output_time_interval_in_yr', None)
     for phase in ('fresh', 'resumed'):
         cfg['sim'].update(modelname=phase, is_restarting=str(phase == 'resumed').lower())
         if phase == 'resumed':
@@ -52,6 +55,10 @@ def main():
             if frame < 1:
                 continue
             data = fields(output / f'{phase}.save.{frame:06d}')
+            # The resumed run rewrites its initial save, not its source checkpoint.
+            if phase == 'fresh' or frame != 1:
+                checkpoint = fields(output / f'{phase}.chkpt.{frame:06d}')
+                assert math.isfinite(struct.unpack('d', checkpoint['reference_frame_time'])[0]), 'Nonfinite PT output clock'
             rows.append((frame, struct.unpack('i', data['steps'])[0],
                          struct.unpack('d', data['time_sec'])[0]))
         histories[phase] = rows

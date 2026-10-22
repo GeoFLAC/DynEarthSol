@@ -72,7 +72,12 @@ OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d
 ```
 
 Repeat with `--schedule step`, `time`, and `catchup`, new output directories,
-and the 3D executable. The same quiescent cell tests binary and HDF5 checkpoints.
+and the 3D executable. Use `--schedule step-default` to omit the time interval
+and exercise the disabled-time default; the PT checkpoint clock must remain
+finite. Repeat with both PT options and with global velocity scaling on/off to
+cover both scheduler paths. The supplied RSF fixture forces global velocity
+scaling on; use an otherwise identical copy with `rheology_type=elastic` to test
+the off setting. The same cell tests binary and HDF5 checkpoints.
 The comparison includes frame numbers, physical steps, output times and all
 subsequent save/checkpoint payloads. Cadence settings remain unchanged on restart.
 PT checkpoints retain the original schedule anchors and the next regular output
@@ -84,7 +89,10 @@ does not qualify earthquake-event history or averaged-field accumulator restart.
 
 A failed PT solve reports its requested stopping threshold separately from the
 existing status line. The threshold is the configured absolute tolerance plus
-the relative tolerance times the initial residual of that physical step. Near
+the relative tolerance times the first warm-trial residual (`warm_initial`).
+The reported `initial` is the selected starting candidate, which can be smaller.
+`evaluations` counts full trials; `iterations` counts loop passes. Both residuals
+are reported before physical transport, mesh motion and stress rotation. Near
 equilibrium, this relative-only target may fall below attainable arithmetic
 accuracy. A small reported residual alone does not authorize acceptance: failed
 candidates are still rolled back, and the solver does not silently relax the

@@ -407,3 +407,102 @@ mixed initial/accepted frames, and accepted-only ranges. Notice counts are
 respectively 1, 1 and 0; available residual fields are retained, and legacy frames
 are converted without inventing a residual. Raw converter logs and VTU outputs
 are in the same local evidence directory under `vtk-{1,4}-{old,mixed,accepted}`.
+
+## Diagnostic and lifecycle audit (2026-10-22)
+
+This audit compares against the preceding held-load follow-up, `bece118`.
+The printed `initial` previously retained a discarded warm candidate even when
+PT selected a stationary start. It now reports the selected starting residual;
+`warm_initial` retains the first warm trial and continues to set the unchanged
+convergence reference. `evaluations` counts complete constitutive/force trials,
+including rejected candidates and warm restoration. The record states
+`stage=before_physical_updates`; `residual` remains the accepted mechanical-solve
+residual before physical transport, mesh motion and Jaumann rotation. A restored
+warm trial is also rechecked for finite fields before use.
+
+For the 2D option-0 elastic example:
+
+| Step | Selected `initial` | `warm_initial` | Accepted `residual` | Iterations / evaluations |
+| --- | --- | --- | --- | --- |
+| 1 | 35355.3390593 | 35355.3390593 | 0.03417443769 | 299 / 299 |
+| 2 | 0.03420140654 | 35355.2942633 | 0.03420140654 | 1 / 2 |
+| 3 | 0.03420140654 | 0.03420140654 | 0.03420140654 | 1 / 1 |
+
+The small difference between step 1's accepted residual and step 2's selected
+initial value comes from the physical stress rotation after acceptance. It is
+not another compression or repeated aging. Independent simplex integration of
+the saved post-rotation stress gives step 2's residual. Inverting the linear
+Jaumann update reconstructs the accepted pre-rotation force vector in both
+dimensions/options (maximum observed component difference `1.04e-16`). Step-1 and
+step-2 saved physical stress arrays are exactly equal. The functional regression
+now checks these time levels independently (`rtol=1e-10`, `atol=5e-11`), in
+addition to the existing damping/projection, reload and restart checks. The old
+executable fails the new diagnostic-record assertion as expected. No exact
+identity is imposed between quantities evaluated at different physical stages.
+
+The audit also reproduced a default-output-clock issue: a step-driven PT input
+that omits the time interval uses a disabled-time sentinel. Multiplying it by
+seconds per year stored infinity in `reference_frame_time`. PT now leaves that
+reference at the finite schedule origin when time output is disabled. Actual
+output predicates and frame cadence are unchanged; explicit time intervals and
+the non-PT path retain their arithmetic. The old executable fails the new strict
+HDF5 `step-default` check on this infinite field. All eight 2D/3D, option-0/1,
+GVS-off/on default-interval restart cases pass after the correction. These cases
+use an otherwise identical elastic cell, so RSF input validation cannot silently
+force GVS back on. No new
+checkpoint fields or changed hydraulic compatibility policy are introduced.
+
+Validation with GNU 11.4, NVHPC 25.9 and RTX 4070 SUPER (cc89):
+
+- Both dimensions compile in serial debug, OpenMP binary/HDF5 and OpenACC HDF5.
+  CPU elastic checks pass for all three output/build combinations and both
+  options, with the new independent force/stress reconstruction. The four
+  per-step-relative examples also pass: changing the displayed initial value
+  does not silently change their tolerance references.
+- All four 100-step Maxwell reference runs pass, with maximum normalized error
+  `2.171e-6` against the discrete reference. Both nine-case 200,000-step EP/RSF
+  suites plus healing pass. All eight 20-step hardening EP/EVP cases retain exact
+  saved physical fields against the parent.
+- Twelve lifecycle, sixteen explicit-period output-schedule, four Maxwell and
+  two oblique restart cases pass the existing strict payload checker. The eight
+  default-period cases above add coverage previously missed by finite-period
+  fixtures.
+- Across 58 parent/changed case comparisons, all available physical save and
+  checkpoint payloads match exactly, excluding runtime/provenance and the
+  deliberately corrected infinite output clock. This covers 2,251 files,
+  including 1,144 corrected clock values. The comparisons include partial
+  outputs of the known failing consolidation runs; they do not mean 58 completed
+  physical simulations.
+- Original Terzaghi/Mandel inputs still fail at their existing convergence limits
+  in both versions. With the previously documented same explicit absolute
+  tolerance, five pairs complete and 3D Terzaghi option 0 still reaches its cap.
+  Saved physical fields, convergence thresholds, accepted residuals and available
+  iteration reports remain exact against the parent. There is no new claim of
+  hydraulic analytical accuracy or improved convergence.
+- Parent `make set` / changed `make cmp` remains BIT-EXACT for the dry 2D/3D core
+  cases. The focused suite again passes 6,832 / 9,639 assertions on four-thread
+  OpenMP, serial ASan/UBSan and OpenACC. This is focused sanitizer coverage.
+- Converter CLI checks pass with one/four workers for all-missing, mixed and
+  accepted-only binary frames (notice counts 1/1/0); two HDF5-copy cases retain
+  the optional residual exactly.
+- GPU held-load/reload and six-step Maxwell checks pass in both dimensions and
+  options, including the new independent force reconstruction. Coordinates and
+  connectivity match CPU exactly; maximum normalized stress/strain/velocity
+  difference is `5.821e-16`, below the declared `5e-5` limit. Four default-clock
+  GPU cases also pass. Serial debug and OpenMP binary output each pass four
+  default-clock cases in addition to the eight HDF5 scheduler cases.
+
+Reproduce the independent force check with `pt_residual_output.py` commands in
+[the solver notes](pt-solver.md). Exercise the disabled-time default explicitly:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d tests/functional/pt_output_schedule.cfg /tmp/pt-default-clock --schedule step-default
+```
+
+Repeat for 3D, both PT options and `use_global_velocity_scaling` settings.
+Local raw evidence, scripts and parent/final binaries are retained at
+`/home/slee91/work/des-pt-review-20261022`; final application builds/tests are
+under `final/`. Earlier intermediate builds/tests were superseded after the
+clock correction; only the final builds qualify that change. No long runs,
+new acceleration, full-application sanitizer, MMG/Exodus/GoSPL or full hydraulic
+GPU qualification is claimed.
