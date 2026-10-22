@@ -32,6 +32,19 @@ Fixes #
 - Start at: <!-- the file and function that carry the change; the rest follows from it -->
 - Check closely: <!-- the riskiest line or assumption: a sign, a threshold, a loop bound -->
 
+## Try it
+
+<!-- For a new feature, option or mode: what a run does by default, which keys
+     change it and how, and the cfg to start from, so a reviewer can run it and
+     vary it without reading the code. One line per key (raise it to ..., lower
+     it to ...); --help keeps the exact rule, and an example cfg that lists the
+     keys with a comment each beats repeating them here. "n/a" for a fix or a
+     refactor with no new behaviour. -->
+
+- Default:
+- Keys that change it:
+- Start from:
+
 ## Numerical effect
 
 <!-- CI builds every flag combination and checks restart determinism, but cannot
