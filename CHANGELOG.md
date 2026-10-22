@@ -71,6 +71,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- PT logs distinguish the selected starting residual (`initial`) from the
+  first warm trial (`warm_initial`) used for convergence scaling, and report
+  actual trial evaluations and the residual's physical-update stage.
+
 - `2vtk.py` reports a missing optional PT residual once per conversion, including
   parallel conversion and selected frame ranges.
 

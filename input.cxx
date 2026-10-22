@@ -412,7 +412,7 @@ static void declare_parameters(po::options_description &cfg,
         ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
-         "Relative tolerance on projected physical-force RMS, scaled by initial imbalance")
+         "Relative tolerance on projected physical-force RMS, scaled by the first warm trial")
         ("control.PT_absolute_tolerance", po::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
          "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
         ("control.PT_option", po::value<int>(&p.control.PT_option)->default_value(0),

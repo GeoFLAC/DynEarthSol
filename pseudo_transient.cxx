@@ -277,15 +277,17 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     for (int iteration=0; iteration<param.control.PT_max_iter; ++iteration) {
         project_free_vectors(var, w.constraints, *var.vel, true);
         result.iterations = iteration+1;
+        ++result.evaluations;
         result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt);
         var.l2_residual = result.residual;
         if (iteration == 0) {
             result.initial_residual = result.residual;
+            result.warm_initial_residual = result.residual;
             result.threshold = param.control.PT_absolute_tolerance +
-                param.control.PT_relative_tolerance*result.initial_residual;
+                param.control.PT_relative_tolerance*result.warm_initial_residual;
             if (running_scale) {
                 if (!var.PT_skip_scale_update)
-                    trial_reference = std::max(trial_reference, result.initial_residual);
+                    trial_reference = std::max(trial_reference, result.warm_initial_residual);
                 roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
                     absolute_force_rms(var, w.constraints, *magnitude);
                 result.threshold = std::max(1e-6*trial_reference, roundoff_floor);
@@ -317,6 +319,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
                 for (int n=0; n<var.nnode; ++n)
                     for (int d=0; d<NDIMS; ++d)
                         (*var.vel)[n][d] = w.constraints.prescribed[n][d];
+                ++result.evaluations;
                 const double stationary_residual =
                     evaluate_mechanical_trial(param, var, w, false, displacement_dt);
                 if (std::isfinite(stationary_residual) && is_finite_candidate(var) &&
@@ -331,11 +334,18 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
                         for (int d=0; d<NDIMS; ++d)
                             (*var.vel)[n][d] = w.old_velocity[n][d];
                     project_free_vectors(var, w.constraints, *var.vel, true);
+                    ++result.evaluations;
                     result.residual = evaluate_mechanical_trial(param, var, w, false, displacement_dt);
+                    if (!std::isfinite(result.residual) || !is_finite_candidate(var)) {
+                        result.initial_residual = result.residual;
+                        result.status = PTStatus::nonfinite;
+                        break;
+                    }
                 }
                 var.l2_residual = result.residual;
             }
         }
+        if (iteration == 0) result.initial_residual = result.residual;
         if (result.residual <= result.threshold) {
             result.status = PTStatus::converged;
             if (running_scale) {
@@ -459,9 +469,11 @@ void require_pt_convergence(const Param& param, const Variables& var, const PTRe
         (var.steps >= var.info_display_next_step &&
          var.steps % param.mesh.quality_check_step_interval == 0))
         std::fprintf(result.status == PTStatus::converged ? stdout : stderr,
-                     "PT step=%d status=%s iterations=%d residual=%.17g initial=%.17g threshold=%.17g\n",
+                     "PT step=%d status=%s iterations=%d residual=%.17g initial=%.17g threshold=%.17g "
+                     "warm_initial=%.17g evaluations=%d stage=before_physical_updates\n",
                      var.steps, pt_status_name(result.status), result.iterations,
-                     result.residual, result.initial_residual, result.threshold);
+                     result.residual, result.initial_residual, result.threshold,
+                     result.warm_initial_residual, result.evaluations);
     if (result.status != PTStatus::converged) {
         die(result.status == PTStatus::nonfinite ? EXIT_RUNTIME_NAN : EXIT_RUNTIME_NONCONVERGENCE,
             "PT mechanical equilibrium failed; physical-start mechanical history restored.");

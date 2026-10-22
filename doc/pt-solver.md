@@ -36,7 +36,7 @@ loads remain in the force. Only constrained reactions and artificial damping are
 excluded. All-constrained models have zero free residual. Convergence requires
 
 ```
-R <= PT_absolute_tolerance + PT_relative_tolerance * R_initial
+R <= PT_absolute_tolerance + PT_relative_tolerance * R_warm
 ```
 
 Regular save files expose the accepted projected undamped vector as
@@ -63,11 +63,16 @@ a completed load increment while retaining warm starts for ongoing flow. A rejec
 stationary candidate is replaced by re-evaluating the warm candidate. No second
 history snapshot is allocated.
 
-The printed `initial`, relative reference and roundoff scale still refer to the
-first warm trial, before the candidate comparison. The threshold formulas and
-defaults are unchanged. A solve accepted with `iterations=1` needs no relaxation
-update, but may have evaluated both velocity candidates. Initial instantaneous
-equilibration retains its existing zero-velocity initialization.
+The printed `initial` is the residual of the selected starting candidate.
+`warm_initial` records the first warm trial, which still sets the relative
+reference and roundoff scale before candidate comparison. The threshold formulas
+and defaults are unchanged. `evaluations` counts full constitutive/force trials,
+including a discarded candidate and any warm-trial restoration; `iterations`
+counts loop passes. A solve accepted with `iterations=1` needs no relaxation
+update but can have more than one evaluation. The record explicitly states
+`stage=before_physical_updates`: its residuals precede transport, mesh motion
+and stress rotation. Initial instantaneous equilibration retains its existing
+zero-velocity initialization.
 An opt-in alternative, `control.PT_use_running_scale=yes`, uses for physical steps:
 
 ```
@@ -146,7 +151,8 @@ of the secant stiffness along the latest velocity increment, and the update is t
 corresponding second-order (heavy-ball) step. Momentum is dropped when it opposes
 the current force, as in kinetic damping (Cundall 1976) and gradient restart
 (O'Donoghue & Candès 2015, *Found. Comput. Math.* 15). There is
-no lagged stress and one force assembly per iteration. `PT_CFL` and `PT_Re` are
+no lagged stress. Each ordinary pass has one force assembly; the first-pass
+candidate comparison can add evaluations as reported above. `PT_CFL` and `PT_Re` are
 not used; the tolerance, acceptance and failure handling are unchanged.
 
 Measured against `PT_option=0` at the same tolerance (serial CPU): Terzaghi 2D/3D
@@ -171,6 +177,17 @@ viscoplastic) or an inertial formulation requires a separate physical assessment
 Physical mesh motion, stress rotation, transport and remeshing remain outside the
 trial loop. Equilibrium is established on the reference geometry; it does not
 claim equilibrium after moving that geometry. No live baseline crosses a remesh.
+
+Even a fixed-grid elastic example need not have exactly equal consecutive
+mechanical-solve residuals. A finite convergence tolerance can leave a small
+spatial spin; the physical Jaumann rotation after acceptance changes stress
+slightly. In the 2D option-0 example, step 1 reports `residual=0.03417443769`
+before rotation. Force assembled independently from its saved post-rotation
+stress is `0.03420140654`, matching step 2's selected `initial`. Step 3's
+`initial` matches step 2's residual because step 2 has zero velocity and no
+rotation. The saved step-1 and step-2 physical stress arrays are identical.
+The regression independently integrates simplex forces from the saved stress
+and inverts the Jaumann update to check both diagnostic time levels.
 
 For a moving-mesh physical PT step, height-dependent pressure boundary laws
 (Winkler foundation, water and side support) use the candidate facet height

@@ -29,8 +29,10 @@ enum class PTStatus { converged, max_iterations, nonfinite };
 
 struct PTResult {
     PTStatus status = PTStatus::max_iterations;
-    int iterations = 0;
+    int iterations = 0, evaluations = 0;
     double residual = 0, initial_residual = 0;
+    // Thresholds retain the first warm trial even if another candidate wins.
+    double warm_initial_residual = 0;
     double threshold = 0;
 };
 
