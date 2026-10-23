@@ -358,23 +358,8 @@ namespace {
         SurfaceTopo topo;
         topo.build(param, var, /*elev_only=*/true);
 
-        array_t points(serpentinize ? n : 0);
-        if (serpentinize) {
-            ms.calculate_marker_coord(var, points);
-            #pragma acc wait
-            // transform to the grid's (x, zeff) space for crust_dominant_cell_below.
-            // Parallel: it runs over all n markers every call, each i writes only
-            // its own row, and topo.zeff() is a pure const lookup.
-            #pragma omp parallel for default(none) shared(points, topo, n)
-            for (int i=0; i<n; i++) {
-                double q[NDIMS];
-                for (int d=0; d<NDIMS; d++) q[d] = points[i][d];
-                points[i][NDIMS-1] = topo.zeff(q);
-            }
-        }
-
         #pragma omp parallel default(none) \
-            shared(param, var, ms, rules, points, serpentinize, max_basalt_depth, topo)
+            shared(param, var, ms, rules, serpentinize, max_basalt_depth, topo)
         {
             // Pass 1: every transition EXCEPT mantle -> serpentinite (that
             // one reads dominant_cells_, so pass 1's invalidations -- from
@@ -389,8 +374,8 @@ namespace {
                     if (serpentinize && mt == param.mat.mattype_mantle)
                         continue;   // resolved in pass 2
 
-                    double Z, press, T;
-                    ms.get_ZPT(var, m, topo, Z, press, T);  // Z below the current surface
+                    double Z, press, T, xz[NDIMS];
+                    ms.get_ZPT(var, m, topo, Z, press, T, xz);  // Z below the current surface
                     const double depth = std::max(0.0, -Z);   // m below the local free surface
 
                     int to = -1;
@@ -418,11 +403,8 @@ namespace {
                             // drifted). Live cell_of() only as fallback for
                             // a label mark_removed() dropped (see label_cell()).
                             int cell = var.vtopo->label_cell(m);
-                            if (cell < 0) {
-                                double pcell[NDIMS];
-                                for (int d = 0; d < NDIMS; d++) pcell[d] = points[m][d];
-                                cell = var.vtopo->cell_of(pcell);
-                            }
+                            if (cell < 0)
+                                cell = var.vtopo->cell_of(xz);
                             var.vtopo->invalidate_dominant_cell(cell);
                         }
                     }
@@ -443,15 +425,12 @@ namespace {
                         if (ms.get_mattype(m) != param.mat.mattype_mantle)
                             continue;
 
-                        double Z, press, T;
-                        ms.get_ZPT(var, m, topo, Z, press, T);  // below current surface
+                        double Z, press, T, p[NDIMS];
+                        ms.get_ZPT(var, m, topo, Z, press, T, p);  // below current surface
                         const double depth = std::max(0.0, -Z);
                         if (depth > max_basalt_depth || !antigorite_stable(press, T))
                             continue;
 
-                        double p[NDIMS];
-                        for (int d=0; d<NDIMS; d++)
-                            p[d] = points[m][d];
                         // The walk starts from the marker's BUILD-time cell
                         // (its label from the last grid rebuild), so the
                         // marker-grid relationship is evaluated in the

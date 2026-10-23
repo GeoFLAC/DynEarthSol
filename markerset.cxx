@@ -1023,7 +1023,7 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 
 
 void MarkerSet::get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
-                        double &Z, double &P, double &T) const {
+                        double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const {
         T = 0;
         double p[NDIMS] = {0};
         ConstShapefnAccessor eta = (*_eta)[m];
@@ -1038,6 +1038,8 @@ void MarkerSet::get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
         // in-plane mean DES itself uses: plane strain's sigma_yy is not kept
         // current by the viscous and Maxwell updates.
         P = -trace((*var.stress)[(*_elem)[m]]) / NDIMS;
+        for (int d=0; d<NDIMS-1; ++d) xzeff[d] = p[d];
+        xzeff[NDIMS-1] = Z;
 }
 
 

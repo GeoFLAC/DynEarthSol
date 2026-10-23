@@ -107,8 +107,10 @@ public:
     // Host only (phase_change_option 3): Z = topo.zeff(x), below the CURRENT free surface, so a
     // rigid vertical motion of the whole mesh does not change it, and P is the mean stress of
     // the marker's element, compression positive.
+    // xzeff is the marker's coordinate with its last axis replaced by Z: its position in the
+    // serpentinization grid's (x, zeff) space.
     void get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
-                 double &Z, double &P, double &T) const;
+                 double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const;
 
 private:
     const std::string _name;
