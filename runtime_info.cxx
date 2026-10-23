@@ -977,6 +977,7 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     add_duration(end, "compute_time", compute_ns * 1e-9);
     add(end, "compute_sec_per_step", format_double("%.6g", compute_ns * 1e-9 / steps_this_run));
     add_duration(end, "remesh_time", var.func_time.remesh_time * 1e-9);
+    // this run's, as remesh_time is; the log's "Remeshing starts (#N" counts the model's
     add(end, "remeshings", std::to_string(var.nremesh));
     // Absent without a remesh, as on screen; outputs >= 1 (the frame before the loop).
     if (var.nremesh > 0)

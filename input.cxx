@@ -172,9 +172,25 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.resolution", po::value<double>(&p.mesh.resolution)->required(),
          "Spatial resolution (in meters)")
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
-         "The size of smallest element relative to an element with typical resolution")
+         "The size of smallest element relative to an element with typical resolution. It sets the "
+         "tiny-element remesh trigger smallest_vol = smallest_size * sizefactor * resolution^NDIMS "
+         "(sizefactor 0.433 in 2D, 0.118 in 3D: a unit-edge equilateral element's measure) and two "
+         "lengths, hmin = smallest_size^(1/NDIMS) * resolution and min_dist = (smallest_size * "
+         "sizefactor)^(1/NDIMS) * resolution. hmin is the Triangle/TetGen node-spacing floor (a "
+         "remesh deletes interior nodes closer than hmin to a retained node), with MMG in 2D the "
+         "boundary-segment length below which a remesh merges the segment's two nodes (never a "
+         "domain corner), and the necking-stop distance of remeshing_option 1, 11 and 13 (see "
+         "remeshing_option). With options 1, 11 and 13 a remesh removes the nodes off a restored "
+         "boundary that lie past it or within min_dist of it, and option 2 the interior nodes within "
+         "min_dist of the new bottom; with options 1 and 10-12 Triangle keeps a boundary node whose "
+         "two segments are both longer than min_dist, and in 3D TetGen's boundary edge flips move a "
+         "boundary by at most min_dist; at a receiving wall, option 13 gives the side profile to new "
+         "material up to min_dist inland of the old wall. With MMG it also sets MMG's size floors "
+         "(see mmg_remesh_defensive_tiny_ratio).")
         ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
-         "The size of largest element relative to an element with typical resolution")
+         "The size of largest element relative to an element with typical resolution, which also "
+         "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
+         "length, hmax = largest_size^(1/NDIMS) * resolution")
         ("mesh.sediment_size", po::value<double>(&p.mesh.sediment_size)->default_value(1.),
          "The size threshold of the refined sediment elements")
         // for 2D only
@@ -196,7 +212,7 @@ static void declare_parameters(po::options_description &cfg,
 
         // for meshing_option = 2 only
         /* read the value as string, then parse as two numbers later */
-        ("mesh.refined_zonex", po::value<std::string>()->default_value("[0.4, 0,6]"),
+        ("mesh.refined_zonex", po::value<std::string>()->default_value("[0.4, 0.6]"),
          "Refining portion of xlength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only")
         ("mesh.refined_zoney", po::value<std::string>()->default_value("[0.4, 0.6]"),
          "Refining portion of ylength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only, for 3D only")
@@ -230,12 +246,95 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.remeshing_option", po::value<int>(&p.mesh.remeshing_option)->default_value(0),
          "How to deal with the boundaries during remeshing?\n"
          " 0: no modification on any boundary.\n"
-         " 1: move all bottom nodes to initial depth, other boundaries are intact.\n"
-         " 2: create a new bottom boundary at the initial depth, other boundaries are intact (2D only).\n"
-         "10: no modification on any boundary, except small boundary segments might get merged.\n"
-         "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
+         " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact.\n"
+         " 2: create a new bottom boundary at the initial depth, other boundaries are intact "
+         "(2D only, not with MMG remeshing).\n"
+         "10: no modification on any boundary, except small boundary segments might get merged "
+         "(in 3D with TetGen, see smallest_size).\n"
+         "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact, except small boundary segments might "
+         "get merged.\n"
          "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions.\n")
+         "13: move all bottom and side-wall nodes (left/right; also front/back in 3D) to initial "
+         "dimensions, and give material entering through a side wall the structure recorded at that "
+         "wall (its side profile). A wall receives while its nodes drift inward between remeshes (by "
+         "any amount when its vbc at the remesh is inflow, else by more than min(1e-3, "
+         "max_boundary_distortion) * resolution). It keeps the column (2D) or wall face (3D) "
+         "recorded when it started receiving (at run start when its vbc is inflow, else at the first "
+         "remesh at which it receives), and drops it when it neither receives nor has an inflow vbc. "
+         "Incoming material gets the recorded temperature, layering, radiogenic source, coord0 "
+         "reference and zero strain at its depth below the wall's top point less the rise surface "
+         "processes gave it, and in 3D at its along-strike position (a point off the recorded face "
+         "takes the values of the face's nearest point). A deposit on the wall top gets the profile "
+         "top's values. Markers a remesh creates in an element at the wall take the layering at the "
+         "element's centroid and time 0; in an element centred in the deposit, mattype_sed and the "
+         "time of a sediment marker of the element, else the remesh time. Temperatures are not "
+         "re-conducted under a risen surface, so they can differ from the domain beside the wall by "
+         "up to the near-surface temperature gradient times the rise. Requires MMG when "
+         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG "
+         "collapses. With MMG on an unstructured mesh, a Triangle/TetGen initial mesh first gets its "
+         "restored-wall elements refined to ~resolution, whatever use_mmg_init says (in 3D under "
+         "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
+         "every remesh caps the size target at every restored-wall node at resolution (see "
+         "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
+         "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
+         "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
+         "of the restored bottom, or below it: the domain has necked through.\n")
+
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
+         "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
+         "(frozen) and rebuilds the rest. This key is the plastic-strain increment since the last "
+         "remesh above which an element is refined: MMG may split it (not along an edge it shares "
+         "with a frozen, MMG-required element) but keeps its existing nodes, so the band's plastic "
+         "strain is "
+         "carried verbatim. Distorted or tiny elements are repaired with node motion (see "
+         "mmg_remesh_defensive_quality_ratio and mmg_remesh_defensive_tiny_ratio), and so is the "
+         "mesh that restoring a boundary squashed or collapsed or that merging a short boundary "
+         "segment (see smallest_size) reshaped. Elements far "
+         "from their size target are freed (see mmg_remesh_size_recovery_ratio), as is the band beside "
+         "a receiving or outward-drifting restored wall (remeshing_option 13). Boundary nodes stay "
+         "pinned except the free-surface nodes a surface process moves by more than 1% of resolution "
+         "per remesh interval (2D only, surface_process_option 1 or 102), the off-bottom nodes of "
+         "unrestored side walls and slant boundaries, the nodes of repaired elements and the band "
+         "nodes off an outward-drifting restored wall. Keep it > "
+         "0: at 0, incidental yielding makes quiet far-field elements splittable at every remesh. "
+         "Default 0.01, heuristic: above the increment of incidental yielding, below a localizing "
+         "band's increment over a remesh interval.")
+        ("mesh.mmg_remesh_defensive_tiny_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
+         "Gap, in element measure, between the tiny-element remesh trigger smallest_vol (see "
+         "smallest_size) and the smallest elements MMG builds (usemmg=1, meshing_elem_shape = 0; "
+         "remeshing and MMG-built initial meshes). MMG's minimum edge length is hmin * "
+         "ratio^(1/NDIMS) (hmin: see smallest_size), so MMG aims to build every element at "
+         "smallest_vol * ratio or more, which must shrink by this factor before it re-triggers, and "
+         "a remesh rebuilds any element below "
+         "smallest_vol * ratio. The ratio also sets MMG's metric floor one step higher, hmin * "
+         "ratio^(2/NDIMS) (at most MMG's hmax), and the post-remesh quality gate at smallest_vol * "
+         "sqrt(ratio). Must be >= 1 (at 1 a just-remeshed element re-triggers under any "
+         "compression); a ratio at or above largest_size / smallest_size is capped just below it, "
+         "with a warning. Default 1.5 (a 2/3 measure gap), heuristic.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
+         "MMG remeshing repairs (unfreezes, with its nodes movable except where disjoint material "
+         "bodies meet) every element of quality below "
+         "min_quality * this ratio, so a marginal element is rebuilt before it crosses the "
+         "min_quality remesh trigger instead of triggering another remesh a few steps later. The "
+         "trigger itself stays at min_quality. Must be >= 1 (1: repair only below the trigger). "
+         "Default 1.5, heuristic.")
+        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+         "Size recovery in MMG remeshing. A quiet element (e.g. one that entered at ~resolution "
+         "through a restored inflow wall and advected inland) is freed to coarsen when it is finer "
+         "by more than this factor than the gradation envelope, the smallest size MMG's gradation "
+         "(hgrad) allows there given every intentionally fine size target; an element at least 2x "
+         "its own plastic-strain size target is freed to split. Neither frees an element refined for "
+         "plastic-strain growth (mmg_remesh_active_plstrain), one on the top surface, one at a "
+         "material interface (by its own and its neighbours' markers) or one within 4 rings of a "
+         "restored wall that receives no material, and neither unpins a restored-wall or bottom "
+         "node; the remesh log's '[unfreeze] size recovery' line counts the top-surface, interface "
+         "and wall-band skips. On a moving "
+         "mesh, a Triangle/TetGen initial mesh also gets the 2x split in its weak zone before any "
+         "field exists, except on a top-surface node or a region boundary ('[weakzone]' log lines). "
+         "0 disables all three; otherwise must be > 1 (a margin against re-freeing the legal size "
+         "transition). Default 1.4 ~ sqrt(2) in edge length (one 2D bisection level), heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -255,27 +354,69 @@ static void declare_parameters(po::options_description &cfg,
          "the switch sharper. The window width is otherwise untuned.")
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
-         "Discarding internal segments after initial mesh is created? "
-         "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
+         "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
+         "'no' keeps them as Triangle/TetGen constraints across remeshes, but a remesh that deletes "
+         "one of their nodes (tiny-element repair, node cleanup near a restored boundary) misroutes "
+         "them, which can make the mesher fail or hang; in 3D with remeshing_option 1 or 10-12 the "
+         "first remesh that deletes a boundary node drops them all. MMG remeshing (usemmg=1, "
+         "meshing_elem_shape = 0) requires 'yes': MMG keeps no internal segment.")
 
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", po::value<int>(&p.mesh.mmg_debug)->default_value(0),
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
-         "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
-         "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
-         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
+         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces. "
+         "At 0.01 MMG refines a sharply bent free surface down to its size floor and builds elements "
+         "below the tiny-element trigger there, so the trigger fires at nearly every quality check: "
+         "use 0.02-0.05 along a 3D fault scarp and 0.1 on the top/wall ridges next to restored side "
+         "walls. MMG3D does not bound its top-surface edge swaps between pinned nodes by this "
+         "distance.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
          "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
-         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
+         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
+         "(MMG still refines its restored walls under remeshing_option 13 and, on a moving mesh, "
+         "its weak zone: see mmg_remesh_size_recovery_ratio). Under "
+         "mattype_option 0, which reads the regional attributes as mattypes, a boundary between "
+         "them stays on the .poly line in 2D and can move by up to about half a coarse element in "
+         "3D (see mmg_init_coarsening_factor).")
+        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+         "Plastic-strain sensitivity of the MMG remeshing metric: the target element volume is "
+         "scaled by 1/(1 + coeff*plastic_strain), so the target edge length by that ratio^(1/NDIMS) "
+         "(whether a node keeps its finest target: see mmg_metric_refine_recover). 0 disables "
+         "plastic refinement from "
+         "a fresh start (the metric floor, the surface-motion inflation of shrinking top elements "
+         "and the option-13 restored-wall cap still apply). MMG starts from this target except at a "
+         "node on a required edge (an edge of a frozen element or, in 2D, an option-13 "
+         "material-interface edge) that belongs to no refined element (see "
+         "mmg_remesh_active_plstrain): there it starts from the mean length of the required edges "
+         "through the node, MMG's own rule. Larger values mesh a plastically strained zone finer, "
+         "down to the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
+         "narrower, at more elements and, where an elastic, advection or diffusion limit sets dt, a "
+         "shorter time step. Default 5.")
+        ("mesh.mmg_metric_refine_recover",
+         po::value<bool>(&p.mesh.mmg_metric_refine_recover)->default_value(false),
+         "no (default): each node keeps the finest plastic-strain size target (see "
+         "mmg_metric_refine_coeff) it has had at a remesh, so a refined zone stays refined where the "
+         "target coarsens, chiefly where plastic strain drops (the remap of rebuilt elements, the 2D "
+         "top-element plastic-strain decay, a growing top element); the mesh can then hold more "
+         "elements. Size recovery (mmg_remesh_size_recovery_ratio) measures against the kept size, and "
+         "material entering through a restored side wall starts unrefined. yes: the target follows "
+         "the current plastic strain. The record is checkpointed: with no, a restart that lowers "
+         "mmg_metric_refine_coeff (even to 0) keeps the sizes recorded before it, and a restart that "
+         "switches from yes to no holds from the last remesh's targets.")
+        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+         "Anisotropic MMG metric at inflow restored side walls (remeshing_option 13). 0 (default): "
+         "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
+         "normal to the wall and kept fine along it, so the incoming column is carried by thin, wide "
+         "elements. MMG's hmax (see largest_size) caps the aspect (~5.5 in 2D, "
+         "~3.1 in 3D at the default largest_size). Other values below 1 are rejected. Requires "
+         "USEMMG.")
         ;
 
     cfg.add_options()
@@ -286,14 +427,23 @@ static void declare_parameters(po::options_description &cfg,
         ("markers.markers_per_element", po::value<int>(&p.markers.markers_per_element)->default_value(4),
          "Number of markers per element. Used when init_marker_option=1.")
         ("markers.init_marker_spacing", po::value<double>(&p.markers.init_marker_spacing)->default_value(0.3),
-         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2.")
+         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2. An "
+         "element the grid misses gets min_num_markers_in_element (at least 1) markers of its "
+         "initial material, with a warning.")
         ("markers.min_num_markers_in_element", po::value<int>(&p.markers.min_num_markers_in_element)->default_value(3),
          "When the number of markers in an element is less than this number, a new marker will be replenished in the element.")
         ("markers.replenishment_option", po::value<int>(&p.markers.replenishment_option)->default_value(2),
          "How to determine the mattype of replenished markers?\n"
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
-         "2: same as the mattype of the nearest marker (slowest option).")
+         "2: same as the mattype of the nearest marker (slowest option).\n"
+         "12: if the element's surviving markers are all one mattype, use that mattype directly "
+         "(deposit-time interpolated for mattype_sed, as in option 2); otherwise fall back "
+         "to option 2 (nearest marker). Exact in single-material elements.\n"
+         "At a remesh, independently of this option, an element whose part inside the old mesh lies "
+         "in one old element whose markers were all one mattype gets that mattype, and with "
+         "remeshing_option 13 an element at a receiving wall gets the wall's recorded layering (see "
+         "remeshing_option).")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;
@@ -545,17 +695,20 @@ static void declare_parameters(po::options_description &cfg,
          "Ratio of the velocity at the bottom of the left boundary width (for option = 1 and 3)")
 
         ("bc.num_vbc_period_x0", po::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
-         "Number of velocity period at x0")
+         "Number of points in the x0 velocity period table")
         ("bc.num_vbc_period_x1", po::value<int>(&p.bc.num_vbc_period_x1)->default_value(1),
-         "Number of velocity period at x1")
+         "Number of points in the x1 velocity period table")
         ("bc.vbc_period_x0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x0 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x0 velocity period table '[t0, t1, ...]' (num_vbc_period_x0 of them, in yr, "
+         "non-decreasing): the ratio is linear between them and constant outside; repeat a time "
+         "for a step")
         ("bc.vbc_period_x1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x1 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x1 velocity period table (in yr), as for x0")
         ("bc.vbc_period_x0_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x0 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x0 at each time of the x0 period table '[r0, r1, r2, ...]'. It scales "
+         "the normal velocity only: tangential values (types 4 and 5, vbc_val_x0_l) stay constant")
         ("bc.vbc_period_x1_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x1 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x1 at each time of the x1 period table, as for x0")
 
         ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
@@ -586,6 +739,18 @@ static void declare_parameters(po::options_description &cfg,
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
          "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
+        ("bc.num_vbc_period_y0", po::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
+         "Number of points in the y0 velocity period table (3D only)")
+        ("bc.num_vbc_period_y1", po::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
+         "Number of points in the y1 velocity period table (3D only)")
+        ("bc.vbc_period_y0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y0 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y1 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y0_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y0 at each time of the y0 period table (3D only), as for x0")
+        ("bc.vbc_period_y1_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y1 at each time of the y1 period table (3D only), as for x0")
 
         ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
@@ -727,7 +892,7 @@ static void declare_parameters(po::options_description &cfg,
         "The layer boundry of radiogenic heating from the top to the bottom (depth -> positive, in meters).\n"
         "Using -1 to indicate the top and bottom of the model.\n")
         ("ic.radiogenic_heat_mat_in_layer",  po::value<std::string>()->default_value("[0]"),
-        "The material type of radiogenic heating in each layer.\n")
+        "The material type of radiogenic heating in each layer (one value: the same in every layer).\n")
         // for temperature_option = 1 and 2
         ("ic.radiogenic_folding_depth", po::value<double>(&p.ic.radiogenic_folding_depth)->default_value(10.e3),
          "Radiogenic folding depth (in meters), used for the temperature profile on the plate.\n")
@@ -953,6 +1118,16 @@ static void read_parameters_from_file
         std::cerr << e.what() << " from option: " << e.get_option_name() << '\n';
         die(EXIT_CONFIG_VALUE);
     }
+    catch (const boost::program_options::unknown_option& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << " (a misspelled or retired key)\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+    catch (const boost::program_options::validation_error& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << "\n";
+        die(EXIT_CONFIG_VALUE);
+    }
     catch (std::exception& e) {
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
@@ -999,30 +1174,38 @@ static int read_numbers(const std::string &input, std::vector<T> &vec, int len)
 }
 
 
+// Read exactly len numbers from key name; len_name says what sets len.
+// With one_for_all, a single number is also accepted and repeated len times.
 template<class T>
 static void get_numbers(const po::variables_map &vm, const char *name,
-                        std::vector<T> &values, int len, int optional_size=0)
+                        std::vector<T> &values, int len, const char *len_name,
+                        bool one_for_all=false)
 {
     if ( ! vm.count(name) ) {
         std::cerr << "Error: " << name << " is not provided.\n";
         die(EXIT_CONFIG_VALUE);
     }
+    if (len < 0) {
+        std::cerr << "Error: " << name << " cannot list " << len << " numbers ("
+                  << len_name << ").\n";
+        die(EXIT_CONFIG_VALUE);
+    }
 
     std::string str = vm[name].as<std::string>();
     int err = read_numbers(str, values, len);
-    if (err && optional_size > 0) {
-        err = read_numbers(str, values, optional_size);
-    } else if (err && optional_size == -1) {
+    if (err && one_for_all) {
         err = read_numbers(str, values, 1);
         if (!err) {
-            values.resize(len);
-            std::fill(values.begin(), values.end(), values[0]);
+            const T v = values[0];
+            values.assign(len, v);
         }
     }
 
     if (err) {
-        std::cerr << "Error: incorrect format for " << name << ",\n"
-                  << "       must be '[d0, d1, d2, ...]'\n";
+        std::cerr << "Error: " << name << " must list " << len
+                  << (len == 1 ? " number (" : " numbers (") << len_name << ")"
+                  << (one_for_all && len != 1 ? " or 1 for all" : "")
+                  << " as '[d0, d1, ...]', got '" << str << "'.\n";
         die(EXIT_CONFIG_VALUE);
     }
 }
@@ -1042,6 +1225,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_steps = std::numeric_limits<int>::max();
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
+
+#ifdef USEMMG
+    // An aspect ratio: in (0,1) it would refine the wall-normal axis; a negative one means nothing.
+    if ( p.mesh.mmg_aniso_wall_ratio != 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
+        std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
+                     "a smaller ratio would refine the wall or mean nothing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
@@ -1113,22 +1305,9 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     //
-    // these parameters are required in mesh.meshing_option == 2
+    // mesh.refined_zone{x,y,z}, read only for mesh.meshing_option == 2
     //
     if (p.mesh.meshing_option == 2) {
-        if ( ! vm.count("mesh.refined_zonex") ||
-#ifdef THREED
-             ! vm.count("mesh.refined_zoney") ||
-#endif
-             ! vm.count("mesh.refined_zonez") ) {
-        std::cerr << "Must provide mesh.refined_zonex, "
-#ifdef THREED
-                  << "mesh.refined_zoney, "
-#endif
-                  << "mesh.refined_zonez.\n";
-        die(EXIT_CONFIG);
-        }
-
         /* get 2 numbers from the string */
         double_vec tmp;
         int err;
@@ -1136,8 +1315,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zonex"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zonex,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zonex,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonex.first = tmp[0];
@@ -1146,8 +1325,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zoney"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zoney,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zoney,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zoney.first = tmp[0];
@@ -1156,8 +1335,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zonez"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zonez,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zonez,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonez.first = tmp[0];
@@ -1167,6 +1346,59 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
     }
+
+#ifdef USEMMG
+    // Only MMG reads the mmg_* keys checked in this block.
+    if (p.mesh.mmg_metric_refine_coeff < 0) {
+        // 1 + coeff*plstrain divides the target volume: it must stay positive.
+        std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
+                     "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // ratio < 1 puts MMG's floor below the trigger: a just-remeshed element re-triggers at once.
+    if (p.mesh.mmg_remesh_defensive_tiny_ratio < 1.0)
+        die(EXIT_CONFIG_VALUE, "mesh.mmg_remesh_defensive_tiny_ratio must be >= 1 "
+            "(1 = MMG builds at the trigger; larger = a wider gap above it).");
+
+    // MMG needs hmin < hmax: cap the ratio just under largest_size/smallest_size. 1e-9 clears the
+    // round-off of mmg_adapt's pow() products (~1e-16) and changes no size that matters. Equal
+    // sizes cap it at 1 - 1e-9 < 1, so the >= 1 check must stay above this cap.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.smallest_size * p.mesh.mmg_remesh_defensive_tiny_ratio >= p.mesh.largest_size) {
+        const double cap = (1 - 1e-9) * p.mesh.largest_size / p.mesh.smallest_size;
+        std::cerr << "Warning: mesh.mmg_remesh_defensive_tiny_ratio = "
+                  << p.mesh.mmg_remesh_defensive_tiny_ratio << " puts MMG's size floor "
+                  << "(smallest_size x ratio) at or above largest_size; capped just below "
+                  << "largest_size / smallest_size = " << p.mesh.largest_size / p.mesh.smallest_size
+                  << ". MMG builds closer to the tiny-element trigger: expect frequent "
+                  << "tiny-element remeshes unless smallest_size < largest_size / ratio.\n";
+        p.mesh.mmg_remesh_defensive_tiny_ratio = cap;
+    }
+
+    if (p.mesh.mmg_remesh_defensive_quality_ratio < 1.0) {
+        // ratio < 1 can leave a below-trigger element frozen, re-triggering at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_defensive_quality_ratio must be >= 1 (1 = repair only below the trigger).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // Quality <= 1, so near a product of 1 R1 frees almost every element at every remesh.
+    // Threshold 0.9, heuristic; written 0.875 because 0.6 * 1.5 rounds below 0.9.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.min_quality * p.mesh.mmg_remesh_defensive_quality_ratio >= 0.875) {
+        std::cerr << "Warning: mesh.min_quality * mesh.mmg_remesh_defensive_quality_ratio "
+                     ">= 0.875: at every remesh the MMG freeze unfreezes every element of quality "
+                     "below that product (all of them at >= 1) for MMG to repair, and an element "
+                     "MMG rebuilds is re-interpolated; the remesh log's 'R1 repair "
+                     "(low-quality/tiny)' count gives their number, tiny elements included.\n";
+    }
+
+    if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
+        // ratio <= 1 frees elements on the gradation envelope itself, at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
@@ -1184,20 +1416,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "monitor.num_points must be >= 0.");
         }
 
-        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
+        const char *npts = "monitor.num_points";
+        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points, npts);
 #ifdef THREED
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
-        const std::string points_y_raw = vm["monitor.points_y"].as<std::string>();
-        const std::string points_z_raw = vm["monitor.points_z"].as<std::string>();
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y,
-                    (points_y_raw == "[]") ? 0 : p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z,
-                    (points_z_raw == "[]") ? 0 : p.monitor.num_points);
-        if (points_z_raw == "[]") {
-            p.monitor.points_z = p.monitor.points_y; // 2D legacy alias: points_y means z
-        }
+        // 2D legacy alias: points_y means z when points_z is not given
+        const bool z_from_y = vm["monitor.points_z"].as<std::string>() == "[]" &&
+                              vm["monitor.points_y"].as<std::string>() != "[]";
+        get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
+                    p.monitor.num_points, npts);
 #endif
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
@@ -1265,12 +1494,55 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
 #endif
+#ifdef USEMMG
+    // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
+    if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available with MMG remeshing "
+            "(usemmg=1, mesh.meshing_elem_shape = 0); use 1 or 11, or a build without MMG.");
+#endif
+    // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
+    if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
+#ifdef USEMMG
+        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available with "
+            "MMG remeshing (usemmg=1, mesh.meshing_elem_shape = 0): MMG keeps no internal "
+            "segment. Use yes, or a build without MMG.");
+#else
+        std::cerr << "Warning: mesh.is_discarding_internal_segments = no: a remesh that deletes a "
+                     "node of an internal segment (tiny-element repair, node cleanup near a "
+                     "restored boundary) misroutes it, which can make the mesher fail or hang; "
+                     "in 3D with remeshing_option 1 or 10-12, the first remesh that deletes a "
+                     "boundary node drops them all.\n";
+#endif
+    }
 
 #ifndef USEMMG
     if (p.mesh.use_mmg_init) {
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // Without USEMMG nothing reads the mmg_* keys: name the ones the cfg set, not the defaulted ones.
+    {
+        const char *mmg_only[] = {
+            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
+            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
+            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_metric_refine_recover",
+            "mesh.mmg_aniso_wall_ratio",
+            "mesh.mmg_remesh_defensive_tiny_ratio",
+        };
+        for (const char *name : mmg_only)
+            if (vm.count(name) && ! vm[name].defaulted())
+                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
+                          << " has no effect.\n";
+    }
+    // Option 13 re-flattens the side walls at every remesh, which breeds sub-hmin wall elements. Only
+    // MMG collapses them: decimate_below_hmin keeps boundary nodes, and the tiny-element repair
+    // skips corners.
+    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_UNSUPPORTED_LIB, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
+            "Without it the restored side wall accumulates sub-hmin elements that the "
+            "Triangle/TetGen path cannot collapse. Uniform meshes (mesh.meshing_elem_shape > 0) "
+            "are unaffected.");
 #endif
 
     //
@@ -1362,25 +1634,29 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     {
         if ( p.ic.weakzone_option == 5 ) {
             int n = p.ic.weakzone_num_segments;
-            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, -1);
-            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, -1);
+            const char *nseg = "ic.weakzone_num_segments";
+            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, nseg, true);
 #ifdef THREED
-            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, nseg, true);
 #endif
         }
 
         if ( p.ic.mattype_option == 1) {
-            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers);
-            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1);
+            if (p.ic.num_mattype_layers < 1) {
+                die(EXIT_CONFIG_VALUE, "ic.num_mattype_layers must be >= 1.");
+            }
+            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers, "ic.num_mattype_layers");
+            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1, "ic.num_mattype_layers - 1");
             // mattype_layer_depths must be already sorted
             if (! std::is_sorted(p.ic.mattype_layer_depths.begin(), p.ic.mattype_layer_depths.end())) {
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
@@ -1394,7 +1670,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE,
                 "ic.initial_stress_option must be 0 or 1.");
         }
-        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR);
+        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR, "one per stress component");
         if (p.ic.initial_stress_option == 1) {
             if (p.control.gravity != 0.0) {
                 die(EXIT_CONFIG_VALUE,
@@ -1527,57 +1803,83 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
 
-        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, 1);
-        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, 1);
+        // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
+        // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.
+        if (std::min({p.bc.num_vbc_period_x0, p.bc.num_vbc_period_x1,
+                      p.bc.num_vbc_period_y0, p.bc.num_vbc_period_y1}) < 1) {
+            die(EXIT_CONFIG_VALUE, "bc.num_vbc_period_* must be positive.");
+        }
+        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
+        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
+        const std::pair<const char*, const double_vec*> period_times[] = {
+            {"vbc_period_x0_time_in_yr", &p.bc.vbc_period_x0_time_in_yr},
+            {"vbc_period_x1_time_in_yr", &p.bc.vbc_period_x1_time_in_yr},
+            {"vbc_period_y0_time_in_yr", &p.bc.vbc_period_y0_time_in_yr},
+            {"vbc_period_y1_time_in_yr", &p.bc.vbc_period_y1_time_in_yr},
+        };
+        for (const auto& t : period_times) {
+            if (! std::is_sorted(t.second->begin(), t.second->end())) {
+                std::cerr << "Error: bc." << t.first << " must be non-decreasing.\n";
+                die(EXIT_CONFIG_VALUE);
+            }
+        }
 
-        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, 1);
+        if (p.ic.nhlayer < 0) {
+            die(EXIT_CONFIG_VALUE, "ic.num_radiogenic_heat_layer must be >= 0.");
+        }
+        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, "ic.num_radiogenic_heat_layer + 1");
         if (p.ic.radiogenic_heat_boundry[0] == -1)
             p.ic.radiogenic_heat_boundry[0] = 0;
         if (p.ic.radiogenic_heat_boundry[p.ic.nhlayer] == -1)
             p.ic.radiogenic_heat_boundry[p.ic.nhlayer] = p.mesh.zlength;
 
-        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, 1);
+        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, "ic.num_radiogenic_heat_layer", true);
 
-        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, -1);
+        const char *nmat_key = "mat.num_materials";
+        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, -1);
+        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, -1);
-        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, -1);
+        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, nmat_key, true);
 
         // Hydraulic parameters
-        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, -1);
-        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, -1);
-        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, -1);
+        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, nmat_key, true);
         // Rate-and-state friction parameters
-        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
-        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
+        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, nmat_key, true);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }

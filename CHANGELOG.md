@@ -32,6 +32,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   runs' `.manifest`, and links the earlier frames under the model's name; the
   new `-hdf` writes updated `.vtkhdf` copies, and `-u` and `-hdf` list the
   frames in a `.vtkhdf.series` for ParaView ([#97]).
+- Conservative MMG remeshing (`usemmg=1`) in 2D and 3D: a remesh keeps most
+  quiet elements (not yielding, distorted or tiny) as they are, so it no longer
+  diffuses the far field, and a yielding band keeps its plastic strain ([#95]).
+- With `remeshing_option = 13`, material entering through a restored side wall
+  (all four walls in 3D) takes the wall's temperature, layering and radiogenic
+  source, and with MMG the mesh along those walls is kept at about `resolution`
+  ([#95]).
 
 ### Changed
 
@@ -56,6 +63,26 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The GoSPL docs follow the des3d coupling tutorial and explain when GoSPL
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
+- **Breaking.** `mmg_hmin_factor` and `mmg_hmax_factor` are retired: MMG takes
+  its size band from `smallest_size` and `largest_size`, and
+  `examples/defaults.cfg` gives the conversion. With `use_mmg_init`, a `.poly`
+  region without a size constraint is no longer refined to `resolution` ([#95]).
+- **Breaking.** `meshing_option = 2` meshes are finer; multiplying
+  `largest_size` by 3.46 (2D) or 5.93 (3D) keeps the old initial mesh ([#95]).
+- **Breaking.** Checkpoints written before this change do not restart ([#95]).
+- **Breaking.** More cfgs stop at startup: `remeshing_option = 13` on an
+  unstructured mesh without MMG (`usemmg=1`), `remeshing_option = 2` or
+  `is_discarding_internal_segments = no` with MMG, a velocity period table
+  without exactly `num_vbc_period_*` points in non-decreasing time, and a
+  one-value `ic.radiogenic_heat_boundry` with radiogenic layers. A remesh now
+  stops the run, instead of continuing, when it leaves a broken mesh or when
+  the top surface has necked down to near the restored bottom ([#95]).
+- **Breaking.** Results change for remeshing on every mesher, for 3D side walls,
+  which now follow their velocity period tables as in 2D, and for a one-value
+  `ic.radiogenic_heat_mat_in_layer`, now given to every layer. With MMG, a
+  plastically strained zone is meshed less finely and keeps the finest size it
+  has reached unless `mmg_metric_refine_recover = yes`, and the initial mesh is
+  refined in its weak zone ([#95]).
 
 ### Fixed
 
@@ -76,6 +103,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   old file as `.info.old`; a repeated restart appended duplicate rows. The
   parent frame a restart overwrites is backed up however the two model names
   are spelled ([#97]).
+- MMG remeshing removes material that drifted past a restored boundary instead
+  of stopping with "BAD ENDING", and a 3D Triangle/TetGen remesh no longer
+  moves a steep free surface by hundreds of metres ([#95]).
+- With `remeshing_option = 13`, a remesh no longer skews the displacement output
+  beside the restored walls ([#95]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -238,6 +270,7 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#91]: https://github.com/GeoFLAC/DynEarthSol/pull/91
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
+[#95]: https://github.com/GeoFLAC/DynEarthSol/pull/95
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104

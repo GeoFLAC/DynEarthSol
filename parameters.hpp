@@ -196,6 +196,12 @@ struct Mesh {
     bool is_discarding_internal_segments;
     int remeshing_option;
 
+    // MMG freeze rules (FREEZE / REQUIRED POLICY, remeshing.cxx)
+    double mmg_remesh_active_plstrain;
+    double mmg_remesh_defensive_tiny_ratio;
+    double mmg_remesh_defensive_quality_ratio;
+    double mmg_remesh_size_recovery_ratio;
+
     // Deborah-number-weighted blend of NN-remapped vs SPR-recovered stress at remeshing
     double remesh_deborah_min;
     double remesh_deborah_max;
@@ -203,11 +209,12 @@ struct Mesh {
     // Parameters for mesh optimizer MMG
     int mmg_debug;
     int mmg_verbose;
-    double mmg_hmax_factor;
-    double mmg_hmin_factor;
     double mmg_hausd_factor;
     double mmg_init_coarsening_factor;
+    double mmg_metric_refine_coeff;
+    bool mmg_metric_refine_recover;
     bool use_mmg_init;
+    double mmg_aniso_wall_ratio;
 };
 
 struct Control {
@@ -323,12 +330,18 @@ struct BC {
 
     int num_vbc_period_x0;
     int num_vbc_period_x1;
+    int num_vbc_period_y0;
+    int num_vbc_period_y1;
 
     double_vec vbc_period_x0_time_in_yr;
     double_vec vbc_period_x1_time_in_yr;
+    double_vec vbc_period_y0_time_in_yr;
+    double_vec vbc_period_y1_time_in_yr;
 
     double_vec vbc_period_x0_ratio;
     double_vec vbc_period_x1_ratio;
+    double_vec vbc_period_y0_ratio;
+    double_vec vbc_period_y1_ratio;
 
     double vbc_val_z1_loading_period;
 
@@ -591,6 +604,105 @@ struct Param {
 };
 
 //
+// The column of a restored side wall (remeshing_option 13): detect_side_profile records it, and
+// restore_side_fields and the side-wall marker replenishment re-impose it on the material that
+// enters through the wall. 2D: a depth table along the wall line. 3D: the wall face, looked up on
+// its triangulation in the (along-strike, depth) plane.
+// Depths are recorded below the side's top point; lookups (side_profile_locate,
+// side_profile_mattype_at, side_profile_mattypes_within) measure them below the column top, the
+// wall's current top point less top_rise. Checkpointed.
+//
+struct SideProfile {
+    // wall nodes, sorted top -> bottom
+    double_vec node_reldepth;      // depth below the side's top point (ascending)
+    double_vec node_coord0_z;      // recorded REFERENCE depth coordinate, var.coord0[NDIMS-1]
+    double_vec node_temperature;   // nodal temperature when recorded
+    double_vec node_init_elem_size; // var.init_elem_size_n (restore_side_fields re-pins it)
+#ifdef THREED
+    double_vec node_strike;        // along-strike coordinate (side_wall_strike)
+#else
+    // node -> element support, CSR: node i's local elements are
+    // node_support_arr[node_support_idx[i] .. node_support_idx[i+1])
+    int_vec    node_support_idx;
+    int_vec    node_support_arr;
+#endif
+    // Elements: 2D every element with a node on the wall, 3D the owners of the wall's boundary
+    // facets. Only the material and the radiogenic source are recorded (see restore_side_fields).
+#ifndef THREED
+    double_vec elem_reldepth;      // centroid depth below the side's top point
+#endif
+    int_vec    elem_mattype;       // dominant marker material (replenishment lookup)
+    double_vec elem_radiogenic_source;
+#ifdef THREED
+    // the wall face's triangulation: NODES_PER_FACET local node indices per boundary facet, and
+    // each facet's owning element (local index)
+    int_vec    facet_node;
+    int_vec    facet_elem;
+    // Uniform grid over the face's (along-strike, depth) bounding box: grid_ns x grid_nr cells,
+    // cell i + grid_ns * j lists the facets whose bounding box meets it, ascending (CSR over
+    // grid_idx / grid_arr). Derived, not checkpointed; built by side_profile_index_elems.
+    double  grid_s0 = 0., grid_s1 = 0., grid_r0 = 0., grid_r1 = 0., grid_ds = 0., grid_dr = 0.;
+    int     grid_ns = 0, grid_nr = 0;
+    int_vec grid_idx, grid_arr;
+#else
+    // local element indices sorted by (elem_reldepth, index): the inflow-band stray window
+    // (side_profile_mattypes_within). Derived, not checkpointed; built by side_profile_index_elems.
+    int_vec    elem_by_depth;
+#endif
+
+    // Sum of the shifts by which remeshes snap the drifted wall back to its plane while a column
+    // is recorded (EVOLVING; lower-wall inflow < 0, upper > 0). Incoming nodes get coord0[axis] =
+    // plane + wall_shift, a Lagrangian entry coordinate outside the domain. clear_column() keeps
+    // it, so a wall that resumes receiving continues the same entry reference.
+    double wall_shift = 0.;
+
+    // Net rise of the wall's top point by surface processes since recording (EVOLVING; update_mesh
+    // adds the change of side_wall_top_z across each surface_processes call, which moves only the
+    // top nodes). Between the column top and the top point lies deposit (in_deposit). 3D: the top
+    // point is the top edge's highest node; the column top is exact while the edge moves as one,
+    // and deposit where the edge was lower than the top point when recorded is filled from the
+    // profile. Temperatures stay the recorded column's, not re-conducted under the moved surface:
+    // they are off by up to about the near-surface temperature gradient x top_rise.
+    double top_rise = 0.;
+
+    int nnode() const { return static_cast<int>(node_reldepth.size()); }
+    int nelem() const { return static_cast<int>(elem_mattype.size()); }
+#ifdef THREED
+    int nfacet() const { return static_cast<int>(facet_elem.size()); }
+#endif
+    // no recorded column (nelem() == 0 too): the one emptiness test. A recorded one has >= 2 wall
+    // nodes (detect_side_profile); the 2D side_profile_locate relies on it.
+    bool empty() const { return node_reldepth.empty(); }
+    // rel = depth below the column top. Above the wall's top point (rel < -top_rise: a band element
+    // reaching higher inland ground) is not deposit; the lookups clamp it onto the profile top.
+    // top_rise is net (a re-deposit after erosion counts as the original top layer).
+    bool in_deposit(double rel) const { return rel < 0. && rel >= -top_rise; }
+    // drop the recorded column (top_rise too: it is relative to the column), keep wall_shift
+    void clear_column() { const double w = wall_shift; *this = SideProfile(); wall_shift = w; }
+};
+
+// Restored side walls of remeshing_option 13: x0, x1 in 2D; x0, x1, y0, y1 in 3D. Even entries are
+// the lower plane (coordinate 0), odd entries the upper plane (xlength / ylength) of their axis.
+// Variables::side_profile is indexed in this order.
+#ifdef THREED
+const int NSIDEWALL = 4;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0, 1, 1 };
+const int   SIDEWALL_BDRY[NSIDEWALL] = { iboundx0, iboundx1, iboundy0, iboundy1 };  // var.bfacets
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1", "y0", "y1" };
+#else
+const int NSIDEWALL = 2;
+const uint  SIDEWALL_FLAG[NSIDEWALL] = { BOUNDX0, BOUNDX1 };
+const int   SIDEWALL_AXIS[NSIDEWALL] = { 0, 0 };
+const char* const SIDEWALL_NAME[NSIDEWALL] = { "x0", "x1" };
+#endif
+inline double side_wall_plane(const Mesh &mesh, int t)   // restored plane coordinate of wall t
+{
+    if (t % 2 == 0) return 0.0;
+    return SIDEWALL_AXIS[t] == 0 ? mesh.xlength : mesh.ylength;
+}
+
+//
 // Structures for surface processes
 //
 // Node-support graph in CSR: node n owns [idx[n], idx[n+1]) of arr and lidx.
@@ -688,7 +800,9 @@ struct Variables {
     double l2_residual;
     double reference_frame_time;
     int steps;
-    int nremesh;
+    int nremesh;        // this run's remeshes, which the time summary and the manifest count
+    int nremesh_prior;  // remeshes before this run (the checkpoint's "nremesh"), so the log's
+                        // remesh #N continues across a restart
     int noutput;
     int info_display_next_step;
     Time func_time;
@@ -730,6 +844,9 @@ struct Variables {
     int_vec *bnodes[nbdrytypes];
     std::vector< std::pair<int,int> > *bfacets[nbdrytypes];
     array_t *bnormals;
+
+    // the recorded column of each restored side wall, SIDEWALL_* order (SideProfile)
+    SideProfile side_profile[NSIDEWALL];
     int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
     int stress_bc_types[nbdrytypes_hydro];
@@ -765,10 +882,17 @@ struct Variables {
     double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
     double_vec *temperature, *plstrain, *delta_plstrain;
+    // R2 baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so a
+    // fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
+    double_vec *plstrain_remesh;
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
     double_vec *ntmp;
     double_vec *init_elem_size_n;   // frozen initial nodal element size for MMG metric
+    // MMG only: each node's plastic-strain size-target record (KEPT REFINEMENT in
+    // compute_metric_field). Only its ratio to init_elem_size_n counts: a writer that re-pins
+    // init_elem_size_n must rescale it, as restore_side_fields does.
+    double_vec *refined_elem_size_n;
     double_vec *radiogenic_source;
 
     // For hyraulic proceses
@@ -812,6 +936,23 @@ struct Variables {
     double_vec *spr_blend_weight;
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
+
+    // Per-remesh scratch, per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
+    // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
+    // found" warning. Empty outside remeshing.
+    std::vector<char> remesh_affected_old_node;
+
+    // Per-remesh scratch, per NEW node: 1 if barycentric_node_interpolation found it outside the
+    // old mesh and copied the nearest old node's fields. restore_side_fields (option 13) and
+    // remesh() overwrite some of those copies (see there); the rest stay. Empty outside remeshing.
+    std::vector<char> remesh_node_outside;
+
+    // Per-remesh scratch, per NEW element: if its part inside the old mesh lies in exactly one old
+    // element whose markers are all one mattype, that mattype, else -1; _time: that old element's
+    // lowest-index marker's time. Filled by nearest_neighbor_interpolation, read by the marker
+    // replenishment, cleared after remap_markers. Empty outside remeshing.
+    std::vector<int> remesh_elem_split_mat;
+    std::vector<double> remesh_elem_split_time;
 
     // tensor_t *stress_old;
 

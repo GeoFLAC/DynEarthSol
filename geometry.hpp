@@ -105,6 +105,7 @@ void compute_mass(const Param &param, const Variables &var,
                   elem_cache &tmp_result);
 
 
+#pragma acc routine seq
 double elem_quality(const array_t &coord, const conn_t &connectivity,
                     const double_vec &volume, int e);
 

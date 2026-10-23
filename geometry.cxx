@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <iostream>
@@ -63,6 +64,7 @@ static inline double mass_scaling_modulus(
 }
 
 /* Given two points, returns the distance^2 */
+#pragma acc routine seq
 template <typename T>
 double dist2(T a, T b)
 {
@@ -2016,14 +2018,33 @@ double elem_quality(const array_t &coord, const conn_t &connectivity,
 double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
                           const double_vec &volume, int &worst_elem)
 {
+    // Two device passes (min, then first element attaining it) reproduce the serial scan's
+    // "first strict minimum" exactly; min is order-independent. A host loop would migrate
+    // coord/connectivity/volume off the device on every quality check.
+    int n = (int)volume.size();
     double q = 1;
-    worst_elem = 0;
-    for (std::size_t e=0; e<volume.size(); e++) {
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(coord, connectivity, volume, n) reduction(min:q)
+#endif
+    #pragma acc parallel loop gang vector reduction(min:q) async
+    for (int e=0; e<n; e++) {
         double quality = elem_quality(coord, connectivity, volume, e);
-        if (quality < q) {
-            q = quality;
-            worst_elem = e;
-        }
+        if (quality < q) q = quality;
     }
+    #pragma acc wait
+    int w = INT_MAX;
+    if (q < 1) {
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(coord, connectivity, volume, n, q) reduction(min:w)
+#endif
+        #pragma acc parallel loop gang vector reduction(min:w) async
+        for (int e=0; e<n; e++) {
+            if (e < w && elem_quality(coord, connectivity, volume, e) == q) w = e;
+        }
+        #pragma acc wait
+        if (w == INT_MAX)   // the two passes must evaluate elem_quality identically
+            die(EXIT_INTERNAL_ASSERT, "worst_elem_quality: no element attains the minimum quality");
+    }
+    worst_elem = (w < INT_MAX) ? w : 0;   // 0 when no element is below 1
     return q;
 }

@@ -425,6 +425,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+    bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());
@@ -435,9 +436,84 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.surfinfo.dhacc, "dhacc", var.surfinfo.dhacc->size());
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
+    bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
+    bin.write_array(*var.refined_elem_size_n, "refined_elem_size_n",
+                    var.refined_elem_size_n->size());
+    // The last surface-process dh: a PT-loop remesh in the first step after a restart reads it (R3,
+    // compute_metric_field) before surface_processes refreshes it. Per node: a restart re-sorts
+    // surfinfo.top_nodes by x.
+    {
+        double_vec dh_n(var.nnode, 0.0);
+        for (int i = 0; i < var.surfinfo.ntop; ++i)
+            dh_n[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i];
+        bin.write_array(dh_n, "surface dh", dh_n.size());
+    }
 #endif
+
+    // Restored side-wall columns (remeshing_option 13, SideProfile): side_prof_sizes = {nnode,
+    // nelem, 2D node-support size / 3D facet count}, NSIDEWALL each, then the per-wall arrays.
+    {
+        char aname[64];
+        int_vec psz(3 * NSIDEWALL, 0);
+        int total = 0;
+        bool shifted = false;
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            const SideProfile &prof = var.side_profile[t];
+            psz[t]                 = prof.nnode();
+            psz[NSIDEWALL + t]     = prof.nelem();
+#ifdef THREED
+            psz[2 * NSIDEWALL + t] = prof.nfacet();
+#else
+            psz[2 * NSIDEWALL + t] = (int)prof.node_support_arr.size();
+#endif
+            total += prof.nnode();
+            shifted = shifted || prof.wall_shift != 0.;
+        }
+        // also with every column erased: the kept wall shifts continue the entry reference
+        if (total > 0 || shifted) {
+            bin.write_aux_array(psz, "side_prof_sizes", psz.size());
+            double_vec shifts(NSIDEWALL), rises(NSIDEWALL);
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                shifts[t] = var.side_profile[t].wall_shift;
+                rises[t]  = var.side_profile[t].top_rise;
+            }
+            bin.write_aux_array(shifts, "side_prof_wall_shift", shifts.size());
+            bin.write_aux_array(rises, "side_prof_top_rise", rises.size());
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                const SideProfile &prof = var.side_profile[t];
+                if (prof.empty()) continue;
+                auto wrd = [&](const double_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                auto wri = [&](const int_vec &a, const char *name) {
+                    std::snprintf(aname, 64, "side_prof_%s.%s", name, SIDEWALL_NAME[t]);
+                    bin.write_aux_array(a, aname, a.size());
+                };
+                wrd(prof.node_reldepth, "node_reldepth");
+                wrd(prof.node_coord0_z, "node_coord0_z");
+                wrd(prof.node_temperature, "node_temperature");
+#ifdef USEMMG
+                // USEMMG only (init_elem_size_n is MMG-only): an empty record cannot be chunked by
+                // HDF5, and the des-binary restart would read nn values from the NEXT record.
+                wrd(prof.node_init_elem_size, "node_init_elem_size");
+#endif
+#ifdef THREED
+                wrd(prof.node_strike, "node_strike");
+                wri(prof.facet_node, "facet_node");
+                wri(prof.facet_elem, "facet_elem");
+#else
+                wri(prof.node_support_idx, "node_support_idx");
+                wri(prof.node_support_arr, "node_support_arr");
+                wrd(prof.elem_reldepth, "elem_reldepth");
+#endif
+                wri(prof.elem_mattype, "elem_mattype");
+                wrd(prof.elem_radiogenic_source, "elem_radiogenic_source");
+            }
+        }
+    }
     if (param.mat.is_plane_strain)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {

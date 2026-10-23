@@ -17,6 +17,7 @@
 #include "utils.hpp"
 #include "knn.hpp"
 #include "matprops.hpp"
+#include "remeshing.hpp"
 
 
 namespace {
@@ -53,17 +54,31 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name
         break;
     }
 
+    // An element the placement left without a marker (one smaller than the init_marker_spacing grid,
+    // e.g. refined around the initial weak zone) gets min_num_markers_in_element markers of its
+    // initial material, by the placement's own rule (initial_mattype), at seeded random positions.
+    const int nfill = std::max(1, param.markers.min_num_markers_in_element);
+    int nempty = 0;
     for( int e = 0; e < var.nelem; e++ ) {
         int num_markers_in_elem = 0;
         for( int i = 0; i < param.mat.nmat; i++ )
             num_markers_in_elem += (*(var.elemmarkers))[e][i];
+        if (num_markers_in_elem > 0) continue;
 
-        if (num_markers_in_elem <= 0) {
-            std::cerr << "Error: no marker in element #" << e
-                      << ". Please increase the number of markers.\n";
-            die(EXIT_RUNTIME_RESOURCE);
+        ++nempty;
+        for (int k = 0; k < nfill; ++k) {
+            double eta[NODES_PER_ELEM];
+            random_eta_seed(eta, e + k);
+            const int mt = initial_mattype(param, var, e, eta);
+            append_marker(eta, e, mt, 0., 0., 0., 0., 0);
+            ++(*var.elemmarkers)[e][mt];
+            (*var.markers_in_elem)[e].push_back(_nmarkers-1);
         }
     }
+    if (nempty)
+        std::cerr << "Warning: the initial marker placement left " << nempty
+                  << " element(s) without a marker; each got " << nfill
+                  << " marker(s) of its initial material.\n";
 }
 
 #ifdef HDF5
@@ -1491,6 +1506,166 @@ namespace {
 #endif
     }
 
+    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): the
+    // split parent's (var.remesh_elem_split_mat) when from_split_parent, else the only mattype
+    // among its surviving markers (the caller guarantees one). Serial.
+    void replenish_markers_homogeneous(const Param& param, const Variables &var,
+            int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi,
+            bool from_split_parent = false)
+    {
+        if (homo_elems.empty()) return;
+        MarkerSet &ms = *var.markersets[0];
+        const ElemMarkerInfo* emi_ptr = emi.data();
+        const int* top_elems_ptr = var.top_elems->data();
+        const int ntop_elems = var.ntop_elems;
+
+        for (const auto& pr : homo_elems) {
+            int e = pr.first;
+            int num_marker_in_elem = pr.second;
+
+            int mt = 0;
+            if (from_split_parent)
+                mt = var.remesh_elem_split_mat[e];
+            else
+                for (int t = 0; t < param.mat.nmat; ++t)
+                    if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
+
+            // Sediment: the lowest-index sediment survivor's time, else the split parent's
+            // (remesh_elem_split_time) rather than 0, an initial marker's. Other mattypes carry 0.
+            double ti_base = 0.;
+            if (mt == param.mat.mattype_sed) {
+                const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[e], mt);
+                if (m0 >= 0) ti_base = ms.get_time(m0);
+                else if (from_split_parent) ti_base = var.remesh_elem_split_time[e];
+            }
+
+            const int first_new = ms.get_nmarkers();
+            while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+                double eta[NODES_PER_ELEM];
+                ms.random_eta_seed(eta, e + num_marker_in_elem + var.steps);
+
+                double ti = ti_base;
+                int ge = genesis;
+                // a new surface sediment marker: the deposit time of
+                // replenish_markers_with_mattype_from_nn (same positions; the new markers join
+                // markers_in_elem after this loop, so the same reference markers)
+                if (is_surface && mt == param.mat.mattype_sed) {
+                    double xq[NDIMS];
+                    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+                    for (int d = 0; d < NDIMS; ++d) {
+                        xq[d] = 0.;
+                        for (int k = 0; k < NODES_PER_ELEM; ++k) xq[d] += coord[k][d] * eta[k];
+                    }
+                    int e_local = binary_search_index(top_elems_ptr, ntop_elems, e);
+                    compute_sed_marker_time_genesis(param, var, ms, e, e_local, emi_ptr,
+                                                    ConstArrayAccessor(xq, 1), ti, ge);
+                }
+
+                ms.append_marker(eta, e, mt, ti, 0., 0., 0., ge);
+                ++(*var.elemmarkers)[e][mt];
+                ++num_marker_in_elem;
+            }
+            for (int m = first_new; m < ms.get_nmarkers(); ++m)
+                (*var.markers_in_elem)[e].push_back(m);
+        }
+    }
+
+
+    // replenishment_option 12: an element whose surviving markers are all one mattype is filled
+    // by replenish_markers_homogeneous, the rest (mixed or empty) by the nearest-neighbor one.
+    void replenish_markers_homogeneous_or_nn(const Param& param, const Variables &var,
+            int_pair_vec &unplenished_elems, int genesis, bool is_surface = false,
+            const EMI_vec& emi = EMI_vec())
+    {
+        if (unplenished_elems.empty()) return;
+        int_pair_vec homo, mixed;
+        homo.reserve(unplenished_elems.size());
+        for (const auto& pr : unplenished_elems) {
+            int e = pr.first;
+            int nnz = 0;
+            if (pr.second > 0)
+                for (int mt = 0; mt < param.mat.nmat; ++mt)
+                    if ((*var.elemmarkers)[e][mt] > 0) ++nnz;
+            if (nnz == 1) homo.push_back(pr);
+            else          mixed.push_back(pr);
+        }
+
+        replenish_markers_homogeneous(param, var, homo, genesis, is_surface, emi);
+        replenish_markers_with_mattype_from_nn(param, var, mixed, genesis, is_surface, emi);
+    }
+
+    // The restored side wall (SIDEWALL_* order) whose profile replenishes element e: the last
+    // profiled wall that e touches (the later wall wins, as in restore_side_fields), -1 if none.
+    int side_profile_wall(const Variables &var, int e)
+    {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        for (int t = NSIDEWALL - 1; t >= 0; --t) {
+            if (var.side_profile[t].empty()) continue;
+            for (int k = 0; k < NODES_PER_ELEM; ++k)
+                if ((*var.bcflag)[conn[k]] & SIDEWALL_FLAG[t]) return t;
+        }
+        return -1;
+    }
+
+    // Element e's centroid in side wall t's profile coordinates: along-strike position s and depth
+    // rel below the column top ref_z. The side-profile replenishment and the inflow-band
+    // correction both locate an element here, so they agree on its material.
+    void side_profile_elem_centroid(const Variables &var, int e, int t, double ref_z,
+                                    double &s, double &rel)
+    {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double cs = 0., cz = 0.;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            cs += side_wall_strike((*var.coord)[conn[k]], t);
+            cz += (*var.coord)[conn[k]][NDIMS-1];
+        }
+        s = cs / NODES_PER_ELEM;
+        rel = ref_z - cz / NODES_PER_ELEM;
+    }
+
+    // Replenish restored side-wall elements (remeshing_option 13) from the profile of the wall
+    // side_profile_wall picks: the recorded material at the element's centroid
+    // (side_profile_elem_centroid), time 0. An element centred in the wall-top deposit gets
+    // mattype_sed with its lowest-index sediment marker's time, else the current time. Serial.
+    void replenish_markers_by_side_profile(const Param& param, const Variables &var,
+                                           int_pair_vec &side_elems, int genesis)
+    {
+        if (side_elems.empty()) return;
+        MarkerSet &ms = *var.markersets[0];
+
+        // column top of each side wall (SideProfile)
+        double ref_z[NSIDEWALL];
+        for (int t = 0; t < NSIDEWALL; ++t)
+            ref_z[t] = side_wall_top_z(var, t) - var.side_profile[t].top_rise;
+
+        for (const auto& pair : side_elems) {
+            int e = pair.first;
+            int num_marker_in_elem = pair.second;
+            const int t = side_profile_wall(var, e);
+            if (t < 0)
+                die(EXIT_INTERNAL_UNREACHABLE, "side-profile replenishment: no profiled wall");
+            const SideProfile &prof = var.side_profile[t];
+            double s, rel;
+            side_profile_elem_centroid(var, e, t, ref_z[t], s, rel);
+            const bool deposit = prof.in_deposit(rel);
+            const int mt = deposit ? param.mat.mattype_sed : side_profile_mattype_at(prof, s, rel);
+            double ti = 0.;
+            if (deposit) {
+                const int m_sed = ms.lowest_index_marker((*var.markers_in_elem)[e],
+                                                         param.mat.mattype_sed);
+                ti = (m_sed >= 0) ? ms.get_time(m_sed) : var.time / YEAR2SEC;
+            }
+            while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
+                double eta[NODES_PER_ELEM];
+                MarkerSet::random_eta_seed(eta, e + num_marker_in_elem + var.steps);
+                ms.append_marker(eta, e, mt, ti, 0., 0., 0., genesis);
+                ++(*var.elemmarkers)[e][mt];
+                (*var.markers_in_elem)[e].push_back(ms.get_nmarkers()-1);
+                ++num_marker_in_elem;
+            }
+        }
+    }
+
 } // anonymous namespace
 
 
@@ -1731,6 +1906,9 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
         case 2:
             replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 3, true, markers_in_elem_info);
             break;
+        case 12:
+            replenish_markers_homogeneous_or_nn(param, var, unplenished_elems, 3, true, markers_in_elem_info);
+            break;
         default:
             std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
             die(EXIT_CONFIG_VALUE);
@@ -1862,15 +2040,50 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     nvtxRangePop();
 #endif
 
+    // Fill order, independent of replenishment_option: elements on a profiled side wall from its
+    // profile, then split-parent elements, then the chosen option. `rest` = not yet replenished.
+    int_pair_vec side_elems, filtered;
+    int_pair_vec *rest = &unplenished_elems;
+    bool have_side_profile = false;
+    for (int t = 0; t < NSIDEWALL && !have_side_profile; ++t)
+        if (!var.side_profile[t].empty()) have_side_profile = true;
+    if (have_side_profile) {
+        for (const auto& pr : unplenished_elems) {
+            if (side_profile_wall(var, pr.first) >= 0) side_elems.push_back(pr);
+            else filtered.push_back(pr);
+        }
+        replenish_markers_by_side_profile(param, var, side_elems, 1);
+        rest = &filtered;
+    }
+
+    // elements with a single-mattype parent (var.remesh_elem_split_mat) inherit its mattype
+    if ((int)var.remesh_elem_split_mat.size() != var.nelem)
+        die(EXIT_INTERNAL_ASSERT, "remap_markers: the split-parent map is not for this mesh");
+    int_pair_vec split_elems, nonsplit;
+    nonsplit.reserve(rest->size());
+    for (const auto& pr : *rest)
+        if (var.remesh_elem_split_mat[pr.first] >= 0) split_elems.push_back(pr);
+        else nonsplit.push_back(pr);
+    if (!split_elems.empty()) {
+        replenish_markers_homogeneous(param, var, split_elems, 1, /*is_surface*/ false, EMI_vec(),
+                                      /*from_split_parent*/ true);
+        std::cout << "    Marker replenish (split-parent): " << split_elems.size()
+                  << " element(s) filled with their single parent's mattype.\n";
+    }
+    rest = &nonsplit;
+
     switch (param.markers.replenishment_option) {
     case 0:
-        replenish_markers_with_mattype_0(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_0(param, var, *rest, 1);
         break;
     case 1:
-        replenish_markers_with_mattype_from_cpdf(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_from_cpdf(param, var, *rest, 1);
         break;
     case 2:
-        replenish_markers_with_mattype_from_nn(param, var, unplenished_elems, 1);
+        replenish_markers_with_mattype_from_nn(param, var, *rest, 1);
+        break;
+    case 12:
+        replenish_markers_homogeneous_or_nn(param, var, *rest, 1);
         break;
     default:
         std::cerr << "Error: unknown markers.replenishment_option: " << param.markers.replenishment_option << '\n';
@@ -1880,6 +2093,99 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
+}
+
+// Correct STRAY marker mattypes in the inflow band (remeshing_option 13), right after
+// remap_markers. The wall machinery (division relocation, wall snap-back, MMG rebuilding the band)
+// moves geometry past markers and leaves a near-interface marker on the wrong side of a division,
+// which would advect inland and flip a split child at a later remesh. Band: the elements with a
+// node on an inflow wall + 1 ring; until incoming material fills it, it holds the domain's own
+// structure, which is re-layered too. Rule: the ELEMENT decides (the profile material at its
+// centroid, side_profile_elem_centroid), so a tilted interface carried by the tessellation is
+// followed. A stray carries a material the profile assigns within two element heights of that
+// depth; any other mismatch is a phase change.
+// Limitations: a phase-changed marker that close to a division is reset too (its rule fires again
+// at the next phase_changes call). In 3D (no division relocation) and at a 2D wall that also
+// drifted outward (no required interface edges), the band carries interfaces at element
+// resolution, so a marker near one can be reset at one remesh and back at a later one. Where two
+// 3D walls' bands overlap, one wall's pass can reset markers placed from the other's profile
+// (side_profile_wall). Elements centred in the wall-top deposit are left alone.
+void correct_inflow_band_marker_mattype(const Param& param, const Variables& var,
+                                        const bool *side_in)
+{
+    if (param.mesh.remeshing_option != 13) return;
+    MarkerSet &ms = *var.markersets[0];
+    int ncorr = 0;   // distinct markers: two 3D walls' bands can overlap
+    std::vector<char> corrected(ms.get_nmarkers(), 0);
+    for (int t = 0; t < NSIDEWALL; ++t) {
+        if (!side_in[t]) continue;
+        const SideProfile &prof = var.side_profile[t];
+        if (prof.empty()) continue;
+
+        // column top (SideProfile)
+        const double top_z = side_wall_top_z(var, t);
+        if (top_z == -std::numeric_limits<double>::max())   // option 13 rebuilds every wall
+            die(EXIT_INTERNAL_ASSERT,
+                "correct_inflow_band_marker_mattype: receiving wall without nodes");
+        const double ref_z = top_z - prof.top_rise;
+
+        std::vector<char> bnode(var.nnode, 0), belem(var.nelem, 0);
+        for (int n = 0; n < var.nnode; ++n)
+            if ((*var.bcflag)[n] & SIDEWALL_FLAG[t]) bnode[n] = 1;
+        for (int ring = 0; ring < 2; ++ring) {
+            for (int e = 0; e < var.nelem; ++e) {
+                if (belem[e]) continue;
+                ConstConnAccessor conn = (*var.connectivity)[e];
+                for (int i = 0; i < NODES_PER_ELEM; ++i)
+                    if (bnode[conn[i]]) { belem[e] = 1; break; }
+            }
+            if (ring == 0)
+                for (int e = 0; e < var.nelem; ++e) {
+                    if (!belem[e]) continue;
+                    ConstConnAccessor conn = (*var.connectivity)[e];
+                    for (int i = 0; i < NODES_PER_ELEM; ++i)
+                        bnode[conn[i]] = 1;
+                }
+        }
+        std::vector<char> in_win(param.mat.nmat);
+        for (int e = 0; e < var.nelem; ++e) {
+            if (!belem[e]) continue;
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            double zmin = std::numeric_limits<double>::max(), zmax = -zmin;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                const double z = (*var.coord)[conn[i]][NDIMS-1];
+                zmin = std::min(zmin, z);
+                zmax = std::max(zmax, z);
+            }
+            double cs, rel;
+            side_profile_elem_centroid(var, e, t, ref_z, cs, rel);
+            if (prof.in_deposit(rel)) continue;   // no recorded layering in the deposit
+            const int expected = side_profile_mattype_at(prof, cs, rel);
+            // Window 2h (h = this element's height): a marker that kept its own depth's material
+            // lies within h of the centroid; one set at an earlier remesh within h_old + h
+            // (assumed: h_old ~ h where the wall metric sets the size). Built at the element's
+            // first mismatching marker only.
+            bool win_built = false;
+            for (int m : (*var.markers_in_elem)[e]) {
+                const int cur = ms.get_mattype(m);
+                if (cur == expected) continue;
+                if (!win_built) {
+                    const double reach = 2. * (zmax - zmin);
+                    std::fill(in_win.begin(), in_win.end(), 0);
+                    side_profile_mattypes_within(prof, cs, rel - reach, rel + reach, in_win);
+                    win_built = true;
+                }
+                if (!in_win[cur]) continue;
+                ms.set_mattype(m, expected);
+                --(*var.elemmarkers)[e][cur];
+                ++(*var.elemmarkers)[e][expected];
+                if (!corrected[m]) { corrected[m] = 1; ++ncorr; }
+            }
+        }
+    }
+    if (ncorr)
+        std::cout << "      [restore] corrected " << ncorr
+                  << " stray marker mattype(s) in the inflow band (element-location rule).\n";
 }
 
 

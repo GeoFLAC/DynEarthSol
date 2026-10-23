@@ -39,11 +39,13 @@ void init_var(const Param& param, Variables& var)
     var.last_remesh_time = 0;
     var.steps = 0;
     var.nremesh = 0;
+    var.nremesh_prior = 0;
     var.noutput = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.refined_elem_size_n = new double_vec(0);
     var.reference_frame_time = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
@@ -209,6 +211,7 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not R2 growth
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
@@ -226,8 +229,11 @@ void init(const Param& param, Variables& var)
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
-    // After compute_mass: it is the only writer of var.volume_n, which this divides by.
+    // After compute_mass: it fills var.volume_n, which this divides by.
     initialize_elem_size_n(var, *var.init_elem_size_n);
+    // No refinement reached yet; the wait covers initialize_elem_size_n's async node kernel.
+    #pragma acc wait
+    *var.refined_elem_size_n = *var.init_elem_size_n;
 #endif
 
     report_mesh_info(var, "initial");
@@ -346,6 +352,7 @@ void restart(const Param& param, Variables& var)
     allocate_variables(param, var);
 #ifdef USEMMG
     var.init_elem_size_n->resize(var.nnode);
+    var.refined_elem_size_n->resize(var.nnode);
 #endif
 
     create_top_elems(var);
@@ -363,6 +370,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        bin_chkpt.read_scalar(var.nremesh_prior, "nremesh");
     }
 
     if (var.steps % param.mesh.quality_check_step_interval == 0 &&
@@ -376,6 +384,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // the R2 baseline, so the first remesh after a restart refines as in a continuous run
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -386,9 +396,80 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
+        bin_chkpt.read_array(*var.refined_elem_size_n, "refined_elem_size_n");
+        {   // the last surface-process dh, stored per node (Output::write_checkpoint)
+            double_vec dh_n(var.nnode);
+            bin_chkpt.read_array(dh_n, "surface dh");
+            for (int i = 0; i < var.surfinfo.ntop; ++i)
+                (*var.surfinfo.dh)[i] = dh_n[(*var.surfinfo.top_nodes)[i]];
+        }
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
+    // column and no shift at the checkpoint. remesh()'s side-profile lifecycle handles a side that
+    // changed at the restart. A restart without option 13 drops them: nothing would erase them,
+    // and the marker replenishment would keep refilling from them.
+    if (param.mesh.remeshing_option == 13 && bin_chkpt.has_array("side_prof_sizes")) {
+        int_vec psz(3 * NSIDEWALL);
+        bin_chkpt.read_array(psz, "side_prof_sizes");
+        char aname[64];
+        double_vec shifts(NSIDEWALL, 0.), rises(NSIDEWALL, 0.);   // wall-restore shifts, top rises
+        bin_chkpt.read_array(shifts, "side_prof_wall_shift");
+        bin_chkpt.read_array(rises, "side_prof_top_rise");
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[t];
+            prof.clear_column();
+            prof.wall_shift = shifts[t];
+            prof.top_rise = rises[t];
+            const int nn = psz[t], ne = psz[NSIDEWALL + t], ns = psz[2 * NSIDEWALL + t];
+            if (nn <= 0) continue;
+            const char *sfx_t = SIDEWALL_NAME[t];
+            auto rd = [&](double_vec &a, const char *name, int size) {
+                a.resize(size);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx_t);
+                bin_chkpt.read_array(a, aname);
+            };
+            rd(prof.node_reldepth, "node_reldepth", nn);
+            rd(prof.node_coord0_z, "node_coord0_z", nn);
+            rd(prof.node_temperature, "node_temperature", nn);
+#ifdef USEMMG
+            // written only under USEMMG; without MMG it must stay empty, which restore_side_fields
+            // tests before it indexes var.init_elem_size_n
+            rd(prof.node_init_elem_size, "node_init_elem_size", nn);
+#endif
+#ifdef THREED
+            rd(prof.node_strike, "node_strike", nn);
+            prof.facet_node.resize(ns * NODES_PER_FACET);
+            std::snprintf(aname, 64, "side_prof_facet_node.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_node, aname);
+            prof.facet_elem.resize(ns);
+            std::snprintf(aname, 64, "side_prof_facet_elem.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_elem, aname);
+#else
+            prof.node_support_idx.resize(nn + 1);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_idx, aname);
+            prof.node_support_arr.resize(ns);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_arr, aname);
+            rd(prof.elem_reldepth, "elem_reldepth", ne);
+#endif
+            prof.elem_mattype.resize(ne);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx_t);
+            bin_chkpt.read_array(prof.elem_mattype, aname);
+            rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+            side_profile_index_elems(prof);
+        }
+        std::cout << "  Restored incoming side profiles from checkpoint:";
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (psz[t] > 0 || shifts[t] != 0.)
+                std::cout << " " << SIDEWALL_NAME[t] << " (" << psz[t] << " nodes, "
+                          << psz[NSIDEWALL + t] << " elements, wall shift " << shifts[t]
+                          << " m, top rise " << rises[t] << " m)";
+        std::cout << ".\n";
     }
 
     // the following fields are not required for restarting, yet
@@ -412,7 +493,11 @@ void restart(const Param& param, Variables& var)
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
+        const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
+        // Shift the R2 baseline by the re-seed only; growth since the last remesh still counts.
+        for (int e = 0; e < var.nelem; ++e)
+            (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];
     }
 
     // Restore the RSF state variable when available, then rebuild the derived
@@ -470,9 +555,25 @@ void update_mesh(const Param& param, Variables& var)
 
     if(!param.control.PT_jump)
     {
+        // option 13: each profiled wall's top rise (SideProfile::top_rise)
+        double top_before[NSIDEWALL] = {};
+        const bool track_tops = param.mesh.remeshing_option == 13 &&
+                                param.control.surface_process_option != 0;
+        if (track_tops) {
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (!var.side_profile[t].empty())
+                    top_before[t] = side_wall_top_z(var, t);
+        }
         surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                       *var.plstrain, *var.volume, *var.volume_n, \
                       var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+        if (track_tops) {
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                SideProfile &prof = var.side_profile[t];
+                if (!prof.empty())
+                    prof.top_rise += side_wall_top_z(var, t) - top_before[t];
+            }
+        }
     }
 
 #ifdef NPROF_DETAIL
@@ -671,6 +772,17 @@ int main(int argc, const char* argv[])
         }
 
         var.dt = compute_dt(param, var);
+
+        // Option 13: record the inflow walls' columns (detect_side_profile) after mesh and markers
+        // exist and before the initial checkpoint. A restart reads the checkpointed ones instead.
+        if (param.mesh.remeshing_option == 13) {
+            const double t_now = var.time / YEAR2SEC;
+            uint bits = 0;
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (side_wall_vbc_is_inflow(param.bc, t, t_now)) bits |= SIDEWALL_FLAG[t];
+            if (bits)
+                detect_side_profile(param, var, bits);
+        }
 
         if (param.sim.has_initial_checkpoint)
             var.output->write_checkpoint(param, var);

@@ -6,6 +6,8 @@ double find_max_vbc(const BC &bc);
 void create_boundary_normals(const Variables &var, array_t &bnormals,
                              double_vec& edge_vec, int* edge_slot);
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel);
+bool side_wall_vbc_is_inflow(const BC &bc, int t, double time_in_yr);
+bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr);
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Param &param, const Variables& var, double_vec& plstrain);

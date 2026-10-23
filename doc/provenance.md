@@ -90,7 +90,7 @@ The other fields:
 | `cpu_time`, `mem_peak_rss_gib` | what it cost |
 | `init_time`, `compute_time`, `remesh_time`, `output_time` | the screen's time summary |
 | `compute_sec_per_step` | the compute time over `steps_this_run` |
-| `remeshings`, `remesh_sec_per_remesh` | the remesh count and average |
+| `remeshings`, `remesh_sec_per_remesh` | this run's remesh count and average (the log's `Remeshing starts (#N` counts the model's) |
 | `outputs`, `output_sec_per_output` | the output count and average |
 
 * As on screen, wall = init + compute + remesh + output.
