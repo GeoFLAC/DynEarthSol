@@ -88,14 +88,14 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  *     below); the others run serially and outside any hot loop, so the lock
  *     costs them nothing that matters.
  *
- *   - The read side (cell_markers(), label_cell(),
- *     is_dominant(), dominant_xext_ok()) does NOT take mutex_. label_cell(),
- *     is_dominant() and dominant_xext_ok() run from subduction_phase_changes()'s
- *     per-marker OpenMP loop -- thousands of calls per phase_changes() step,
- *     from every thread at once -- so a lock there would make every thread
- *     contend on mutex_ for each lookup. Locking it is unnecessary for how
- *     this class is actually driven: the index mutators are called from
- *     build_serpentinization_grid() or
+ *   - The read side (cell_markers(), label_cell(), is_dominant(),
+ *     dominant_xext_ok(), cells_with_dominant_below()) does NOT take mutex_.
+ *     label_cell(), is_dominant() and dominant_xext_ok() run from
+ *     subduction_phase_changes()'s per-marker OpenMP loop -- thousands of
+ *     calls per phase_changes() step, from every thread at once -- so a lock
+ *     there would make every thread contend on mutex_ for each lookup.
+ *     Locking it is unnecessary for how this class is actually driven: the
+ *     index mutators are called from build_serpentinization_grid() or
  *     remove_markers(), which run to completion (thread join / #pragma acc
  *     wait) before subduction_phase_changes()'s marker loop starts, never
  *     concurrently with it, and dominant_cells_ follows the split described
@@ -127,17 +127,19 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * recomputing cell composition on every subduction_phase_changes() step:
  * between remeshes the slab advances only ~dx per tens-of-thousands of steps,
  * so which cells are dominant changes far more slowly than phase_changes() is
- * called.  is_dominant() is one O(1) hash lookup per walked cell, vs.
- * cell_markers() + a fraction count per walked cell per call.
+ * called: a caller reads the set instead of running cell_markers() + a
+ * fraction count per cell per call.
  *
  * Thread safety for dominant_cells_ follows the same split as the read path:
  * clear_dominant()/set_dominant() are called from build_serpentinization_grid()
  * (single-threaded), and invalidate_dominant_cell() is called from pass 1 of
- * the OMP parallel region (concurrent writers → takes mutex_).  is_dominant()
- * is called from pass 2 of the same region (no concurrent writers: the OMP
- * implicit barrier between pass 1 and pass 2 provides the happens-before that
- * makes all pass-1 invalidations visible to pass-2 readers, exactly the same
- * argument as cell_markers() being unlocked).
+ * the OMP parallel region (concurrent writers → takes mutex_).
+ * cells_with_dominant_below() (one thread, between the passes) and
+ * is_dominant()/dominant_xext_ok() (pass 2's margin walk) read it after
+ * pass 1 in the same region (no concurrent writers: the OMP implicit barrier
+ * that ends pass 1 provides the happens-before that makes all pass-1
+ * invalidations visible to them, exactly the same argument as cell_markers()
+ * being unlocked).
  *
  * The class is deliberately decoupled from Param/Variables/MarkerSet: the
  * caller passes the points it bins and their bounds. The one caller,
@@ -214,6 +216,13 @@ public:
     // O(1) query: true iff `cell` is in dominant_cells_. NOT locked -- see
     // the class doc's thread-safety section on dominant_cells_.
     bool is_dominant(int cell) const { return dominant_cells_.count(cell) > 0; }
+
+    // Set below[c] = 1 for every cell c that has a dominant cell at most
+    // nsteps cells strictly below it in its column, 0 elsewhere (below is
+    // resized to num_cells()): the walk down from every cell at once, in
+    // |dominant_cells_| * nsteps steps. NOT locked -- see the class doc's
+    // thread-safety section on dominant_cells_.
+    void cells_with_dominant_below(int nsteps, std::vector<char>& below) const;
 
     // Remove `cell` from dominant_cells_ (conservative: treated as non-
     // dominant until the next build). Called from pass 1 of

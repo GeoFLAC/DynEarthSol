@@ -4254,6 +4254,19 @@ bool VirtualTopology::dominant_xext_ok(int cell, const double* p, double margin)
 }
 
 
+void VirtualTopology::cells_with_dominant_below(int nsteps, std::vector<char>& below) const
+{
+    below.assign(num_cells(), 0);
+    for (int dom : dominant_cells_) {
+        int c = neighbor_cell(dom, NDIMS-1, +1);
+        for (int k = 0; c >= 0 && k < nsteps; ++k) {
+            below[c] = 1;
+            c = neighbor_cell(c, NDIMS-1, +1);
+        }
+    }
+}
+
+
 void VirtualTopology::invalidate_dominant_cell(int cell)
 {
     std::lock_guard<std::mutex> lock(mutex_);

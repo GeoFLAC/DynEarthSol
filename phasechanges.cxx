@@ -264,29 +264,38 @@ namespace {
                || mt == param.mat.mattype_sediment_rock;
     }
 
-    // True iff a crust-dominant cell (as recorded in vt.dominant_cells_ by
-    // build_serpentinization_grid()) exists within `thickness` STRICTLY BELOW
-    // `cell0` (the querying marker's build-time label, or its live cell when
-    // the label was invalidated -- see the pass-2 call site). cell0 itself
-    // is skipped -- a mantle marker sitting inside the crust body must not
-    // self-trigger; only crust strictly below it does. dominant_cells_ is
-    // precomputed once per remesh and kept consistent between rebuilds by
-    // invalidate_dominant_cell() in pass 1 (see below), so is_dominant() is a
-    // single O(1) hash lookup per walked cell. margin >= 0 additionally
-    // requires the marker's horizontal position p to lie within the walked
-    // cell's recorded crust extent (+/- margin) -- rejecting crust that is in
-    // the marker's column but horizontally distant (the slab-bend
-    // column-quantization false positive); margin < 0 keeps whole-column
-    // behavior and never reads p, which may then be null.
+    // How many cells pass 2 looks down from a mantle marker's cell: those
+    // one, two, ... cell sizes below it, up to `thickness`. Counted by
+    // repeated addition, not by division, which can round a boundary case
+    // the other way and change which markers convert; capped at num_cells(),
+    // more than any column holds, so a huge thickness cannot run away.
+    int crust_walk_steps(const VirtualTopology& vt, double thickness)
+    {
+        int nsteps = 0;
+        for (double dist = vt.cell_size(); dist <= thickness && nsteps < vt.num_cells();
+                dist += vt.cell_size())
+            ++nsteps;
+        return nsteps;
+    }
+
+    // The crust-margin test (margin >= 0): true iff, at most nsteps cells
+    // STRICTLY BELOW `cell0` (the querying marker's build-time label, or its
+    // live cell when the label was invalidated -- see the pass-2 call site),
+    // a crust-dominant cell (vt.dominant_cells_, as pass 1 left it) holds
+    // the marker's horizontal position p within its recorded crust extent
+    // (+/- margin) -- rejecting crust that is in the marker's column but
+    // horizontally distant (the slab-bend column-quantization false
+    // positive). cell0 itself is skipped -- a mantle marker sitting inside
+    // the crust body must not self-trigger; only crust strictly below it
+    // does. With the margin off, pass 2 reads the whole-column answer from
+    // VirtualTopology::cells_with_dominant_below() instead.
     bool crust_dominant_cell_below(const VirtualTopology& vt, int cell0,
-                                    const double* p, double thickness,
+                                    const double* p, int nsteps,
                                     double margin)
     {
-        const double dx = vt.cell_size();
         int cell = vt.neighbor_cell(cell0, NDIMS-1, -1);   // one cell below, not cell0 itself
-        for (double dist = dx; cell >= 0 && dist <= thickness; dist += dx) {
-            if (vt.is_dominant(cell) &&
-                (margin < 0 || vt.dominant_xext_ok(cell, p, margin)))
+        for (int k = 0; cell >= 0 && k < nsteps; ++k) {
+            if (vt.is_dominant(cell) && vt.dominant_xext_ok(cell, p, margin))
                 return true;
             cell = vt.neighbor_cell(cell, NDIMS-1, -1);
         }
@@ -305,8 +314,8 @@ namespace {
     // for, so a marker's per-element elemmarkers update is race-free in each
     // pass.
     //
-    // Two passes, not one, because crust_dominant_cell_below() checks
-    // var.vtopo->dominant_cells_, which records which cells are crust-dominant.
+    // Two passes, not one, because pass 2 reads var.vtopo->dominant_cells_,
+    // which records which cells are crust-dominant.
     // Pass 1 can turn a crust marker into a material the grid does not count
     // (eclogite, metasediment), so its cell may no longer be crust-dominant --
     // it therefore calls
@@ -317,12 +326,14 @@ namespace {
     // between the two #pragma omp for loops ensures all pass-1 invalidations
     // complete before pass 2 reads.
     //
-    // Pass 2 calls crust_dominant_cell_below(), an O(1) is_dominant() hash
-    // lookup per walked cell. dominant_cells_ is computed at each
-    // build_serpentinization_grid() and, apart from pass 1's invalidations,
-    // stays valid across the phase_changes() calls until the next rebuild
-    // (between remeshes the slab advances only ~dx per tens of thousands of
-    // steps, far slower than the 10-step phase_change interval).
+    // Between the passes, one thread turns dominant_cells_ into a per-cell
+    // flag: crust-dominant cell within serpentinization_thickness below.
+    // With the margin off, pass 2 reads one flag per mantle marker; with it
+    // on, the flag prefilters crust_dominant_cell_below(). dominant_cells_ is
+    // computed at each build_serpentinization_grid() and, apart from pass 1's
+    // invalidations, stays valid across the phase_changes() calls until the
+    // next rebuild (between remeshes the slab advances only ~dx per tens of
+    // thousands of steps, far slower than the 10-step phase_change interval).
     void subduction_phase_changes(const Param& param, Variables& var, MarkerSet& ms)
     {
         int n = ms.get_nmarkers();
@@ -358,8 +369,13 @@ namespace {
         SurfaceTopo topo;
         topo.build(param, var, /*elev_only=*/true);
 
+        // Pass 2's look-down distance in cells, and its per-cell answer
+        // (filled between the passes).
+        int nsteps = serpentinize ? crust_walk_steps(*var.vtopo, param.mat.serpentinization_thickness) : 0;
+        std::vector<char> crust_below;
+
         #pragma omp parallel default(none) \
-            shared(param, var, ms, rules, serpentinize, max_basalt_depth, topo)
+            shared(param, var, ms, rules, serpentinize, max_basalt_depth, topo, nsteps, crust_below)
         {
             // Pass 1: every transition EXCEPT mantle -> serpentinite (that
             // one reads dominant_cells_, so pass 1's invalidations -- from
@@ -388,40 +404,43 @@ namespace {
                     double Z, press, T, xz[NDIMS];
                     ms.get_ZPT(var, m, topo, Z, press, T, xz);  // Z below the current surface
                     const double depth = std::max(0.0, -Z);   // m below the local free surface
-                    const int to = rule->applies(depth, press, T) ? rule->to : -1;
+                    if (!rule->applies(depth, press, T))
+                        continue;
 
-                    if (to >= 0 && to != mt) {
-                        ms.set_mattype(m, to);
-                        --(*var.elemmarkers)[e][mt];
-                        ++(*var.elemmarkers)[e][to];
-                        // When a crust marker turns into a material the grid
-                        // does not count, its cell may no longer be
-                        // crust-dominant. Invalidate it immediately
-                        // so pass 2's is_dominant() queries see the updated
-                        // answer. invalidate_dominant_cell() takes mutex_ and
-                        // is an O(1) erase -- cheap even under contention.
-                        if (serpentinize && counts_as_crust(param, mt) && !counts_as_crust(param, to)) {
-                            // Invalidate the cell whose dominance this marker
-                            // contributed to -- its BUILD-time cell (the cell
-                            // the dominance scan actually counted it in; the
-                            // live cell can differ once the marker has
-                            // drifted). Live cell_of() only as fallback for
-                            // a label mark_removed() dropped (see label_cell()).
-                            int cell = var.vtopo->label_cell(m);
-                            if (cell < 0)
-                                cell = var.vtopo->cell_of(xz);
-                            var.vtopo->invalidate_dominant_cell(cell);
-                        }
+                    const int to = rule->to;   // never mt: build_phase_transition_rules() drops from == to
+                    ms.set_mattype(m, to);
+                    --(*var.elemmarkers)[e][mt];
+                    ++(*var.elemmarkers)[e][to];
+                    // When a crust marker turns into a material the grid does
+                    // not count, its cell may no longer be crust-dominant.
+                    // Invalidate it immediately so the
+                    // crust-below map built between the passes (and the
+                    // margin walk) sees the updated answer.
+                    // invalidate_dominant_cell() takes mutex_ and is an O(1)
+                    // erase -- cheap even under contention.
+                    if (serpentinize && counts_as_crust(param, mt) && !counts_as_crust(param, to)) {
+                        // Invalidate the cell whose dominance this marker
+                        // contributed to -- its BUILD-time cell (the cell the
+                        // dominance scan actually counted it in; the live
+                        // cell can differ once the marker has drifted). Live
+                        // cell_of() only as fallback for a label
+                        // mark_removed() dropped (see label_cell()).
+                        int cell = var.vtopo->label_cell(m);
+                        if (cell < 0)
+                            cell = var.vtopo->cell_of(xz);
+                        var.vtopo->invalidate_dominant_cell(cell);
                     }
                 }
             }
             // implicit barrier: all pass-1 writes (set_mattype + invalidations)
             // are visible to every thread before pass 2 starts.
 
-            // Pass 2: mantle -> serpentinite. crust_dominant_cell_below() uses
-            // is_dominant(), an O(1) hash lookup into dominant_cells_
-            // precomputed at build time.
+            // Pass 2: mantle -> serpentinite.
             if (serpentinize) {
+                #pragma omp single
+                var.vtopo->cells_with_dominant_below(nsteps, crust_below);
+                // implicit barrier: the map is complete before any thread reads it.
+
                 #pragma omp for
                 for (int e=0; e<var.nelem; e++) {
                     int nmarkers = (*var.markers_in_elem)[e].size();
@@ -430,27 +449,22 @@ namespace {
                         if (ms.get_mattype(m) != param.mat.mattype_mantle)
                             continue;
 
-                        // The walk starts from the marker's BUILD-time cell
-                        // (its label from the last grid rebuild), so the
-                        // marker-grid relationship is evaluated in the
-                        // rebuild-time configuration and stays constant
-                        // between rebuilds -- a drifting marker cannot flip
-                        // the answer mid-interval by crossing a lattice line
-                        // against the frozen dominance data. A label
-                        // mark_removed() dropped falls back to the live cell
-                        // until the next rebuild. The
-                        // margin test still uses the live horizontal position
-                        // -- drift between rebuilds is far smaller than any
-                        // useful margin. With a label and the margin off the
-                        // walk needs no position, so it runs before the P-T
-                        // evaluation, which most mantle markers (no crust
-                        // below) then skip; both tests are pure, so their
-                        // order cannot change the result.
+                        // The crust-below test reads the marker's
+                        // BUILD-time cell (its label from the last grid
+                        // rebuild), so the marker-grid relationship is
+                        // evaluated in the rebuild-time configuration and
+                        // stays constant between rebuilds -- a drifting marker
+                        // cannot flip the answer mid-interval by crossing a
+                        // lattice line against the frozen dominance data. A
+                        // label mark_removed() dropped falls back to the live
+                        // cell until the next rebuild. The margin test still
+                        // uses the live horizontal position -- drift between
+                        // rebuilds is far smaller than any useful margin. A
+                        // labelled marker with no crust below skips the P-T
+                        // evaluation; the tests are pure, so their order
+                        // cannot change the result.
                         int cell0 = var.vtopo->label_cell(m);
-                        const bool walk_first = cell0 >= 0 && param.mat.serpentinization_crust_margin < 0;
-                        if (walk_first && !crust_dominant_cell_below(*var.vtopo, cell0, nullptr,
-                                param.mat.serpentinization_thickness,
-                                param.mat.serpentinization_crust_margin))
+                        if (cell0 >= 0 && !crust_below[cell0])
                             continue;
 
                         double Z, press, T, p[NDIMS];
@@ -459,14 +473,15 @@ namespace {
                         if (depth > max_basalt_depth || !antigorite_stable(press, T))
                             continue;
 
-                        if (!walk_first) {
-                            if (cell0 < 0)
-                                cell0 = var.vtopo->cell_of(p);
-                            if (!crust_dominant_cell_below(*var.vtopo, cell0, p,
-                                    param.mat.serpentinization_thickness,
-                                    param.mat.serpentinization_crust_margin))
+                        if (cell0 < 0) {
+                            cell0 = var.vtopo->cell_of(p);
+                            if (!crust_below[cell0])
                                 continue;
                         }
+                        if (param.mat.serpentinization_crust_margin >= 0 &&
+                                !crust_dominant_cell_below(*var.vtopo, cell0, p, nsteps,
+                                    param.mat.serpentinization_crust_margin))
+                            continue;
                         ms.set_mattype(m, param.mat.mattype_serpentinite);
                         --(*var.elemmarkers)[e][param.mat.mattype_mantle];
                         ++(*var.elemmarkers)[e][param.mat.mattype_serpentinite];
@@ -576,13 +591,13 @@ void build_serpentinization_grid(const Param& param, Variables& var)
 
     // Bin every marker, not just crust: the dominance scan below counts each
     // cell's crust share of ITS OWN population, and pass
-    // 2 starts each mantle marker's walk from its label.
+    // 2 reads each mantle marker's crust-below flag at its label.
     var.vtopo->build_index(points, n);
 
     // Precompute which cells are crust-dominant (more than half of their
     // markers count as crust, counts_as_crust())
-    // so subduction_phase_changes() pass 2 can do O(1) is_dominant() lookups
-    // instead of recomputing cell composition at every phase_changes() call
+    // so subduction_phase_changes() pass 2 builds its crust-below map from
+    // them instead of recomputing cell composition at every phase_changes() call
     // (every 10 steps).
     // removed_since_rebuild_ is empty right after build_index(), so
     // cell_markers() here is an exact, zero-overhead bucket read.
