@@ -374,16 +374,21 @@ namespace {
                     if (serpentinize && mt == param.mat.mattype_mantle)
                         continue;   // resolved in pass 2
 
+                    // The marker's rule first (at most one per source phase): a
+                    // material without one needs no P-T evaluation at all.
+                    const PhaseTransition* rule = nullptr;
+                    for (const PhaseTransition& r : rules)
+                        if (r.from == mt) {
+                            rule = &r;
+                            break;
+                        }
+                    if (rule == nullptr)
+                        continue;
+
                     double Z, press, T, xz[NDIMS];
                     ms.get_ZPT(var, m, topo, Z, press, T, xz);  // Z below the current surface
                     const double depth = std::max(0.0, -Z);   // m below the local free surface
-
-                    int to = -1;
-                    for (const PhaseTransition& r : rules)
-                        if (r.from == mt) {
-                            if (r.applies(depth, press, T)) to = r.to;
-                            break;   // at most one rule per source phase
-                        }
+                    const int to = rule->applies(depth, press, T) ? rule->to : -1;
 
                     if (to >= 0 && to != mt) {
                         ms.set_mattype(m, to);
