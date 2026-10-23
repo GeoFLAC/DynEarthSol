@@ -277,7 +277,7 @@ namespace {
     // cell's recorded crust extent (+/- margin) -- rejecting crust that is in
     // the marker's column but horizontally distant (the slab-bend
     // column-quantization false positive); margin < 0 keeps whole-column
-    // behavior.
+    // behavior and never reads p, which may then be null.
     bool crust_dominant_cell_below(const VirtualTopology& vt, int cell0,
                                     const double* p, double thickness,
                                     double margin)
@@ -430,12 +430,6 @@ namespace {
                         if (ms.get_mattype(m) != param.mat.mattype_mantle)
                             continue;
 
-                        double Z, press, T, p[NDIMS];
-                        ms.get_ZPT(var, m, topo, Z, press, T, p);  // below current surface
-                        const double depth = std::max(0.0, -Z);
-                        if (depth > max_basalt_depth || !antigorite_stable(press, T))
-                            continue;
-
                         // The walk starts from the marker's BUILD-time cell
                         // (its label from the last grid rebuild), so the
                         // marker-grid relationship is evaluated in the
@@ -447,17 +441,35 @@ namespace {
                         // until the next rebuild. The
                         // margin test still uses the live horizontal position
                         // -- drift between rebuilds is far smaller than any
-                        // useful margin.
+                        // useful margin. With a label and the margin off the
+                        // walk needs no position, so it runs before the P-T
+                        // evaluation, which most mantle markers (no crust
+                        // below) then skip; both tests are pure, so their
+                        // order cannot change the result.
                         int cell0 = var.vtopo->label_cell(m);
-                        if (cell0 < 0)
-                            cell0 = var.vtopo->cell_of(p);
-                        if (crust_dominant_cell_below(*var.vtopo, cell0, p,
+                        const bool walk_first = cell0 >= 0 && param.mat.serpentinization_crust_margin < 0;
+                        if (walk_first && !crust_dominant_cell_below(*var.vtopo, cell0, nullptr,
                                 param.mat.serpentinization_thickness,
-                                param.mat.serpentinization_crust_margin)) {
-                            ms.set_mattype(m, param.mat.mattype_serpentinite);
-                            --(*var.elemmarkers)[e][param.mat.mattype_mantle];
-                            ++(*var.elemmarkers)[e][param.mat.mattype_serpentinite];
+                                param.mat.serpentinization_crust_margin))
+                            continue;
+
+                        double Z, press, T, p[NDIMS];
+                        ms.get_ZPT(var, m, topo, Z, press, T, p);  // below current surface
+                        const double depth = std::max(0.0, -Z);
+                        if (depth > max_basalt_depth || !antigorite_stable(press, T))
+                            continue;
+
+                        if (!walk_first) {
+                            if (cell0 < 0)
+                                cell0 = var.vtopo->cell_of(p);
+                            if (!crust_dominant_cell_below(*var.vtopo, cell0, p,
+                                    param.mat.serpentinization_thickness,
+                                    param.mat.serpentinization_crust_margin))
+                                continue;
                         }
+                        ms.set_mattype(m, param.mat.mattype_serpentinite);
+                        --(*var.elemmarkers)[e][param.mat.mattype_mantle];
+                        ++(*var.elemmarkers)[e][param.mat.mattype_serpentinite];
                     }
                 }
             }
