@@ -815,9 +815,9 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
     // the count up to the last build's count flagged, so a marker appended
     // later (replenishment, deposition) never inherits a label.
     // Done as a plain serial pass after the wait above, rather than inlined
-    // into the a_out loop: mark_removed() takes an internal lock (std::mutex,
-    // std::unordered_set) that has no business inside a GPU-offloadable
-    // "#pragma acc parallel loop" body, and, as elsewhere in this file, host
+    // into the a_out loop: mark_removed() inserts into a std::unordered_set,
+    // which has no business inside a GPU-offloadable "#pragma acc parallel
+    // loop" body, and, as elsewhere in this file, host
     // code reads data an async kernel uses (a_out) only once it has finished.
     // Only for markersets[0]: the index holds its ids, and the same id in
     // another set (the hydrous markers, which remap_markers also compacts)

@@ -3983,8 +3983,6 @@ VirtualTopology::VirtualTopology(const double* domain_lo, const double* domain_h
 
 void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
 
     ints.clear();
@@ -4025,8 +4023,6 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
 
 VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_vec& dbls)
 {
-    // Not locked: this constructs a brand-new object that is not yet
-    // reachable from any other thread.
     if (ints.empty() || ints[0] != layout_tag)
         die(EXIT_IO_RESTART, "vtopo_int has another VirtualTopology layout: restart from a checkpoint this build wrote");
     VirtualTopology* vt = new VirtualTopology();   // private default ctor
@@ -4149,8 +4145,6 @@ int VirtualTopology::vertical_index(const double* p) const
 
 void VirtualTopology::build_index(const array_t& coords, int npoints)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
     bucket_.assign(ncells, int_vec());
     removed_since_rebuild_.clear();
@@ -4189,7 +4183,6 @@ int VirtualTopology::neighbor_cell(int cell, int axis, int dir) const
 
 void VirtualTopology::cell_markers(int cell, int_vec& ids) const
 {
-    // Not locked: see the class doc's thread-safety section in mesh.hpp.
     if (cell < 0 || cell >= static_cast<int>(bucket_.size()))
         die(EXIT_INTERNAL_ASSERT, "VirtualTopology::cell_markers: cell outside [0, num_cells())");
     ids.clear();
@@ -4201,14 +4194,12 @@ void VirtualTopology::cell_markers(int cell, int_vec& ids) const
 
 void VirtualTopology::mark_removed(int id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     removed_since_rebuild_.insert(id);
 }
 
 
 void VirtualTopology::clear_dominant()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     dominant_cells_.clear();
     dominant_xext_.clear();
     xext_built_ = false;
@@ -4217,14 +4208,12 @@ void VirtualTopology::clear_dominant()
 
 void VirtualTopology::set_dominant(int cell)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     dominant_cells_.insert(cell);
 }
 
 
 void VirtualTopology::set_dominant_xext(int cell, const double* xlo, const double* xhi)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     XExt& e = dominant_xext_[cell];
     for (int d=0; d<NDIMS-1; d++) {
         e.lo[d] = xlo[d];
@@ -4235,7 +4224,6 @@ void VirtualTopology::set_dominant_xext(int cell, const double* xlo, const doubl
 
 void VirtualTopology::mark_xext_built()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     xext_built_ = true;
 }
 
@@ -4269,7 +4257,6 @@ void VirtualTopology::cells_with_dominant_below(int nsteps, std::vector<char>& b
 
 void VirtualTopology::invalidate_dominant_cell(int cell)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     dominant_cells_.erase(cell);
     dominant_xext_.erase(cell);
 }

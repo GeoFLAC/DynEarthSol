@@ -281,9 +281,9 @@ namespace {
     // The crust-margin test (margin >= 0): true iff, at most nsteps cells
     // STRICTLY BELOW `cell0` (the querying marker's build-time label, or its
     // live cell when the label was invalidated -- see the pass-2 call site),
-    // a crust-dominant cell (vt.dominant_cells_, as pass 1 left it) holds
-    // the marker's horizontal position p within its recorded crust extent
-    // (+/- margin) -- rejecting crust that is in the marker's column but
+    // a crust-dominant cell (vt.dominant_cells_, after the drops between the
+    // passes) holds the marker's horizontal position p within its recorded
+    // crust extent (+/- margin) -- rejecting crust that is in the marker's column but
     // horizontally distant (the slab-bend column-quantization false
     // positive). cell0 itself is skipped -- a mantle marker sitting inside
     // the crust body must not self-trigger; only crust strictly below it
@@ -317,21 +317,19 @@ namespace {
     // Two passes, not one, because pass 2 reads var.vtopo->dominant_cells_,
     // which records which cells are crust-dominant.
     // Pass 1 can turn a crust marker into a material the grid does not count
-    // (eclogite, metasediment), so its cell may no longer be crust-dominant --
-    // it therefore calls
-    // invalidate_dominant_cell() immediately so pass 2 sees the updated answer.
-    // Without the barrier, pass 2 could observe a cell as still dominant while
-    // pass 1 on another thread is in the middle of converting the marker that
-    // made it dominant -- a race on dominant_cells_. The implicit barrier
-    // between the two #pragma omp for loops ensures all pass-1 invalidations
-    // complete before pass 2 reads.
+    // (eclogite, metasediment), so its cell may no longer be crust-dominant:
+    // pass 1 records the cell, and between
+    // the passes one thread drops each recorded cell from dominant_cells_.
+    // A dropped cell is not recounted; it stays non-dominant until the next
+    // rebuild. The barriers that end pass 1 and the single keep every drop
+    // ahead of pass 2's reads.
     //
-    // Between the passes, one thread turns dominant_cells_ into a per-cell
-    // flag: crust-dominant cell within serpentinization_thickness below.
+    // The same thread then turns dominant_cells_ into a per-cell flag:
+    // crust-dominant cell within serpentinization_thickness below.
     // With the margin off, pass 2 reads one flag per mantle marker; with it
     // on, the flag prefilters crust_dominant_cell_below(). dominant_cells_ is
-    // computed at each build_serpentinization_grid() and, apart from pass 1's
-    // invalidations, stays valid across the phase_changes() calls until the
+    // computed at each build_serpentinization_grid() and, apart from those
+    // drops, stays valid across the phase_changes() calls until the
     // next rebuild (between remeshes the slab advances only ~dx per tens of
     // thousands of steps, far slower than the 10-step phase_change interval).
     void subduction_phase_changes(const Param& param, Variables& var, MarkerSet& ms)
@@ -344,10 +342,11 @@ namespace {
         // Geometric input for serpentinization: var.vtopo's general marker-cell
         // index (see mesh.hpp), built eagerly after init() and at the end of
         // remeshing, and frozen in between except for mark_removed() (see
-        // markerset.cxx) and invalidate_dominant_cell() (pass 1 below). It is
-        // rebuilt here, before the next remesh, only when a restart did not
-        // bring a usable one: absent (the checkpoint was written without it),
-        // or without crust extents while the margin feature is on.
+        // markerset.cxx) and invalidate_dominant_cell() (between the passes
+        // below). It is rebuilt here, before the next remesh, only when a
+        // restart did not bring a usable one: absent (the checkpoint was
+        // written without it), or without crust extents while the margin
+        // feature is on.
         bool serpentinize = uses_serpentinization_grid(param);
         if (serpentinize &&
                 (var.vtopo == nullptr ||
@@ -373,14 +372,15 @@ namespace {
         // (filled between the passes).
         int nsteps = serpentinize ? crust_walk_steps(*var.vtopo, param.mat.serpentinization_thickness) : 0;
         std::vector<char> crust_below;
+        int_vec crust_lost_cells;   // cells where pass 1 turned a crust marker non-crust
 
         #pragma omp parallel default(none) \
-            shared(param, var, ms, rules, serpentinize, max_basalt_depth, topo, nsteps, crust_below)
+            shared(param, var, ms, rules, serpentinize, max_basalt_depth, topo, nsteps, crust_below, \
+                   crust_lost_cells)
         {
             // Pass 1: every transition EXCEPT mantle -> serpentinite (that
-            // one reads dominant_cells_, so pass 1's invalidations -- from
-            // basalt_to_eclogite -- must be complete first; see the function
-            // doc above).
+            // one reads dominant_cells_, which must first drop the cells
+            // whose crust this pass converts; see the function doc above).
             #pragma omp for
             for (int e=0; e<var.nelem; e++) {
                 int nmarkers = (*var.markers_in_elem)[e].size();
@@ -412,34 +412,38 @@ namespace {
                     --(*var.elemmarkers)[e][mt];
                     ++(*var.elemmarkers)[e][to];
                     // When a crust marker turns into a material the grid does
-                    // not count, its cell may no longer be crust-dominant.
-                    // Invalidate it immediately so the
-                    // crust-below map built between the passes (and the
-                    // margin walk) sees the updated answer.
-                    // invalidate_dominant_cell() takes mutex_ and is an O(1)
-                    // erase -- cheap even under contention.
+                    // not count, its cell may no longer be crust-dominant:
+                    // record it for the drop between the passes. Rare (one
+                    // entry per converted crust marker), so a critical section
+                    // costs nothing that matters.
                     if (serpentinize && counts_as_crust(param, mt) && !counts_as_crust(param, to)) {
-                        // Invalidate the cell whose dominance this marker
-                        // contributed to -- its BUILD-time cell (the cell the
-                        // dominance scan actually counted it in; the live
-                        // cell can differ once the marker has drifted). Live
-                        // cell_of() only as fallback for a label
-                        // mark_removed() dropped (see label_cell()).
+                        // The cell whose dominance this marker contributed
+                        // to -- its BUILD-time cell (the cell the dominance
+                        // scan actually counted it in; the live cell can
+                        // differ once the marker has drifted). Live cell_of()
+                        // only as fallback for a label mark_removed() dropped
+                        // (see label_cell()).
                         int cell = var.vtopo->label_cell(m);
                         if (cell < 0)
                             cell = var.vtopo->cell_of(xz);
-                        var.vtopo->invalidate_dominant_cell(cell);
+                        #pragma omp critical(vt_crust_lost_cells)
+                        crust_lost_cells.push_back(cell);
                     }
                 }
             }
-            // implicit barrier: all pass-1 writes (set_mattype + invalidations)
-            // are visible to every thread before pass 2 starts.
+            // implicit barrier: all pass-1 writes (set_mattype and the
+            // recorded cells) are visible to every thread before pass 2 starts.
 
             // Pass 2: mantle -> serpentinite.
             if (serpentinize) {
                 #pragma omp single
-                var.vtopo->cells_with_dominant_below(nsteps, crust_below);
-                // implicit barrier: the map is complete before any thread reads it.
+                {
+                    for (int cell : crust_lost_cells)
+                        var.vtopo->invalidate_dominant_cell(cell);
+                    var.vtopo->cells_with_dominant_below(nsteps, crust_below);
+                }
+                // implicit barrier: the drops and the map are complete before
+                // any thread reads them.
 
                 #pragma omp for
                 for (int e=0; e<var.nelem; e++) {
