@@ -9,8 +9,6 @@ namespace {
 
     void simple_subduction(const Param& param, const Variables& var, const MarkerSet& ms, int m, int& new_mt, int& hyd_inc)
     {
-        auto& hydem = *var.hydrous_elemmarkers;
-
         const int mt_mantle = 0;
         const int mt_serpentinized_mantle = 1;
         const int mt_oceanic_crust = 2;
@@ -73,7 +71,10 @@ namespace {
             {
                 const double min_serpentine_T = 550 + 273;
                 const int el = ms.get_elem(m);
-                if (T <= min_serpentine_T && hydem[el][0]) {
+                // The hydrous marker set exists only with has_hydration_processes;
+                // without it no water is present, so the mantle stays dry.
+                if (T <= min_serpentine_T && param.control.has_hydration_processes &&
+                    (*var.hydrous_elemmarkers)[el][0]) {
                     new_mt = mt_serpentinized_mantle;
                     //hyd_inc = -1;
                 }
