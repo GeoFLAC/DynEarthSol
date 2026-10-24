@@ -153,8 +153,9 @@ void phase_changes(const Param& param, Variables& var)
     #pragma acc wait
 
     if (is_error) {
+        // validate_parameters() admits only the options this dispatch implements.
         std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
-        die(EXIT_CONFIG_VALUE);
+        die(EXIT_INTERNAL_UNREACHABLE);
     }
 
     if (param.control.has_hydration_processes) {

@@ -974,9 +974,8 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.phase_change_option", po::value<int>(&p.mat.phase_change_option)->default_value(0),
          "What kind of phase changes?\n"
          "0: no phase changes.\n"
-         "1: simple rules of subduction-related phase changes. See SimpleSubduction class in phasechanges.cxx for more details.\n"
-         "2: simple rules of middle ocean ridge formation. See SimpleRifting class in phasechanges.cxx for more details.\n"
-         "101: custom phase changes.")
+         "1: simple rules of subduction-related phase changes. See simple_subduction() in phasechanges.cxx for more details.\n"
+         "101: custom phase changes (custom_phase_change() in phasechanges.cxx).")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
@@ -984,17 +983,18 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
-         "Index of depleted mantle material. For phase change of middle ocean ridge")
+         "Index of depleted mantle material. Unused: no phase change reads it.")
         ("mat.mattype_partial_melting_mantle", po::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
-         "Index of parital melting mantle material. For phase change of middle ocean ridge")
+         "Index of partial melting mantle material. Unused: no phase change reads it.")
         ("mat.mattype_crust", po::value<int>(&p.mat.mattype_crust)->default_value(0),
          "Index of crust material.  For continental thermal gradient")
         ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
-         "Index of oceanic crust. For formation of middle ocean ridge in phasechanges.cxx")
+         "Index of oceanic crust. A top element where it is the most abundant marker material keeps its plastic "
+         "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx).")
         ("mat.mattype_sed", po::value<int>(&p.mat.mattype_sed)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
         ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
-         "Index of mddle ocean ridge extrusion. For formation of middle ocean ridge in phasechanges.cxx")
+         "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
         ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
          "Index of asthenosphere.")
         ("mat.max_viscosity", po::value<double>(&p.mat.visc_max)->default_value(1e24),
@@ -1006,7 +1006,7 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
-         "Converting rate from melting to oceanic crust. For formation of middle ocean ridge in bc.cxx")
+         "Converting rate from melting to oceanic crust. Unused: no phase change reads it.")
 
         // these parameters need to parsed later
         ("mat.rho0", po::value<std::string>()->default_value("[3210]"),
@@ -1761,6 +1761,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
 #endif
 
+        // phase_changes() implements only these; any other value would run to its first
+        // phase-change step and die there.
+        switch (p.mat.phase_change_option) {
+        case 0: case 1: case 101:
+            break;
+        default:
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_option must be 0, 1 or 101 (see --help).");
+        }
         if (p.mat.phase_change_option != 0 && p.mat.nmat == 1) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is chosen, but mat.num_materials is 1.");
         }
