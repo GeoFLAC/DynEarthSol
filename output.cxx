@@ -149,7 +149,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     double dt = var.dt;
     double inv_dt = 0; // only used when is_averaged
     if (!disable_averaging && is_averaged) {
-        dt = (var.time - time0) / average_interval;
+        // time0 is the time after the window's first step: the span holds the
+        // average_interval - 1 steps after it.
+        dt = (var.time - time0) / (average_interval - 1);
         inv_dt = 1.0 / (var.time - time0);
     }
 
@@ -235,7 +237,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
-        double tmp = 1.0 / (average_interval + 1);
+        double tmp = 1.0 / average_interval;   // one sample per step of the window
         #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
@@ -384,7 +386,9 @@ void Output::average_fields(Variables& var)
         }
         std::copy(var.stress->begin(), var.stress->end(), stress_avg.begin());
 
-        delta_plstrain_avg = *var.delta_plstrain;
+        // The rates are differences from the snapshots above, which hold the state
+        // after this step, so the plastic increments count from the next step on.
+        delta_plstrain_avg.assign(var.delta_plstrain->size(), 0.0);
     }
     else {
         // Averaging stress & plastic strain
