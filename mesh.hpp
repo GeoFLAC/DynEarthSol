@@ -1,7 +1,6 @@
 #ifndef DYNEARTHSOL3D_MESH_HPP
 #define DYNEARTHSOL3D_MESH_HPP
 
-#include <unordered_map>
 #include <unordered_set>
 
 void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
@@ -81,15 +80,16 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * Thread safety: no member takes a lock. The mutators run in serial code
  * only: build_index() and the dominance and extent setters in
  * build_serpentinization_grid(), mark_removed() in remove_markers() after its
- * #pragma acc wait, and invalidate_dominant_cell() in the omp single between
+ * #pragma acc wait, and invalidate_dominant_cell() in the host step between
  * the passes of subduction_phase_changes(). serialize() runs in
  * Output::write_checkpoint(), and restart() replaces the object through
  * deserialize(). Only label_cell(), cell_of(), neighbor_cell(),
- * is_dominant() and dominant_xext_ok() run from the passes, from every
- * thread at once, and they never meet a writer: each loop ends (a thread
- * join, the acc wait, or the barrier that ends the single) before the next
- * mutator runs. A change that mutates the index while such a loop runs
- * needs its own synchronization.
+ * is_dominant() and dominant_xext_ok() run from the passes (OpenMP threads,
+ * or device kernels in an ACC build), and they never meet a writer: the
+ * mutators run on the host between those loops, in program order, and each
+ * loop ends (a thread join or an acc wait) before the next mutator runs. A
+ * change that mutates the index while such a loop runs needs its own
+ * synchronization.
  *
  * column_index()/vertical_index()/cell_of()/neighbor_cell() are pure
  * functions of dims_/lo_/dx_, fixed at construction
@@ -102,23 +102,16 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * marker positions -- a mismatch can change which markers convert, so the
  * restarted run can diverge.
  *
- * `dominant_cells_` (managed by clear_dominant()/set_dominant()/is_dominant()/
- * invalidate_dominant_cell()) is a precomputed set of cells whose indexed-
- * marker composition exceeds some threshold fraction of a designated material
- * (for serpentinization: see build_serpentinization_grid()). The caller
- * computes it once per build_index() call (in build_serpentinization_grid())
- * rather than
+ * `dominant_` (managed by clear_dominant()/set_dominant()/is_dominant()/
+ * invalidate_dominant_cell()) flags the precomputed cells whose indexed-marker
+ * composition exceeds some threshold fraction of a designated material (for
+ * serpentinization: see build_serpentinization_grid()). The caller computes it
+ * once per build_index() call (in build_serpentinization_grid()) rather than
  * recomputing cell composition on every subduction_phase_changes() step:
  * between remeshes the slab advances only ~dx per tens-of-thousands of steps,
  * so which cells are dominant changes far more slowly than phase_changes() is
- * called: a caller reads the set instead of running cell_markers() + a
+ * called: a caller reads the flags instead of running cell_markers() + a
  * fraction count per cell per call.
- *
- * clear_dominant()/set_dominant() run in build_serpentinization_grid(), and
- * invalidate_dominant_cell() in the omp single between the passes, before
- * that single builds the crust-below map; pass 2's margin walk
- * (is_dominant(), dominant_xext_ok()) reads the set after the single's
- * barrier.
  *
  * The class is deliberately decoupled from Param/Variables/MarkerSet: the
  * caller passes the points it bins and their bounds. The one caller,
@@ -148,12 +141,14 @@ public:
 
     // The flat cell id containing point p, for use with neighbor_cell()/
     // cell_markers(). Pure function.
+    #pragma acc routine seq
     int cell_of(const double* p) const { return column_index(p) * nz_ + vertical_index(p); }
 
     // The cell id one step over from `cell` along `axis` (0..NDIMS-1) in
     // direction `dir` (+1 or -1); -1 if that step leaves the grid. Lets a
     // caller walk multiple steps (e.g. down a column) without re-deriving
     // coordinates each step. Pure function.
+    #pragma acc routine seq
     int neighbor_cell(int cell, int axis, int dir) const;
 
     // Marker ids currently associated with `cell`, which must be in
@@ -166,7 +161,8 @@ public:
     // Record that marker `id` no longer means what it did when build_index()
     // last ran -- its slot reused by MarkerSet's compaction swap, or retired
     // with the tail (see the class doc) -- so cell_markers() stops trusting a
-    // stale bucket_ entry for it and label_cell() returns -1.
+    // stale bucket_ entry for it and label_cell() returns -1 (its label is
+    // cleared here, so label_cell() needs no set lookup).
     void mark_removed(int id);
 
     // Total number of cells in the grid (ncol_ * nz_). Exposed so callers
@@ -181,29 +177,29 @@ public:
 
     // --- Dominance cache (see the class doc above) ---
 
-    // Remove all entries from dominant_cells_. Called at the start of
+    // Clear every dominance flag and crust extent. Called at the start of
     // dominance precomputation in build_serpentinization_grid().
     void clear_dominant();
 
-    // Mark `cell` as dominant (add to dominant_cells_). Called from
-    // build_serpentinization_grid() after counting crust composition per cell.
+    // Flag `cell` as dominant. Called from build_serpentinization_grid()
+    // after counting crust composition per cell.
     void set_dominant(int cell);
 
-    // O(1) query: true iff `cell` is in dominant_cells_.
-    bool is_dominant(int cell) const { return dominant_cells_.count(cell) > 0; }
+    // O(1) query: true iff `cell` is flagged dominant.
+    #pragma acc routine seq
+    bool is_dominant(int cell) const { return dominant_[cell] != 0; }
 
     // Set below[c] = 1 for every cell c that has a dominant cell at most
     // nsteps cells strictly below it in its column, 0 elsewhere (below is
     // resized to num_cells()): the walk down from every cell at once, in
-    // |dominant_cells_| * nsteps steps.
+    // num_cells() + (dominant cells) * nsteps steps.
     void cells_with_dominant_below(int nsteps, std::vector<char>& below) const;
 
-    // Remove `cell` from dominant_cells_ (conservative: treated as non-
-    // dominant until the next build, not recounted). Called between the
-    // passes of subduction_phase_changes() for each cell where pass 1 turned a
-    // crust marker non-crust, so pass 2 does not read a dominance that the
-    // conversion may have ended. Also drops the cell's crust extent (below),
-    // keeping the two stores consistent.
+    // Unflag `cell` (conservative: treated as non-dominant until the next
+    // build, not recounted). Called between the passes of
+    // subduction_phase_changes() for each cell where pass 1 turned a crust
+    // marker non-crust, so pass 2 does not read a dominance that the conversion
+    // may have ended. Its crust extent is then never read again.
     void invalidate_dominant_cell(int cell);
 
     // --- Per-dominant-cell crust horizontal extent (optional refinement) ---
@@ -218,9 +214,8 @@ public:
     //
     // Storage is caller-driven exactly like dominance: populated in
     // build_serpentinization_grid() (only when the margin feature is
-    // enabled -- absent extents cost nothing in memory or checkpoints),
-    // cleared by clear_dominant(), dropped per-cell by
-    // invalidate_dominant_cell(). xlo/xhi are the NDIMS-1 horizontal
+    // enabled -- absent extents cost nothing in memory or checkpoints) and
+    // cleared by clear_dominant(). xlo/xhi are the NDIMS-1 horizontal
     // coordinates (axis order 0..NDIMS-2).
     void set_dominant_xext(int cell, const double* xlo, const double* xhi);
 
@@ -233,7 +228,8 @@ public:
     // True iff every horizontal component of p lies within the dominant
     // `cell`'s crust extent widened by margin, [lo - margin, hi + margin].
     // Only for has_xext_data() grids, where every dominant cell has an extent
-    // (dies otherwise).
+    // (serialize() asserts it, deserialize() reads one per dominant id).
+    #pragma acc routine seq
     bool dominant_xext_ok(int cell, const double* p, double margin) const;
 
     // --- Per-marker build-time cell label ---
@@ -246,12 +242,12 @@ public:
     // flip the answer mid-interval against the frozen dominance data).
     // Returns -1 when the label cannot be trusted: id at or past the last
     // build's count, or flagged by mark_removed(); the caller falls back to
-    // the live position. Derived data: reconstructed from bucket_ on
-    // deserialize, so it adds NO checkpoint fields.
+    // the live position. Derived data: reconstructed from bucket_ and the
+    // removed ids on deserialize, so it adds NO checkpoint fields.
+    #pragma acc routine seq
     int label_cell(int m) const
     {
         if (m < 0 || m >= (int) label_.size()) return -1;
-        if (removed_since_rebuild_.count(m)) return -1;
         return label_[m];
     }
 
@@ -264,7 +260,9 @@ public:
     // ints = [layout_tag, dims_[0..NDIMS-1],
     //         bucket_[c].size() for c in 0..ncells), bucket_ contents concatenated,
     //         removed_since_rebuild_.size(), its ids,
-    //         xext_built_ (0 or 1), dominant_cells_.size(), its cell ids].
+    //         xext_built_ (0 or 1), the number of dominant cells, their ids
+    //         (serialize() writes them ascending; deserialize() accepts any
+    //         order, and a reader must not rely on it)].
     // deserialize() dies (EXIT_IO_RESTART) on any other first int.
     // dbls = [lo_[0..NDIMS-1], dx_,
     //         per dominant cell (same order as its ids in ints): its crust
@@ -298,27 +296,31 @@ private:
     int_vec2D bucket_;
     // Marker ids mark_removed() has flagged since the last build_index().
     std::unordered_set<int> removed_since_rebuild_;
-    // Cells whose indexed-marker population exceeds the caller's dominance
-    // threshold (build_serpentinization_grid() for serpentinization). Populated
-    // once per build_index() by the caller via clear_dominant()/set_dominant();
-    // partially invalidated between rebuilds via
+    // One flag per cell: 1 when its indexed-marker population exceeds the
+    // caller's dominance threshold (build_serpentinization_grid() for
+    // serpentinization). Set once per build_index() by the caller via
+    // clear_dominant()/set_dominant(); partially cleared between rebuilds via
     // invalidate_dominant_cell() when a crust marker turns non-crust. See the
     // class doc above.
-    std::unordered_set<int> dominant_cells_;
+    std::vector<char> dominant_;
 
-    // Crust horizontal extent per dominant cell (see set_dominant_xext()):
-    // lo[0..NDIMS-2], hi[0..NDIMS-2]. One per dominant cell when
-    // xext_built_, none otherwise.
-    struct XExt { double lo[NDIMS-1]; double hi[NDIMS-1]; };
-    std::unordered_map<int, XExt> dominant_xext_;
+    // Crust horizontal extent per cell (see set_dominant_xext()), xext_stride
+    // doubles per cell: lo[0..NDIMS-2], then hi[0..NDIMS-2]. Sized, NaN for a
+    // cell without one, at the first set_dominant_xext() or mark_xext_built(),
+    // or by deserialize() when xext_built_; empty otherwise.
+    enum { xext_stride = 2 * (NDIMS-1) };
+    double_vec xext_;
     bool xext_built_ = false;       // set by mark_xext_built(); checkpointed as is
 
     // Build-time cell of every marker id below the last build's count (see
-    // label_cell()). Rebuilt by build_index(), reconstructed from bucket_ by
+    // label_cell()), or -1 once mark_removed() flags it. Rebuilt by
+    // build_index(), reconstructed from bucket_ and the removed ids by
     // deserialize() -- never checkpointed itself.
     int_vec label_;
 
+    #pragma acc routine seq
     int column_index(const double* p) const;   // horizontal cell -> [0, ncol_)
+    #pragma acc routine seq
     int vertical_index(const double* p) const; // vertical cell -> [0, nz_)
 };
 

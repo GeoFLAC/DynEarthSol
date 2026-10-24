@@ -55,8 +55,11 @@ struct SurfaceTopo {
     void build(const Param& param, const Variables& var, bool elev_only = false);
     // p is the full coordinate: double[NDIMS] or an array_t row (accessor overloads).
     // The 2-D/3-D branch is compile-time, so call sites are dimension-agnostic.
+    #pragma acc routine seq
     double elev(const double* p) const;             // z_surf at p; 0.0 when !on
+    #pragma acc routine seq
     double zeff(const double* p) const;             // reference-depth coordinate
+    #pragma acc routine seq
     double heff_at(const double* p, double d) const;  // attenuation-table lookup
     double elev(ConstArrayAccessor p) const;
     double zeff(ConstArrayAccessor p) const;

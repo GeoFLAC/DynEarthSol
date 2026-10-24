@@ -3978,6 +3978,7 @@ VirtualTopology::VirtualTopology(const double* domain_lo, const double* domain_h
         ncol_ *= dims_[d];
 
     bucket_.assign(static_cast<std::size_t>(ncol_) * nz_, int_vec());
+    dominant_.assign(static_cast<std::size_t>(ncol_) * nz_, 0);
 }
 
 
@@ -3998,7 +3999,8 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
         ints.push_back(id);
 
     ints.push_back(xext_built_ ? 1 : 0);
-    ints.push_back(static_cast<int>(dominant_cells_.size()));
+    ints.push_back(static_cast<int>(
+        std::count_if(dominant_.begin(), dominant_.end(), [](char f) { return f != 0; })));
 
     dbls.clear();
     for (int d=0; d<NDIMS; d++) dbls.push_back(lo_[d]);
@@ -4006,16 +4008,18 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
 
     // One loop for ids AND extents so the two streams stay aligned by
     // position. With xext_built_ every dominant cell has an extent:
-    // build_serpentinization_grid() records one for each, and
-    // invalidate_dominant_cell() erases id and extent together.
-    if (xext_built_ && dominant_xext_.size() != dominant_cells_.size())
-        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
-    for (int c : dominant_cells_) {
-        ints.push_back(c);
+    // build_serpentinization_grid() records one for each.
+    if (xext_built_ && xext_.size() != ncells * xext_stride)
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: the grid has no crust extents");
+    for (std::size_t c=0; c<ncells; c++) {
+        if (!dominant_[c]) continue;
+        ints.push_back(static_cast<int>(c));
         if (xext_built_) {
-            const XExt& e = dominant_xext_.at(c);
-            for (int d=0; d<NDIMS-1; d++) dbls.push_back(e.lo[d]);
-            for (int d=0; d<NDIMS-1; d++) dbls.push_back(e.hi[d]);
+            for (int k=0; k<xext_stride; k++) {
+                if (std::isnan(xext_[c*xext_stride + k]))
+                    die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
+                dbls.push_back(xext_[c*xext_stride + k]);
+            }
         }
     }
 }
@@ -4067,8 +4071,8 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     for (int i=0; i<nremoved; i++)
         vt->removed_since_rebuild_.insert(next());
 
-    // Crust extents ride in dbls, one XExt per dominant id in the same order
-    // (see serialize()), exactly when the stored xext_built_ says so.
+    // Crust extents ride in dbls, one per dominant id in the same order (see
+    // serialize()), exactly when the stored xext_built_ says so.
     std::size_t r = NDIMS + 1;   // dbls cursor: lo_ and dx_ come first
     if (dbls.size() < r)
         die(EXIT_IO_RESTART, "vtopo_dbl ends before its counts do");
@@ -4078,18 +4082,24 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
         return dbls[r++];
     };
     {
+        vt->dominant_.assign(ncells, 0);
         vt->xext_built_ = (next() != 0);
+        if (vt->xext_built_)
+            vt->xext_.assign(ncells * xext_stride, std::numeric_limits<double>::quiet_NaN());
         const int ndominant = next();
         check(ndominant >= 0);
         for (int i=0; i<ndominant; i++) {
             const int c = next();
             check(c >= 0 && static_cast<std::size_t>(c) < ncells);
-            vt->dominant_cells_.insert(c);
-            if (vt->xext_built_) {
-                XExt& e = vt->dominant_xext_[c];
-                for (int d=0; d<NDIMS-1; d++) e.lo[d] = next_dbl();
-                for (int d=0; d<NDIMS-1; d++) e.hi[d] = next_dbl();
-            }
+            vt->dominant_[c] = 1;
+            if (vt->xext_built_)
+                for (int k=0; k<xext_stride; k++) {
+                    // A stored extent is a crust-marker coordinate, so finite.
+                    const double v = next_dbl();
+                    if (!std::isfinite(v))
+                        die(EXIT_IO_RESTART, "vtopo_dbl holds a crust extent that is not finite");
+                    vt->xext_[c*xext_stride + k] = v;
+                }
         }
     }
 
@@ -4106,6 +4116,9 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
                     die(EXIT_IO_RESTART, "vtopo_int holds a marker id more than once");
                 vt->label_[m] = static_cast<int>(c);
             }
+        // As mark_removed() does: a flagged id has no trusted label.
+        for (int id : vt->removed_since_rebuild_)
+            if (id >= 0 && static_cast<std::size_t>(id) < nentries) vt->label_[id] = -1;
     }
 
     // The reads stop at either array's end; an array longer than its counts
@@ -4195,35 +4208,41 @@ void VirtualTopology::cell_markers(int cell, int_vec& ids) const
 void VirtualTopology::mark_removed(int id)
 {
     removed_since_rebuild_.insert(id);
+    if (id >= 0 && id < static_cast<int>(label_.size()))
+        label_[id] = -1;
 }
 
 
 void VirtualTopology::clear_dominant()
 {
-    dominant_cells_.clear();
-    dominant_xext_.clear();
+    dominant_.assign(dominant_.size(), 0);
+    xext_.clear();
     xext_built_ = false;
 }
 
 
 void VirtualTopology::set_dominant(int cell)
 {
-    dominant_cells_.insert(cell);
+    dominant_[cell] = 1;
 }
 
 
 void VirtualTopology::set_dominant_xext(int cell, const double* xlo, const double* xhi)
 {
-    XExt& e = dominant_xext_[cell];
+    if (xext_.empty())
+        xext_.assign(dominant_.size() * xext_stride, std::numeric_limits<double>::quiet_NaN());
     for (int d=0; d<NDIMS-1; d++) {
-        e.lo[d] = xlo[d];
-        e.hi[d] = xhi[d];
+        xext_[cell*xext_stride + d] = xlo[d];
+        xext_[cell*xext_stride + NDIMS-1 + d] = xhi[d];
     }
 }
 
 
 void VirtualTopology::mark_xext_built()
 {
+    // Built extents have their array even when no cell is dominant.
+    if (xext_.empty())
+        xext_.assign(dominant_.size() * xext_stride, std::numeric_limits<double>::quiet_NaN());
     xext_built_ = true;
 }
 
@@ -4231,12 +4250,11 @@ void VirtualTopology::mark_xext_built()
 bool VirtualTopology::dominant_xext_ok(int cell, const double* p, double margin) const
 {
     // Called only with the margin on, when xext_built_ holds and so every
-    // dominant cell has an extent (see serialize()).
-    const auto it = dominant_xext_.find(cell);
-    if (it == dominant_xext_.end())
-        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
+    // dominant cell has an extent (see serialize()). Written so a NaN extent
+    // (a cell without one) rejects: device code cannot die.
+    const double* e = &xext_[static_cast<std::size_t>(cell) * xext_stride];
     for (int d=0; d<NDIMS-1; d++)
-        if (p[d] < it->second.lo[d] - margin || p[d] > it->second.hi[d] + margin)
+        if (!(p[d] >= e[d] - margin && p[d] <= e[NDIMS-1 + d] + margin))
             return false;
     return true;
 }
@@ -4245,7 +4263,8 @@ bool VirtualTopology::dominant_xext_ok(int cell, const double* p, double margin)
 void VirtualTopology::cells_with_dominant_below(int nsteps, std::vector<char>& below) const
 {
     below.assign(num_cells(), 0);
-    for (int dom : dominant_cells_) {
+    for (int dom = 0; dom < num_cells(); ++dom) {
+        if (!dominant_[dom]) continue;
         int c = neighbor_cell(dom, NDIMS-1, +1);
         for (int k = 0; c >= 0 && k < nsteps; ++k) {
             below[c] = 1;
@@ -4257,8 +4276,7 @@ void VirtualTopology::cells_with_dominant_below(int nsteps, std::vector<char>& b
 
 void VirtualTopology::invalidate_dominant_cell(int cell)
 {
-    dominant_cells_.erase(cell);
-    dominant_xext_.erase(cell);
+    dominant_[cell] = 0;
 }
 
 

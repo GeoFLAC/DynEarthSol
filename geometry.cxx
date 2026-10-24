@@ -1066,7 +1066,15 @@ double SurfaceTopo::elev(const double* p) const
     const double xq = p[0];
     if (xq <= x.front()) return z.front();
     if (xq >= x.back())  return z.back();
-    const std::size_t i = std::upper_bound(x.begin(), x.end(), xq) - x.begin();
+    // The first i with x[i] > xq, as std::upper_bound finds it; written out
+    // because device code calls this (iterator algorithms are not safe there).
+    std::size_t lo = 0, hi = x.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (xq < x[mid]) hi = mid;
+        else lo = mid + 1;
+    }
+    const std::size_t i = lo;
     const double dx = x[i] - x[i-1];
     if (dx <= 0.0) return z[i];   // coincident nodes (degenerate surface): no interpolation
     return z[i-1] + (z[i] - z[i-1]) * (xq - x[i-1]) / dx;
