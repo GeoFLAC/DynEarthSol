@@ -157,7 +157,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
          "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
         ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
-         "Output verbose during mesh/remeshing. -1 for no output.")
+         "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
+         "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
+         "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
+         "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top. Warnings print "
+         "at every level.")
         ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
          "Refine the elements with sediment marker during remeshing.")
         ("mesh.tetgen_optlevel", po::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),

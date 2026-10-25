@@ -172,7 +172,7 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
     const double *msrc = in.metric_aniso ? in.metric_aniso : in.metric;
     std::vector<double> met(msrc, msrc + (std::size_t)in.nnode * msize);
     const int n_kept = apply_required_edge_size(in, msize, met);
-    if (n_kept)
+    if (n_kept && mesh.meshing_verbosity >= 0)
         std::printf("      [mmg] kept the metric at %d node(s) on a required edge (keep_metric); "
                     "MMG's required-edge size at the others.\n", n_kept);
 
