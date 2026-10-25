@@ -12,7 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TZ=UTC
 ARG CXXVERSION=gcc-11
 # GOSPL=1 adds a conda `gospl` environment and gospl_extensions, and builds the
-# 3D executable with use_gospl=1 (GoSPL coupling is 3D only).
+# 3D executable with usegospl=1 (GoSPL coupling is 3D only).
 ARG GOSPL=0
 # Update package list and install necessary software
 RUN apt-get update && apt-get install -y \
@@ -98,7 +98,7 @@ WORKDIR $HOME/DynEarthSol
 ARG NDIMS=2
 RUN make ndims=$NDIMS cleanall \
     && if [ "$GOSPL" = "1" ]; then \
-      make ndims=3 use_gospl=1 -j4 \
+      make ndims=3 usegospl=1 -j4 \
         CONDA_ENV_PATH=$HOME/miniforge3/envs/gospl PYTHON_VERSION=3.11; \
     elif [ "$CXXVERSION" = "clang-14" ]; then \
       make ndims=$NDIMS -j4 CXX=clang++;\
