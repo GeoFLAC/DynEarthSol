@@ -1298,10 +1298,10 @@ namespace {
         std::vector<double> net_erosion(ntop, 0.0);
         int run_result = var.gospl_driver->run_and_get_erosion(
             total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
-        if (run_result != 0) {
-            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
-            return;
-        }
+        if (run_result != 0)
+            // A failed call can leave GoSPL's surface partly advanced, so the
+            // coupling cannot continue from it.
+            die(EXIT_RUNTIME_GOSPL, "GoSPL run_and_get_erosion failed");
 
         // Apply dh to all DES surface nodes.
         // net_erosion contains only erosion+diffusion (uplift stripped in Python);
