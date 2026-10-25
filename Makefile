@@ -37,13 +37,13 @@ nprof = 0
 gprof = 0
 usemmg = 0
 useexo = 0
-use_gospl = 0
+usegospl = 0
 hdf5 = 0
 snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo use_gospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -77,7 +77,7 @@ OSNAME := $(shell uname -s)
 ## Every other dependency's path is declared beside the code that consumes it, so
 ## it is read together with the flags it feeds: OPENMP_* in the clang++ branch, and
 ## EXO_*, MMG_* and the GoSPL and PYTHON_* group inside their useexo=1, usemmg=1
-## and use_gospl=1 blocks.
+## and usegospl=1 blocks.
 ##
 ## Everything here uses `?=`, so an EXPORTED value is honoured -- that is how a
 ## module file or a conda activate hook can name a prefix once instead of every
@@ -378,7 +378,7 @@ ifeq ($(usemmg), 1)
 	MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
 endif
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	# GoSPL extensions library configuration
 	# Path to locally built gospl_extensions (clone from GitHub)
 	GOSPL_EXT_DIR ?= $(HOME)/opt/gospl_extensions
@@ -396,7 +396,7 @@ ifeq ($(use_gospl), 1)
 	endif
 	
 	# Python include/lib dirs — override on the command line for non-conda builds:
-	#   make use_gospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
+	#   make usegospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
 	CONDA_ENV_PATH ?= $(HOME)/miniforge3/envs/gospl
 	PYTHON_VERSION     ?= 3.11
 	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
@@ -730,7 +730,7 @@ SRCS =	\
 	markerset.cxx \
 	knn.cxx
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	SRCS += gospl_driver/gospl-driver.cxx
 endif
 
@@ -764,7 +764,7 @@ INCS =	\
 	sortindex.hpp \
 	utils.hpp
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	INCS += gospl_driver/gospl-driver.hpp
 endif
 
@@ -809,7 +809,7 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
 endif
@@ -1028,7 +1028,7 @@ ifeq ($(hdf5), 1)
 endif
 	@echo "usemmg             $(strip $(usemmg))"
 	@echo "useexo             $(strip $(useexo))"
-	@echo "use_gospl          $(strip $(use_gospl))"
+	@echo "usegospl           $(strip $(usegospl))"
 	@echo "openacc            $(strip $(openacc))"
 ifeq ($(openacc), 1)
 	@echo "  gpu target       cc$(GPU_CC)   ($(GPU_CC_NOTE))"
@@ -1045,7 +1045,7 @@ endif
 		"$(if $(strip $(FEATURE_$(f)_FLAGS)),[on],[off])" \
 		"$${r:-? run make feature-map}";)
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 .PHONY: install-gospl-wrapper
 install-gospl-wrapper: 
 	@echo '#!/bin/bash' > dynearthsol-gospl
@@ -1110,7 +1110,7 @@ $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	@+$(MAKE) install-gospl-wrapper
 	@echo ""
 	@echo "=============================================="
@@ -1286,7 +1286,7 @@ clean-submodules:
 
 deepclean: 
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	@rm -f dynearthsol-gospl
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
@@ -1294,7 +1294,7 @@ endif
 cleanall: clean
 	@rm -f $(TET_OBJS) $(TRI_OBJS) $(OBJS) $(EXE)
 	@+$(MAKE) -C $(C3X3_DIR) clean openacc=$(openacc)
-ifeq ($(use_gospl), 1)
+ifeq ($(usegospl), 1)
 	@rm -f dynearthsol-gospl
 endif
 	@+$(MAKE) -C $(C3X3_DIR) clean

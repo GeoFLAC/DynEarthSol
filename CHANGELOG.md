@@ -56,10 +56,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
   ([#97]).
-- **Breaking.** `make use_gospl=1` looks for the gospl environment in
+- **Breaking.** `make usegospl=1` looks for the gospl environment in
   `~/miniforge3/envs/gospl`, where GoSPL's install now puts it; a Miniconda
   install sets `CONDA_ENV_PATH`, which, like `GOSPL_EXT_DIR`, may now also be
   exported ([#104]).
+- **Breaking.** The make option `use_gospl` is now `usegospl`, matching
+  `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
+  error.
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
