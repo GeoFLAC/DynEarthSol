@@ -1014,8 +1014,7 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.mattype_continental_crust", po::value<int>(&p.mat.mattype_continental_crust)->default_value(0),
          "Index of crust material.  For continental thermal gradient")
         ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
-         "Index of oceanic crust. A top element where it is the most abundant marker material keeps its plastic "
-         "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx). With mat.phase_change_option 3: the source of the eclogite "
+         "Index of oceanic crust. With mat.phase_change_option 3: the source of the eclogite "
          "rule and wet crust for the serpentinization grid; then it must be set in the cfg.")
         ("mat.mattype_serpentinite", po::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
          "Index of serpentinite material, for mat.phase_change_option 3 with mat.has_serpentinization: what "
