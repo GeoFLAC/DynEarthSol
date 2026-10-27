@@ -364,8 +364,7 @@ namespace {
     // flag prefilters wet_crust_dominant_cell_below(). The dominant set is
     // computed at each build_serpentinization_grid() and, apart from those
     // drops, stays valid across the phase_changes() calls until the next
-    // rebuild (between remeshes the slab advances only ~dx per tens of
-    // thousands of steps, far slower than the 10-step phase_change interval).
+    // rebuild, at the next quality check or remesh.
     void subduction_phase_changes(const Param& param, Variables& var, MarkerSet& ms)
     {
         int n = ms.get_nmarkers();
@@ -380,14 +379,13 @@ namespace {
         }
 
         // Geometric input for serpentinization: var.vtopo's general marker-cell
-        // index (see mesh.hpp), built eagerly after init() and at the end of
-        // remeshing, and frozen in between except for mark_removed() (see
-        // markerset.cxx) and invalidate_dominant_cell() (between the passes
-        // below). It is rebuilt here, before the next remesh, only when a
-        // restart did not bring a usable one: absent (the checkpoint was
-        // written without it, or restart() dropped it for another cell
-        // size), or without wet-crust extents while the margin
-        // feature is on.
+        // index (see mesh.hpp), built eagerly after init(), at each quality
+        // check and at the end of remeshing, and frozen in between except for
+        // invalidate_dominant_cell() (between the passes below). It is rebuilt
+        // here, before the next quality check, only when a restart did not
+        // bring a usable one: absent (the checkpoint was written without it,
+        // or restart() dropped it for another cell size), or without
+        // wet-crust extents while the margin feature is on.
         bool serpentinize = uses_serpentinization_grid(param);
         if (serpentinize &&
                 (var.vtopo == nullptr ||
@@ -398,6 +396,10 @@ namespace {
         // dominant_xext_ok() reads the extents unchecked (device code cannot die).
         if (serpentinize && param.mat.serpentinization_wet_crust_margin >= 0 && !vt->has_xext_data())
             die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: the wet-crust margin is on, but the grid has no wet-crust extents");
+        // label_cell() reads unchecked: every marker must have its label (see the
+        // VirtualTopology doc in mesh.hpp for why no marker is added or removed).
+        if (serpentinize && (vt->num_labels() != n || vt->built_last_id() != ms.get_last_id()))
+            die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: a marker was added or removed since the serpentinization grid was built");
 
         // Depth cap on mantle serpentinization, below the stability wedge's own cold-slab
         // extrapolation (> 200 km at 500 C): slab dehydration, the water source, is
@@ -461,11 +463,8 @@ namespace {
                     // The cell whose dominance this marker contributed to --
                     // its BUILD-time cell (the cell the dominance scan
                     // actually counted it in; the live cell can differ once
-                    // the marker has drifted). Live cell_of() only as fallback
-                    // for a label mark_removed() dropped (see label_cell()).
-                    int cell = vt->label_cell(m);
-                    if (cell < 0)
-                        cell = vt->cell_of(xz);
+                    // the marker has drifted).
+                    const int cell = vt->label_cell(m);
 #ifndef ACC
                     #pragma omp atomic write
 #endif
@@ -504,15 +503,13 @@ namespace {
                 // relationship is evaluated in the rebuild-time configuration
                 // and stays constant between rebuilds -- a drifting marker
                 // cannot flip the answer mid-interval by crossing a lattice
-                // line against the frozen dominance data. A label
-                // mark_removed() dropped falls back to the live cell until the
-                // next rebuild. The margin test still uses the live horizontal
-                // position -- drift between rebuilds is far smaller than any
-                // useful margin. A labelled marker with no wet crust below skips
-                // the P-T evaluation; the tests are pure, so their order cannot
-                // change the result.
-                int cell0 = vt->label_cell(m);
-                if (cell0 >= 0 && !wet_crust_below[cell0])
+                // line against the frozen dominance data. The margin test still
+                // uses the live horizontal position -- drift between rebuilds is
+                // far smaller than any useful margin. A marker with no wet crust
+                // below skips the P-T evaluation; the tests are pure, so their
+                // order cannot change the result.
+                const int cell0 = vt->label_cell(m);
+                if (!wet_crust_below[cell0])
                     continue;
 
                 double Z, press, T, p[NDIMS];
@@ -521,11 +518,6 @@ namespace {
                 if (depth > max_basalt_depth || !antigorite_stable(press, T))
                     continue;
 
-                if (cell0 < 0) {
-                    cell0 = vt->cell_of(p);
-                    if (!wet_crust_below[cell0])
-                        continue;
-                }
                 if (param.mat.serpentinization_wet_crust_margin >= 0 &&
                         !wet_crust_dominant_cell_below(*vt, cell0, p, nsteps,
                             param.mat.serpentinization_wet_crust_margin))
@@ -668,14 +660,12 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // Bin every marker, not just wet crust: the dominance scan below counts each
     // cell's wet-crust share of ITS OWN population, and pass 2 reads each mantle
     // marker's wet-crust-below flag at its label.
-    var.vtopo->build_index(points, n);
+    var.vtopo->build_index(points, n, ms.get_last_id());
 
     // Precompute which cells are wet-crust-dominant (more than half of their
     // markers count as wet crust, counts_as_wet_crust()) so subduction_phase_changes()
     // pass 2 builds its wet-crust-below map from them instead of recomputing cell
     // composition at every phase_changes() call (every 10 steps).
-    // removed_since_rebuild_ is empty right after build_index(), so
-    // cell_markers() here is an exact, zero-overhead bucket read.
     // 0.50, not GeoFLAC master's 0.8 (phase_ratio > 0.8 in an element below
     // a mantle marker, which it gives no source for): on these half-element
     // cells 0.8 leaves out the cell straddling the slab top, which cuts the
@@ -691,9 +681,8 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // VirtualTopology::serialize).
     const bool want_xext = param.mat.serpentinization_wet_crust_margin >= 0;
     var.vtopo->clear_dominant();
-    int_vec ids;
     for (int c = 0; c < ncells; ++c) {
-        var.vtopo->cell_markers(c, ids);
+        const int_vec& ids = var.vtopo->cell_markers(c);
         int wet_crust = 0;
         double xlo[NDIMS-1], xhi[NDIMS-1];
         for (int id : ids)

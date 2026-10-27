@@ -1079,6 +1079,15 @@ int main(int argc, const char* argv[])
                          *var.tmp_result);
         }
 
+        // Rebuild the serpentinization grid at each quality check. Markers of
+        // markersets[0] are added or removed only by the surface processes in
+        // update_mesh() above, under this same step test, and by a remesh, which
+        // builds the grid at its end. So the grid always indexes every marker,
+        // and it does not go stale in a run that seldom remeshes. A checkpoint
+        // holds the grid the run reads.
+        if (var.steps % param.mesh.quality_check_step_interval == 0)
+            build_serpentinization_grid(param, var);
+
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain, rotation_dt);

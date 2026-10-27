@@ -58,6 +58,7 @@ public:
     inline std::string get_name() const { return _name; }
 
     inline int get_nmarkers() const { return _nmarkers; }
+    inline int get_last_id() const { return _last_id; }
     inline void set_nmarkers(int n) { _nmarkers = n; }
 
     inline bool if_melt(const int mat) const { return (std::find((*_mattype).begin(), (*_mattype).end(), mat) != (*_mattype).end()); }

@@ -1,8 +1,6 @@
 #ifndef DYNEARTHSOL3D_MESH_HPP
 #define DYNEARTHSOL3D_MESH_HPP
 
-#include <unordered_set>
-
 void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
                         int n_init_segments, const int *init_segments, const int *init_segflags,
                         int n_regions, const double *regattr,
@@ -54,36 +52,25 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * MarkerSet::get_mattype() at each build, and subduction_phase_changes(),
  * which reads the resulting wet-crust-dominant cells).
  *
- * build_index() is rebuilt once per remesh (and at init): markers move
- * continuously between remeshes, so absolute positions drift, but their
+ * build_index() runs at init, at each quality check
+ * (mesh.quality_check_step_interval) and at the end of each remesh: markers
+ * move continuously in between, so absolute positions drift, but their
  * cell-adjacency (who is above/below/left/right) changes far more slowly.
- * Between rebuilds, mark_removed() records marker churn as one delta
- * (removed_since_rebuild_, which grows with the churn until the next
- * rebuild; lookups stay O(1)) rather than mutating bucket_ directly: the id
- * is flagged, no reverse id->cell lookup required. cell_markers() skips
- * flagged ids and label_cell() returns -1 for them,
- * so a caller never sees a wrong marker -- there is no separate "fast but
- * stale" accessor to misuse. This matters here more than usual:
- * MarkerSet::remove_markers() deletes by copying the last live marker's data
- * into the freed slot and shrinking the count (see remove_marker_data() in
- * markerset.cxx), so a deleted id doesn't just go missing -- it can silently
- * start meaning a *different* marker. Without mark_removed() flagging the
- * freed ids and the whole retired tail, a frozen bucket_ entry would read
- * that new marker's material instead of "absent," corrupting the
- * composition fraction rather than just lagging it. Every id from the count
- * up to the last build's count therefore stays flagged, so a marker created
- * between rebuilds (replenishment, deposition) gets a flagged id or one past
- * the build's: it belongs to no bucket and has no label until the next
- * rebuild, so a cell's population leaves it out until then, and a caller
- * places it by its live position.
+ * Between rebuilds no marker of the indexed set is created or deleted:
+ * its count changes only in the surface processes of a quality-check step
+ * (rebuilt in the same step) and in a remesh (rebuilt at its end). So every
+ * marker id has a bucket and a label. MarkerSet::remove_markers() reuses the
+ * freed ids for other markers, so a stale index would read the wrong marker;
+ * subduction_phase_changes() therefore dies when the marker count is not
+ * num_labels() or the set's last id (MarkerSet::get_last_id(), which every
+ * append increments) is not built_last_id().
  *
  * Thread safety: no member takes a lock. The mutators run in serial code
  * only: build_index() and the dominance and extent setters in
- * build_serpentinization_grid(), mark_removed() in remove_markers() after its
- * #pragma acc wait, and invalidate_dominant_cell() in the host step between
+ * build_serpentinization_grid(), and invalidate_dominant_cell() in the host step between
  * the passes of subduction_phase_changes(). serialize() runs in
  * Output::write_checkpoint(), and restart() replaces the object through
- * deserialize(). Only label_cell(), cell_of(), neighbor_cell(),
+ * deserialize(). Only label_cell(), neighbor_cell(),
  * is_dominant() and dominant_xext_ok() run from the passes (OpenMP threads,
  * or device kernels in an ACC build), and they never meet a writer: the
  * mutators run on the host between those loops, in program order, and each
@@ -95,7 +82,7 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * functions of dims_/lo_/dx_, fixed at construction
  * and never mutated after.
  *
- * Because that lagged index (bucket_ plus its removed ids) drives a live
+ * Because that lagged index (bucket_ and its labels) drives a live
  * decision at every phase_changes() call, it IS part of the checkpoint
  * (serialize()/deserialize()): a restart must carry the identical state the
  * continuous run had at that step, not a fresher rebuild against current
@@ -108,8 +95,7 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * serpentinization: see build_serpentinization_grid()). The caller computes it
  * once per build_index() call (in build_serpentinization_grid()) rather than
  * recomputing cell composition on every subduction_phase_changes() step:
- * between remeshes the slab advances only ~dx per tens-of-thousands of steps,
- * so which cells are dominant changes far more slowly than phase_changes() is
+ * which cells are dominant changes far more slowly than phase_changes() is
  * called: a caller reads the flags instead of running cell_markers() + a
  * fraction count per cell per call.
  *
@@ -134,14 +120,17 @@ public:
                     double resolution);
 
     // Rebuild the per-cell marker-id buckets from scratch, binning every
-    // marker index m (into coords, 0..npoints-1), and clear
-    // removed_since_rebuild_ (the fresh bucket_ already reflects everything
-    // up to this point). Replaces whatever build_index() built before.
-    void build_index(const array_t& coords, int npoints);
+    // marker index m (into coords, 0..npoints-1), and record last_id, the
+    // marker set's last id (see built_last_id()). Replaces whatever
+    // build_index() built before.
+    void build_index(const array_t& coords, int npoints, int last_id);
+
+    // The marker set's last id at the last build_index(): with num_labels(),
+    // it shows whether a marker was added or removed since.
+    int built_last_id() const { return built_last_id_; }
 
     // The flat cell id containing point p, for use with neighbor_cell()/
     // cell_markers(). Pure function.
-    #pragma acc routine seq
     int cell_of(const double* p) const { return column_index(p) * nz_ + vertical_index(p); }
 
     // The cell id one step over from `cell` along `axis` (0..NDIMS-1) in
@@ -151,19 +140,14 @@ public:
     #pragma acc routine seq
     int neighbor_cell(int cell, int axis, int dir) const;
 
-    // Marker ids currently associated with `cell`, which must be in
-    // [0, num_cells()) (dies otherwise): build_index()'s bucket_, minus the
-    // ids mark_removed() has flagged since. `ids` is cleared and filled (not
-    // appended to); empty when nothing is bound there, which includes every
-    // cell of a new grid before its first build_index().
-    void cell_markers(int cell, int_vec& ids) const;
+    // Marker ids build_index() binned into `cell`, which must be in
+    // [0, num_cells()) (dies otherwise). Empty when nothing is bound there,
+    // which includes every cell of a new grid before its first build_index().
+    const int_vec& cell_markers(int cell) const;
 
-    // Record that marker `id` no longer means what it did when build_index()
-    // last ran -- its slot reused by MarkerSet's compaction swap, or retired
-    // with the tail (see the class doc) -- so cell_markers() stops trusting a
-    // stale bucket_ entry for it and label_cell() returns -1 (its label is
-    // cleared here, so label_cell() needs no set lookup).
-    void mark_removed(int id);
+    // The number of markers the last build_index() binned (or deserialize()
+    // restored): label_cell() is valid for ids 0..num_labels()-1.
+    int num_labels() const { return static_cast<int>(label_.size()); }
 
     // Total number of cells in the grid (ncol_ * nz_). Exposed so callers
     // (e.g. build_serpentinization_grid()) can iterate all cells to compute
@@ -241,26 +225,20 @@ public:
     // relationships are evaluated in the build-time configuration and stay
     // constant between rebuilds (live-position queries let a drifting marker
     // flip the answer mid-interval against the frozen dominance data).
-    // Returns -1 when the label cannot be trusted: id at or past the last
-    // build's count, or flagged by mark_removed(); the caller falls back to
-    // the live position. Derived data: reconstructed from bucket_ and the
-    // removed ids on deserialize, so it adds NO checkpoint fields.
+    // m must be in [0, num_labels()). Derived data: reconstructed from
+    // bucket_ on deserialize, so it adds NO checkpoint fields.
     #pragma acc routine seq
-    int label_cell(int m) const
-    {
-        if (m < 0 || m >= (int) label_.size()) return -1;
-        return label_[m];
-    }
+    int label_cell(int m) const { return label_[m]; }
 
     // Checkpoint round-trip. Kept decoupled from binaryio (per this class's
     // design): the owner does the file I/O. Both vectors are variable length
-    // (buckets and removed ids in ints, optional wet-crust extents in dbls), so the owner
+    // (buckets in ints, optional wet-crust extents in dbls), so the owner
     // must also stash each one's size (length-1 arrays vtopo_len /
     // vtopo_dbl_len) to pre-size the buffers before the read_array() that
     // fills them -- see output.cxx/dynearthsol.cxx for the pattern.
     // ints = [layout_tag, dims_[0..NDIMS-1],
     //         bucket_[c].size() for c in 0..ncells), bucket_ contents concatenated,
-    //         removed_since_rebuild_.size(), its ids,
+    //         built_last_id_,
     //         xext_built_ (0 or 1), the number of dominant cells, their ids
     //         (serialize() writes them ascending; deserialize() accepts any
     //         order, and a reader must not rely on it)].
@@ -280,7 +258,7 @@ private:
     // First int of serialize()'s ints; change it whenever the layout changes.
     // A negative tag never equals a cell count (dims_[0] >= 1), so ints that
     // start without a tag never match; nor do ints with another layout's tag.
-    enum { layout_tag = -3 };
+    enum { layout_tag = -4 };
 
     VirtualTopology() : dx_(0), nz_(0), ncol_(0)
     { for (int d=0; d<NDIMS; d++) { lo_[d]=0; dims_[d]=0; } }   // for deserialize()
@@ -295,8 +273,6 @@ private:
     // per cell, all empty from construction until build_index() fills them;
     // deserialize() restores them as checkpointed.
     int_vec2D bucket_;
-    // Marker ids mark_removed() has flagged since the last build_index().
-    std::unordered_set<int> removed_since_rebuild_;
     // One flag per cell: 1 when its indexed-marker population exceeds the
     // caller's dominance threshold (build_serpentinization_grid() for
     // serpentinization). Set once per build_index() by the caller via
@@ -313,15 +289,13 @@ private:
     double_vec xext_;
     bool xext_built_ = false;       // set by mark_xext_built(); checkpointed as is
 
-    // Build-time cell of every marker id below the last build's count (see
-    // label_cell()), or -1 once mark_removed() flags it. Rebuilt by
-    // build_index(), reconstructed from bucket_ and the removed ids by
+    // Build-time cell of every marker id the last build binned (see
+    // label_cell()). Rebuilt by build_index(), reconstructed from bucket_ by
     // deserialize() -- never checkpointed itself.
     int_vec label_;
+    int built_last_id_ = 0;   // see built_last_id(); checkpointed
 
-    #pragma acc routine seq
     int column_index(const double* p) const;   // horizontal cell -> [0, ncol_)
-    #pragma acc routine seq
     int vertical_index(const double* p) const; // vertical cell -> [0, nz_)
 };
 

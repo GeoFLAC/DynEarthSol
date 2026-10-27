@@ -533,10 +533,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     // binning the continuous run had at this step, instead of a fresher rebuild
     // against current marker positions -- serpentinization reads this index
     // every phase_changes() step, so a mismatch here can change which markers
-    // convert and make the restarted run diverge. This includes the
-    // mark_removed() ids recorded since the last rebuild, not just the
-    // frozen bucket -- skipping those would let a restart trust labels the
-    // continuous run had already dropped. vtopo_int is variable length,
+    // convert and make the restarted run diverge. vtopo_int is variable length,
     // so vtopo_len records its size for read_array() to pre-size the buffer
     // on restart. (var.vtopo is null unless uses_serpentinization_grid() ->
     // nothing written.)

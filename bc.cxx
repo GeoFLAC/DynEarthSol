@@ -1865,6 +1865,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
+        // The main loop rebuilds the serpentinization grid under this same step
+        // test, because it must index every marker; change the two together.
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
 

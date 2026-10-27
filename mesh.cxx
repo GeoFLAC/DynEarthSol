@@ -3986,10 +3986,7 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
         ints.push_back(static_cast<int>(bucket_[c].size()));
     for (std::size_t c=0; c<ncells; c++)
         ints.insert(ints.end(), bucket_[c].begin(), bucket_[c].end());
-
-    ints.push_back(static_cast<int>(removed_since_rebuild_.size()));
-    for (int id : removed_since_rebuild_)
-        ints.push_back(id);
+    ints.push_back(built_last_id_);
 
     ints.push_back(xext_built_ ? 1 : 0);
     ints.push_back(static_cast<int>(
@@ -4058,11 +4055,7 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     }
     const std::size_t nentries = q - first;
     p = q;
-
-    const int nremoved = next();
-    check(nremoved >= 0);
-    for (int i=0; i<nremoved; i++)
-        vt->removed_since_rebuild_.insert(next());
+    vt->built_last_id_ = next();
 
     // Wet-crust extents ride in dbls, one per dominant id in the same order (see
     // serialize()), exactly when the stored xext_built_ says so.
@@ -4099,7 +4092,7 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     // Rebuild the per-marker labels (label_cell()) from the bucket just
     // restored -- derived data, not checkpointed. build_index() bins every id
     // 0..npoints-1 exactly once, so the buckets hold each id below their entry
-    // count once.
+    // count once, and every label is set.
     {
         vt->label_.assign(nentries, -1);
         for (std::size_t c=0; c<ncells; c++)
@@ -4109,9 +4102,6 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
                     die(EXIT_IO_RESTART, "vtopo_int holds a marker id more than once");
                 vt->label_[m] = static_cast<int>(c);
             }
-        // As mark_removed() does: a flagged id has no trusted label.
-        for (int id : vt->removed_since_rebuild_)
-            if (id >= 0 && static_cast<std::size_t>(id) < nentries) vt->label_[id] = -1;
     }
 
     // The reads stop at either array's end; an array longer than its counts
@@ -4149,11 +4139,11 @@ int VirtualTopology::vertical_index(const double* p) const
 }
 
 
-void VirtualTopology::build_index(const array_t& coords, int npoints)
+void VirtualTopology::build_index(const array_t& coords, int npoints, int last_id)
 {
+    built_last_id_ = last_id;
     const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
     bucket_.assign(ncells, int_vec());
-    removed_since_rebuild_.clear();
     label_.assign(npoints, -1);
 
     // Serial: push_back into shared buckets would race under OpenMP, and
@@ -4187,22 +4177,11 @@ int VirtualTopology::neighbor_cell(int cell, int axis, int dir) const
 }
 
 
-void VirtualTopology::cell_markers(int cell, int_vec& ids) const
+const int_vec& VirtualTopology::cell_markers(int cell) const
 {
     if (cell < 0 || cell >= static_cast<int>(bucket_.size()))
         die(EXIT_INTERNAL_ASSERT, "VirtualTopology::cell_markers: cell outside [0, num_cells())");
-    ids.clear();
-    for (int id : bucket_[cell])
-        if (removed_since_rebuild_.find(id) == removed_since_rebuild_.end())
-            ids.push_back(id);
-}
-
-
-void VirtualTopology::mark_removed(int id)
-{
-    removed_since_rebuild_.insert(id);
-    if (id >= 0 && id < static_cast<int>(label_.size()))
-        label_[id] = -1;
+    return bucket_[cell];
 }
 
 

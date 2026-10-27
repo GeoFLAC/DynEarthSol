@@ -984,12 +984,10 @@ struct Variables {
     Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
 
     // Cached marker-cell index (when uses_serpentinization_grid(), see
-    // VirtualTopology in mesh.hpp). Owned; rebuilt eagerly after init() and
-    // at the end of remeshing, and lazily by subduction_phase_changes() when a
-    // restart left none it can use (see phasechanges.hpp). Between rebuilds,
-    // marker deletion (remove_markers() in markerset.cxx) only flags the ids
-    // it touches via mark_removed() rather than a full re-scan. Checkpointed
-    // (serialize()/deserialize(), including the flagged ids) so a restart
+    // VirtualTopology in mesh.hpp). Owned; rebuilt eagerly after init(), at
+    // each quality check and at the end of remeshing, and lazily by
+    // subduction_phase_changes() when a restart left none it can use (see
+    // phasechanges.hpp). Checkpointed (serialize()/deserialize()) so a restart
     // carries the identical lagged state the continuous run had at that step.
     VirtualTopology *vtopo;
 

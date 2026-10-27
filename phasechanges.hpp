@@ -22,7 +22,8 @@ std::vector<const char*> phase_change_keys(const Param&);
 
 // (Re)build the background grid for geometric serpentinization; no-op
 // unless uses_serpentinization_grid().
-// Called eagerly after init() and at the end of remeshing. A restart
+// Called eagerly after init(), at each quality check and at the end of
+// remeshing. A restart
 // restores the grid from the checkpoint instead (restart() in
 // dynearthsol.cxx); subduction_phase_changes() calls this only when that
 // left none it can use: no grid, or no wet-crust extents while the margin

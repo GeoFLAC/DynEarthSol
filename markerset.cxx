@@ -807,26 +807,6 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
 
     #pragma acc wait
 
-    // a_out[i]'s slot now holds b_out[i]'s old data, and the whole tail
-    // replaced_markers is about to retire (shrunk past by _nmarkers -= n
-    // below) -- those ids are stale against whatever the marker-cell index
-    // (see VirtualTopology in mesh.hpp) recorded for them at its last rebuild.
-    // Flagging the whole tail, deleted tail ids included, keeps every id from
-    // the count up to the last build's count flagged, so a marker appended
-    // later (replenishment, deposition) never inherits a label.
-    // Done as a plain serial pass after the wait above, rather than inlined
-    // into the a_out loop: mark_removed() inserts into a std::unordered_set,
-    // which has no business inside a GPU-offloadable "#pragma acc parallel
-    // loop" body, and, as elsewhere in this file, host
-    // code reads data an async kernel uses (a_out) only once it has finished.
-    // Only for markersets[0]: the index holds its ids, and the same id in
-    // another set (the hydrous markers, which remap_markers also compacts)
-    // names a different marker.
-    if (var.vtopo && this == var.markersets[0]) {
-        for (int id : a_out) var.vtopo->mark_removed(id);
-        for (int id : replaced_markers) var.vtopo->mark_removed(id);
-    }
-
     _nmarkers -= n;
 
 #ifdef NPROF_DETAIL

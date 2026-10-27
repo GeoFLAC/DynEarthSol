@@ -427,7 +427,8 @@ static void declare_parameters(po::options_description &cfg,
          "gets its own wet-crust-dominant cell row instead of averaging with the mantle above, while a "
          "cell nominally (elements of edge mesh.resolution) holds ~2.3 markers in 2D (~4.2 in 3D) at the "
          "default 4 per element; a refined mesh puts more in each cell. Heuristic, untuned. With serpentinization "
-         "on it must be > 0, and mesh.resolution * mesh.vt_size must not exceed mat.serpentinization_thickness.")
+         "on it must be > 0, and mesh.resolution * mesh.vt_size must not exceed mat.serpentinization_thickness. "
+         "The grid is rebuilt at each mesh.quality_check_step_interval and after each remesh.")
         ;
 
     cfg.add_options()
