@@ -4010,14 +4010,14 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
     // position. With xext_built_ every dominant cell has an extent:
     // build_serpentinization_grid() records one for each.
     if (xext_built_ && xext_.size() != ncells * xext_stride)
-        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: the grid has no crust extents");
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: the grid has no wet-crust extents");
     for (std::size_t c=0; c<ncells; c++) {
         if (!dominant_[c]) continue;
         ints.push_back(static_cast<int>(c));
         if (xext_built_) {
             for (int k=0; k<xext_stride; k++) {
                 if (std::isnan(xext_[c*xext_stride + k]))
-                    die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no crust extent");
+                    die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no wet-crust extent");
                 dbls.push_back(xext_[c*xext_stride + k]);
             }
         }
@@ -4071,7 +4071,7 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     for (int i=0; i<nremoved; i++)
         vt->removed_since_rebuild_.insert(next());
 
-    // Crust extents ride in dbls, one per dominant id in the same order (see
+    // Wet-crust extents ride in dbls, one per dominant id in the same order (see
     // serialize()), exactly when the stored xext_built_ says so.
     std::size_t r = NDIMS + 1;   // dbls cursor: lo_ and dx_ come first
     if (dbls.size() < r)
@@ -4094,10 +4094,10 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
             vt->dominant_[c] = 1;
             if (vt->xext_built_)
                 for (int k=0; k<xext_stride; k++) {
-                    // A stored extent is a crust-marker coordinate, so finite.
+                    // A stored extent is a wet-crust-marker coordinate, so finite.
                     const double v = next_dbl();
                     if (!std::isfinite(v))
-                        die(EXIT_IO_RESTART, "vtopo_dbl holds a crust extent that is not finite");
+                        die(EXIT_IO_RESTART, "vtopo_dbl holds a wet-crust extent that is not finite");
                     vt->xext_[c*xext_stride + k] = v;
                 }
         }

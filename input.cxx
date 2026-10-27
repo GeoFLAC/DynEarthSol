@@ -424,7 +424,7 @@ static void declare_parameters(po::options_description &cfg,
          "Cell size of the virtual-topology marker grid (in unit of mesh.resolution), used by the "
          "serpentinization grid (mat.phase_change_option 3 with mat.has_serpentinization). 0.5 = half an "
          "element edge: the one-element-thick slab crust "
-         "gets its own crust-dominant cell row instead of averaging with the mantle above, while a "
+         "gets its own wet-crust-dominant cell row instead of averaging with the mantle above, while a "
          "cell nominally (elements of edge mesh.resolution) holds ~2.3 markers in 2D (~4.2 in 3D) at the "
          "default 4 per element; a refined mesh puts more in each cell. Heuristic, untuned. With serpentinization "
          "on it must be > 0, and mesh.resolution * mesh.vt_size must not exceed mat.serpentinization_thickness.")
@@ -1016,12 +1016,12 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
          "Index of oceanic crust. A top element where it is the most abundant marker material keeps its plastic "
          "strain when surface plastic strain decays (surface_plstrain_diffusion() in bc.cxx). With mat.phase_change_option 3: the source of the eclogite "
-         "rule and crust for the serpentinization grid; then it must be set in the cfg.")
+         "rule and wet crust for the serpentinization grid; then it must be set in the cfg.")
         ("mat.mattype_serpentinite", po::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
          "Index of serpentinite material, for mat.phase_change_option 3 with mat.has_serpentinization: what "
          "mantle above the slab turns into, and the source of serpentinite->mantle dehydration. Default -1 "
          "(unset); with serpentinization on it must be in [0, mat.num_materials) and distinct from "
-         "mattype_mantle and the crust materials (mattype_oceanic_crust, mattype_sediment, and "
+         "mattype_mantle and the wet-crust materials (mattype_oceanic_crust, mattype_sediment, and "
          "mattype_sediment_rock when set).")
         ("mat.mattype_eclogite", po::value<int>(&p.mat.mattype_eclogite)->default_value(-1),
          "Index of eclogite material. For the mat.phase_change_option 3 rule engine: oceanic-crust markers past the "
@@ -1031,7 +1031,7 @@ static void declare_parameters(po::options_description &cfg,
          "mattype_mantle above the chlorite-out boundary (Grove et al. 2009). Unset (-1, the default) disables it.")
         ("mat.mattype_sediment_rock", po::value<int>(&p.mat.mattype_sediment_rock)->default_value(-1),
          "Index of consolidated sedimentary-rock material. For mat.phase_change_option 3: mattype_sediment compacts to "
-         "this, which then metamorphoses to mattype_metasediment; when set, it is also crust for the "
+         "this, which then metamorphoses to mattype_metasediment; when set, it is also wet crust for the "
          "serpentinization grid. Unset (-1, the default) disables it.")
         ("mat.mattype_metasediment", po::value<int>(&p.mat.mattype_metasediment)->default_value(-1),
          "Index of metamorphic-sediment material. For mat.phase_change_option 3: mattype_sediment_rock -> this -> "
@@ -1041,7 +1041,7 @@ static void declare_parameters(po::options_description &cfg,
          "(Wei et al. 2004). Unset (-1, the default) disables it.")
         ("mat.mattype_sediment", po::value<int>(&p.mat.mattype_sediment)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion. "
-         "With mat.phase_change_option 3: crust for the serpentinization grid (with mat.has_serpentinization) "
+         "With mat.phase_change_option 3: wet crust for the serpentinization grid (with mat.has_serpentinization) "
          "and the source of the sediment chain (with mat.has_sediment_metamorphism); with either it must be "
          "set in the cfg.")
         ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
@@ -1059,24 +1059,24 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
          "Converting rate from melting to oceanic crust. Unused: no phase change reads it.")
         ("mat.serpentinization_thickness", po::value<double>(&p.mat.serpentinization_thickness)->default_value(10e3),
-         "Thickness (in m) of the mantle layer above crust (oceanic crust or sediment) that turns into serpentinite "
+         "Thickness (in m) of the mantle layer above wet crust (oceanic crust, sediment or sedimentary rock) that turns into serpentinite "
          "(mat.phase_change_option is 3 with mat.has_serpentinization). Counted in whole background-grid "
          "cells below the marker's own "
-         "cell (cell size mesh.resolution * mesh.vt_size), down to a cell more than half crust, so the effective "
+         "cell (cell size mesh.resolution * mesh.vt_size), down to a cell more than half wet crust, so the effective "
          "reach differs from it by up to two cells, and the thickness must be positive and at least one cell. "
          "Default 10e3: heuristic, untuned.")
-        ("mat.serpentinization_crust_margin", po::value<double>(&p.mat.serpentinization_crust_margin)->default_value(-1.0),
-         "Horizontal margin (in m) for the serpentinization crust-below test. When >= 0, a crust-dominant "
+        ("mat.serpentinization_wet_crust_margin", po::value<double>(&p.mat.serpentinization_wet_crust_margin)->default_value(-1.0),
+         "Horizontal margin (in m) for the serpentinization wet-crust-below test. When >= 0, a wet-crust-dominant "
          "grid cell triggers conversion only if the marker's horizontal position lies within the cell's "
-         "crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
-         "column-quantization false positive at a slab bend, where a cell is crust-dominant from crust "
+         "wet-crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
+         "column-quantization false positive at a slab bend, where a cell is wet-crust-dominant from wet crust "
          "up to a whole cell size away horizontally. < 0 (default) disables: whole-column behavior.")
         ("mat.has_serpentinization", po::value<bool>(&p.mat.has_serpentinization)->default_value(true),
          "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
          "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
          "Needs mattype_serpentinite, and mattype_sediment set in the cfg. "
          "Off: no serpentinization grid is built, and the checks on its inputs are skipped: mattype_mantle, "
-         "mattype_serpentinite and the crust materials distinct, mattype_serpentinite in range and set, "
+         "mattype_serpentinite and the wet-crust materials distinct, mattype_serpentinite in range and set, "
          "mattype_sediment set, serpentinization_thickness positive and at least one grid cell, mesh.vt_size positive. "
          "mattype_mantle, mattype_oceanic_crust and mattype_sediment stay range-checked with the other base material "
          "indices, and the rule "
@@ -1891,16 +1891,16 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                         "mat.has_serpentinization needs mat.") + t.first + " in [0, mat.num_materials).";
                     die(EXIT_CONFIG_VALUE, msg.c_str());
                 }
-            // The grid counts these as crust (counts_as_crust() in phasechanges.cxx);
+            // The grid counts these as wet crust (counts_as_wet_crust() in phasechanges.cxx);
             // the mantle or serpentinite among them would trigger itself.
-            const int crust_types[] = { p.mat.mattype_oceanic_crust, p.mat.mattype_sediment,
-                                        p.mat.mattype_sediment_rock };
+            const int wet_crust_types[] = { p.mat.mattype_oceanic_crust, p.mat.mattype_sediment,
+                                            p.mat.mattype_sediment_rock };
             bool aliased = p.mat.mattype_mantle == p.mat.mattype_serpentinite;
-            for (int t : crust_types)
+            for (int t : wet_crust_types)
                 aliased = aliased || t == p.mat.mattype_mantle || t == p.mat.mattype_serpentinite;
             if (aliased) {
                 die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 3, but mattype_mantle, mattype_serpentinite "
-                    "and the crust materials (mattype_oceanic_crust, mattype_sediment, and "
+                    "and the wet-crust materials (mattype_oceanic_crust, mattype_sediment, and "
                     "mattype_sediment_rock when set) are not distinct.");
             }
             if (p.mat.serpentinization_thickness <= 0) {
@@ -1909,11 +1909,11 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             if (p.mesh.vt_size <= 0) {
                 die(EXIT_CONFIG_VALUE, "mesh.vt_size must be positive.");
             }
-            // The crust-below search steps down in whole grid cells; a thickness
+            // The wet-crust-below search steps down in whole grid cells; a thickness
             // under one cell examines no cell at all and serpentinization never fires.
             if (p.mat.serpentinization_thickness < p.mesh.resolution * p.mesh.vt_size) {
                 die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness is smaller than one virtual-topology "
-                    "cell (mesh.resolution * mesh.vt_size); the crust-below search would examine no cell. "
+                    "cell (mesh.resolution * mesh.vt_size); the wet-crust-below search would examine no cell. "
                     "Raise the thickness or lower mesh.vt_size.");
             }
         }

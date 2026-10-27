@@ -281,13 +281,16 @@ namespace {
         return rules;
     }
 
-    // Whether the serpentinization grid counts a material as crust: oceanic
-    // crust, sediment, and sedimentary rock when its index is set (-1, unset,
-    // equals no material). GeoFLAC master's mantle rule looks below a marker
-    // for oceanic crust and sedimentary rock (kocean1, kocean2, ksed2);
-    // unconsolidated sediment counts too, as in tan2's geoflac fork.
+    // Whether the serpentinization grid counts a material as wet crust: the
+    // water-bearing slab material whose dehydration hydrates the mantle above
+    // it -- oceanic crust, sediment, and sedimentary rock when its index is set
+    // (-1, unset, equals no material). Continental crust, eclogite,
+    // metasediment and schist are crust but not wet crust. GeoFLAC master's
+    // mantle rule looks below a marker for oceanic crust and sedimentary rock
+    // (kocean1, kocean2, ksed2); unconsolidated sediment counts too, as in
+    // tan2's geoflac fork.
     #pragma acc routine seq
-    bool counts_as_crust(const Param& param, int mt)
+    bool counts_as_wet_crust(const Param& param, int mt)
     {
         return mt == param.mat.mattype_oceanic_crust || mt == param.mat.mattype_sediment
                || mt == param.mat.mattype_sediment_rock;
@@ -298,7 +301,7 @@ namespace {
     // repeated addition, not by division, which can round a boundary case
     // the other way and change which markers convert; capped at num_cells(),
     // more than any column holds, so a huge thickness cannot run away.
-    int crust_walk_steps(const VirtualTopology& vt, double thickness)
+    int wet_crust_walk_steps(const VirtualTopology& vt, double thickness)
     {
         int nsteps = 0;
         for (double dist = vt.cell_size(); dist <= thickness && nsteps < vt.num_cells();
@@ -307,21 +310,21 @@ namespace {
         return nsteps;
     }
 
-    // The crust-margin test (margin >= 0): true iff, at most nsteps cells
+    // The wet-crust-margin test (margin >= 0): true iff, at most nsteps cells
     // STRICTLY BELOW `cell0` (the querying marker's build-time label, or its
     // live cell when the label was invalidated -- see the pass-2 call site),
-    // a crust-dominant cell (vt.is_dominant(), after the drops between the
+    // a wet-crust-dominant cell (vt.is_dominant(), after the drops between the
     // passes) holds the marker's horizontal position p within its recorded
-    // crust extent (+/- margin) -- rejecting crust that is in the marker's column but
-    // horizontally distant (the slab-bend column-quantization false
-    // positive). cell0 itself is skipped -- a mantle marker sitting inside
-    // the crust body must not self-trigger; only crust strictly below it
+    // wet-crust extent (+/- margin) -- rejecting wet crust that is in the
+    // marker's column but horizontally distant (the slab-bend
+    // column-quantization false positive). cell0 itself is skipped -- a mantle marker sitting inside
+    // the wet-crust body must not self-trigger; only wet crust strictly below it
     // does. With the margin off, pass 2 reads the whole-column answer from
     // VirtualTopology::cells_with_dominant_below() instead.
     #pragma acc routine seq
-    bool crust_dominant_cell_below(const VirtualTopology& vt, int cell0,
-                                    const double* p, int nsteps,
-                                    double margin)
+    bool wet_crust_dominant_cell_below(const VirtualTopology& vt, int cell0,
+                                       const double* p, int nsteps,
+                                       double margin)
     {
         int cell = vt.neighbor_cell(cell0, NDIMS-1, -1);   // one cell below, not cell0 itself
         for (int k = 0; cell >= 0 && k < nsteps; ++k) {
@@ -342,18 +345,18 @@ namespace {
     // so a marker's per-element elemmarkers update is race-free in it.
     //
     // Two passes, not one, because pass 2 reads the grid's dominant-cell
-    // flags. Pass 1 can turn a crust marker into a material the grid does not
+    // flags. Pass 1 can turn a wet-crust marker into a material the grid does not
     // count (eclogite, metasediment), so its cell may no longer be
-    // crust-dominant: pass 1 flags the cell, and the host step between the
+    // wet-crust-dominant: pass 1 flags the cell, and the host step between the
     // passes drops each flagged cell from the dominant set. A dropped cell is
     // not recounted; it stays non-dominant until the next rebuild. Pass 1's
     // end (the OpenMP join, or the acc wait) makes its flags visible to the
     // host step, and pass 2 starts after that step.
     //
     // The host step then turns the dominant set into a per-cell flag:
-    // crust-dominant cell within serpentinization_thickness below. With the
+    // wet-crust-dominant cell within serpentinization_thickness below. With the
     // margin off, pass 2 reads one flag per mantle marker; with it on, the
-    // flag prefilters crust_dominant_cell_below(). The dominant set is
+    // flag prefilters wet_crust_dominant_cell_below(). The dominant set is
     // computed at each build_serpentinization_grid() and, apart from those
     // drops, stays valid across the phase_changes() calls until the next
     // rebuild (between remeshes the slab advances only ~dx per tens of
@@ -377,18 +380,18 @@ namespace {
         // markerset.cxx) and invalidate_dominant_cell() (between the passes
         // below). It is rebuilt here, before the next remesh, only when a
         // restart did not bring a usable one: absent (the checkpoint was
-        // written without it), or without crust extents while the margin
+        // written without it), or without wet-crust extents while the margin
         // feature is on.
         bool serpentinize = uses_serpentinization_grid(param);
         if (serpentinize &&
                 (var.vtopo == nullptr ||
-                 (param.mat.serpentinization_crust_margin >= 0 &&
+                 (param.mat.serpentinization_wet_crust_margin >= 0 &&
                   !var.vtopo->has_xext_data())))
             build_serpentinization_grid(param, var);
         const VirtualTopology* vt = var.vtopo;   // null unless serpentinize
         // dominant_xext_ok() reads the extents unchecked (device code cannot die).
-        if (serpentinize && param.mat.serpentinization_crust_margin >= 0 && !vt->has_xext_data())
-            die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: the crust margin is on, but the grid has no crust extents");
+        if (serpentinize && param.mat.serpentinization_wet_crust_margin >= 0 && !vt->has_xext_data())
+            die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: the wet-crust margin is on, but the grid has no wet-crust extents");
 
         // Depth cap on mantle serpentinization, below the stability wedge's own cold-slab
         // extrapolation (> 200 km at 500 C): slab dehydration, the water source, is
@@ -406,13 +409,14 @@ namespace {
 
         // Pass 2's look-down distance in cells, its per-cell answer (filled
         // between the passes), and pass 1's per-cell flags.
-        int nsteps = serpentinize ? crust_walk_steps(*vt, param.mat.serpentinization_thickness) : 0;
-        std::vector<char> crust_below;
-        int_vec crust_lost(serpentinize ? vt->num_cells() : 0, 0);   // 1: a crust marker there turned non-crust
-        int* lost = crust_lost.data();   // an atomic write needs a plain scalar target
+        int nsteps = serpentinize ? wet_crust_walk_steps(*vt, param.mat.serpentinization_thickness) : 0;
+        std::vector<char> wet_crust_below;
+        // 1: a wet-crust marker there turned into a material that is not wet crust
+        int_vec wet_crust_lost(serpentinize ? vt->num_cells() : 0, 0);
+        int* lost = wet_crust_lost.data();   // an atomic write needs a plain scalar target
 
         // Pass 1: every transition EXCEPT mantle -> serpentinite (that one
-        // reads the dominant set, which must first drop the cells whose crust
+        // reads the dominant set, which must first drop the cells whose wet crust
         // this pass converts; see the function doc above).
 #ifndef ACC
         #pragma omp parallel for default(none) \
@@ -444,10 +448,10 @@ namespace {
                 ms.set_mattype(m, to);
                 --(*var.elemmarkers)[e][mt];
                 ++(*var.elemmarkers)[e][to];
-                // When a crust marker turns into a material the grid does not
-                // count, its cell may no longer be crust-dominant: flag it for
+                // When a wet-crust marker turns into a material the grid does not
+                // count, its cell may no longer be wet-crust-dominant: flag it for
                 // the drop between the passes.
-                if (serpentinize && counts_as_crust(param, mt) && !counts_as_crust(param, to)) {
+                if (serpentinize && counts_as_wet_crust(param, mt) && !counts_as_wet_crust(param, to)) {
                     // The cell whose dominance this marker contributed to --
                     // its BUILD-time cell (the cell the dominance scan
                     // actually counted it in; the live cell can differ once
@@ -469,16 +473,16 @@ namespace {
         if (!serpentinize) return;
 
         // Between the passes, on the host: drop the flagged cells, then build
-        // the crust-below map pass 2 reads.
+        // the wet-crust-below map pass 2 reads.
         for (int cell = 0; cell < vt->num_cells(); ++cell)
-            if (crust_lost[cell])
+            if (wet_crust_lost[cell])
                 var.vtopo->invalidate_dominant_cell(cell);
-        vt->cells_with_dominant_below(nsteps, crust_below);
+        vt->cells_with_dominant_below(nsteps, wet_crust_below);
 
         // Pass 2: mantle -> serpentinite.
 #ifndef ACC
         #pragma omp parallel for default(none) \
-            shared(param, var, ms, vt, max_basalt_depth, topo, nsteps, crust_below)
+            shared(param, var, ms, vt, max_basalt_depth, topo, nsteps, wet_crust_below)
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0; e<var.nelem; e++) {
@@ -489,7 +493,7 @@ namespace {
                 if (ms.get_mattype(m) != param.mat.mattype_mantle)
                     continue;
 
-                // The crust-below test reads the marker's BUILD-time cell (its
+                // The wet-crust-below test reads the marker's BUILD-time cell (its
                 // label from the last grid rebuild), so the marker-grid
                 // relationship is evaluated in the rebuild-time configuration
                 // and stays constant between rebuilds -- a drifting marker
@@ -498,11 +502,11 @@ namespace {
                 // mark_removed() dropped falls back to the live cell until the
                 // next rebuild. The margin test still uses the live horizontal
                 // position -- drift between rebuilds is far smaller than any
-                // useful margin. A labelled marker with no crust below skips
+                // useful margin. A labelled marker with no wet crust below skips
                 // the P-T evaluation; the tests are pure, so their order cannot
                 // change the result.
                 int cell0 = vt->label_cell(m);
-                if (cell0 >= 0 && !crust_below[cell0])
+                if (cell0 >= 0 && !wet_crust_below[cell0])
                     continue;
 
                 double Z, press, T, p[NDIMS];
@@ -513,12 +517,12 @@ namespace {
 
                 if (cell0 < 0) {
                     cell0 = vt->cell_of(p);
-                    if (!crust_below[cell0])
+                    if (!wet_crust_below[cell0])
                         continue;
                 }
-                if (param.mat.serpentinization_crust_margin >= 0 &&
-                        !crust_dominant_cell_below(*vt, cell0, p, nsteps,
-                            param.mat.serpentinization_crust_margin))
+                if (param.mat.serpentinization_wet_crust_margin >= 0 &&
+                        !wet_crust_dominant_cell_below(*vt, cell0, p, nsteps,
+                            param.mat.serpentinization_wet_crust_margin))
                     continue;
                 ms.set_mattype(m, param.mat.mattype_serpentinite);
                 --(*var.elemmarkers)[e][param.mat.mattype_mantle];
@@ -572,7 +576,7 @@ std::vector<const char*> phase_change_keys(const Param& param)
         keys.push_back("mattype_mantle");
         keys.push_back("mattype_serpentinite");
         keys.push_back("mattype_oceanic_crust");
-        keys.push_back("mattype_sediment");   // counts as crust (counts_as_crust())
+        keys.push_back("mattype_sediment");   // counts as wet crust (counts_as_wet_crust())
     }
     return keys;
 }
@@ -599,11 +603,11 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     ms.calculate_marker_coord(var, points);   // waits for its own kernel
 
     // Express the grid's vertical axis as depth below the CURRENT free surface
-    // (zeff = z - z_surf(x)) instead of absolute z. The "crust-below" geometry
+    // (zeff = z - z_surf(x)) instead of absolute z. The "wet-crust-below" geometry
     // the grid encodes is then a RELATIVE relationship: a rigid vertical motion
     // of the whole mesh (e.g. the initial isostatic rise) shifts every marker and
     // the surface by the same amount, so every marker's zeff -- and hence its
-    // cell -- is unchanged, and the crust-dominant cells stay registered to the
+    // cell -- is unchanged, and the wet-crust-dominant cells stay registered to the
     // material that actually sits above/below. Built from the current top-boundary
     // nodes, so it moves with the mesh with no persistent state (SurfaceTopo doc).
     SurfaceTopo topo;
@@ -626,14 +630,14 @@ void build_serpentinization_grid(const Param& param, Variables& var)
 
     var.vtopo = new VirtualTopology(lo, hi, param.mesh.resolution * param.mesh.vt_size);
 
-    // Bin every marker, not just crust: the dominance scan below counts each
-    // cell's crust share of ITS OWN population, and pass 2 reads each mantle
-    // marker's crust-below flag at its label.
+    // Bin every marker, not just wet crust: the dominance scan below counts each
+    // cell's wet-crust share of ITS OWN population, and pass 2 reads each mantle
+    // marker's wet-crust-below flag at its label.
     var.vtopo->build_index(points, n);
 
-    // Precompute which cells are crust-dominant (more than half of their
-    // markers count as crust, counts_as_crust()) so subduction_phase_changes()
-    // pass 2 builds its crust-below map from them instead of recomputing cell
+    // Precompute which cells are wet-crust-dominant (more than half of their
+    // markers count as wet crust, counts_as_wet_crust()) so subduction_phase_changes()
+    // pass 2 builds its wet-crust-below map from them instead of recomputing cell
     // composition at every phase_changes() call (every 10 steps).
     // removed_since_rebuild_ is empty right after build_index(), so
     // cell_markers() here is an exact, zero-overhead bucket read.
@@ -644,31 +648,31 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // holds markers_per_element times (cell / element measure) markers:
     // nominally ~2.3 in 2D and ~4.2 in 3D (vt_size doc), so a two-marker cell
     // needs both. Untuned.
-    const double crust_fraction_threshold = 0.50;
+    const double wet_crust_fraction_threshold = 0.50;
     const int ncells = var.vtopo->num_cells();
-    // Record each dominant cell's crust horizontal extent only when the
+    // Record each dominant cell's wet-crust horizontal extent only when the
     // margin feature is on: the extents are dead weight otherwise, in memory
     // and in the checkpoint (they ride in vtopo_dbl -- see
     // VirtualTopology::serialize).
-    const bool want_xext = param.mat.serpentinization_crust_margin >= 0;
+    const bool want_xext = param.mat.serpentinization_wet_crust_margin >= 0;
     var.vtopo->clear_dominant();
     int_vec ids;
     for (int c = 0; c < ncells; ++c) {
         var.vtopo->cell_markers(c, ids);
-        int crust = 0;
+        int wet_crust = 0;
         double xlo[NDIMS-1], xhi[NDIMS-1];
         for (int id : ids)
-            if (counts_as_crust(param, ms.get_mattype(id))) {
+            if (counts_as_wet_crust(param, ms.get_mattype(id))) {
                 if (want_xext) {
                     for (int d = 0; d < NDIMS-1; d++) {
                         const double x = points[id][d];
-                        if (crust == 0 || x < xlo[d]) xlo[d] = x;
-                        if (crust == 0 || x > xhi[d]) xhi[d] = x;
+                        if (wet_crust == 0 || x < xlo[d]) xlo[d] = x;
+                        if (wet_crust == 0 || x > xhi[d]) xhi[d] = x;
                     }
                 }
-                ++crust;
+                ++wet_crust;
             }
-        if (!ids.empty() && static_cast<double>(crust) / ids.size() > crust_fraction_threshold) {
+        if (!ids.empty() && static_cast<double>(wet_crust) / ids.size() > wet_crust_fraction_threshold) {
             var.vtopo->set_dominant(c);
             if (want_xext)
                 var.vtopo->set_dominant_xext(c, xlo, xhi);

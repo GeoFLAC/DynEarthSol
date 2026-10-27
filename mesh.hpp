@@ -49,10 +49,10 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  *
  * Used by serpentinization: a mantle marker converts when a cell within
  * mat.serpentinization_thickness below it is more than some threshold
- * fraction crust, oceanic crust or sediment (see build_serpentinization_grid()
+ * fraction wet crust (counts_as_wet_crust(); see build_serpentinization_grid()
  * in phasechanges.cxx, which computes the fraction from cell_markers() +
  * MarkerSet::get_mattype() at each build, and subduction_phase_changes(),
- * which reads the resulting crust-dominant cells).
+ * which reads the resulting wet-crust-dominant cells).
  *
  * build_index() is rebuilt once per remesh (and at init): markers move
  * continuously between remeshes, so absolute positions drift, but their
@@ -177,12 +177,12 @@ public:
 
     // --- Dominance cache (see the class doc above) ---
 
-    // Clear every dominance flag and crust extent. Called at the start of
+    // Clear every dominance flag and wet-crust extent. Called at the start of
     // dominance precomputation in build_serpentinization_grid().
     void clear_dominant();
 
     // Flag `cell` as dominant. Called from build_serpentinization_grid()
-    // after counting crust composition per cell.
+    // after counting wet-crust composition per cell.
     void set_dominant(int cell);
 
     // O(1) query: true iff `cell` is flagged dominant.
@@ -197,20 +197,21 @@ public:
 
     // Unflag `cell` (conservative: treated as non-dominant until the next
     // build, not recounted). Called between the passes of
-    // subduction_phase_changes() for each cell where pass 1 turned a crust
-    // marker non-crust, so pass 2 does not read a dominance that the conversion
-    // may have ended. Its crust extent is then never read again.
+    // subduction_phase_changes() for each cell where pass 1 turned a wet-crust
+    // marker into a material that is not wet crust, so pass 2 does not read a
+    // dominance that the conversion may have ended. Its wet-crust extent is
+    // then never read again.
     void invalidate_dominant_cell(int cell);
 
-    // --- Per-dominant-cell crust horizontal extent (optional refinement) ---
+    // --- Per-dominant-cell wet-crust horizontal extent (optional refinement) ---
     //
-    // A dominant cell answers "this cell holds enough crust" for its WHOLE
+    // A dominant cell answers "this cell holds enough wet crust" for its WHOLE
     // horizontal span (one cell per axis), so a marker at one edge of a
-    // column inherits crust sitting up to a full cell size away -- the
+    // column inherits wet crust sitting up to a full cell size away -- the
     // horizontal-quantization false positive at a slab bend. When the caller
     // additionally records the horizontal min/max of the cell's qualifying
-    // (crust) markers at build time, dominant_xext_ok() narrows the answer
-    // to "crust within `margin` of this horizontal position".
+    // (wet-crust) markers at build time, dominant_xext_ok() narrows the answer
+    // to "wet crust within `margin` of this horizontal position".
     //
     // Storage is caller-driven exactly like dominance: populated in
     // build_serpentinization_grid() (only when the margin feature is
@@ -226,7 +227,7 @@ public:
     bool has_xext_data() const { return xext_built_; }
 
     // True iff every horizontal component of p lies within the dominant
-    // `cell`'s crust extent widened by margin, [lo - margin, hi + margin].
+    // `cell`'s wet-crust extent widened by margin, [lo - margin, hi + margin].
     // Only for has_xext_data() grids, where every dominant cell has an extent
     // (serialize() asserts it, deserialize() reads one per dominant id).
     #pragma acc routine seq
@@ -253,7 +254,7 @@ public:
 
     // Checkpoint round-trip. Kept decoupled from binaryio (per this class's
     // design): the owner does the file I/O. Both vectors are variable length
-    // (buckets and removed ids in ints, optional crust extents in dbls), so the owner
+    // (buckets and removed ids in ints, optional wet-crust extents in dbls), so the owner
     // must also stash each one's size (length-1 arrays vtopo_len /
     // vtopo_dbl_len) to pre-size the buffers before the read_array() that
     // fills them -- see output.cxx/dynearthsol.cxx for the pattern.
@@ -265,7 +266,7 @@ public:
     //         order, and a reader must not rely on it)].
     // deserialize() dies (EXIT_IO_RESTART) on any other first int.
     // dbls = [lo_[0..NDIMS-1], dx_,
-    //         per dominant cell (same order as its ids in ints): its crust
+    //         per dominant cell (same order as its ids in ints): its wet crust
     //         extent lo[0..NDIMS-2], hi[0..NDIMS-2] -- present exactly when
     //         xext_built_ (margin feature on at build; otherwise dbls keeps
     //         the plain NDIMS+1 length). Like ints, dbls is therefore
@@ -300,11 +301,11 @@ private:
     // caller's dominance threshold (build_serpentinization_grid() for
     // serpentinization). Set once per build_index() by the caller via
     // clear_dominant()/set_dominant(); partially cleared between rebuilds via
-    // invalidate_dominant_cell() when a crust marker turns non-crust. See the
-    // class doc above.
+    // invalidate_dominant_cell() when a wet-crust marker turns into a material
+    // that is not wet crust. See the class doc above.
     std::vector<char> dominant_;
 
-    // Crust horizontal extent per cell (see set_dominant_xext()), xext_stride
+    // Wet-crust horizontal extent per cell (see set_dominant_xext()), xext_stride
     // doubles per cell: lo[0..NDIMS-2], then hi[0..NDIMS-2]. Sized, NaN for a
     // cell without one, at the first set_dominant_xext() or mark_xext_built(),
     // or by deserialize() when xext_built_; empty otherwise.

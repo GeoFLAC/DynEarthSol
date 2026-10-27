@@ -462,7 +462,7 @@ struct Mat {
     int mattype_asthenosphere;
     double convert_rate_oceanic_crust;
     double serpentinization_thickness;
-    double serpentinization_crust_margin;
+    double serpentinization_wet_crust_margin;
 
     // phase_change_option 3 process switches (subduction_phase_changes)
     bool has_serpentinization;

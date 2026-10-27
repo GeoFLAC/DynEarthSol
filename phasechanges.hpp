@@ -23,7 +23,7 @@ std::vector<const char*> phase_change_keys(const Param&);
 // Called eagerly after init() and at the end of remeshing. A restart
 // restores the grid from the checkpoint instead (restart() in
 // dynearthsol.cxx); subduction_phase_changes() calls this only when that
-// left none it can use: no grid, or no crust extents while the margin
+// left none it can use: no grid, or no wet-crust extents while the margin
 // feature is on (a checkpoint written with the margin off).
 void build_serpentinization_grid(const Param&, Variables&);
 
