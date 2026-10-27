@@ -9,8 +9,10 @@ void phase_changes(const Param&, Variables&);
 bool uses_serpentinization_grid(const Param&);
 
 // Dies (EXIT_CONFIG_VALUE) when a mat.phase_change_option 3 rule would misfire:
-// two active rules from one material, or any rule from mattype_mantle.
-// Called at input.
+// an active switch whose source or target is unset, out of range or the same
+// material; two active rules from one material; any rule from mattype_mantle;
+// or mattype_sediment equal to mattype_oceanic_crust while has_eclogitization
+// is on. Called at input.
 void check_phase_transition_rules(const Param&);
 
 // The mat.mattype_* keys (without "mat.") that mat.phase_change_option 3 reads:

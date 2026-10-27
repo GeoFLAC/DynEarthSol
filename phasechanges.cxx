@@ -135,10 +135,10 @@ namespace {
     // TO ADD A TRANSITION: write a predicate (cite its phase diagram; mark it
     // #pragma acc routine seq, as pass 1 calls it on the device), give it a
     // TransitionKind and its case in transition_rule_applies(), and add one
-    // row to build_phase_transition_rules() with its mat.has_* switch.  A new
-    // source/target phase needs a mat.mattype_* parameter; the rule stays
-    // inactive unless its switch is on AND that index is a distinct, in-range
-    // material.
+    // row to phase_transition_candidates() with its mat.has_* switch.  A new
+    // source/target phase needs a mat.mattype_* parameter; while the switch
+    // is on, check_phase_transition_rules() requires its source and target to
+    // be distinct, in-range materials.
 
     // oceanic crust (basalt) -> eclogite.  Hacker (2003) JGR, Fig. 1/8 (as
     // geoflac names it): low-P boundary trpres and steep high-P boundary
@@ -258,25 +258,30 @@ namespace {
         const char* target;   // the mat.mattype_* that sets `to`, for phase_change_keys()
     };
 
-    // Build the active rule set from the process switches and configured
-    // material indices.  Add a row to introduce a transition; a rule is dropped
-    // unless its mat.has_* switch is on AND its source and target are distinct,
-    // in-range materials (so an unset mat.mattype_* also keeps it off).
+    // Every transition the rule engine knows, whether its mat.has_* switch
+    // (`flag`) is on or not. Add a row to introduce a transition.
+    struct Candidate { bool on; int from; int to; TransitionKind kind; const char* flag; const char* source; const char* target; };
+    std::vector<Candidate> phase_transition_candidates(const Param& param)
+    {
+        return {
+            { param.mat.has_eclogitization,             param.mat.mattype_oceanic_crust,  param.mat.mattype_eclogite,       TransitionKind::basalt_to_eclogite,       "has_eclogitization",             "mattype_oceanic_crust",  "mattype_eclogite" },
+            { param.mat.has_serpentinization,           param.mat.mattype_serpentinite,   param.mat.mattype_mantle,         TransitionKind::serpentinite_to_mantle,   "has_serpentinization",           "mattype_serpentinite",   "mattype_mantle" },
+            { param.mat.has_hydrous_mantle_dehydration, param.mat.mattype_hydrous_mantle, param.mat.mattype_mantle,         TransitionKind::hydrous_mantle_to_mantle, "has_hydrous_mantle_dehydration", "mattype_hydrous_mantle", "mattype_mantle" },
+            { param.mat.has_sediment_metamorphism,      param.mat.mattype_sediment,       param.mat.mattype_sediment_rock,  TransitionKind::sediment_compaction,      "has_sediment_metamorphism",      "mattype_sediment",       "mattype_sediment_rock" },
+            { param.mat.has_sediment_metamorphism,      param.mat.mattype_sediment_rock,  param.mat.mattype_metasediment,   TransitionKind::sediment_to_metasediment, "has_sediment_metamorphism",      "mattype_sediment_rock",  "mattype_metasediment" },
+            { param.mat.has_sediment_metamorphism,      param.mat.mattype_metasediment,   param.mat.mattype_schist,         TransitionKind::metasediment_to_schist,   "has_sediment_metamorphism",      "mattype_metasediment",   "mattype_schist" },
+        };
+    }
+
+    // The active rule set: each candidate whose switch is on. Its indices are
+    // safe to read per marker only after check_phase_transition_rules()
+    // (input), which dies on an active switch whose source or target is unset,
+    // out of range, or the same material.
     std::vector<PhaseTransition> build_phase_transition_rules(const Param& param)
     {
-        const int nmat = param.mat.nmat;
-        struct Candidate { bool on; int from; int to; TransitionKind kind; const char* source; const char* target; };
-        const Candidate all[] = {
-            { param.mat.has_eclogitization,             param.mat.mattype_oceanic_crust,  param.mat.mattype_eclogite,       TransitionKind::basalt_to_eclogite,       "mattype_oceanic_crust",  "mattype_eclogite" },
-            { param.mat.has_serpentinization,           param.mat.mattype_serpentinite,   param.mat.mattype_mantle,         TransitionKind::serpentinite_to_mantle,   "mattype_serpentinite",   "mattype_mantle" },
-            { param.mat.has_hydrous_mantle_dehydration, param.mat.mattype_hydrous_mantle, param.mat.mattype_mantle,         TransitionKind::hydrous_mantle_to_mantle, "mattype_hydrous_mantle", "mattype_mantle" },
-            { param.mat.has_sediment_metamorphism,      param.mat.mattype_sediment,       param.mat.mattype_sediment_rock,  TransitionKind::sediment_compaction,      "mattype_sediment",       "mattype_sediment_rock" },
-            { param.mat.has_sediment_metamorphism,      param.mat.mattype_sediment_rock,  param.mat.mattype_metasediment,   TransitionKind::sediment_to_metasediment, "mattype_sediment_rock",  "mattype_metasediment" },
-            { param.mat.has_sediment_metamorphism,      param.mat.mattype_metasediment,   param.mat.mattype_schist,         TransitionKind::metasediment_to_schist,   "mattype_metasediment",   "mattype_schist" },
-        };
         std::vector<PhaseTransition> rules;
-        for (const Candidate& c : all)
-            if (c.on && c.from != c.to && c.from >= 0 && c.from < nmat && c.to >= 0 && c.to < nmat)
+        for (const Candidate& c : phase_transition_candidates(param))
+            if (c.on)
                 rules.push_back({c.from, c.to, c.kind, c.source, c.target});
         return rules;
     }
@@ -537,6 +542,26 @@ namespace {
 
 void check_phase_transition_rules(const Param& param)
 {
+    // A switch that is on names materials the rules index per marker, and
+    // it must not turn itself off because one of them was left unset or
+    // names the other.
+    const int nmat = param.mat.nmat;
+    for (const Candidate& c : phase_transition_candidates(param)) {
+        if (!c.on) continue;
+        if (c.from < 0 || c.from >= nmat || c.to < 0 || c.to >= nmat) {
+            const std::string msg = std::string("mat.phase_change_option 3: mat.") + c.flag + " is on, but mat."
+                + c.source + " (" + std::to_string(c.from) + ") or mat." + c.target + " ("
+                + std::to_string(c.to) + ") is unset or not in [0, mat.num_materials); set both, "
+                "or turn mat." + c.flag + " off.";
+            die(EXIT_CONFIG_VALUE, msg.c_str());
+        }
+        if (c.from == c.to) {
+            const std::string msg = std::string("mat.phase_change_option 3: mat.") + c.flag + " is on, but mat."
+                + c.source + " and mat." + c.target + " are both " + std::to_string(c.from)
+                + "; give them different indices, or turn mat." + c.flag + " off.";
+            die(EXIT_CONFIG_VALUE, msg.c_str());
+        }
+    }
     // Pass 1 reads one rule per source material, so two rules that share a
     // source cannot both apply. No rule is meant to start from the mantle:
     // with serpentinization on, pass 1 leaves mantle markers to pass 2 and
@@ -559,6 +584,14 @@ void check_phase_transition_rules(const Param& param)
             die(EXIT_CONFIG_VALUE, msg.c_str());
         }
     }
+    // Surface processes deposit mattype_sediment; were it oceanic crust, the
+    // deposits would turn into eclogite.
+    if (param.mat.has_eclogitization && param.mat.mattype_sediment == param.mat.mattype_oceanic_crust) {
+        const std::string msg = "mat.phase_change_option 3: mat.mattype_sediment equals mat.mattype_oceanic_crust ("
+            + std::to_string(param.mat.mattype_oceanic_crust) + ") while mat.has_eclogitization is on, so "
+            "sediment would turn into eclogite; give mat.mattype_sediment (default 0) its own index.";
+        die(EXIT_CONFIG_VALUE, msg.c_str());
+    }
 }
 
 
@@ -570,10 +603,11 @@ std::vector<const char*> phase_change_keys(const Param& param)
         keys.push_back(r.source);
         keys.push_back(r.target);
     }
-    if (!rules.empty())
-        keys.push_back("mattype_mantle");   // check_phase_transition_rules() compares every source with it
-    if (uses_serpentinization_grid(param)) {
+    // check_phase_transition_rules() compares every rule source with the
+    // mantle, and the grid converts it.
+    if (!rules.empty() || uses_serpentinization_grid(param))
         keys.push_back("mattype_mantle");
+    if (uses_serpentinization_grid(param)) {
         keys.push_back("mattype_serpentinite");
         keys.push_back("mattype_oceanic_crust");
         keys.push_back("mattype_sediment");   // counts as wet crust (counts_as_wet_crust())
