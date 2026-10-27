@@ -385,7 +385,8 @@ namespace {
         // markerset.cxx) and invalidate_dominant_cell() (between the passes
         // below). It is rebuilt here, before the next remesh, only when a
         // restart did not bring a usable one: absent (the checkpoint was
-        // written without it), or without wet-crust extents while the margin
+        // written without it, or restart() dropped it for another cell
+        // size), or without wet-crust extents while the margin
         // feature is on.
         bool serpentinize = uses_serpentinization_grid(param);
         if (serpentinize &&
