@@ -4046,7 +4046,7 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     vt->label_.assign(ints.begin()+p, ints.begin()+p+nlabels);
     p += nlabels;
     for (int c : vt->label_)
-        check(c >= 0 && static_cast<std::size_t>(c) < ncells);
+        check(c >= -1 && c < static_cast<int>(ncells));
     vt->built_last_id_ = next();
 
     // Wet-crust extents ride in dbls, one per dominant id in the same order (see
@@ -4127,7 +4127,8 @@ void VirtualTopology::build_index(const array_t& coords, int npoints, int last_i
         double p[NDIMS];
         for (int d=0; d<NDIMS; d++)
             p[d] = coords[m][d];
-        label_[m] = cell_of(p);
+        if (p[NDIMS-1] >= lo_[NDIMS-1])   // below the grid: no bucket, label -1
+            label_[m] = cell_of(p);
     }
     fill_buckets();
 }
@@ -4139,13 +4140,15 @@ void VirtualTopology::fill_buckets()
     const std::size_t ncells = cell_start_.size() - 1;
     std::fill(cell_start_.begin(), cell_start_.end(), 0);
     for (int c : label_)
-        ++cell_start_[c + 1];
+        if (c >= 0)   // a label -1 is in no bucket
+            ++cell_start_[c + 1];
     for (std::size_t c = 0; c < ncells; ++c)
         cell_start_[c + 1] += cell_start_[c];
-    ids_.resize(label_.size());
+    ids_.resize(cell_start_[ncells]);
     int_vec next(cell_start_.begin(), cell_start_.end() - 1);
     for (int m = 0; m < static_cast<int>(label_.size()); ++m)
-        ids_[next[label_[m]]++] = m;
+        if (label_[m] >= 0)
+            ids_[next[label_[m]]++] = m;
 }
 
 

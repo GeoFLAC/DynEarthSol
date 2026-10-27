@@ -59,7 +59,8 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * Between rebuilds no marker of the indexed set is created or deleted:
  * its count changes only in the surface processes of a quality-check step
  * (rebuilt in the same step) and in a remesh (rebuilt at its end). So every
- * marker id has a bucket and a label. MarkerSet::remove_markers() reuses the
+ * marker id has a label: its cell, or -1 below the grid's bottom (no bucket).
+ * MarkerSet::remove_markers() reuses the
  * freed ids for other markers, so a stale index would read the wrong marker;
  * subduction_phase_changes() therefore dies when the marker count is not
  * num_labels() or the set's last id (MarkerSet::get_last_id(), which every
@@ -104,9 +105,11 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * build_serpentinization_grid(), takes the marker coordinates
  * (MarkerSet::calculate_marker_coord()), replaces each z by its depth below
  * the local surface (SurfaceTopo::zeff()), and bounds the grid by a min/max
- * scan over those (x, zeff) points.
+ * scan over those (x, zeff) points, with the bottom raised to the deepest
+ * level the serpentinization search can read.
  *
- * Points outside the domain are clamped to the nearest cell.  The vertical
+ * build_index() leaves out a point below the grid's bottom and clamps any
+ * other point outside the grid to the nearest cell.  The vertical
  * axis is index NDIMS-1, positive up (DES convention); the grid works
  * unchanged in 2D and 3D builds. In 2D, axis 0 is horizontal (left/right);
  * in 3D, axes 0 and 1 are both horizontal and axis NDIMS-1 remains vertical.
@@ -120,7 +123,9 @@ public:
                     double resolution);
 
     // Rebuild the per-cell marker-id buckets from scratch, binning every
-    // marker index m (into coords, 0..npoints-1), and record last_id, the
+    // marker index m (into coords, 0..npoints-1) at or above the grid's
+    // bottom (a point below it gets no bucket and label -1; a point outside
+    // the grid elsewhere goes to the nearest cell), and record last_id, the
     // marker set's last id (see built_last_id()). Replaces whatever
     // build_index() built before.
     void build_index(const array_t& coords, int npoints, int last_id);
@@ -236,8 +241,9 @@ public:
     // relationships are evaluated in the build-time configuration and stay
     // constant between rebuilds (live-position queries let a drifting marker
     // flip the answer mid-interval against the frozen dominance data).
-    // m must be in [0, num_labels()). The labels are what the checkpoint
-    // stores; the buckets are derived from them.
+    // m must be in [0, num_labels()); -1 for a marker below the grid's
+    // bottom. The labels are what the checkpoint stores; the buckets are
+    // derived from them.
     #pragma acc routine seq
     int label_cell(int m) const { return label_[m]; }
 
@@ -272,7 +278,7 @@ private:
     enum { layout_tag = -5 };
 
     // Fill cell_start_ and ids_ from label_ (a counting sort, so each cell's
-    // ids stay ascending).
+    // ids stay ascending); a label -1 goes in no bucket.
     void fill_buckets();
 
     VirtualTopology() : dx_(0), nz_(0), ncol_(0)
@@ -287,7 +293,7 @@ private:
     // Per-cell marker-id buckets, flat cell numbering (see cell_of()), in one
     // array: cell c holds ids_[cell_start_[c] .. cell_start_[c+1]). All empty
     // from construction until build_index() fills them; deserialize() derives
-    // them from the stored labels. 4 bytes per cell plus 4 per marker.
+    // them from the stored labels. 4 bytes per cell plus 4 per binned marker.
     int_vec cell_start_;   // num_cells() + 1 offsets into ids_
     int_vec ids_;
     // One flag per cell: 1 when its indexed-marker population exceeds the

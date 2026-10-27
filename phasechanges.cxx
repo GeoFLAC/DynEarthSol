@@ -13,6 +13,13 @@
 
 namespace {
 
+    // Depth cap on mantle serpentinization (m below the local free surface),
+    // below the stability wedge's own cold-slab extrapolation (> 200 km at
+    // 500 C): slab dehydration, the water source, is essentially complete by
+    // ~150 km. Heuristic, untuned. It also bounds the grid's depth (see
+    // build_serpentinization_grid()).
+    double serpentinization_max_depth() { return 150e3; }
+
     void simple_subduction(const Param& param, const Variables& var, const MarkerSet& ms, int m, int& new_mt, int& hyd_inc)
     {
         const int mt_mantle = 0;
@@ -401,10 +408,7 @@ namespace {
         if (serpentinize && (vt->num_labels() != n || vt->built_last_id() != ms.get_last_id()))
             die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: a marker was added or removed since the serpentinization grid was built");
 
-        // Depth cap on mantle serpentinization, below the stability wedge's own cold-slab
-        // extrapolation (> 200 km at 500 C): slab dehydration, the water source, is
-        // essentially complete by ~150 km. Heuristic, untuned.
-        double max_basalt_depth = 150e3;  // m
+        double max_basalt_depth = serpentinization_max_depth();  // m
 
         // Surface-relative depth for BOTH the rules' depth argument (get_ZPT) and the
         // grid query coordinate. Built from the current mesh, so it matches the
@@ -463,13 +467,16 @@ namespace {
                     // The cell whose dominance this marker contributed to --
                     // its BUILD-time cell (the cell the dominance scan
                     // actually counted it in; the live cell can differ once
-                    // the marker has drifted).
+                    // the marker has drifted). None when the marker was below
+                    // the grid: no cell counted it.
                     const int cell = vt->label_cell(m);
+                    if (cell >= 0) {
 #ifndef ACC
-                    #pragma omp atomic write
+                        #pragma omp atomic write
 #endif
-                    #pragma acc atomic write
-                    lost[cell] = 1;
+                        #pragma acc atomic write
+                        lost[cell] = 1;
+                    }
                 }
             }
         }
@@ -505,11 +512,13 @@ namespace {
                 // cannot flip the answer mid-interval by crossing a lattice
                 // line against the frozen dominance data. The margin test still
                 // uses the live horizontal position -- drift between rebuilds is
-                // far smaller than any useful margin. A marker with no wet crust
-                // below skips the P-T evaluation; the tests are pure, so their
-                // order cannot change the result.
+                // far smaller than any useful margin. A marker below the grid
+                // (label -1) was deeper than the depth cap plus the look-down
+                // distance and one cell at the build, so it is skipped; one with
+                // no wet crust below skips the P-T evaluation. The tests are
+                // pure, so their order cannot change the result.
                 const int cell0 = vt->label_cell(m);
-                if (!wet_crust_below[cell0])
+                if (cell0 < 0 || !wet_crust_below[cell0])
                     continue;
 
                 double Z, press, T, p[NDIMS];
@@ -654,10 +663,18 @@ void build_serpentinization_grid(const Param& param, Variables& var)
             lo[d] = std::min(lo[d], points[i][d]);
             hi[d] = std::max(hi[d], points[i][d]);
         }
+    // No deeper than a mantle marker at the depth cap can look down for wet
+    // crust, plus one cell: build_index() leaves out the markers below, so
+    // the deep mantle costs no cells. The extra cell is headroom for a marker
+    // that rises between rebuilds (in examples/subduction.cfg about 40 m per
+    // quality-check interval, against 3 km cells).
+    const double cell_size = param.mesh.resolution * param.mesh.vt_size;
+    lo[NDIMS-1] = std::max(lo[NDIMS-1], -(serpentinization_max_depth()
+                                          + param.mat.serpentinization_thickness + cell_size));
 
-    var.vtopo = new VirtualTopology(lo, hi, param.mesh.resolution * param.mesh.vt_size);
+    var.vtopo = new VirtualTopology(lo, hi, cell_size);
 
-    // Bin every marker, not just wet crust: the dominance scan below counts each
+    // Bin every marker in the grid, not just wet crust: the dominance scan below counts each
     // cell's wet-crust share of ITS OWN population, and pass 2 reads each mantle
     // marker's wet-crust-below flag at its label.
     var.vtopo->build_index(points, n, ms.get_last_id());
