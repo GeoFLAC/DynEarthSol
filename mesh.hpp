@@ -82,7 +82,7 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_
  * functions of dims_/lo_/dx_, fixed at construction
  * and never mutated after.
  *
- * Because that lagged index (bucket_ and its labels) drives a live
+ * Because that lagged index (the labels and their buckets) drives a live
  * decision at every phase_changes() call, it IS part of the checkpoint
  * (serialize()/deserialize()): a restart must carry the identical state the
  * continuous run had at that step, not a fresher rebuild against current
@@ -140,10 +140,21 @@ public:
     #pragma acc routine seq
     int neighbor_cell(int cell, int axis, int dir) const;
 
+    // A cell's marker ids, ascending, as a range a range-for can walk.
+    struct IdRange {
+        const int* first;
+        const int* last;
+        const int* begin() const { return first; }
+        const int* end() const { return last; }
+        std::size_t size() const { return static_cast<std::size_t>(last - first); }
+        bool empty() const { return first == last; }
+    };
+
     // Marker ids build_index() binned into `cell`, which must be in
     // [0, num_cells()) (dies otherwise). Empty when nothing is bound there,
     // which includes every cell of a new grid before its first build_index().
-    const int_vec& cell_markers(int cell) const;
+    // Valid until the next build_index().
+    IdRange cell_markers(int cell) const;
 
     // The number of markers the last build_index() binned (or deserialize()
     // restored): label_cell() is valid for ids 0..num_labels()-1.
@@ -225,19 +236,19 @@ public:
     // relationships are evaluated in the build-time configuration and stay
     // constant between rebuilds (live-position queries let a drifting marker
     // flip the answer mid-interval against the frozen dominance data).
-    // m must be in [0, num_labels()). Derived data: reconstructed from
-    // bucket_ on deserialize, so it adds NO checkpoint fields.
+    // m must be in [0, num_labels()). The labels are what the checkpoint
+    // stores; the buckets are derived from them.
     #pragma acc routine seq
     int label_cell(int m) const { return label_[m]; }
 
     // Checkpoint round-trip. Kept decoupled from binaryio (per this class's
     // design): the owner does the file I/O. Both vectors are variable length
-    // (buckets in ints, optional wet-crust extents in dbls), so the owner
+    // (labels in ints, optional wet-crust extents in dbls), so the owner
     // must also stash each one's size (length-1 arrays vtopo_len /
     // vtopo_dbl_len) to pre-size the buffers before the read_array() that
     // fills them -- see output.cxx/dynearthsol.cxx for the pattern.
     // ints = [layout_tag, dims_[0..NDIMS-1],
-    //         bucket_[c].size() for c in 0..ncells), bucket_ contents concatenated,
+    //         the number of labels, label_ (one cell per marker id),
     //         built_last_id_,
     //         xext_built_ (0 or 1), the number of dominant cells, their ids
     //         (serialize() writes them ascending; deserialize() accepts any
@@ -258,7 +269,11 @@ private:
     // First int of serialize()'s ints; change it whenever the layout changes.
     // A negative tag never equals a cell count (dims_[0] >= 1), so ints that
     // start without a tag never match; nor do ints with another layout's tag.
-    enum { layout_tag = -4 };
+    enum { layout_tag = -5 };
+
+    // Fill cell_start_ and ids_ from label_ (a counting sort, so each cell's
+    // ids stay ascending).
+    void fill_buckets();
 
     VirtualTopology() : dx_(0), nz_(0), ncol_(0)
     { for (int d=0; d<NDIMS; d++) { lo_[d]=0; dims_[d]=0; } }   // for deserialize()
@@ -269,10 +284,12 @@ private:
     int nz_;            // dims_[NDIMS-1], vertical
     int ncol_;          // product of the NDIMS-1 horizontal dims_
 
-    // Per-cell marker-id buckets, flat cell numbering (see cell_of()): one
-    // per cell, all empty from construction until build_index() fills them;
-    // deserialize() restores them as checkpointed.
-    int_vec2D bucket_;
+    // Per-cell marker-id buckets, flat cell numbering (see cell_of()), in one
+    // array: cell c holds ids_[cell_start_[c] .. cell_start_[c+1]). All empty
+    // from construction until build_index() fills them; deserialize() derives
+    // them from the stored labels. 4 bytes per cell plus 4 per marker.
+    int_vec cell_start_;   // num_cells() + 1 offsets into ids_
+    int_vec ids_;
     // One flag per cell: 1 when its indexed-marker population exceeds the
     // caller's dominance threshold (build_serpentinization_grid() for
     // serpentinization). Set once per build_index() by the caller via
@@ -290,8 +307,7 @@ private:
     bool xext_built_ = false;       // set by mark_xext_built(); checkpointed as is
 
     // Build-time cell of every marker id the last build binned (see
-    // label_cell()). Rebuilt by build_index(), reconstructed from bucket_ by
-    // deserialize() -- never checkpointed itself.
+    // label_cell()). Set by build_index(), restored by deserialize().
     int_vec label_;
     int built_last_id_ = 0;   // see built_last_id(); checkpointed
 

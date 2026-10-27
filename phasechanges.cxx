@@ -682,7 +682,7 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     const bool want_xext = param.mat.serpentinization_wet_crust_margin >= 0;
     var.vtopo->clear_dominant();
     for (int c = 0; c < ncells; ++c) {
-        const int_vec& ids = var.vtopo->cell_markers(c);
+        const VirtualTopology::IdRange ids = var.vtopo->cell_markers(c);
         int wet_crust = 0;
         double xlo[NDIMS-1], xhi[NDIMS-1];
         for (int id : ids)

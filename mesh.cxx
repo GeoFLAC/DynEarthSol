@@ -3970,7 +3970,7 @@ VirtualTopology::VirtualTopology(const double* domain_lo, const double* domain_h
     for (int d=0; d<NDIMS-1; d++)
         ncol_ *= dims_[d];
 
-    bucket_.assign(static_cast<std::size_t>(ncol_) * nz_, int_vec());
+    cell_start_.assign(static_cast<std::size_t>(ncol_) * nz_ + 1, 0);
     dominant_.assign(static_cast<std::size_t>(ncol_) * nz_, 0);
 }
 
@@ -3982,10 +3982,8 @@ void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
     ints.clear();
     ints.push_back(layout_tag);
     for (int d=0; d<NDIMS; d++) ints.push_back(dims_[d]);
-    for (std::size_t c=0; c<ncells; c++)
-        ints.push_back(static_cast<int>(bucket_[c].size()));
-    for (std::size_t c=0; c<ncells; c++)
-        ints.insert(ints.end(), bucket_[c].begin(), bucket_[c].end());
+    ints.push_back(static_cast<int>(label_.size()));
+    ints.insert(ints.end(), label_.begin(), label_.end());
     ints.push_back(built_last_id_);
 
     ints.push_back(xext_built_ ? 1 : 0);
@@ -4037,24 +4035,18 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
         vt->dims_[d] = next();
         check(vt->dims_[d] > 0);
         ncells *= vt->dims_[d];
-        check(ncells <= ints.size());   // one size entry per cell follows
+        check(ncells <= std::numeric_limits<int>::max());   // cell ids are ints
     }
     vt->nz_ = vt->dims_[NDIMS-1];
     vt->ncol_ = 1;
     for (int d=0; d<NDIMS-1; d++) vt->ncol_ *= vt->dims_[d];
 
-    vt->bucket_.assign(ncells, int_vec());
-    std::size_t q = p + ncells;   // bucket contents start after the size block
-    check(q <= ints.size());
-    const std::size_t first = q;
-    for (std::size_t c=0; c<ncells; c++) {
-        const int cnt = next();
-        check(cnt >= 0 && q + cnt <= ints.size());
-        vt->bucket_[c].assign(ints.begin()+q, ints.begin()+q+cnt);
-        q += cnt;
-    }
-    const std::size_t nentries = q - first;
-    p = q;
+    const int nlabels = next();
+    check(nlabels >= 0 && p + nlabels <= ints.size());
+    vt->label_.assign(ints.begin()+p, ints.begin()+p+nlabels);
+    p += nlabels;
+    for (int c : vt->label_)
+        check(c >= 0 && static_cast<std::size_t>(c) < ncells);
     vt->built_last_id_ = next();
 
     // Wet-crust extents ride in dbls, one per dominant id in the same order (see
@@ -4089,20 +4081,8 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
         }
     }
 
-    // Rebuild the per-marker labels (label_cell()) from the bucket just
-    // restored -- derived data, not checkpointed. build_index() bins every id
-    // 0..npoints-1 exactly once, so the buckets hold each id below their entry
-    // count once, and every label is set.
-    {
-        vt->label_.assign(nentries, -1);
-        for (std::size_t c=0; c<ncells; c++)
-            for (int m : vt->bucket_[c]) {
-                check(m >= 0 && static_cast<std::size_t>(m) < nentries);
-                if (vt->label_[m] != -1)
-                    die(EXIT_IO_RESTART, "vtopo_int holds a marker id more than once");
-                vt->label_[m] = static_cast<int>(c);
-            }
-    }
+    vt->cell_start_.assign(ncells + 1, 0);
+    vt->fill_buckets();
 
     // The reads stop at either array's end; an array longer than its counts
     // is caught here.
@@ -4142,20 +4122,30 @@ int VirtualTopology::vertical_index(const double* p) const
 void VirtualTopology::build_index(const array_t& coords, int npoints, int last_id)
 {
     built_last_id_ = last_id;
-    const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
-    bucket_.assign(ncells, int_vec());
     label_.assign(npoints, -1);
-
-    // Serial: push_back into shared buckets would race under OpenMP, and
-    // it runs once per rebuild, not per phase_changes() call.
     for (int m=0; m<npoints; m++) {
         double p[NDIMS];
         for (int d=0; d<NDIMS; d++)
             p[d] = coords[m][d];
-        const int c = cell_of(p);
-        bucket_[c].push_back(m);
-        label_[m] = c;
+        label_[m] = cell_of(p);
     }
+    fill_buckets();
+}
+
+
+void VirtualTopology::fill_buckets()
+{
+    // Serial: it runs once per rebuild, not per phase_changes() call.
+    const std::size_t ncells = cell_start_.size() - 1;
+    std::fill(cell_start_.begin(), cell_start_.end(), 0);
+    for (int c : label_)
+        ++cell_start_[c + 1];
+    for (std::size_t c = 0; c < ncells; ++c)
+        cell_start_[c + 1] += cell_start_[c];
+    ids_.resize(label_.size());
+    int_vec next(cell_start_.begin(), cell_start_.end() - 1);
+    for (int m = 0; m < static_cast<int>(label_.size()); ++m)
+        ids_[next[label_[m]]++] = m;
 }
 
 
@@ -4177,11 +4167,12 @@ int VirtualTopology::neighbor_cell(int cell, int axis, int dir) const
 }
 
 
-const int_vec& VirtualTopology::cell_markers(int cell) const
+VirtualTopology::IdRange VirtualTopology::cell_markers(int cell) const
 {
-    if (cell < 0 || cell >= static_cast<int>(bucket_.size()))
+    if (cell < 0 || cell >= num_cells())
         die(EXIT_INTERNAL_ASSERT, "VirtualTopology::cell_markers: cell outside [0, num_cells())");
-    return bucket_[cell];
+    const int* base = ids_.data();
+    return IdRange{base + cell_start_[cell], base + cell_start_[cell + 1]};
 }
 
 
