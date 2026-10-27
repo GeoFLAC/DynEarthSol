@@ -772,7 +772,6 @@ struct SurfaceInfo {
     double max_surf_vel;
 
     double_vec *dh;
-    double_vec *dh_oc;
     double_vec *src_locs;
 
     double_vec *total_dx;

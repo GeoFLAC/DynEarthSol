@@ -1888,7 +1888,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         surface_plstrain_diffusion(var,plstrain);
 
     if ( param.control.is_reporting_terrigenous_info && var.steps%10000 == 0 &&  var.steps != 0  ) {
-        double max_dh = 0., min_dh = 0., max_dh_oc = 0.;
+        double max_dh = 0., min_dh = 0.;
         for (int i=0;i<var.surfinfo.ntop;i++) {
             max_dh = std::max(max_dh, (*var.surfinfo.dh)[i]);
             min_dh = std::min(min_dh, (*var.surfinfo.dh)[i]);

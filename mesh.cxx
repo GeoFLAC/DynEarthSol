@@ -3418,9 +3418,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.elem_and_nodes;
     surfinfo.elem_and_nodes = new segment_t(etop);
 
-    delete surfinfo.dh_oc;
-    surfinfo.dh_oc = new double_vec(ntop,0.);
-
     delete surfinfo.total_dx;
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     delete surfinfo.total_slope;
@@ -3488,10 +3485,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.edvacc_surf = new double_vec(etop,0);
     surfinfo.top_facet_elems = new int_vec(etop,0);
     surfinfo.elem_and_nodes = new segment_t(etop);
-
-    surfinfo.dh_oc = new double_vec(ntop,0.);
-    // surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    // surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 
