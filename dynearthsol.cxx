@@ -1067,6 +1067,21 @@ int main(int argc, const char* argv[])
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
+        // The functions of a slow step are expensive and their inputs change
+        // slowly, so they run every slow_updates_interval steps.
+        const int slow_updates_interval = 10;
+        const bool slow_step = var.steps % slow_updates_interval == 0;
+        // phase_changes() converts nothing with one material or option 0.
+        const bool phase_change_step = slow_step && param.mat.nmat > 1 &&
+                                       param.mat.phase_change_option != 0;
+        if (phase_change_step) {
+            // Before update_mesh(): its compute_mass() then sees the converted
+            // composition, for the next step and for a restart from this step,
+            // which rebuilds the masses from it.
+            phase_changes(param, var);
+            var.mat->refresh_elem_cache();
+        }
+
         // Objective rotation still belongs to the current physical step, even
         // if the update below selects var.dt for the next step.
         const double rotation_dt = var.dt;
@@ -1077,6 +1092,12 @@ int main(int argc, const char* argv[])
             // Select the next step from the accepted velocity. The GVS mass
             // must follow the same current rate used by the state bound.
             var.dt = compute_dt(param, var);
+            compute_mass(param, var, var.max_vbc_val, *var.volume_n,
+                         *var.mass, *var.tmass, *var.hmass, *var.ymass,
+                         *var.tmp_result);
+        }
+        else if (phase_change_step) {
+            // A fixed mesh has no update_mesh() to rebuild them.
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
@@ -1098,20 +1119,7 @@ int main(int argc, const char* argv[])
         monitor_write_if_due(param, var);
 
         #pragma acc wait
-        const int slow_updates_interval = 10;
-        if (var.steps % slow_updates_interval == 0) {
-            // The functions inside this if-block are expensive in computation is expensive,
-            // and only changes slowly. Don't have to do it every time step
-            phase_changes(param, var);
-            // phase_changes() moved elemmarkers; compute_dt() below reads them.
-            var.mat->refresh_elem_cache();
-            // The lumped masses in use were built BEFORE the conversions above;
-            // rebuild them so the next step -- and a restart from this step, which
-            // rebuilds them from the checkpoint -- see one composition.
-            if (param.mat.phase_change_option != 0)
-                compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass,
-                             *var.hmass, *var.ymass, *var.tmp_result);
-
+        if (slow_step) {
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
