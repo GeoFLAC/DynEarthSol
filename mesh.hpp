@@ -158,7 +158,7 @@ public:
     // Marker ids build_index() binned into `cell`, which must be in
     // [0, num_cells()) (dies otherwise). Empty when nothing is bound there,
     // which includes every cell of a new grid before its first build_index().
-    // Valid until the next build_index().
+    // Valid until the next build_index() or the grid's deletion.
     IdRange cell_markers(int cell) const;
 
     // The number of markers the last build_index() binned (or deserialize()
@@ -293,7 +293,8 @@ private:
     // Per-cell marker-id buckets, flat cell numbering (see cell_of()), in one
     // array: cell c holds ids_[cell_start_[c] .. cell_start_[c+1]). All empty
     // from construction until build_index() fills them; deserialize() derives
-    // them from the stored labels. 4 bytes per cell plus 4 per binned marker.
+    // them from the stored labels. With label_ and dominant_, the grid costs
+    // 5 bytes per cell and 8 per marker.
     int_vec cell_start_;   // num_cells() + 1 offsets into ids_
     int_vec ids_;
     // One flag per cell: 1 when its indexed-marker population exceeds the

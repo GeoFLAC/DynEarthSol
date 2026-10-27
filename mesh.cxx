@@ -4020,6 +4020,8 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
     VirtualTopology* vt = new VirtualTopology();   // private default ctor
     // Every count and id below comes from the file, so every read is bounded:
     // a corrupt checkpoint dies here instead of reading past either array.
+    // The dims are trusted up to INT_MAX cells, though: nothing in the file
+    // bounds the cell count, so corrupt dims can ask for a huge allocation.
     std::size_t p = 1;
     auto next = [&]() {
         if (p >= ints.size())
@@ -4081,7 +4083,6 @@ VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_
         }
     }
 
-    vt->cell_start_.assign(ncells + 1, 0);
     vt->fill_buckets();
 
     // The reads stop at either array's end; an array longer than its counts
@@ -4136,19 +4137,22 @@ void VirtualTopology::build_index(const array_t& coords, int npoints, int last_i
 
 void VirtualTopology::fill_buckets()
 {
-    // Serial: it runs once per rebuild, not per phase_changes() call.
-    const std::size_t ncells = cell_start_.size() - 1;
-    std::fill(cell_start_.begin(), cell_start_.end(), 0);
+    // Serial: it runs once per rebuild, not per phase_changes() call. Count
+    // each cell's markers, take the running sum (cell_start_[c] is then cell
+    // c's end), and place the ids from the last down, each one before its
+    // cell's current start: that leaves cell_start_[c] at cell c's start and
+    // each cell's ids ascending, with no temporary per cell.
+    const int ncells = num_cells();
+    cell_start_.assign(ncells + 1, 0);
     for (int c : label_)
         if (c >= 0)   // a label -1 is in no bucket
-            ++cell_start_[c + 1];
-    for (std::size_t c = 0; c < ncells; ++c)
-        cell_start_[c + 1] += cell_start_[c];
+            ++cell_start_[c];
+    for (int c = 1; c <= ncells; ++c)
+        cell_start_[c] += cell_start_[c - 1];
     ids_.resize(cell_start_[ncells]);
-    int_vec next(cell_start_.begin(), cell_start_.end() - 1);
-    for (int m = 0; m < static_cast<int>(label_.size()); ++m)
+    for (int m = static_cast<int>(label_.size()) - 1; m >= 0; --m)
         if (label_[m] >= 0)
-            ids_[next[label_[m]]++] = m;
+            ids_[--cell_start_[label_[m]]] = m;
 }
 
 
