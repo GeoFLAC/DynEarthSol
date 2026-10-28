@@ -44,11 +44,12 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
 
 ## Build
 
-GoSPL coupling is 3D only. Build **outside** the gospl environment, which keeps
-the compiler off conda's libraries:
+GoSPL coupling is 3D only. Which conda environment is active does not matter
+for this build: the Makefile finds GoSPL's Python through `CONDA_ENV_PATH`. Only
+an active environment with its own Boost or compilers changes it, and
+`make config` shows what was picked.
 
 ```bash
-conda deactivate   # if any environment is active
 make clean
 make ndims=3 usegospl=1 usemmg=1 -j4
 ```
