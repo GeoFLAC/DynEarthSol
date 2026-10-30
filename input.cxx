@@ -47,7 +47,7 @@ static void declare_parameters(po::options_description &cfg,
         ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
-         ">0: must be a multiple of mesh.quality_check_step_interval.")
+         ">0: rounded up to a multiple of mesh.quality_check_step_interval.")
         ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
          "Print the .manifest's sections on screen at run start, one line each,\n"
          "[build] then [runtime]. On by default: it is the start-of-run report every\n"
@@ -1390,7 +1390,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.");
     }
 
-    // Ensure info_display_step_interval is a multiple of quality_check_step_interval
+    // The status line prints only on quality-check steps, so round the interval up to a
+    // multiple of quality_check_step_interval.
     if (p.sim.info_display_step_interval <= 0)
         p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
@@ -1400,7 +1401,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << p.sim.info_display_step_interval
                   << " (must be a multiple of quality_check_step_interval="
                   << q << ")\n";
-        die(EXIT_CONFIG_VALUE);
     }
     if (p.sim.earthquake_output_step_interval < 1) {
         die(EXIT_CONFIG_VALUE, "sim.earthquake_output_step_interval must be >= 1.");
