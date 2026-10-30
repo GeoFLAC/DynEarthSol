@@ -1002,7 +1002,7 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 }
 
 
-void MarkerSet::get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
+void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, const SurfaceTopo& topo,
                         double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const {
         T = 0;
         double p[NDIMS] = {0};
@@ -1014,10 +1014,14 @@ void MarkerSet::get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
             T += (*var.temperature)[conn[i]] * eta[i];
         }
         Z = topo.zeff(p);
-        // The element's mean stress, compression positive. In 2D this is the
-        // in-plane mean DES itself uses: plane strain's sigma_yy is not kept
-        // current by the viscous and Maxwell updates.
-        P = -trace((*var.stress)[(*_elem)[m]]) / NDIMS;
+        if (param.mat.phase_change_pressure_option == 1)
+            // At the depth the rules read, max(0, -Z): a marker above the surface reads 0.
+            P = ref_pressure(param, std::min(0.0, Z));
+        else
+            // The element's mean stress, compression positive. In 2D this is the
+            // in-plane mean DES itself uses: plane strain's sigma_yy is not kept
+            // current by the viscous and Maxwell updates.
+            P = -trace((*var.stress)[(*_elem)[m]]) / NDIMS;
         for (int d=0; d<NDIMS-1; ++d) xzeff[d] = p[d];
         xzeff[NDIMS-1] = Z;
 }

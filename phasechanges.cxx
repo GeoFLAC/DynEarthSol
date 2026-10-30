@@ -131,10 +131,11 @@ namespace {
     //           and a rigid vertical motion of the whole mesh (e.g. the initial
     //           isostatic rise) does not change it. Reduces to depth below z = 0
     //           when there is no relief / no top boundary.
-    //   press   pressure (Pa) from get_ZPT() -- the mean stress of the marker's
-    //           element, compression positive (in 2D the in-plane mean DES
-    //           itself uses), so it carries the model's tectonic over- and
-    //           underpressure (the source used a fixed-density lithostatic)
+    //   press   pressure (Pa) from get_ZPT(), compression positive:
+    //           mat.phase_change_pressure_option 0 = the marker's element mean
+    //           stress (in 2D the in-plane mean DES itself uses), which carries
+    //           the model's tectonic over- and underpressure; 1 = ref_pressure()
+    //           at depth, the lithostat the source used
     //   T       temperature in Kelvin (converted to Celsius inside each
     //           predicate, the unit of geoflac's thresholds and the cited
     //           diagrams)
@@ -451,7 +452,7 @@ namespace {
                     continue;
 
                 double Z, press, T, xz[NDIMS];
-                ms.get_ZPT(var, m, topo, Z, press, T, xz);  // Z below the current surface
+                ms.get_ZPT(param, var, m, topo, Z, press, T, xz);  // Z below the current surface
                 const double depth = std::max(0.0, -Z);   // m below the local free surface
                 if (!transition_rule_applies(kind, depth, press, T))
                     continue;
@@ -522,7 +523,7 @@ namespace {
                     continue;
 
                 double Z, press, T, p[NDIMS];
-                ms.get_ZPT(var, m, topo, Z, press, T, p);  // below current surface
+                ms.get_ZPT(param, var, m, topo, Z, press, T, p);  // below current surface
                 const double depth = std::max(0.0, -Z);
                 if (depth > max_basalt_depth || !antigorite_stable(press, T))
                     continue;

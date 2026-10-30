@@ -106,11 +106,11 @@ public:
     #pragma acc routine seq
     void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
     // phase_change_option 3: Z = topo.zeff(x), below the CURRENT free surface, so a rigid
-    // vertical motion of the whole mesh does not change it, and P is the mean stress of the
-    // marker's element, compression positive. xzeff is the marker's coordinate with its last
+    // vertical motion of the whole mesh does not change it, and P is the pressure that
+    // mat.phase_change_pressure_option selects. xzeff is the marker's coordinate with its last
     // axis replaced by Z: its position in the serpentinization grid's (x, zeff) space.
     #pragma acc routine seq
-    void get_ZPT(const Variables& var, int m, const SurfaceTopo& topo,
+    void get_ZPT(const Param& param, const Variables& var, int m, const SurfaceTopo& topo,
                  double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const;
 
 private:

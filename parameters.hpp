@@ -444,6 +444,7 @@ struct IC {
 struct Mat {
     int rheol_type;
     int phase_change_option;
+    int phase_change_pressure_option;
     int nmat;
     int mattype_ref;
     int mattype_mantle;

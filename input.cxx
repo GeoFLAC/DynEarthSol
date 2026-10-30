@@ -988,8 +988,8 @@ static void declare_parameters(po::options_description &cfg,
          "0: no phase changes.\n"
          "1: simple rules of subduction-related phase changes. See simple_subduction() in phasechanges.cxx for more details.\n"
          "3: subduction phase-change rule engine (see subduction_phase_changes() in phasechanges.cxx). A marker "
-         "converts to a metamorphic product when it crosses a pressure-temperature reaction boundary (pressure: the "
-         "mean stress of its element, compression positive, in 2D the in-plane mean; depth: below the local "
+         "converts to a metamorphic product when it crosses a pressure-temperature reaction boundary (pressure: "
+         "see mat.phase_change_pressure_option; depth: below the local "
          "surface; chlorite-out and the first two sediment steps read depth only); each transition "
          "activates only when its target mat.mattype_* is set to a distinct material and its switch is on "
          "(mat.has_eclogitization and mat.has_serpentinization default on, mat.has_hydrous_mantle_dehydration "
@@ -1000,6 +1000,12 @@ static void declare_parameters(po::options_description &cfg,
          "sediment->sedimentary rock->metasediment->schist (compaction uses geoflac's unsourced thresholds, "
          "the next step Montanez & Crossey 2017, the last Wei 2004).\n"
          "101: custom phase changes (custom_phase_change() in phasechanges.cxx).")
+        ("mat.phase_change_pressure_option", po::value<int>(&p.mat.phase_change_pressure_option)->default_value(0),
+         "The pressure the mat.phase_change_option 3 rules read (options 1 and 101 always use ref_pressure()).\n"
+         "0: the mean stress of the marker's element, compression positive, in 2D the in-plane mean. Tectonic "
+         "over- and underpressure move the reaction boundaries.\n"
+         "1: the reference pressure, ref_pressure() (control.ref_pressure_option), at the marker's depth below "
+         "the local surface. The phase diagrams are drawn for a lithostat, and geoflac reads one.")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
@@ -1860,6 +1866,9 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             break;
         default:
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option must be 0, 1, 3 or 101 (see --help).");
+        }
+        if (p.mat.phase_change_pressure_option != 0 && p.mat.phase_change_pressure_option != 1) {
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_pressure_option must be 0 or 1 (see --help).");
         }
         if (p.mat.phase_change_option != 0 && p.mat.nmat == 1) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is chosen, but mat.num_materials is 1.");
