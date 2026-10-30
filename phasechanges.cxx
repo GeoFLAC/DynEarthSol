@@ -13,13 +13,6 @@
 
 namespace {
 
-    // Depth cap on mantle serpentinization (m below the local free surface),
-    // below the stability wedge's own cold-slab extrapolation (> 200 km at
-    // 500 C): slab dehydration, the water source, is essentially complete by
-    // ~150 km. Heuristic, untuned. It also bounds the grid's depth (see
-    // build_serpentinization_grid()).
-    double serpentinization_max_depth() { return 150e3; }
-
     void simple_subduction(const Param& param, const Variables& var, const MarkerSet& ms, int m, int& new_mt, int& hyd_inc)
     {
         const int mt_mantle = 0;
@@ -354,8 +347,9 @@ namespace {
     // at most one P-T rule per marker, as FLAC's select case does. Pass 2 then
     // reads each marker's material after pass 1, so a marker can convert twice
     // in one call, where FLAC converts it once; only hydrous mantle can, in a
-    // thin P-T sliver near the 150 km depth cap. Each pass iterates by element,
-    // so a marker's per-element elemmarkers update is race-free in it.
+    // thin P-T sliver near the depth cap, mat.serpentinization_max_depth.
+    // Each pass iterates by element, so a marker's per-element elemmarkers
+    // update is race-free in it.
     //
     // Two passes, not one, because pass 2 reads the grid's dominant-cell
     // flags. Pass 1 can turn a wet-crust marker into a material the grid does not
@@ -408,8 +402,6 @@ namespace {
         // VirtualTopology doc in mesh.hpp for why no marker is added or removed).
         if (serpentinize && (vt->num_labels() != n || vt->built_last_id() != ms.get_last_id()))
             die(EXIT_INTERNAL_ASSERT, "phase_change_option 3: a marker was added or removed since the serpentinization grid was built");
-
-        double max_basalt_depth = serpentinization_max_depth();  // m
 
         // Surface-relative depth for BOTH the rules' depth argument (get_ZPT) and the
         // grid query coordinate. Built from the current mesh, so it matches the
@@ -495,7 +487,7 @@ namespace {
         // Pass 2: mantle -> serpentinite.
 #ifndef ACC
         #pragma omp parallel for default(none) \
-            shared(param, var, ms, vt, max_basalt_depth, topo, nsteps, wet_crust_below)
+            shared(param, var, ms, vt, topo, nsteps, wet_crust_below)
 #endif
         #pragma acc parallel loop gang vector async
         for (int e=0; e<var.nelem; e++) {
@@ -525,7 +517,7 @@ namespace {
                 double Z, press, T, p[NDIMS];
                 ms.get_ZPT(param, var, m, topo, Z, press, T, p);  // below current surface
                 const double depth = std::max(0.0, -Z);
-                if (depth > max_basalt_depth || !antigorite_stable(press, T))
+                if (depth > param.mat.serpentinization_max_depth || !antigorite_stable(press, T))
                     continue;
 
                 if (param.mat.serpentinization_wet_crust_margin >= 0 &&
@@ -670,7 +662,7 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // that rises between rebuilds (in examples/subduction.cfg about 40 m per
     // quality-check interval, against 3 km cells).
     const double cell_size = param.mesh.resolution * param.mesh.vt_size;
-    lo[NDIMS-1] = std::max(lo[NDIMS-1], -(serpentinization_max_depth()
+    lo[NDIMS-1] = std::max(lo[NDIMS-1], -(param.mat.serpentinization_max_depth
                                           + param.mat.serpentinization_thickness + cell_size));
 
     var.vtopo = new VirtualTopology(lo, hi, cell_size);
@@ -680,18 +672,11 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // marker's wet-crust-below flag at its label.
     var.vtopo->build_index(points, n, ms.get_last_id());
 
-    // Precompute which cells are wet-crust-dominant (more than half of their
-    // markers count as wet crust, counts_as_wet_crust()) so subduction_phase_changes()
-    // pass 2 builds its wet-crust-below map from them instead of recomputing cell
-    // composition at every phase_changes() call (every 10 steps).
-    // 0.50, not GeoFLAC master's 0.8 (phase_ratio > 0.8 in an element below
-    // a mantle marker, which it gives no source for): on these half-element
-    // cells 0.8 leaves out the cell straddling the slab top, which cuts the
-    // serpentinite band of examples/subduction.cfg by more than half. A cell
-    // holds markers_per_element times (cell / element measure) markers:
-    // nominally ~2.3 in 2D and ~4.2 in 3D (vt_size doc), so a two-marker cell
-    // needs both. Untuned.
-    const double wet_crust_fraction_threshold = 0.50;
+    // Precompute which cells are wet-crust-dominant (more than
+    // mat.wet_crust_fraction_threshold of their markers count as wet crust,
+    // counts_as_wet_crust()) so subduction_phase_changes() pass 2 builds its
+    // wet-crust-below map from them instead of recomputing cell composition at
+    // every phase_changes() call (every 10 steps).
     const int ncells = var.vtopo->num_cells();
     // Record each dominant cell's wet-crust horizontal extent only when the
     // margin feature is on: the extents are dead weight otherwise, in memory
@@ -714,7 +699,7 @@ void build_serpentinization_grid(const Param& param, Variables& var)
                 }
                 ++wet_crust;
             }
-        if (!ids.empty() && static_cast<double>(wet_crust) / ids.size() > wet_crust_fraction_threshold) {
+        if (!ids.empty() && static_cast<double>(wet_crust) / ids.size() > param.mat.wet_crust_fraction_threshold) {
             var.vtopo->set_dominant(c);
             if (want_xext)
                 var.vtopo->set_dominant_xext(c, xlo, xhi);

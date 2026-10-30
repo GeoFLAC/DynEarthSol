@@ -414,9 +414,13 @@ void restart(const Param& param, Variables& var)
         // a restart that changed mesh.resolution or mesh.vt_size drops the
         // restored grid, and the next phase_changes or remesh builds one at the
         // cfg's size. The run then no longer continues the checkpointed one exactly.
-        // A restart that raises mat.serpentinization_thickness keeps the
-        // checkpoint's grid bottom until the next rebuild, at most one quality
-        // check later, so a look-down near the depth cap may stop at its last row.
+        // A restart that raises mat.serpentinization_thickness or
+        // mat.serpentinization_max_depth keeps the checkpoint's grid bottom until
+        // the next rebuild, at most one quality check later, so a look-down near
+        // the depth cap may stop at its last row, and a mantle marker below that
+        // row (label -1) does not serpentinize. One that changes
+        // mat.wet_crust_fraction_threshold keeps the checkpoint's dominant cells
+        // until then.
         const double cell_size = param.mesh.resolution * param.mesh.vt_size;
         if (var.vtopo->cell_size() != cell_size) {
             std::cerr << "Warning: the checkpoint's serpentinization grid has " << var.vtopo->cell_size()

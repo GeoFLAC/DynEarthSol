@@ -995,7 +995,8 @@ static void declare_parameters(po::options_description &cfg,
          "(mat.has_eclogitization and mat.has_serpentinization default on, mat.has_hydrous_mantle_dehydration "
          "and mat.has_sediment_metamorphism off). Transitions: oceanic crust->"
          "eclogite (Hacker 2003), mantle<->serpentinite (Ulmer & Trommsdorff 1995; serpentinization also needs "
-         "crust, oceanic crust or sediment, within mat.serpentinization_thickness below the marker), "
+         "wet crust -- oceanic crust, sediment or sedimentary rock -- within mat.serpentinization_thickness below "
+         "the marker, and no deeper than mat.serpentinization_max_depth), "
          "hydrous mantle->mantle (Grove 2009), and "
          "sediment->sedimentary rock->metasediment->schist (compaction uses geoflac's unsourced thresholds, "
          "the next step Montanez & Crossey 2017, the last Wei 2004).\n"
@@ -1072,7 +1073,8 @@ static void declare_parameters(po::options_description &cfg,
          "Thickness (in m) of the mantle layer above wet crust (oceanic crust, sediment or sedimentary rock) that turns into serpentinite "
          "(mat.phase_change_option is 3 with mat.has_serpentinization). Counted in whole background-grid "
          "cells below the marker's own "
-         "cell (cell size mesh.resolution * mesh.vt_size), down to a cell more than half wet crust, so the effective "
+         "cell (cell size mesh.resolution * mesh.vt_size), down to a wet-crust-dominant cell "
+         "(mat.wet_crust_fraction_threshold), so the effective "
          "reach differs from it by up to two cells, and the thickness must be positive and at least one cell. "
          "Default 10e3: heuristic, untuned.")
         ("mat.serpentinization_wet_crust_margin", po::value<double>(&p.mat.serpentinization_wet_crust_margin)->default_value(-1.0),
@@ -1081,6 +1083,19 @@ static void declare_parameters(po::options_description &cfg,
          "wet-crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
          "column-quantization false positive at a slab bend, where a cell is wet-crust-dominant from wet crust "
          "up to a whole cell size away horizontally. < 0 (default) disables: whole-column behavior.")
+        ("mat.serpentinization_max_depth", po::value<double>(&p.mat.serpentinization_max_depth)->default_value(150e3),
+         "mat.phase_change_option 3 with mat.has_serpentinization: no mantle deeper than this (in m below the "
+         "local free surface) serpentinizes. It also ends the serpentinization grid, at this depth plus "
+         "mat.serpentinization_thickness and one cell. Must be positive. Default 150e3, heuristic, untuned: slab "
+         "dehydration, the water source, is essentially complete by ~150 km, shallower than the antigorite "
+         "stability field's cold-slab extrapolation (> 200 km at 500 C).")
+        ("mat.wet_crust_fraction_threshold", po::value<double>(&p.mat.wet_crust_fraction_threshold)->default_value(0.5),
+         "mat.phase_change_option 3 with mat.has_serpentinization: a serpentinization grid cell is wet-crust-dominant, "
+         "so it can serpentinize the mantle above it, when more than this fraction of its markers is wet crust. "
+         "In [0, 1). A cell holds markers.markers_per_element times (cell / element measure) markers, nominally "
+         "~2.3 in 2D and ~4.2 in 3D at mesh.vt_size 0.5, so at 0.5 a two-marker cell needs both. Default 0.5, "
+         "untuned: geoflac's 0.8 (of an element, with no source) leaves out the cell that straddles the slab top "
+         "and cuts the serpentinite band of examples/subduction.cfg by more than half.")
         ("mat.has_serpentinization", po::value<bool>(&p.mat.has_serpentinization)->default_value(true),
          "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
          "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
@@ -1919,6 +1934,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             }
             if (p.mat.serpentinization_thickness <= 0) {
                 die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness must be positive.");
+            }
+            if (p.mat.serpentinization_max_depth <= 0) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_max_depth must be positive.");
+            }
+            // The dominance test is a strict '>': at 1 no cell could be dominant.
+            if (p.mat.wet_crust_fraction_threshold < 0 || p.mat.wet_crust_fraction_threshold >= 1) {
+                die(EXIT_CONFIG_VALUE, "mat.wet_crust_fraction_threshold must be in [0, 1).");
             }
             if (p.mesh.vt_size <= 0) {
                 die(EXIT_CONFIG_VALUE, "mesh.vt_size must be positive.");
