@@ -324,7 +324,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double_vec vbc_vertical_divisions_x1(4,0.);
     for (int i=0;i<4;i++) {
         vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
-        vbc_vertical_divisions_x1[i] = - (BOUNDX0_max - var.vbc_vertical_div_x1[i] * BOUNDX0_width);
+        vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - var.vbc_vertical_div_x1[i] * BOUNDX1_width);
     }
 #endif
 
