@@ -785,7 +785,8 @@ static void declare_parameters(po::options_description &cfg,
          "outward normal direction is positive; if stress, unit is Pa)")
         
         ("bc.bottom_shear_zone_thickness", po::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
-         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, unit is km.")
+         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, in m: the x0 wall velocity "
+         "tapers linearly to 0 from this height above the bottom down to the bottom. 0 disables it.")
         ;
 
     cfg.add_options()
