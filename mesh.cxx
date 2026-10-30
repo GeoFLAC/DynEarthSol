@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <string>
@@ -3416,9 +3418,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.elem_and_nodes;
     surfinfo.elem_and_nodes = new segment_t(etop);
 
-    delete surfinfo.dh_oc;
-    surfinfo.dh_oc = new double_vec(ntop,0.);
-
     delete surfinfo.total_dx;
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     delete surfinfo.total_slope;
@@ -3486,10 +3485,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.edvacc_surf = new double_vec(etop,0);
     surfinfo.top_facet_elems = new int_vec(etop,0);
     surfinfo.elem_and_nodes = new segment_t(etop);
-
-    surfinfo.dh_oc = new double_vec(ntop,0.);
-    // surfinfo.dhacc_oc = new double_vec(var.nnode,0);
-    // surfinfo.edhacc_oc = new double_vec(var.nelem);
 
     surfinfo.src_locs = new double_vec(2,0.);
 
@@ -3953,5 +3948,305 @@ void average_nodal_to_elem<tensor_t::ConstComponentAccessor, tensor_t::Component
     tensor_t::ConstComponentAccessor nodal, 
     const conn_t &connectivity, int nelem, tensor_t::ComponentAccessor elem, bool);
 template
-void average_nodal_to_elem<const double*, double*>(const double* nodal, 
+void average_nodal_to_elem<const double*, double*>(const double* nodal,
     const conn_t &connectivity, int nelem, double* elem, bool);
+
+
+//
+// VirtualTopology -- background Cartesian grid of per-cell marker-id
+// buckets.  See mesh.hpp for the interface and the algorithm's contract.
+//
+
+VirtualTopology::VirtualTopology(const double* domain_lo, const double* domain_hi,
+                                 double resolution)
+    : dx_(resolution)
+{
+    for (int d=0; d<NDIMS; d++) {
+        lo_[d] = domain_lo[d];
+        dims_[d] = std::max(1, static_cast<int>(std::ceil((domain_hi[d] - domain_lo[d]) / dx_)));
+    }
+    nz_ = dims_[NDIMS-1];
+    ncol_ = 1;
+    for (int d=0; d<NDIMS-1; d++)
+        ncol_ *= dims_[d];
+
+    cell_start_.assign(static_cast<std::size_t>(ncol_) * nz_ + 1, 0);
+    dominant_.assign(static_cast<std::size_t>(ncol_) * nz_, 0);
+}
+
+
+void VirtualTopology::serialize(int_vec& ints, double_vec& dbls) const
+{
+    const std::size_t ncells = static_cast<std::size_t>(ncol_) * nz_;
+
+    ints.clear();
+    ints.push_back(layout_tag);
+    for (int d=0; d<NDIMS; d++) ints.push_back(dims_[d]);
+    ints.push_back(static_cast<int>(label_.size()));
+    ints.insert(ints.end(), label_.begin(), label_.end());
+    ints.push_back(built_last_id_);
+
+    ints.push_back(xext_built_ ? 1 : 0);
+    ints.push_back(static_cast<int>(
+        std::count_if(dominant_.begin(), dominant_.end(), [](char f) { return f != 0; })));
+
+    dbls.clear();
+    for (int d=0; d<NDIMS; d++) dbls.push_back(lo_[d]);
+    dbls.push_back(dx_);
+
+    // One loop for ids AND extents so the two streams stay aligned by
+    // position. With xext_built_ every dominant cell has an extent:
+    // build_serpentinization_grid() records one for each.
+    if (xext_built_ && xext_.size() != ncells * xext_stride)
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology: the grid has no wet-crust extents");
+    for (std::size_t c=0; c<ncells; c++) {
+        if (!dominant_[c]) continue;
+        ints.push_back(static_cast<int>(c));
+        if (xext_built_) {
+            for (int k=0; k<xext_stride; k++) {
+                if (std::isnan(xext_[c*xext_stride + k]))
+                    die(EXIT_INTERNAL_ASSERT, "VirtualTopology: a dominant cell has no wet-crust extent");
+                dbls.push_back(xext_[c*xext_stride + k]);
+            }
+        }
+    }
+}
+
+
+VirtualTopology* VirtualTopology::deserialize(const int_vec& ints, const double_vec& dbls)
+{
+    if (ints.empty() || ints[0] != layout_tag)
+        die(EXIT_IO_RESTART, "vtopo_int has another VirtualTopology layout: restart from a checkpoint this build wrote");
+    VirtualTopology* vt = new VirtualTopology();   // private default ctor
+    // Every count and id below comes from the file, so every read is bounded:
+    // a corrupt checkpoint dies here instead of reading past either array.
+    // The dims are trusted up to INT_MAX cells, though: nothing in the file
+    // bounds the cell count, so corrupt dims can ask for a huge allocation.
+    std::size_t p = 1;
+    auto next = [&]() {
+        if (p >= ints.size())
+            die(EXIT_IO_RESTART, "vtopo_int ends before its counts do");
+        return ints[p++];
+    };
+    auto check = [](bool ok) {
+        if (!ok)
+            die(EXIT_IO_RESTART, "vtopo_int holds a count or id outside its range");
+    };
+    std::size_t ncells = 1;
+    for (int d=0; d<NDIMS; d++) {
+        vt->dims_[d] = next();
+        check(vt->dims_[d] > 0);
+        ncells *= vt->dims_[d];
+        check(ncells <= std::numeric_limits<int>::max());   // cell ids are ints
+    }
+    vt->nz_ = vt->dims_[NDIMS-1];
+    vt->ncol_ = 1;
+    for (int d=0; d<NDIMS-1; d++) vt->ncol_ *= vt->dims_[d];
+
+    const int nlabels = next();
+    check(nlabels >= 0 && p + nlabels <= ints.size());
+    vt->label_.assign(ints.begin()+p, ints.begin()+p+nlabels);
+    p += nlabels;
+    for (int c : vt->label_)
+        check(c >= -1 && c < static_cast<int>(ncells));
+    vt->built_last_id_ = next();
+
+    // Wet-crust extents ride in dbls, one per dominant id in the same order (see
+    // serialize()), exactly when the stored xext_built_ says so.
+    std::size_t r = NDIMS + 1;   // dbls cursor: lo_ and dx_ come first
+    if (dbls.size() < r)
+        die(EXIT_IO_RESTART, "vtopo_dbl ends before its counts do");
+    auto next_dbl = [&]() {
+        if (r >= dbls.size())
+            die(EXIT_IO_RESTART, "vtopo_dbl ends before its counts do");
+        return dbls[r++];
+    };
+    {
+        vt->dominant_.assign(ncells, 0);
+        vt->xext_built_ = (next() != 0);
+        if (vt->xext_built_)
+            vt->xext_.assign(ncells * xext_stride, std::numeric_limits<double>::quiet_NaN());
+        const int ndominant = next();
+        check(ndominant >= 0);
+        for (int i=0; i<ndominant; i++) {
+            const int c = next();
+            check(c >= 0 && static_cast<std::size_t>(c) < ncells);
+            vt->dominant_[c] = 1;
+            if (vt->xext_built_)
+                for (int k=0; k<xext_stride; k++) {
+                    // A stored extent is a wet-crust-marker coordinate, so finite.
+                    const double v = next_dbl();
+                    if (!std::isfinite(v))
+                        die(EXIT_IO_RESTART, "vtopo_dbl holds a wet-crust extent that is not finite");
+                    vt->xext_[c*xext_stride + k] = v;
+                }
+        }
+    }
+
+    vt->fill_buckets();
+
+    // The reads stop at either array's end; an array longer than its counts
+    // is caught here.
+    if (p != ints.size() || r != dbls.size())
+        die(EXIT_IO_RESTART, "vtopo_int / vtopo_dbl do not decode to their end");
+
+    for (int d=0; d<NDIMS; d++) vt->lo_[d] = dbls[d];
+    vt->dx_ = dbls[NDIMS];
+    bool finite = std::isfinite(vt->dx_) && vt->dx_ > 0;
+    for (int d=0; d<NDIMS; d++) finite = finite && std::isfinite(vt->lo_[d]);
+    if (!finite)
+        die(EXIT_IO_RESTART, "vtopo_dbl holds a grid origin or cell size that is not finite and positive");
+    return vt;
+}
+
+
+int VirtualTopology::column_index(const double* p) const
+{
+    // Fold the NDIMS-1 horizontal axes: i in 2D, i*dims_[1]+j in 3D.
+    int col = 0;
+    for (int d=0; d<NDIMS-1; d++) {
+        int i = static_cast<int>((p[d] - lo_[d]) / dx_);
+        i = std::min(std::max(i, 0), dims_[d] - 1);
+        col = col * dims_[d] + i;
+    }
+    return col;
+}
+
+
+int VirtualTopology::vertical_index(const double* p) const
+{
+    int k = static_cast<int>((p[NDIMS-1] - lo_[NDIMS-1]) / dx_);
+    return std::min(std::max(k, 0), nz_ - 1);
+}
+
+
+void VirtualTopology::build_index(const array_t& coords, int npoints, int last_id)
+{
+    built_last_id_ = last_id;
+    label_.assign(npoints, -1);
+    for (int m=0; m<npoints; m++) {
+        double p[NDIMS];
+        for (int d=0; d<NDIMS; d++)
+            p[d] = coords[m][d];
+        if (p[NDIMS-1] >= lo_[NDIMS-1])   // below the grid: no bucket, label -1
+            label_[m] = cell_of(p);
+    }
+    fill_buckets();
+}
+
+
+void VirtualTopology::fill_buckets()
+{
+    // Serial: it runs once per rebuild, not per phase_changes() call. Count
+    // each cell's markers, take the running sum (cell_start_[c] is then cell
+    // c's end), and place the ids from the last down, each one before its
+    // cell's current start: that leaves cell_start_[c] at cell c's start and
+    // each cell's ids ascending, with no temporary per cell.
+    const int ncells = num_cells();
+    cell_start_.assign(ncells + 1, 0);
+    for (int c : label_)
+        if (c >= 0)   // a label -1 is in no bucket
+            ++cell_start_[c];
+    for (int c = 1; c <= ncells; ++c)
+        cell_start_[c] += cell_start_[c - 1];
+    ids_.resize(cell_start_[ncells]);
+    for (int m = static_cast<int>(label_.size()) - 1; m >= 0; --m)
+        if (label_[m] >= 0)
+            ids_[--cell_start_[label_[m]]] = m;
+}
+
+
+int VirtualTopology::neighbor_cell(int cell, int axis, int dir) const
+{
+    int idx[NDIMS];
+    int rem = cell;
+    for (int d=NDIMS-1; d>=0; d--) {
+        idx[d] = rem % dims_[d];
+        rem /= dims_[d];
+    }
+    idx[axis] += dir;
+    if (idx[axis] < 0 || idx[axis] >= dims_[axis])
+        return -1;
+    int flat = 0;
+    for (int d=0; d<NDIMS; d++)
+        flat = flat * dims_[d] + idx[d];
+    return flat;
+}
+
+
+VirtualTopology::IdRange VirtualTopology::cell_markers(int cell) const
+{
+    if (cell < 0 || cell >= num_cells())
+        die(EXIT_INTERNAL_ASSERT, "VirtualTopology::cell_markers: cell outside [0, num_cells())");
+    const int* base = ids_.data();
+    return IdRange{base + cell_start_[cell], base + cell_start_[cell + 1]};
+}
+
+
+void VirtualTopology::clear_dominant()
+{
+    dominant_.assign(dominant_.size(), 0);
+    xext_.clear();
+    xext_built_ = false;
+}
+
+
+void VirtualTopology::set_dominant(int cell)
+{
+    dominant_[cell] = 1;
+}
+
+
+void VirtualTopology::set_dominant_xext(int cell, const double* xlo, const double* xhi)
+{
+    if (xext_.empty())
+        xext_.assign(dominant_.size() * xext_stride, std::numeric_limits<double>::quiet_NaN());
+    for (int d=0; d<NDIMS-1; d++) {
+        xext_[cell*xext_stride + d] = xlo[d];
+        xext_[cell*xext_stride + NDIMS-1 + d] = xhi[d];
+    }
+}
+
+
+void VirtualTopology::mark_xext_built()
+{
+    // Built extents have their array even when no cell is dominant.
+    if (xext_.empty())
+        xext_.assign(dominant_.size() * xext_stride, std::numeric_limits<double>::quiet_NaN());
+    xext_built_ = true;
+}
+
+
+bool VirtualTopology::dominant_xext_ok(int cell, const double* p, double margin) const
+{
+    // Called only with the margin on, when xext_built_ holds and so every
+    // dominant cell has an extent (see serialize()). Written so a NaN extent
+    // (a cell without one) rejects: device code cannot die.
+    const double* e = &xext_[static_cast<std::size_t>(cell) * xext_stride];
+    for (int d=0; d<NDIMS-1; d++)
+        if (!(p[d] >= e[d] - margin && p[d] <= e[NDIMS-1 + d] + margin))
+            return false;
+    return true;
+}
+
+
+void VirtualTopology::cells_with_dominant_below(int nsteps, std::vector<char>& below) const
+{
+    below.assign(num_cells(), 0);
+    for (int dom = 0; dom < num_cells(); ++dom) {
+        if (!dominant_[dom]) continue;
+        int c = neighbor_cell(dom, NDIMS-1, +1);
+        for (int k = 0; c >= 0 && k < nsteps; ++k) {
+            below[c] = 1;
+            c = neighbor_cell(c, NDIMS-1, +1);
+        }
+    }
+}
+
+
+void VirtualTopology::invalidate_dominant_cell(int cell)
+{
+    dominant_[cell] = 0;
+}
+
+

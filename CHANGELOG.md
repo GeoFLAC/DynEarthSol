@@ -39,6 +39,19 @@ For a release, the full auto-generated list of merged pull requests is in its
   (all four walls in 3D) takes the wall's temperature, layering and radiogenic
   source, and with MMG the mesh along those walls is kept at about `resolution`
   ([#95]).
+- A VirtualTopology grid: a background grid that bins markers by cell, so a
+  rule can ask which material lies below a marker. It is rebuilt at each
+  quality check and after each remesh, ends below the deepest mantle that can
+  serpentinize, and checkpoints carry it, so a restart continues with the same
+  grid ([#110]).
+- `mat.phase_change_option = 3`: geoflac's subduction phase changes (eclogite,
+  mantle and serpentinite, chlorite-out, the sediment chain), read with the
+  depth below the current surface and the element mean stress or, with
+  `mat.phase_change_pressure_option = 1`, the reference lithostat. Mantle
+  serpentinizes above wet crust (oceanic crust, sediment or sedimentary rock)
+  that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
+  a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
+  markers. `examples/subduction.cfg` runs it ([#110]).
 
 ### Changed
 
@@ -89,6 +102,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   plastically strained zone is meshed less finely and keeps the finest size it
   has reached unless `mmg_metric_refine_recover = yes`, and the initial mesh is
   refined in its weak zone ([#95]).
+- **Breaking.** `mat.mattype_crust` and `mat.mattype_sed` are renamed
+  `mat.mattype_continental_crust` and `mat.mattype_sediment`; the old names stop
+  at startup ([#110]).
+- **Breaking.** `mat.mattype_continental_crust` and `mat.mattype_oceanic_crust`
+  default to -1 (unset), so `ic.temperature_option = 1` and an active
+  `phase_change_option = 3` rule stop at startup until the material they read
+  is set ([#110]).
+- In 2D, the surface plastic strain decays in every top element, oceanic crust
+  included, so 2D runs with oceanic crust at the surface change ([#110]).
 
 ### Fixed
 
@@ -114,6 +136,16 @@ For a release, the full auto-generated list of merged pull requests is in its
   moves a steep free surface by hundreds of metres ([#95]).
 - With `remeshing_option = 13`, a remesh no longer skews the displacement output
   beside the restored walls ([#95]).
+- Averaged output (the default) divides by the steps its window holds, so it
+  changes by about 1 % at the default `quality_check_step_interval`; with an
+  interval of 1 it is no longer averaged, and a restart from such a frame works
+  ([#110]).
+- The lumped masses are rebuilt after phase changes convert markers, so runs
+  with `phase_change_option` 1 or 101 change ([#110]).
+- A 2D MMG remesh that folds the mesh above a bottom node snapped back to the
+  bottom (exit 42) now lifts the interior nodes there and remeshes again; a
+  remesh that does not fold is unchanged. This repair is temporary: the full
+  fix, `bc.has_winkler_bottom_restore`, comes in a later release ([#110]).
 - `remeshing_option = 12` works with MMG remeshing in 2D; its first remesh used
   to scatter the mesh. With Triangle it deletes only the nodes cut off under
   the slanted x0 wall; it used to delete interior nodes too, coarsening the
@@ -289,4 +321,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104
 [#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105
+[#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113

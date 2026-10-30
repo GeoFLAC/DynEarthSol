@@ -683,7 +683,7 @@ static void spr_fused_fields(const Variables &var,
 #endif
 }
 
-void SurfaceTopo::build(const Param& param, const Variables& var)
+void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only)
 {
     on = false;
     atten = false;
@@ -713,6 +713,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         z[i] = (*var.coord)[order[i]][NDIMS-1];
     }
     on = true;
+
+    if (elev_only) return;
 
     // Attenuation table: resample z_surf onto a uniform grid (Nyquist for the
     // surface nodes, capped), take its DCT-I cosine series, and tabulate
@@ -962,6 +964,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     }
     on = true;
 
+    if (elev_only) return;
+
     // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
     // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
     // (sum'' = half-weight end samples; square grid so one cos table serves both axes)
@@ -1062,7 +1066,15 @@ double SurfaceTopo::elev(const double* p) const
     const double xq = p[0];
     if (xq <= x.front()) return z.front();
     if (xq >= x.back())  return z.back();
-    const std::size_t i = std::upper_bound(x.begin(), x.end(), xq) - x.begin();
+    // The first i with x[i] > xq, as std::upper_bound finds it; written out
+    // because device code calls this (iterator algorithms are not safe there).
+    std::size_t lo = 0, hi = x.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (xq < x[mid]) hi = mid;
+        else lo = mid + 1;
+    }
+    const std::size_t i = lo;
     const double dx = x[i] - x[i-1];
     if (dx <= 0.0) return z[i];   // coincident nodes (degenerate surface): no interpolation
     return z[i-1] + (z[i] - z[i-1]) * (xq - x[i-1]) / dx;

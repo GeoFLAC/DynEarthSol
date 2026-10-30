@@ -1669,29 +1669,21 @@ namespace {
 }
 
 
-void surface_plstrain_diffusion(const Param &param, \
-    const Variables& var, double_vec& plstrain)
+void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
-    int mat_oc = param.mat.mattype_oceanic_crust;
     // Top elements only, but a host loop here would drag plstrain off the device on every call.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, plstrain, lambha, mat_oc)
+    #pragma omp parallel for default(none) shared(var, plstrain, lambha)
 #endif
     #pragma acc parallel loop gang vector async
     for (int ti = 0; ti < var.ntop_elems; ++ti) {
         const int e = (*var.top_elems)[ti];
-        // most abundant marker mattype: first maximum, as std::max_element
-        const int_vec &a = (*var.elemmarkers)[e];
-        int mat = 0;
-        for (std::size_t m = 1; m < a.size(); ++m)
-            if (a[m] > a[mat]) mat = (int)m;
-        if (mat != mat_oc)
-            plstrain[e] -= plstrain[e] * lambha * var.dt;
+        plstrain[e] -= plstrain[e] * lambha * var.dt;
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -1873,6 +1865,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
+        // The main loop rebuilds the serpentinization grid under this same step
+        // test, because it must index every marker; change the two together.
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
 
@@ -1884,7 +1878,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
             // set marker of sediment.
-            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sediment, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
     }
 
@@ -1893,10 +1887,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
     if (!(var.steps % param.mesh.quality_check_step_interval &&  var.steps != 0))
         // correct the plastic strain of urface element for preventing surface landslide.
-        surface_plstrain_diffusion(param,var,plstrain);
+        surface_plstrain_diffusion(var,plstrain);
 
     if ( param.control.is_reporting_terrigenous_info && var.steps%10000 == 0 &&  var.steps != 0  ) {
-        double max_dh = 0., min_dh = 0., max_dh_oc = 0.;
+        double max_dh = 0., min_dh = 0.;
         for (int i=0;i<var.surfinfo.ntop;i++) {
             max_dh = std::max(max_dh, (*var.surfinfo.dh)[i]);
             min_dh = std::min(min_dh, (*var.surfinfo.dh)[i]);

@@ -96,7 +96,7 @@ def read_data(des, frame):
     marker_data = des.read_markers(frame, markersetname)
     field = marker_data[markersetname + '.coord']
     stuff.m_x = field[:,0]
-    stuff.m_z = field[:,1]
+    stuff.m_z = field[:,-1]
     stuff.m_id = marker_data[markersetname + '.id']
     stuff.m_mat = marker_data[markersetname + '.mattype']
     stuff.m_time = marker_data[markersetname + '.time']

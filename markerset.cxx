@@ -1002,6 +1002,31 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
 }
 
 
+void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, const SurfaceTopo& topo,
+                        double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const {
+        T = 0;
+        double p[NDIMS] = {0};
+        ConstShapefnAccessor eta = (*_eta)[m];
+        ConstConnAccessor conn = (*var.connectivity)[(*_elem)[m]];
+        for (int i=0; i<NODES_PER_ELEM; ++i) {
+            for (int d=0; d<NDIMS; ++d)
+                p[d] += (*var.coord)[conn[i]][d] * eta[i];
+            T += (*var.temperature)[conn[i]] * eta[i];
+        }
+        Z = topo.zeff(p);
+        if (param.mat.phase_change_pressure_option == 1)
+            // At the depth the rules read, max(0, -Z): a marker above the surface reads 0.
+            P = ref_pressure(param, std::min(0.0, Z));
+        else
+            // The element's mean stress, compression positive. In 2D this is the
+            // in-plane mean DES itself uses: plane strain's sigma_yy is not kept
+            // current by the viscous and Maxwell updates.
+            P = -trace((*var.stress)[(*_elem)[m]]) / NDIMS;
+        for (int d=0; d<NDIMS-1; ++d) xzeff[d] = p[d];
+        xzeff[NDIMS-1] = Z;
+}
+
+
 void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) const {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1311,7 +1336,7 @@ namespace {
 
         ElemMarkerInfo emi_base[2];
         for (int m : (*var.markers_in_elem)[e]) {
-            if (ms.get_mattype(m) != param.mat.mattype_sed) continue;
+            if (ms.get_mattype(m) != param.mat.mattype_sediment) continue;
             int ind = (ms.get_genesis(m) == 2 || ms.get_genesis(m) == 4) ? 0 : 1;
             emi_base[ind].value += ms.get_time(m);
             ConstShapefnAccessor eta = ms.get_eta(m);
@@ -1480,7 +1505,7 @@ namespace {
                 double ti = ms.get_time(m);
                 int ge = genesis;
 
-                if (is_surface && mt == param.mat.mattype_sed) {
+                if (is_surface && mt == param.mat.mattype_sediment) {
                     int e_local = binary_search_index(top_elems_ptr, ntop_elems, e);
                     compute_sed_marker_time_genesis(param, var, ms, e, e_local, emi_ptr, x, ti, ge);
                 }
@@ -1533,7 +1558,7 @@ namespace {
             // Sediment: the lowest-index sediment survivor's time, else the split parent's
             // (remesh_elem_split_time) rather than 0, an initial marker's. Other mattypes carry 0.
             double ti_base = 0.;
-            if (mt == param.mat.mattype_sed) {
+            if (mt == param.mat.mattype_sediment) {
                 const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[e], mt);
                 if (m0 >= 0) ti_base = ms.get_time(m0);
                 else if (from_split_parent) ti_base = var.remesh_elem_split_time[e];
@@ -1549,7 +1574,7 @@ namespace {
                 // a new surface sediment marker: the deposit time of
                 // replenish_markers_with_mattype_from_nn (same positions; the new markers join
                 // markers_in_elem after this loop, so the same reference markers)
-                if (is_surface && mt == param.mat.mattype_sed) {
+                if (is_surface && mt == param.mat.mattype_sediment) {
                     double xq[NDIMS];
                     ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
                     for (int d = 0; d < NDIMS; ++d) {
@@ -1626,7 +1651,7 @@ namespace {
     // Replenish restored side-wall elements (remeshing_option 13) from the profile of the wall
     // side_profile_wall picks: the recorded material at the element's centroid
     // (side_profile_elem_centroid), time 0. An element centred in the wall-top deposit gets
-    // mattype_sed with its lowest-index sediment marker's time, else the current time. Serial.
+    // mattype_sediment with its lowest-index sediment marker's time, else the current time. Serial.
     void replenish_markers_by_side_profile(const Param& param, const Variables &var,
                                            int_pair_vec &side_elems, int genesis)
     {
@@ -1648,11 +1673,11 @@ namespace {
             double s, rel;
             side_profile_elem_centroid(var, e, t, ref_z[t], s, rel);
             const bool deposit = prof.in_deposit(rel);
-            const int mt = deposit ? param.mat.mattype_sed : side_profile_mattype_at(prof, s, rel);
+            const int mt = deposit ? param.mat.mattype_sediment : side_profile_mattype_at(prof, s, rel);
             double ti = 0.;
             if (deposit) {
                 const int m_sed = ms.lowest_index_marker((*var.markers_in_elem)[e],
-                                                         param.mat.mattype_sed);
+                                                         param.mat.mattype_sediment);
                 ti = (m_sed >= 0) ? ms.get_time(m_sed) : var.time / YEAR2SEC;
             }
             while (num_marker_in_elem < param.markers.min_num_markers_in_element) {
@@ -1837,7 +1862,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
                         ++elemmarkers[new_elem][mat];
                     } else {
                         // record time information on deleted sediment marker
-                        if (mat == param.mat.mattype_sed) {
+                        if (mat == param.mat.mattype_sediment) {
                             for (int d=0; d<NDIMS; ++d) {
                                 markers_in_elem_info[i].coord[d] += m_coord[d];
                             }

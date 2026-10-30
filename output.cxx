@@ -13,6 +13,7 @@
 #include "matprops.hpp"
 #include "output.hpp"
 #include "utils.hpp"
+#include "mesh.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -53,7 +54,11 @@ Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
     manifest(manifest),
     peak_rss_gib(0),
     start_time(start_time),
-    is_averaged(param.sim.is_outputting_averaged_fields),
+    // A one-step window IS the instantaneous field, and average_fields() opens a
+    // window on steps % interval == 1, which never happens for an interval of 1:
+    // the averaged buffers would stay empty and be written as zero-length arrays.
+    is_averaged(param.sim.is_outputting_averaged_fields &&
+                param.mesh.quality_check_step_interval > 1),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
@@ -145,7 +150,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     double dt = var.dt;
     double inv_dt = 0; // only used when is_averaged
     if (!disable_averaging && is_averaged) {
-        dt = (var.time - time0) / average_interval;
+        // time0 is the time after the window's first step: the span holds the
+        // average_interval - 1 steps after it.
+        dt = (var.time - time0) / (average_interval - 1);
         inv_dt = 1.0 / (var.time - time0);
     }
 
@@ -231,7 +238,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
-        double tmp = 1.0 / (average_interval + 1);
+        double tmp = 1.0 / average_interval;   // one sample per step of the window
         #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
@@ -380,7 +387,9 @@ void Output::average_fields(Variables& var)
         }
         std::copy(var.stress->begin(), var.stress->end(), stress_avg.begin());
 
-        delta_plstrain_avg = *var.delta_plstrain;
+        // The rates are differences from the snapshots above, which hold the state
+        // after this step, so the plastic increments count from the next step on.
+        delta_plstrain_avg.assign(var.delta_plstrain->size(), 0.0);
     }
     else {
         // Averaging stress & plastic strain
@@ -518,6 +527,28 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
+    // Serialize the cached marker-cell index (mat.phase_change_option 3, see
+    // VirtualTopology in mesh.hpp) so a restart carries forward the EXACT lagged
+    // binning the continuous run had at this step, instead of a fresher rebuild
+    // against current marker positions -- serpentinization reads this index
+    // every phase_changes() step, so a mismatch here can change which markers
+    // convert and make the restarted run diverge. vtopo_int is variable length,
+    // so vtopo_len records its size for read_array() to pre-size the buffer
+    // on restart. (var.vtopo is null unless uses_serpentinization_grid() ->
+    // nothing written.)
+    if (var.vtopo) {
+        int_vec vt_i;
+        double_vec vt_d;
+        var.vtopo->serialize(vt_i, vt_d);
+        int_vec vt_len(1, static_cast<int>(vt_i.size()));
+        bin.write_aux_array(vt_len, "vtopo_len", vt_len.size());
+        bin.write_aux_array(vt_i, "vtopo_int", vt_i.size());
+        bin.write_aux_array(vt_d, "vtopo_dbl", vt_d.size());
+        // vtopo_dbl is variable length too (VirtualTopology::serialize()), so
+        // its length is recorded alongside vtopo_len for the restart reader.
+        int_vec vt_dlen(1, static_cast<int>(vt_d.size()));
+        bin.write_aux_array(vt_dlen, "vtopo_dbl_len", vt_dlen.size());
     }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {

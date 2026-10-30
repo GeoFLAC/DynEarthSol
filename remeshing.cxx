@@ -22,6 +22,7 @@
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
 #include "nn-interpolation.hpp"
+#include "phasechanges.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
@@ -1011,9 +1012,9 @@ void refine_surface_elem(const Param &param, const Variables &var,
         int e = (*var.surfinfo.top_facet_elems)[i];
 
         int_vec &a = (*var.elemmarkers)[e];
-        if (a[param.mat.mattype_sed] == 0) continue;
+        if (a[param.mat.mattype_sediment] == 0) continue;
 //        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-//        if (mat != param.mat.mattype_sed) continue;
+//        if (mat != param.mat.mattype_sediment) continue;
 
         if (old_volume[e] < surface_vol) continue;
 
@@ -2302,6 +2303,38 @@ double packed_elem_quality(const double *coord, const int *elem)
 #endif
 }
 
+
+// Shared by check_mesh_tangle() and, with MMG, by the bottom-fold repair in optimize_mesh_2d():
+// outside the MMG block, so a build without MMG has them too.
+namespace {
+
+// The tolerance of the fold test: an element's signed measure counts only beyond
+// tangle_rel() * maxedge^NDIMS. Round-off in it is ~1e-15 of maxedge^NDIMS, a fold is O(1), so
+// 1e-9 (not tuned) ignores noise and leaves anything flatter to the tiny/quality triggers.
+double tangle_rel() { return 1e-9; }
+
+// The fold test of check_mesh_tangle(), shared with the bottom-fold repair in optimize_mesh_2d()
+// so both read one predicate: the first element wound against the majority orientation, counting
+// only elements beyond their tolerance, or -1. measure(e, m, tol) gives element e's signed
+// measure and tangle_rel() * its longest edge^NDIMS.
+template <typename Measure>
+int first_folded_element(int nelem, const Measure &measure)
+{
+    int npos = 0, nneg = 0;
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; measure(e, m, tol);
+        if (m >  tol) ++npos;
+        else if (m < -tol) ++nneg;
+    }
+    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; measure(e, m, tol);
+        if (std::fabs(m) > tol && m * ref < 0.0) return e;
+    }
+    return -1;
+}
+
+} // anonymous namespace
 
 #ifdef USEMMG
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
@@ -4390,6 +4423,88 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
 #else
 
+namespace {
+
+// Twice the signed area of triangle e (nodes in conn[3e..3e+2], coordinates xz).
+double tri_measure(const double *xz, const int *conn, int e)
+{
+    const double *a = &xz[conn[3*e]*2], *b = &xz[conn[3*e+1]*2], *c = &xz[conn[3*e+2]*2];
+    return (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+}
+
+// +1 or -1: the orientation most triangles share.
+int majority_sign(const double *xz, const int *conn, int ne)
+{
+    int npos = 0;
+    for (int e = 0; e < ne; ++e) npos += tri_measure(xz, conn, e) > 0.0;
+    return (2 * npos >= ne) ? 1 : -1;
+}
+
+// TEMPORARY repair of the bottom-snap fold: flatten_bottom() lifts a bottom node that sank below
+// the bottom plane back onto it, sometimes so far that a triangle above it turns inside out; MMG
+// reorients it silently and returns a folded mesh, which check_mesh_tangle() stops on. Lift
+// interior nodes (on no boundary segment) of the input's inverted triangles, so they move up with
+// the bottom node, each by the least amount that gives its triangle a measure of FRAC x its
+// longest edge^2 (before the lift), and repeat for the triangles a lift inverts in turn. Up only:
+// the snap moved the bottom up, and a node moved down would close on the restored bottom. A
+// triangle's measure is linear in one node's z, so each lift hits its target exactly. Returns the
+// number of nodes lifted (0: nothing inverted), or -1 when a triangle has no interior node a lift
+// unfolds, or the passes run out. Called only on a fold, so a remesh that does not fold is
+// untouched. The full fix, the bc.has_winkler_bottom_restore option, comes in a later release;
+// this repair then goes.
+int lift_to_unfold(double *xz, const int *conn, int nn, int ne, const int *seg, int ns,
+                   double &max_lift)
+{
+    const double FRAC = 0.05;      // target measure / longest edge^2: a sliver MMG can improve; untuned
+    const int MAX_PASSES = 10;     // a lift inverts at most a few neighbours; untuned
+    const int s = majority_sign(xz, conn, ne);
+    std::vector<char> on_boundary(nn, 0);
+    for (int i = 0; i < 2 * ns; ++i) on_boundary[seg[i]] = 1;
+    std::vector<char> lifted(nn, 0);
+    max_lift = 0.0;
+    for (int pass = 0; pass < MAX_PASSES; ++pass) {
+        int ninverted = 0;
+        for (int e = 0; e < ne; ++e) {
+            const double m = s * tri_measure(xz, conn, e);
+            if (m > 0.0) continue;
+            ++ninverted;
+            double edge2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < i; ++j) {
+                    const double dx = xz[conn[3*e+i]*2] - xz[conn[3*e+j]*2];
+                    const double dz = xz[conn[3*e+i]*2+1] - xz[conn[3*e+j]*2+1];
+                    edge2 = std::max(edge2, dx*dx + dz*dz);
+                }
+            // The least upward lift among the interior nodes that unfolds e.
+            int best = -1;
+            double best_dz = std::numeric_limits<double>::max();
+            for (int i = 0; i < 3; ++i) {
+                const int n = conn[3*e+i];
+                if (on_boundary[n]) continue;
+                // d(measure)/dz of node n: x of the node after next minus x of the next one
+                // (tri_measure's cofactor), times s for the majority orientation.
+                const double *p = &xz[conn[3*e+(i+1)%3]*2], *q = &xz[conn[3*e+(i+2)%3]*2];
+                const double g = s * (q[0] - p[0]);
+                if (g <= 0.0) continue;   // lifting n would not unfold e
+                const double dz = (FRAC * edge2 - m) / g;
+                if (dz < best_dz) { best_dz = dz; best = n; }
+            }
+            if (best < 0) return -1;
+            xz[best*2+1] += best_dz;
+            lifted[best] = 1;
+            max_lift = std::max(max_lift, best_dz);
+        }
+        if (ninverted == 0) {
+            int nlifted = 0;
+            for (char l : lifted) nlifted += l;
+            return nlifted;
+        }
+    }
+    return -1;
+}
+
+} // anonymous namespace
+
 void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
               const segment_t &original_segment, const segflag_t &original_segflag)
@@ -4638,6 +4753,36 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie, split_node.data() };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
+    // TEMPORARY repair of the bottom-snap fold (lift_to_unfold()): only when MMG returned a
+    // mesh that check_mesh_tangle() stops on (the same fold test), so a remesh that does not
+    // fold is untouched.
+    auto out_measure = [&](int e, double &m, double &tol) {
+        const double *x = mmg_out.coord.data();
+        const int *cn = &mmg_out.conn[3*e];
+        double maxedge2 = 0.0;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < i; ++j) {
+                const double dx = x[cn[i]*2] - x[cn[j]*2], dz = x[cn[i]*2+1] - x[cn[j]*2+1];
+                maxedge2 = std::max(maxedge2, dx*dx + dz*dz);
+            }
+        m = tri_measure(x, mmg_out.conn.data(), e);
+        tol = tangle_rel() * maxedge2;
+    };
+    if (first_folded_element(mmg_out.nelem, out_measure) >= 0) {
+        double max_lift;
+        const int nlifted = lift_to_unfold(mcoord, mconn1, mnode, melem, mseg1, mseg, max_lift);
+        if (nlifted > 0) {
+            std::cout << "      [fold] MMG returned a folded mesh; lifted " << nlifted
+                      << " interior node(s) of the inverted input triangle(s), by up to "
+                      << max_lift << " m, and re-ran MMG.\n";
+            mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
+        }
+        else
+            std::cout << "      [fold] MMG returned a folded mesh, and "
+                      << (nlifted == 0 ? "the input has no inverted triangle"
+                                       : "no interior node lift unfolds the input, or the "
+                                         "passes ran out") << ".\n";
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
@@ -4925,10 +5070,8 @@ static double tangle_orient2d(const double *a, const double *b, const double *c)
 void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
                        int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
 {
-    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and the tolerance
-    // REL * maxedge^NDIMS: round-off in m is ~1e-15 of maxedge^NDIMS, a fold is O(1), so 1e-9
-    // (not tuned) ignores noise and leaves anything flatter to the tiny/quality triggers.
-    const double REL = 1e-9;
+    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and its tolerance.
+    const double REL = tangle_rel();
     auto elem_measure = [&](int e, double &m, double &tol) {
         const auto &cn = connectivity[e];
         double maxedge2 = 0.0;
@@ -4952,18 +5095,10 @@ void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &con
     };
 
     // (1) folded element -- opposite orientation to the mesh's dominant sign.
-    // Pass 1: dominant orientation sign (ignoring near-degenerate elements).
-    int npos = 0, nneg = 0;
-    for (int e = 0; e < nelem; ++e) {
-        double m, tol; elem_measure(e, m, tol);
-        if (m >  tol) ++npos;
-        else if (m < -tol) ++nneg;
-    }
-    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
-    // Pass 2: flag the first element wound against the majority.
-    for (int e = 0; e < nelem; ++e) {
-        double m, tol; elem_measure(e, m, tol);
-        if (std::fabs(m) > tol && m * ref < 0.0) {
+    {
+        const int e = first_folded_element(nelem, elem_measure);
+        if (e >= 0) {
+            double m, tol; elem_measure(e, m, tol);
             const auto &cn = connectivity[e];
             std::cerr << "Error: tangled mesh (" << when << "): element #" << e
                       << " is folded (signed measure = " << m << ", opposite the mesh's orientation). ";
@@ -6267,6 +6402,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing finished.\n";
 
+    // Marker positions and population changed wholesale; rebuild the
+    // serpentinization grid (mat.phase_change_option 3 with
+    // mat.has_serpentinization) from the new mesh.
+    build_serpentinization_grid(param, var);
 
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;
