@@ -278,7 +278,9 @@ void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
         double y = qcoord[i*NDIMS + NDIMS-1];
         if (!is_x0(flag)) {
             double fx = v * (y - x0_zmin) + x1x;
-            if (fx < x) {
+            // Only the sliver between the slanted wall and the new vertical wall x = x1x is
+            // cut off; a node past x1x lies inside the domain and must be kept.
+            if (fx < x && x < x1x) {
 #ifdef USEMMG
                 // adjust all nodes at the right side of edge line
                 double dx = (x - fx) * shrink_x;
