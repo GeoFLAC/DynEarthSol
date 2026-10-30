@@ -319,6 +319,20 @@ class Dynearthsol:
         return
 
 
+    def marker_sets(self, frame=None):
+        '''Names of the marker sets in this frame; "hydrous-markerset" is there
+        only with control.has_hydration_processes.'''
+        if frame is None: frame = self._header_frame
+        if frame != self._header_frame: self.read_header(frame)
+        if self.format == 'binary':
+            return sorted(n[:-len(' size')] for n in self.field_pos
+                          if n.endswith(' size'))
+        import h5py
+        with h5py.File(self.get_fn(frame), 'r') as f:
+            return sorted(k[:-len('.nmarkers')] for k in f.keys()
+                          if k.endswith('.nmarkers'))
+
+
     def read_markers(self, frame, markername):
         'Read and return marker data'
         if frame != self._header_frame: self.read_header(frame)
