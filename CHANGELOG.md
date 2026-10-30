@@ -69,10 +69,16 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
   ([#97]).
-- **Breaking.** `make use_gospl=1` looks for the gospl environment in
+- **Breaking.** `make usegospl=1` looks for the gospl environment in
   `~/miniforge3/envs/gospl`, where GoSPL's install now puts it; a Miniconda
   install sets `CONDA_ENV_PATH`, which, like `GOSPL_EXT_DIR`, may now also be
   exported ([#104]).
+- **Breaking.** The make option `use_gospl` is now `usegospl`, matching
+  `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
+  error.
+- A GoSPL step that fails stops the run with exit code 53 instead of skipping
+  that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
+  overshoot of the coupling interval ("bad hmax", PETSc error 77).
 - The GoSPL docs follow the des3d coupling tutorial and explain when GoSPL
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
@@ -140,6 +146,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   bottom (exit 42) now lifts the interior nodes there and remeshes again; a
   remesh that does not fold is unchanged. This repair is temporary: the full
   fix, `bc.has_winkler_bottom_restore`, comes in a later release ([#110]).
+- `remeshing_option = 12` works with MMG remeshing in 2D; its first remesh used
+  to scatter the mesh. With Triangle it deletes only the nodes cut off under
+  the slanted x0 wall; it used to delete interior nodes too, coarsening the
+  mesh at every remesh. 3D MMG builds refuse it at startup ([#113]).
+- `vbc_val_division_x1_min/max` are fractions of the x1 wall's height, as
+  documented; they were taken on the x0 wall ([#113]).
+- `--help` gives `bottom_shear_zone_thickness` in metres, the unit the code has
+  always used; it said km ([#113]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -308,3 +322,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104
 [#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
+[#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113

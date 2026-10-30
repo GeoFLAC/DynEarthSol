@@ -50,7 +50,7 @@ the compiler off conda's libraries:
 ```bash
 conda deactivate   # if any environment is active
 make clean
-make ndims=3 use_gospl=1 usemmg=1 -j4
+make ndims=3 usegospl=1 usemmg=1 -j4
 ```
 
 - `ndims=3` is required; `usemmg=1` (MMG mesh optimization during remeshing) is
@@ -75,7 +75,7 @@ cat dynearthsol-gospl                              # wrapper script written?
 ```
 
 If `dynearthsol-gospl` is missing, the build did not complete with
-`use_gospl=1`.
+`usegospl=1`.
 
 ## Configuration
 

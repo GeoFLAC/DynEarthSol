@@ -324,7 +324,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
     double_vec vbc_vertical_divisions_x1(4,0.);
     for (int i=0;i<4;i++) {
         vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
-        vbc_vertical_divisions_x1[i] = - (BOUNDX0_max - var.vbc_vertical_div_x1[i] * BOUNDX0_width);
+        vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - var.vbc_vertical_div_x1[i] * BOUNDX1_width);
     }
 #endif
 
@@ -1298,10 +1298,10 @@ namespace {
         std::vector<double> net_erosion(ntop, 0.0);
         int run_result = var.gospl_driver->run_and_get_erosion(
             total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
-        if (run_result != 0) {
-            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
-            return;
-        }
+        if (run_result != 0)
+            // A failed call can leave GoSPL's surface partly advanced, so the
+            // coupling cannot continue from it.
+            die(EXIT_RUNTIME_GOSPL, "GoSPL run_and_get_erosion failed");
 
         // Apply dh to all DES surface nodes.
         // net_erosion contains only erosion+diffusion (uplift stripped in Python);

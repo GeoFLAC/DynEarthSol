@@ -168,17 +168,17 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
 }
 
 void flatten_x0(const uint_vec &old_bcflag, double *qcoord,
-                int_vec &points_to_delete, double min_dist)
+                int_vec &points_to_delete, double min_dist, double plane = 0.)
 {
     for (std::size_t i=0; i<old_bcflag.size(); ++i) {
         uint flag = old_bcflag[i];
         if (is_x0(flag))
-            qcoord[i*NDIMS] = 0.;
+            qcoord[i*NDIMS] = plane;
         // Delete any non-x0 node within min_dist of (or past) the plane, a top or bottom node
         // carried past the corner too (skipping boundary nodes leaves an orphan wedge there).
         // flatten_x1/y0/y1 do the same.
         else if (! is_x0(flag))
-            if (qcoord[i*NDIMS] < min_dist)
+            if (qcoord[i*NDIMS] < plane + min_dist)
                 points_to_delete.push_back(i);
     }
 }
@@ -209,95 +209,24 @@ void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
-                int_vec &points_to_delete)
+// remeshing_option 12: make the x0 wall vertical again at the x of its top corner (x0 and top),
+// for a wall whose foot lags or leads its top (a push tapered toward a fixed bottom). Nodes left
+// outside, within min_dist of the new wall or past it, are marked as flatten_x0 marks them.
+// Returns the new wall position.
+double flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
+                         int_vec &points_to_delete, double min_dist)
 {
-
-    // for cutting x0 boundary to (x0 & z1) in X
-    double x1x, bx0;
-
-    int j=0;
-    while (j>-1) {
-        uint flag = old_bcflag[j];
-        if ((flag & BOUNDX0 ) && (flag & BOUNDZ1)) {
-            x1x = qcoord[j*NDIMS]; break;
-        }
-        j++;
-    }
-
-    // interpolation or extrapolation 4 bx0
-    j=0;
-    int l=0;
-    double bo_X[2], bo_depth[2];
-    do {
-        uint flag = old_bcflag[j];
-        if (is_bottom(flag)) {
-           bo_depth[l]  = qcoord[j*NDIMS + NDIMS-1];
-           bo_X[l] = qcoord[j*NDIMS];
-           l++;
-        }
-        j++;
-    } while (l<2);
-
-    bx0 = bo_depth[0] + (bo_depth[1]-bo_depth[0])*(x1x-bo_X[0])/(bo_X[1]-bo_X[0]);
-
-    std::cout << "x1x: " << x1x << "; bx0: "<<bx0<< '\n';
-    double x0_zmin = std::numeric_limits<double>::max();
-    double bot_xmax = std::numeric_limits<double>::lowest();
-    double b0_exceed_xmax = std::numeric_limits<double>::lowest();
-
-    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        if (is_x0(flag)) {
-            if ((x0_zmin > qcoord[i*NDIMS + NDIMS-1]) && !(qcoord[i*NDIMS] > x1x))
-                x0_zmin = qcoord[i*NDIMS + NDIMS-1];
-            else if (is_bottom(flag))
-                b0_exceed_xmax = qcoord[i*NDIMS];
-            // set all x0 to x1x in X
-            qcoord[i*NDIMS] = x1x;
-        }
-    }
-
-    double z0_xmax_ref = 2*x1x - b0_exceed_xmax;
-
+    double plane = std::numeric_limits<double>::quiet_NaN();
     for (std::size_t i=0; i<old_bcflag.size(); ++i)
-        if (is_bottom(old_bcflag[i]))
-            if ((bot_xmax < qcoord[i*NDIMS]) && (qcoord[i*NDIMS] < z0_xmax_ref))
-                bot_xmax = qcoord[i*NDIMS];
-
-    double v = (x1x - bot_xmax) / (x0_zmin - bx0);
-
-#ifdef USEMMG
-    double shrink_x = (x1x - bot_xmax) / (b0_exceed_xmax - bot_xmax);
-#else
-    double b0_clean_zmin_ref = x0_zmin - (x0_zmin - bx0)/2.;
-#endif
-
-    for (std::size_t i=0; i < old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        double x = qcoord[i*NDIMS];
-        double y = qcoord[i*NDIMS + NDIMS-1];
-        if (!is_x0(flag)) {
-            double fx = v * (y - x0_zmin) + x1x;
-            if (fx < x) {
-#ifdef USEMMG
-                // adjust all nodes at the right side of edge line
-                double dx = (x - fx) * shrink_x;
-                qcoord[i*NDIMS] = fx + dx;
-#else
-                // remove all nodes at the right side of edge line
-                points_to_delete.push_back(i);
-#endif
-            }
-#ifdef USEMMG
-#else
-        } else if (!is_bottom(flag)) {
-            // remove b0 nodes close to the z0-b0 corner
-            if (y < b0_clean_zmin_ref)
-                points_to_delete.push_back(i);
-#endif
+        if (is_x0(old_bcflag[i]) && (old_bcflag[i] & BOUNDZ1)) {
+            plane = qcoord[i*NDIMS];
+            break;
         }
-    }
+    if (std::isnan(plane))
+        die(EXIT_INTERNAL_ASSERT, "flatten_x0_corner: the x0 wall has no top-corner node");
+    std::cout << "      [flatten] x0 wall restored to vertical at x = " << plane << " m.\n";
+    flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist, plane);
+    return plane;
 }
 
 void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
@@ -1346,7 +1275,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                    points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
         break;
     case 12:
-        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     }
 
@@ -4063,7 +3992,7 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
                             const double *coord, const uint_vec &bcflag,
                             const int *conn, const int *segment, const int *segflag,
                             const double_vec &metric,
-                            double zlen, double xlen, double ylen, double min_dist,
+                            double zlen, double xlen, double ylen, double min_dist, double x0plane,
                             double_vec &ncoord, int_vec &nconn,
                             int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
                             int_vec &new_to_old_node, int_vec &new_to_old_elem,
@@ -4073,7 +4002,7 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
     auto planes_near = [&](int s) {
         const double *p = coord + s*NDIMS;
         uint c = 0;
-        if (p[0]       <  0.0  + min_dist) c |= BOUNDX0;
+        if (p[0]       <  x0plane + min_dist) c |= BOUNDX0;
         if (p[0]       >  xlen - min_dist) c |= BOUNDX1;
 #ifdef THREED
         if (p[1]       <  0.0  + min_dist) c |= BOUNDY0;
@@ -4372,6 +4301,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     }
 
     int_vec points_to_delete;
+    double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
     bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
@@ -4435,7 +4365,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist, x0plane,
                                c_coord, c_conn, c_seg, c_segflag, c_metric,
                                c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
         mnode = cn; melem = ce; mseg = cs;
@@ -4619,6 +4549,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     }
 
     int_vec points_to_delete;
+    double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
     bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
@@ -4641,7 +4572,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                        points_to_delete, floors);
         break;
     case 12:
-        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        excl_func = &is_corner;
+        x0plane = flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     case 13:
         // restore the bottom AND both side walls to their initial planes
@@ -4684,7 +4616,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist, x0plane,
                                c_coord, c_conn, c_seg, c_segflag, c_metric,
                                c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
         mnode = cn; melem = ce; mseg = cs;
