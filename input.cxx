@@ -255,7 +255,10 @@ static void declare_parameters(po::options_description &cfg,
          "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact, except small boundary segments might "
          "get merged.\n"
-         "12: flatten x0 when using fixed bottom boundary.\n"
+         "12: move all x0 (left) wall nodes to the x of the wall's top corner and delete the "
+         "nodes left outside, other boundaries are intact. For a wall pushed over a fixed bottom "
+         "with its push tapered toward it (vbc_x0 = 3 with bottom_shear_zone_thickness), whose "
+         "foot lags its top. With MMG remeshing, 2D only.\n"
          "13: move all bottom and side-wall nodes (left/right; also front/back in 3D) to initial "
          "dimensions, and give material entering through a side wall the structure recorded at that "
          "wall (its side profile). A wall receives while its nodes drift inward between remeshes (by "
@@ -785,7 +788,8 @@ static void declare_parameters(po::options_description &cfg,
          "outward normal direction is positive; if stress, unit is Pa)")
         
         ("bc.bottom_shear_zone_thickness", po::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
-         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, unit is km.")
+         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, in m: the x0 wall velocity "
+         "tapers linearly to 0 from this height above the bottom down to the bottom. 0 disables it.")
         ;
 
     cfg.add_options()
@@ -1493,6 +1497,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.remeshing_option == 2) {
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
+#endif
+#if defined(USEMMG) && defined(THREED)
+    // optimize_mesh (3D MMG) has no flatten_x0_corner case.
+    if (p.mesh.remeshing_option == 12 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available with MMG remeshing "
+            "in 3D (usemmg=1, mesh.meshing_elem_shape = 0); use a build without MMG.");
 #endif
 #ifdef USEMMG
     // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
