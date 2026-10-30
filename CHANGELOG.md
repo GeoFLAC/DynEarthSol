@@ -114,6 +114,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   moves a steep free surface by hundreds of metres ([#95]).
 - With `remeshing_option = 13`, a remesh no longer skews the displacement output
   beside the restored walls ([#95]).
+- With `remeshing_option = 12`, a Triangle remesh deletes only the nodes cut off
+  under the slanted x0 wall; it used to delete interior nodes too, coarsening
+  the mesh at every remesh ([#113]).
+- `vbc_val_division_x1_min/max` are fractions of the x1 wall's height, as
+  documented; they were taken on the x0 wall ([#113]).
+- `--help` gives `bottom_shear_zone_thickness` in metres, the unit the code has
+  always used; it said km ([#113]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -281,3 +288,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104
 [#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105
+[#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
