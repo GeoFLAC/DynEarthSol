@@ -111,6 +111,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   is set ([#110]).
 - In 2D, the surface plastic strain decays in every top element, oceanic crust
   included, so 2D runs with oceanic crust at the surface change ([#110]).
+- An MMG remesh prints only its trigger, "Remeshing starts", "New mesh" and
+  "Remeshing finished" at the default `meshing_verbosity = -1`; `0` restores
+  the stage log. Each MMG quality retry prints one line naming the bad elements
+  ([#114]).
+- GPU runs with averaged output (the default) are faster: the averaging no
+  longer moves fields off the device every step (3D 7.9 to 1.6 ms/step on an
+  RTX A5000) ([#114]).
 
 ### Fixed
 
@@ -154,6 +161,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   documented; they were taken on the x0 wall ([#113]).
 - `--help` gives `bottom_shear_zone_thickness` in metres, the unit the code has
   always used; it said km ([#113]).
+- GPU builds: the monitor could record stress and strain from before the
+  step's rotation, and a remesh could free arrays a kernel was still reading
+  ([#114]).
+- `2vtk.py` converts the hydrous marker set of `hdf5=1` runs; it was skipped
+  ([#114]).
+- An `info_display_step_interval` that is not a multiple of
+  `quality_check_step_interval` is rounded up as the message says; the run
+  used to stop ([#114]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -323,3 +338,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
+[#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
