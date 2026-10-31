@@ -176,8 +176,9 @@ defaults are not what you want.
   * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
     (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make usegospl=1`
     also generates the `dynearthsol-gospl` wrapper script.
-  * Coupling is 3D only, so build with `make ndims=3 usegospl=1`, outside the
-    conda environment to keep the compiler off conda's libraries.
+  * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
+    conda environment does not matter unless it has its own Boost or compilers;
+    `make config` shows what was picked.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the

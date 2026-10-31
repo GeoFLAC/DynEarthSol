@@ -44,11 +44,12 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
 
 ## Build
 
-GoSPL coupling is 3D only. Build **outside** the gospl environment, which keeps
-the compiler off conda's libraries:
+GoSPL coupling is 3D only. Which conda environment is active does not matter
+for this build: the Makefile finds GoSPL's Python through `CONDA_ENV_PATH`. Only
+an active environment with its own Boost or compilers changes it, and
+`make config` shows what was picked.
 
 ```bash
-conda deactivate   # if any environment is active
 make clean
 make ndims=3 usegospl=1 usemmg=1 -j4
 ```
@@ -205,7 +206,7 @@ scheme.
 
 1. **Initialization**: GoSPL is initialized once from the YAML config file. At the first coupling event, GoSPL's elevation field (`hGlobal`) is seeded from DES's initial surface via `apply_elevation_data()`.
 2. **Each coupling event** (every `gospl_coupling_frequency` DES steps, or every `gospl_coupling_interval_in_yr` years when `gospl_coupling_mode = time`):
-   - **Time-averaged tectonic velocity** is computed as `Δcoord/Δt` over the coupling interval (not the instantaneous DES velocity), where `Δcoord` is each surface node's displacement since the previous event and `Δt` the model time elapsed since then. DES uses inertial scaling (quasi-dynamic formulation), so instantaneous velocities contain damped-wave components that are numerical artifacts and would perturb GoSPL's drainage network. Averaging over the interval filters these out. On the first coupling event, instantaneous velocity is used as a fallback.
+   - **Time-averaged tectonic velocity** is computed as `Δcoord/Δt` over the coupling interval (not the instantaneous DES velocity), where `Δcoord` is each surface node's displacement since the previous event and `Δt` the model time elapsed since then. DES uses inertial scaling (quasi-dynamic formulation), so instantaneous velocities contain damped-wave components that are numerical artifacts and would perturb GoSPL's drainage network. Averaging over the interval filters these out. On the first coupling event and the first after a remesh, instantaneous velocity is used as a fallback.
    - DES surface velocities (vx, vy, vz) are IDW-interpolated onto the GoSPL mesh via `set_surface_velocity()`.
    - `run_and_get_erosion(dt)` advances GoSPL by one step of length `dt`. Internally: horizontal advection (vx, vy), vertical uplift (vz via `upsub`), SPL erosion, and hillslope diffusion are applied to GoSPL's `hGlobal`. The returned `delta_h` contains **only the erosion and diffusion component** — the uplift (`upsub * dt`) is subtracted before returning because DES already applied the same displacement through its Lagrangian mechanical solver. Returning the full delta_h would double-count the tectonic uplift.
    - DES adds `delta_h` (erosion + diffusion only) to its surface node z-coordinates. `delta_h` is not `Δcoord_z`: the latter is DES's tectonic displacement, the former the surface-process change added on top of it.
@@ -230,7 +231,7 @@ scheme.
 
 - **Coupling interval is a trigger, not a clamp.** In `gospl_coupling_mode = time`, `gospl_coupling_interval_in_yr` only gates *when* coupling fires (`accumulated_dt >= gospl_coupling_interval_in_yr`); the `dt` actually passed to GoSPL is `accumulated_dt` itself. If DES's adaptive `dt` exceeds the configured interval, coupling fires every DES step and GoSPL's Δt silently becomes DES's `dt` instead of the configured value — there is no sub-stepping or truncation back to the nominal interval.
 
-- **Remeshing mid-interval.** The coupling clock (`accumulated_dt`/`step_counter`) is time-based and unaffected by DES remeshing — a remesh occurring between two coupling events does not skip or reset the coupling schedule, and GoSPL's elevation state is not reseeded from DES after a remesh (consistent with "GoSPL owns the topography" above). However, the internal time-averaged-velocity calculation only guards against a *change in surface node count* across the remesh; if a remesh happens to leave the top-boundary node count unchanged (common when only the interior remeshes), node identity/order is not otherwise verified, and the "time-averaged" velocity computed for the next coupling event can silently difference unrelated nodes. Treat the coupling event immediately following a remesh with caution until this is hardened.
+- **Remeshing mid-interval.** The coupling clock (`accumulated_dt`/`step_counter`) is time-based and unaffected by DES remeshing — a remesh occurring between two coupling events does not skip or reset the coupling schedule, and GoSPL's elevation state is not reseeded from DES after a remesh (consistent with "GoSPL owns the topography" above). A remesh renumbers the nodes, so the coupling event after one uses the instantaneous velocity instead of the time-averaged one, and the log says so: `GoSPL: instantaneous velocity at t=... yr: remeshed since the last coupling (surface nodes N0 -> N1)`.
 
 - **GoSPL mesh domain is fixed at initialization.** `generate_mesh()` runs once, at startup, sized to the DES model's *initial* top-surface extent plus `gospl_mesh_padding` (default 10%) on each side. It is never regenerated during the run (and on restart, an existing mesh file is reused as-is rather than rebuilt). There is currently no mechanism to re-center or resize the GoSPL domain as the DES model deforms. Consequently, the padding fraction effectively upper-bounds the lateral extension the DES model can accumulate before its surface nodes migrate out of the padded domain's interior and approach the GoSPL mesh boundary, where the truncated-drainage-basin / BC-enforcement artifacts the padding was meant to avoid can reappear. No runtime check warns when this happens, so choose a generous `gospl_mesh_padding` for strongly extensional models.
 

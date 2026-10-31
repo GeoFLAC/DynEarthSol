@@ -1217,11 +1217,13 @@ namespace {
         // that can interfere with the C++ heap.
         static std::vector<double> surface_coords_start;
         static bool has_surface_start = false;
+        // var.nremesh when surface_coords_start was recorded. A remesh renumbers the nodes
+        // (renumbering_mesh), so top_nodes[i] may name a different node afterwards even
+        // when the surface node count is unchanged.
+        static int nremesh_at_start = -1;
 
         // Re-initialize GoSPL topography on the first coupling event only.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
-        // Also invalidate surface_coords_start: after remeshing the node set changes,
-        // so time-averaged velocities cannot span across the remesh boundary.
         if (var.gospl_driver->needs_elevation_reset) {
             std::vector<double> des_elev(ntop);
             for (std::size_t i = 0; i < ntop; ++i)
@@ -1241,8 +1243,7 @@ namespace {
         // coupling event or after remeshing.
         if (var.gospl_driver->velocity_coupling) {
             std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
-            bool use_time_avg = has_surface_start &&
-                                surface_coords_start.size() == ntop * 3;
+            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh;
             for (std::size_t i = 0; i < ntop; ++i) {
                 int n = top_nodes[i];
                 if (use_time_avg) {
@@ -1284,12 +1285,15 @@ namespace {
                           << " vy=[" << vy_min << ", " << vy_max << "]"
                           << " vz=[" << vz_min << ", " << vz_max << "]"
                           << std::endl;
-            else if (!use_time_avg)
-                // The fallback after the first event means the surface node count
-                // changed, i.e. a remesh; the docs ask users to watch for it.
+            else if (!use_time_avg) {
+                // The fallback after the first event means a remesh. "same count" marks
+                // the case a node-count check cannot see.
+                const std::size_t nstart = surface_coords_start.size() / 3;
                 std::cout << "GoSPL: instantaneous velocity at t=" << var.time / YEAR2SEC
-                          << " yr: surface node count changed since the last coupling"
-                          << std::endl;
+                          << " yr: remeshed since the last coupling (surface nodes "
+                          << nstart << " -> " << ntop
+                          << (nstart == ntop ? ", same count" : "") << ")" << std::endl;
+            }
         }
 
         // Run GoSPL and get net dh in one call.
@@ -1323,6 +1327,7 @@ namespace {
         // Done after GoSPL returns; surface_coords_start is a static vector allocated in
         // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
         surface_coords_start = coords;
+        nremesh_at_start = var.nremesh;
         has_surface_start = true;
 
         var.gospl_driver->record_coupling(total_dt, min_dh, max_dh, sum_dh / ntop);
