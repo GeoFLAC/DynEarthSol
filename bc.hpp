@@ -3,6 +3,7 @@
 
 bool is_on_boundary(const Variables &var, int node);
 double find_max_vbc(const BC &bc);
+void print_bc_table(const BC &bc);
 void create_boundary_normals(const Variables &var, array_t &bnormals,
                              double_vec& edge_vec, int* edge_slot);
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel);

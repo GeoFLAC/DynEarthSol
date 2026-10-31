@@ -811,6 +811,7 @@ int main(int argc, const char* argv[])
     // run simulation
     //
     static Variables var; // declared as static to silence valgrind's memory leak detection
+    print_bc_table(param.bc);
     init_var(param, var);
 
     var.output = new Output(param, build, cpu, dev, manifest, var.func_time.start_time,

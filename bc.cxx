@@ -18,6 +18,88 @@
 
 #include "bc.hpp"
 
+namespace {
+
+// Per-component form of a legacy vbc code (see the design note in issue #115).
+// Values are symbolic: N is vbc_val_* times the period table, V the raw
+// vbc_val_*, L vbc_val_*_l, 0 zero, . none. It is only printed for now;
+// apply_vbcs still switches on the integer codes.
+struct SideBCRow {
+    const char *types;
+    const char *vals;
+};
+
+SideBCRow legacy_vbc_row(char side, int code)
+{
+#ifdef THREED
+    const bool lateral = (side == 'x' || side == 'y');
+    if (side == 'n') {
+        switch (code) {
+        case 1: case 11: return {"vff", "V,.,."};
+        case 3: case 13: return {"vvv", "V,0,0"};
+        }
+        return {"fff", ".,.,."};
+    }
+    static const SideBCRow x3[] = {{"fff", ".,.,."}, {"vff", "N,.,."}, {"fvv", ".,0,0"}, {"vvv", "N,0,0"},
+                                   {"fvv", ".,V,0"}, {"vvv", "0,V,0"}, {"vvf", "N,L,."}, {"vvf", "N,0,."}};
+    static const SideBCRow y3[] = {{"fff", ".,.,."}, {"fvf", ".,N,."}, {"vfv", "0,.,0"}, {"vvv", "0,N,0"},
+                                   {"vfv", "V,.,0"}, {"vvv", "V,0,0"}, {"vvf", "L,N,."}, {"vvf", "0,N,."}};
+    static const SideBCRow z3[] = {{"fff", ".,.,."}, {"ffv", ".,.,V"}, {"vvf", "0,0,."}, {"vvv", "0,0,V"}};
+    if (lateral && code >= 0 && code <= 7) return side == 'x' ? x3[code] : y3[code];
+    if (side == 'z' && code >= 0 && code <= 3) return z3[code];
+    return {"fff", ".,.,."};
+#else
+    if (side == 'n') {
+        switch (code) {
+        case 1: case 11: return {"vf", "V,."};
+        case 3: case 13: return {"vv", "V,0"};
+        }
+        return {"ff", ".,."};
+    }
+    static const SideBCRow x2[] = {{"ff", ".,."}, {"vf", "N,."}, {"fv", ".,0"}, {"vv", "N,0"}, {"vv", "0,V"}};
+    static const SideBCRow z2[] = {{"ff", ".,."}, {"fv", ".,V"}, {"vf", "0,."}, {"vv", "0,V"}, {"vv", "V,0"}};
+    if (side == 'x' && ((code >= 0 && code <= 4) || code == 6)) return code == 6 ? SideBCRow{"vv", "N,L"} : x2[code];
+    if (side == 'z' && code >= 0 && code <= 4) return z2[code];
+    return {"ff", ".,."};
+#endif
+}
+
+void print_side(const char *name, char side, int code, int stress_bc, double stress_val, bool horizontal_frame)
+{
+    SideBCRow r = legacy_vbc_row(side, code);
+    // codes that do nothing today also lose the lithostatic support of code 0
+    const bool known = (code == 0) || (r.types[0] != 'f') || (r.types[1] != 'f') || (NDIMS == 3 && r.types[2] != 'f');
+    std::cout << "  " << name << ": code " << std::setw(2) << code << "  types " << r.types
+              << "  values [" << r.vals << "]";
+    if (side == 'n') std::cout << "  frame " << (horizontal_frame ? "(h, tangent, z)" : "(n, tangent, tangent)");
+    if (!known) std::cout << "  (no effect, no lithostatic)";
+    if (stress_bc != 0)
+        std::cout << "  traction " << stress_val << " Pa on component " << "xyz"[stress_bc-1];
+    std::cout << '\n';
+}
+
+} // anonymous namespace
+
+
+void print_bc_table(const BC &bc)
+{
+    std::cout << "Velocity/traction boundary conditions, per component:\n";
+    print_side("x0", 'x', bc.vbc_x0, bc.stress_bc_x0, bc.stress_val_x0, false);
+    print_side("x1", 'x', bc.vbc_x1, bc.stress_bc_x1, bc.stress_val_x1, false);
+#ifdef THREED
+    print_side("y0", 'y', bc.vbc_y0, bc.stress_bc_y0, bc.stress_val_y0, false);
+    print_side("y1", 'y', bc.vbc_y1, bc.stress_bc_y1, bc.stress_val_y1, false);
+#endif
+    print_side("z0", 'z', bc.vbc_z0, bc.stress_bc_z0, bc.stress_val_z0, false);
+    print_side("z1", 'z', bc.vbc_z1, bc.stress_bc_z1, bc.stress_val_z1, false);
+    const int n[] = {bc.vbc_n0, bc.vbc_n1, bc.vbc_n2, bc.vbc_n3};
+    for (int i=0; i<4; ++i) {
+        const char name[3] = {'n', char('0'+i), 0};
+        print_side(name, 'n', n[i], 0, 0, n[i] >= 11);
+    }
+}
+
+
 
 namespace {
 
