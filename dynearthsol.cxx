@@ -1120,9 +1120,11 @@ int main(int argc, const char* argv[])
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain, rotation_dt);
 
+        // Drain the async rotate_stress: the monitor and the slow-step updates below read
+        // stress and strain on the host.
+        #pragma acc wait
         monitor_write_if_due(param, var);
 
-        #pragma acc wait
         if (slow_step) {
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,
