@@ -465,14 +465,21 @@ def process_single_frame(args):
     # Converting marker
     #
     if output_markers:
-        # ordinary markerset
-        filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
-        output_vtp_file(des, frame, filename, 'markerset', time_in_yr, step)
-
-        # hydrous markerset
-        if 'hydrous-markerset size' in des.field_pos:
-            filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
-            output_vtp_file(des, frame, filename, 'hydrous-markerset', time_in_yr, step)
+        # Read the set names from the frame: des.field_pos (the binary header
+        # index) is empty for vtkhdf output. Convert the primary set first, so an
+        # error in another set cannot stop its .vtp being written.
+        marker_sets = des.marker_sets(frame)
+        marker_sets = ([m for m in marker_sets if m == 'markerset'] +
+                       [m for m in marker_sets if m != 'markerset'])
+        for markersetname in marker_sets:
+            if markersetname == 'markerset':
+                filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
+            elif markersetname == 'hydrous-markerset':
+                filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
+            else:
+                filename = '{0}.{1}.{2}.vtp'.format(output_prefix, markersetname,
+                                                    suffix)
+            output_vtp_file(des, frame, filename, markersetname, time_in_yr, step)
 
     return suffix
 

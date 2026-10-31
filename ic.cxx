@@ -891,9 +891,9 @@ void initial_temperature(const Param &param, const Variables &var,
             // Continental geotherm
             const double pi = 3.14159265358979323846;
 
-            const int dens_c = param.mat.rho0[param.mat.mattype_crust];
+            const int dens_c = param.mat.rho0[param.mat.mattype_continental_crust];
             const int dens_m = param.mat.rho0[param.mat.mattype_mantle];
-            const double cond_c = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_crust)];
+            const double cond_c = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_continental_crust)];
             const double cond_m = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_mantle)];
             const double diff_m = cond_m/1000./dens_m;
 

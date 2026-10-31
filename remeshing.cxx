@@ -22,6 +22,7 @@
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
 #include "nn-interpolation.hpp"
+#include "phasechanges.hpp"
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
@@ -167,17 +168,17 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
 }
 
 void flatten_x0(const uint_vec &old_bcflag, double *qcoord,
-                int_vec &points_to_delete, double min_dist)
+                int_vec &points_to_delete, double min_dist, double plane = 0.)
 {
     for (std::size_t i=0; i<old_bcflag.size(); ++i) {
         uint flag = old_bcflag[i];
         if (is_x0(flag))
-            qcoord[i*NDIMS] = 0.;
+            qcoord[i*NDIMS] = plane;
         // Delete any non-x0 node within min_dist of (or past) the plane, a top or bottom node
         // carried past the corner too (skipping boundary nodes leaves an orphan wedge there).
         // flatten_x1/y0/y1 do the same.
         else if (! is_x0(flag))
-            if (qcoord[i*NDIMS] < min_dist)
+            if (qcoord[i*NDIMS] < plane + min_dist)
                 points_to_delete.push_back(i);
     }
 }
@@ -208,95 +209,24 @@ void flatten_y0(const uint_vec &old_bcflag, double *qcoord,
     }
 }
 
-void flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
-                int_vec &points_to_delete)
+// remeshing_option 12: make the x0 wall vertical again at the x of its top corner (x0 and top),
+// for a wall whose foot lags or leads its top (a push tapered toward a fixed bottom). Nodes left
+// outside, within min_dist of the new wall or past it, are marked as flatten_x0 marks them.
+// Returns the new wall position.
+double flatten_x0_corner(const uint_vec &old_bcflag, double *qcoord,
+                         int_vec &points_to_delete, double min_dist)
 {
-
-    // for cutting x0 boundary to (x0 & z1) in X
-    double x1x, bx0;
-
-    int j=0;
-    while (j>-1) {
-        uint flag = old_bcflag[j];
-        if ((flag & BOUNDX0 ) && (flag & BOUNDZ1)) {
-            x1x = qcoord[j*NDIMS]; break;
-        }
-        j++;
-    }
-
-    // interpolation or extrapolation 4 bx0
-    j=0;
-    int l=0;
-    double bo_X[2], bo_depth[2];
-    do {
-        uint flag = old_bcflag[j];
-        if (is_bottom(flag)) {
-           bo_depth[l]  = qcoord[j*NDIMS + NDIMS-1];
-           bo_X[l] = qcoord[j*NDIMS];
-           l++;
-        }
-        j++;
-    } while (l<2);
-
-    bx0 = bo_depth[0] + (bo_depth[1]-bo_depth[0])*(x1x-bo_X[0])/(bo_X[1]-bo_X[0]);
-
-    std::cout << "x1x: " << x1x << "; bx0: "<<bx0<< '\n';
-    double x0_zmin = std::numeric_limits<double>::max();
-    double bot_xmax = std::numeric_limits<double>::lowest();
-    double b0_exceed_xmax = std::numeric_limits<double>::lowest();
-
-    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        if (is_x0(flag)) {
-            if ((x0_zmin > qcoord[i*NDIMS + NDIMS-1]) && !(qcoord[i*NDIMS] > x1x))
-                x0_zmin = qcoord[i*NDIMS + NDIMS-1];
-            else if (is_bottom(flag))
-                b0_exceed_xmax = qcoord[i*NDIMS];
-            // set all x0 to x1x in X
-            qcoord[i*NDIMS] = x1x;
-        }
-    }
-
-    double z0_xmax_ref = 2*x1x - b0_exceed_xmax;
-
+    double plane = std::numeric_limits<double>::quiet_NaN();
     for (std::size_t i=0; i<old_bcflag.size(); ++i)
-        if (is_bottom(old_bcflag[i]))
-            if ((bot_xmax < qcoord[i*NDIMS]) && (qcoord[i*NDIMS] < z0_xmax_ref))
-                bot_xmax = qcoord[i*NDIMS];
-
-    double v = (x1x - bot_xmax) / (x0_zmin - bx0);
-
-#ifdef USEMMG
-    double shrink_x = (x1x - bot_xmax) / (b0_exceed_xmax - bot_xmax);
-#else
-    double b0_clean_zmin_ref = x0_zmin - (x0_zmin - bx0)/2.;
-#endif
-
-    for (std::size_t i=0; i < old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        double x = qcoord[i*NDIMS];
-        double y = qcoord[i*NDIMS + NDIMS-1];
-        if (!is_x0(flag)) {
-            double fx = v * (y - x0_zmin) + x1x;
-            if (fx < x) {
-#ifdef USEMMG
-                // adjust all nodes at the right side of edge line
-                double dx = (x - fx) * shrink_x;
-                qcoord[i*NDIMS] = fx + dx;
-#else
-                // remove all nodes at the right side of edge line
-                points_to_delete.push_back(i);
-#endif
-            }
-#ifdef USEMMG
-#else
-        } else if (!is_bottom(flag)) {
-            // remove b0 nodes close to the z0-b0 corner
-            if (y < b0_clean_zmin_ref)
-                points_to_delete.push_back(i);
-#endif
+        if (is_x0(old_bcflag[i]) && (old_bcflag[i] & BOUNDZ1)) {
+            plane = qcoord[i*NDIMS];
+            break;
         }
-    }
+    if (std::isnan(plane))
+        die(EXIT_INTERNAL_ASSERT, "flatten_x0_corner: the x0 wall has no top-corner node");
+    std::cout << "      [flatten] x0 wall restored to vertical at x = " << plane << " m.\n";
+    flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist, plane);
+    return plane;
 }
 
 void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
@@ -1082,9 +1012,9 @@ void refine_surface_elem(const Param &param, const Variables &var,
         int e = (*var.surfinfo.top_facet_elems)[i];
 
         int_vec &a = (*var.elemmarkers)[e];
-        if (a[param.mat.mattype_sed] == 0) continue;
+        if (a[param.mat.mattype_sediment] == 0) continue;
 //        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-//        if (mat != param.mat.mattype_sed) continue;
+//        if (mat != param.mat.mattype_sediment) continue;
 
         if (old_volume[e] < surface_vol) continue;
 
@@ -1345,7 +1275,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
                    points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
         break;
     case 12:
-        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     }
 
@@ -2374,6 +2304,38 @@ double packed_elem_quality(const double *coord, const int *elem)
 }
 
 
+// Shared by check_mesh_tangle() and, with MMG, by the bottom-fold repair in optimize_mesh_2d():
+// outside the MMG block, so a build without MMG has them too.
+namespace {
+
+// The tolerance of the fold test: an element's signed measure counts only beyond
+// tangle_rel() * maxedge^NDIMS. Round-off in it is ~1e-15 of maxedge^NDIMS, a fold is O(1), so
+// 1e-9 (not tuned) ignores noise and leaves anything flatter to the tiny/quality triggers.
+double tangle_rel() { return 1e-9; }
+
+// The fold test of check_mesh_tangle(), shared with the bottom-fold repair in optimize_mesh_2d()
+// so both read one predicate: the first element wound against the majority orientation, counting
+// only elements beyond their tolerance, or -1. measure(e, m, tol) gives element e's signed
+// measure and tangle_rel() * its longest edge^NDIMS.
+template <typename Measure>
+int first_folded_element(int nelem, const Measure &measure)
+{
+    int npos = 0, nneg = 0;
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; measure(e, m, tol);
+        if (m >  tol) ++npos;
+        else if (m < -tol) ++nneg;
+    }
+    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
+    for (int e = 0; e < nelem; ++e) {
+        double m, tol; measure(e, m, tol);
+        if (std::fabs(m) > tol && m * ref < 0.0) return e;
+    }
+    return -1;
+}
+
+} // anonymous namespace
+
 #ifdef USEMMG
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
 // 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
@@ -2487,7 +2449,7 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
             }
         }
         // printf, not cout: earlier log lines leave cout in fixed or scientific format
-        if (n_inflated)
+        if (n_inflated && param.mesh.meshing_verbosity >= 0)
             std::printf("      [metric] surface-motion anticipation: inflated the target of %d "
                         "shrinking top element(s) (largest volume factor %.6f).\n",
                         n_inflated, max_inflate);
@@ -2524,7 +2486,7 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
         min_ratio = std::min(min_ratio, r);
     }
     // printf, as above
-    if (n_kept)
+    if (n_kept && param.mesh.meshing_verbosity >= 0)
         std::printf("      [metric] kept refinement at %d node(s), the finest at %.3f of its "
                     "current plastic-strain target.\n", n_kept, min_ratio);
     // FLOOR (mmg_metric_floor): a target at MMG's hmin puts the band where MMG's output scatter
@@ -2724,7 +2686,7 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
             }
         }
     }
-    if (n_iface_pinned)
+    if (n_iface_pinned && param.mesh.meshing_verbosity >= 0)
         std::cout << "      [freeze] repair: " << n_iface_pinned
                   << " material-interface node ref(s) of low-quality elements not freed by the "
                      "quality term (the interface must not move during the repair).\n";
@@ -2844,7 +2806,7 @@ void rule_side_strip(const Param &param, const Variables &var, const conn_t &con
                 free_node(m, conn[i], 4);
         }
     }
-    if (n_freed) {
+    if (n_freed && param.mesh.meshing_verbosity >= 0) {
         std::cout << "      [unfreeze] side strip:";
         const char *sep = " ";
         for (int t = 0; t < NSIDEWALL; ++t) {
@@ -2914,7 +2876,8 @@ std::vector<int> build_interface_req_edges(const Variables &var, const conn_t &c
 void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &conn,
                                   std::vector<double> &metric, std::vector<char> &reqn,
                                   std::vector<char> &reqe, std::vector<int> &iface,
-                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down)
+                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down,
+                                  bool verbose)
 {
     if (iface.empty()) return;
     const double FACTOR = 1.41;   // ~MMG2D's split threshold (MMG2D_LOPTL = 1.4); pre-do it here
@@ -2973,7 +2936,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
         out.push_back(a); out.push_back(m); out.push_back(m); out.push_back(b);
     }
     iface.swap(out);
-    if (nsplit)
+    if (nsplit && verbose)
         std::cout << "      [require] pre-subdivided " << nsplit
                   << " over-long interface edge(s) at their midpoints "
                      "(MMG cannot split a required edge itself).\n";
@@ -3111,7 +3074,8 @@ void rule_size_recovery(const Param &param, const Variables &var,
             if (!((*var.bcflag)[conn[i]] & clamp_side_bits) && !((*var.bcflag)[conn[i]] & BOUNDZ0))
                 free_node(m, conn[i], 5);
     }
-    if (n_freed || n_oversized || n_top_skipped || n_mat_skipped || n_fixed_skipped)
+    const bool verbose = param.mesh.meshing_verbosity >= 0;
+    if ((n_freed || n_oversized || n_top_skipped || n_mat_skipped || n_fixed_skipped) && verbose)
         std::cout << "      [unfreeze] size recovery: freed " << n_freed
                   << " fossil-fine + " << n_oversized << " oversized(>=2x) elem(s) (skipped "
                   << n_top_skipped << " top-surface, "
@@ -3371,8 +3335,9 @@ void mark_quiet_required(const Param &param, const Variables &var,
         }
         derive_required(m, mnode, melem, mconn,
                         required_node, required_elem, split_node, n_req_node, n_req_elem);
-        report_freeze_summary("direct path", m.counts, m.elem_grade, n_r6_free,
-                              "R6 flatten-broken", "", mnode, n_req_node, n_req_elem);
+        if (param.mesh.meshing_verbosity >= 0)
+            report_freeze_summary("direct path", m.counts, m.elem_grade, n_r6_free,
+                                  "R6 flatten-broken", "", mnode, n_req_node, n_req_elem);
     }
     else {
         // (2) OLD masks -> NEW masks. t.node_rule stays unallocated and t.counts zero: R6/R7
@@ -3415,10 +3380,11 @@ void mark_quiet_required(const Param &param, const Variables &var,
                         required_node, required_elem, split_node, n_req_node, n_req_elem);
         // R1-R5 attribution was counted on the pre-collapse mesh (m); the totals are the
         // translated mask actually handed to MMG.
-        report_freeze_summary("collapse path", m.counts, t.elem_grade, n_r67_free,
-                              "R6/R7 flatten-broken + collapse region",
-                              " (R1-R5 counted pre-collapse)",
-                              mnode, n_req_node, n_req_elem);
+        if (param.mesh.meshing_verbosity >= 0)
+            report_freeze_summary("collapse path", m.counts, t.elem_grade, n_r67_free,
+                                  "R6/R7 flatten-broken + collapse region",
+                                  " (R1-R5 counted pre-collapse)",
+                                  mnode, n_req_node, n_req_elem);
     }
 }
 
@@ -3449,9 +3415,11 @@ void elem_centroid_scale(const double *coord, const int *elem, double *centroid,
 
 // Count the MMG output elements that would soon re-trigger remeshing: bad_mesh_quality's quality
 // test, plus a tiny test stricter than its trigger (tiny_vol). When bad_c / bad_r are non-null,
-// append each bad element's centroid and radius (longest edge).
+// append each bad element's centroid and radius (longest edge); when bad_q / bad_v are non-null,
+// append its quality and its volume as a fraction of tiny_vol.
 int collect_bad_output(const Param &param, const MMGOutput &out,
-                       std::vector<double> *bad_c, std::vector<double> *bad_r)
+                       std::vector<double> *bad_c, std::vector<double> *bad_r,
+                       std::vector<double> *bad_q = nullptr, std::vector<double> *bad_v = nullptr)
 {
     const double q_thr = param.mesh.min_quality;
     // Half the gap (in log measure) from the tiny-element trigger to MMG's floor: at the trigger a
@@ -3474,6 +3442,8 @@ int collect_bad_output(const Param &param, const MMGOutput &out,
 #endif
         if (q >= q_thr && vol >= tiny_vol) continue;
         ++nbad;
+        if (bad_q) bad_q->push_back(q);
+        if (bad_v) bad_v->push_back(vol / tiny_vol);
         if (!bad_c || !bad_r) continue;
         double c[NDIMS], r;
         elem_centroid_scale(out.coord.data(), el, c, r);
@@ -3497,7 +3467,8 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
 {
     std::vector<double> bad_c;    // bad output element centroids (NDIMS each)
     std::vector<double> bad_r;    // matching locality radii (longest edge)
-    const int nbad = collect_bad_output(param, out, &bad_c, &bad_r);
+    std::vector<double> bad_q, bad_v;   // their quality and volume / tiny_vol, for the retry line
+    const int nbad = collect_bad_output(param, out, &bad_c, &bad_r, &bad_q, &bad_v);
     if (nbad == 0) return 0;
 
     // Node -> element support of the MMG INPUT mesh, built locally: on the collapse path the mesh
@@ -3585,14 +3556,29 @@ int unfreeze_near_bad_output(const Param &param, const MMGOutput &out,
             if (!req_node[el[k]]) { req_elem[e] = 0; ++nfreed_hinge; break; }
     }
     const int nfreed = nfreed_core + nfreed_hinge;
-    std::cout << "      [quality] MMG output has " << nbad
-              << " below-min_quality/tiny element(s); unfroze " << nfreed_core
-              << " core entities within " << rings << " connectivity ring(s) (+"
-              << nfreed_hinge << " hinge element(s), nodes kept)"
-              << (nfreed ? " for a retry."
-                         : " -- nothing frozen in reach, keeping this mesh (a tiny element where the"
-                           " free surface meets a wall can need a larger mmg_hausd_factor).")
-              << "\n";
+    if (!nfreed)
+        std::cout << "      [quality] WARNING: MMG output has " << nbad
+                  << " below-min_quality/tiny element(s) and nothing frozen in reach; keeping this "
+                     "mesh (a tiny element where the free surface meets a wall can need a larger "
+                     "mmg_hausd_factor).\n";
+    else {
+        // each bad element: low quality and/or tiny volume, and where, so a spot that
+        // fails at every remesh is recognisable
+        std::cout << "    MMG attempt " << attempt + 2 << "/4: " << nbad << " bad output element(s):";
+        for (int j = 0; j < nbad; ++j) {
+            const bool lowq = bad_q[j] < param.mesh.min_quality, tiny = bad_v[j] < 1.0;
+            std::cout << (j ? ", " : " ");
+            if (lowq) std::cout << "q " << bad_q[j];
+            if (lowq && tiny) std::cout << " and ";
+            if (tiny) std::cout << "tiny " << bad_v[j] << "x";
+            std::cout << " at (";
+            for (int d = 0; d < NDIMS; ++d)
+                std::cout << (d ? ", " : "") << bad_c[(std::size_t)j*NDIMS + d];
+            std::cout << ")";
+        }
+        std::cout << "; unfroze " << nfreed_core << " core entities within " << rings
+                  << " ring(s) + " << nfreed_hinge << " hinge element(s)\n";
+    }
     return nfreed;
 }
 
@@ -3655,8 +3641,6 @@ void mmg_adapt_quality_gated(const Param &param, const MMGInput &in, MMGOutput &
         }
         if (unfreeze_near_bad_output(param, out, in.nnode, in.nelem, in.coord, in.conn,
                                      attempt, req_node, req_elem) == 0) break;
-        std::cout << "      [quality] re-running MMG with the unfrozen neighbourhood (attempt "
-                  << attempt + 2 << "/4).\n";
     }
 }
 
@@ -3704,7 +3688,7 @@ static void rebuild_collapsed_segments(int nseg, const int *segment, const int *
                                        const int_vec &new_to_old_node, const uint_vec &bcflag,
                                        const double_vec &ncoord,
                                        int_vec &nsegment, int_vec &nsegflag, int &ns,
-                                       int_vec *fold = nullptr)
+                                       bool verbose, int_vec *fold = nullptr)
 {
     // faces of the surviving elements: sorted node set -> {owner count, the owner's node order}
     typedef std::array<int, NODES_PER_FACET> Facet;
@@ -3761,7 +3745,7 @@ static void rebuild_collapsed_segments(int nseg, const int *segment, const int *
         ++n_exposed;
     }
     if (fold && !fold->empty()) return;   // the caller repairs the fold and redoes the collapse
-    if (n_orphan || n_exposed)
+    if ((n_orphan || n_exposed) && verbose)
         std::cout << "      [collapse] boundary: dropped " << n_orphan << " orphan segment(s), flagged "
                   << n_exposed << " exposed face(s).\n";
 }
@@ -3784,7 +3768,7 @@ static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &c
                                   double_vec &ncoord, int_vec &nconn,
                                   int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
                                   int_vec &new_to_old_node, int_vec &new_to_old_elem,
-                                  int &nn, int &ne, int &ns, int_vec &fold)
+                                  int &nn, int &ne, int &ns, int_vec &fold, bool verbose)
 {
     // merged_to[n] = the node n was collapsed onto, or -1 if alive. Peel and stalemate never merge
     // onto an outside node (merges apply after the scan: a cycle could close); the stranded pass can
@@ -3902,7 +3886,7 @@ static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &c
     int n_passed = 0, n_left = 0;
     for (char c : passed_over) n_passed += c;
     for (int n = 0; n < nnode; ++n) n_left += (crossed[n] && alive(n));
-    if (n_passed)
+    if (n_passed && verbose)
         std::cout << "      [collapse] " << n_passed << " outside node(s) deferred or redirected a merge "
                      "that would invert an element; " << n_left
                   << " left unmerged by the crossed-plane passes.\n";
@@ -3998,7 +3982,7 @@ static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &c
 
     int_vec fold_faces;
     rebuild_collapsed_segments(nseg, segment, segflag, remap, ne, nconn, new_to_old_node, bcflag, ncoord,
-                               nsegment, nsegflag, ns, &fold_faces);
+                               nsegment, nsegflag, ns, verbose, &fold_faces);
     // the dropped elements that own each fold face (FOLD: see collapse_outside_nodes)
     for (std::size_t f = 0; f < fold_faces.size(); f += NODES_PER_FACET) {
         bool owned = false;
@@ -4030,17 +4014,17 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
                             const double *coord, const uint_vec &bcflag,
                             const int *conn, const int *segment, const int *segflag,
                             const double_vec &metric,
-                            double zlen, double xlen, double ylen, double min_dist,
+                            double zlen, double xlen, double ylen, double min_dist, double x0plane,
                             double_vec &ncoord, int_vec &nconn,
                             int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
                             int_vec &new_to_old_node, int_vec &new_to_old_elem,
-                            int &nn, int &ne, int &ns)
+                            int &nn, int &ne, int &ns, bool verbose)
 {
     // the planes node s is past or within min_dist of (BOUND* bitmask)
     auto planes_near = [&](int s) {
         const double *p = coord + s*NDIMS;
         uint c = 0;
-        if (p[0]       <  0.0  + min_dist) c |= BOUNDX0;
+        if (p[0]       <  x0plane + min_dist) c |= BOUNDX0;
         if (p[0]       >  xlen - min_dist) c |= BOUNDX1;
 #ifdef THREED
         if (p[1]       <  0.0  + min_dist) c |= BOUNDY0;
@@ -4060,7 +4044,7 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
         int_vec fold;
         collapse_outside_pass(pts, crossed, nnode, nelem, nseg, coord, bcflag, conn, segment, segflag,
                               metric, ncoord, nconn, nsegment, nsegflag, nmetric,
-                              new_to_old_node, new_to_old_elem, nn, ne, ns, fold);
+                              new_to_old_node, new_to_old_elem, nn, ne, ns, fold, verbose);
         if (fold.empty()) return;
         int added = 0;
         for (std::size_t i = 0; i < fold.size(); i += NODES_PER_ELEM) {
@@ -4082,8 +4066,9 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
             }
         }
         if (!added) die_collapse_fold(coord + fold[0]*NDIMS);
-        std::cout << "      [collapse] fold: marking " << added << " node(s) of dropped flat/inverted "
-                     "element(s) above the restored bottom as outside too; redoing the collapse.\n";
+        if (verbose)
+            std::cout << "      [collapse] fold: marking " << added << " node(s) of dropped flat/inverted "
+                         "element(s) above the restored bottom as outside too; redoing the collapse.\n";
     }
 }
 
@@ -4110,7 +4095,7 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
         double min_len,
         double_vec &ncoord, int_vec &nconn, int_vec &nsegment, int_vec &nsegflag, double_vec &nmetric,
         int_vec &new_to_old_node, int_vec &new_to_old_elem, int_vec &removed_old_nodes,
-        int &nn, int &ne, int &ns)
+        int &nn, int &ne, int &ns, bool verbose)
 {
     // node -> boundary-segment adjacency (a simple boundary chain has exactly 2 per node),
     // for locating the collapse neighbours p and q of the area-preserving reposition.
@@ -4232,8 +4217,8 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
         // same flat/inverted cut as collapse_outside_pass (reason there), on a reshaped element
         // only (Rules above)
         if (!pristine(e) && ref != 0.0 && m * ref <= 1e-6 * ref * ref) {
-            std::cout << "      [collapse] boundary segments below hmin: skipped, it would leave a "
-                         "flat or inverted element.\n";
+            std::cout << "      [collapse] WARNING: boundary segments below hmin: skipped, it would "
+                         "leave a flat or inverted element.\n";
             nn = ne = ns = 0;
             return 0;
         }
@@ -4243,8 +4228,8 @@ int collapse_short_boundary_segments_2d(int nnode, int nelem, int nseg,
     }
 
     rebuild_collapsed_segments(nseg, segment, segflag, remap, ne, nconn, new_to_old_node, bcflag, ncoord,
-                               nsegment, nsegflag, ns);
-    if (nadjusted)   // logged only for a collapse that went through
+                               nsegment, nsegflag, ns, verbose);
+    if (nadjusted && verbose)   // logged only for a collapse that went through
         std::cout << "      [collapse] area-preserving merge: repositioned " << nadjusted
                   << " top-surface merge target(s), conserving " << a_conserved
                   << " m^2 of domain area a plain snap would have swept.\n";
@@ -4339,6 +4324,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     }
 
     int_vec points_to_delete;
+    double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
     bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
@@ -4395,16 +4381,18 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     // flatten_* marked nodes past or within min_dist of a restored plane
     bool outside_material = !points_to_delete.empty();
     bool collapse_needed = outside_material;
+    const bool verbose = param.mesh.meshing_verbosity >= 0;
     if (outside_material) {
-        std::cout << "      [collapse] material past, or within " << min_dist
-                  << " m of, a restored boundary; collapsing it onto the boundary plane "
-                     "before MMG (collapse path).\n";
+        if (verbose)
+            std::cout << "      [collapse] material past, or within " << min_dist
+                      << " m of, a restored boundary; collapsing it onto the boundary plane "
+                         "before MMG (collapse path).\n";
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist, x0plane,
                                c_coord, c_conn, c_seg, c_segflag, c_metric,
-                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
+                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs, verbose);
         mnode = cn; melem = ce; mseg = cs;
         mcoord = c_coord.data();
         mconn1 = c_conn.data();
@@ -4460,6 +4448,88 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
 #else
 
+namespace {
+
+// Twice the signed area of triangle e (nodes in conn[3e..3e+2], coordinates xz).
+double tri_measure(const double *xz, const int *conn, int e)
+{
+    const double *a = &xz[conn[3*e]*2], *b = &xz[conn[3*e+1]*2], *c = &xz[conn[3*e+2]*2];
+    return (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+}
+
+// +1 or -1: the orientation most triangles share.
+int majority_sign(const double *xz, const int *conn, int ne)
+{
+    int npos = 0;
+    for (int e = 0; e < ne; ++e) npos += tri_measure(xz, conn, e) > 0.0;
+    return (2 * npos >= ne) ? 1 : -1;
+}
+
+// TEMPORARY repair of the bottom-snap fold: flatten_bottom() lifts a bottom node that sank below
+// the bottom plane back onto it, sometimes so far that a triangle above it turns inside out; MMG
+// reorients it silently and returns a folded mesh, which check_mesh_tangle() stops on. Lift
+// interior nodes (on no boundary segment) of the input's inverted triangles, so they move up with
+// the bottom node, each by the least amount that gives its triangle a measure of FRAC x its
+// longest edge^2 (before the lift), and repeat for the triangles a lift inverts in turn. Up only:
+// the snap moved the bottom up, and a node moved down would close on the restored bottom. A
+// triangle's measure is linear in one node's z, so each lift hits its target exactly. Returns the
+// number of nodes lifted (0: nothing inverted), or -1 when a triangle has no interior node a lift
+// unfolds, or the passes run out. Called only on a fold, so a remesh that does not fold is
+// untouched. The full fix, the bc.has_winkler_bottom_restore option, comes in a later release;
+// this repair then goes.
+int lift_to_unfold(double *xz, const int *conn, int nn, int ne, const int *seg, int ns,
+                   double &max_lift)
+{
+    const double FRAC = 0.05;      // target measure / longest edge^2: a sliver MMG can improve; untuned
+    const int MAX_PASSES = 10;     // a lift inverts at most a few neighbours; untuned
+    const int s = majority_sign(xz, conn, ne);
+    std::vector<char> on_boundary(nn, 0);
+    for (int i = 0; i < 2 * ns; ++i) on_boundary[seg[i]] = 1;
+    std::vector<char> lifted(nn, 0);
+    max_lift = 0.0;
+    for (int pass = 0; pass < MAX_PASSES; ++pass) {
+        int ninverted = 0;
+        for (int e = 0; e < ne; ++e) {
+            const double m = s * tri_measure(xz, conn, e);
+            if (m > 0.0) continue;
+            ++ninverted;
+            double edge2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < i; ++j) {
+                    const double dx = xz[conn[3*e+i]*2] - xz[conn[3*e+j]*2];
+                    const double dz = xz[conn[3*e+i]*2+1] - xz[conn[3*e+j]*2+1];
+                    edge2 = std::max(edge2, dx*dx + dz*dz);
+                }
+            // The least upward lift among the interior nodes that unfolds e.
+            int best = -1;
+            double best_dz = std::numeric_limits<double>::max();
+            for (int i = 0; i < 3; ++i) {
+                const int n = conn[3*e+i];
+                if (on_boundary[n]) continue;
+                // d(measure)/dz of node n: x of the node after next minus x of the next one
+                // (tri_measure's cofactor), times s for the majority orientation.
+                const double *p = &xz[conn[3*e+(i+1)%3]*2], *q = &xz[conn[3*e+(i+2)%3]*2];
+                const double g = s * (q[0] - p[0]);
+                if (g <= 0.0) continue;   // lifting n would not unfold e
+                const double dz = (FRAC * edge2 - m) / g;
+                if (dz < best_dz) { best_dz = dz; best = n; }
+            }
+            if (best < 0) return -1;
+            xz[best*2+1] += best_dz;
+            lifted[best] = 1;
+            max_lift = std::max(max_lift, best_dz);
+        }
+        if (ninverted == 0) {
+            int nlifted = 0;
+            for (char l : lifted) nlifted += l;
+            return nlifted;
+        }
+    }
+    return -1;
+}
+
+} // anonymous namespace
+
 void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
               const segment_t &original_segment, const segflag_t &original_segflag)
@@ -4504,6 +4574,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     }
 
     int_vec points_to_delete;
+    double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
     bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
@@ -4526,7 +4597,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                        points_to_delete, floors);
         break;
     case 12:
-        flatten_x0_corner(old_bcflag, qcoord, points_to_delete);
+        excl_func = &is_corner;
+        x0plane = flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     case 13:
         // restore the bottom AND both side walls to their initial planes
@@ -4562,16 +4634,18 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     // flatten_* marked nodes past or within min_dist of a restored plane
     bool outside_material = !points_to_delete.empty();
     bool collapse_needed = outside_material;
+    const bool verbose = param.mesh.meshing_verbosity >= 0;
     if (outside_material) {
-        std::cout << "      [collapse] material past, or within " << min_dist
-                  << " m of, a restored boundary; collapsing it onto the boundary plane "
-                     "before MMG (collapse path).\n";
+        if (verbose)
+            std::cout << "      [collapse] material past, or within " << min_dist
+                      << " m of, a restored boundary; collapsing it onto the boundary plane "
+                         "before MMG (collapse path).\n";
         int cn = 0, ce = 0, cs = 0;
         collapse_outside_nodes(points_to_delete, old_nnode, old_nelem, old_nseg,
                                qcoord, old_bcflag, qconn, qsegment, qsegflag, *var.ntmp,
-                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist,
+                               param.mesh.zlength, param.mesh.xlength, param.mesh.ylength, min_dist, x0plane,
                                c_coord, c_conn, c_seg, c_segflag, c_metric,
-                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs);
+                               c_new_to_old_node, c_new_to_old_elem, cn, ce, cs, verbose);
         mnode = cn; melem = ce; mseg = cs;
         mcoord = c_coord.data();
         mconn1 = c_conn.data();
@@ -4600,10 +4674,11 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
                          outside_material ? c_bcflag : old_bcflag, mconn1, mseg1, msegflag,
                          outside_material ? c_metric : *var.ntmp, floors.hmin,
                          s_coord, s_conn, s_seg, s_segflag, s_metric,
-                         s_new_to_old_node, s_new_to_old_elem, removed, sn, se, ss);
+                         s_new_to_old_node, s_new_to_old_elem, removed, sn, se, ss, verbose);
         if (n_surf > 0) {
-            std::cout << "      [collapse] boundary segments below hmin: collapsing " << n_surf
-                      << " node(s) before MMG (collapse path).\n";
+            if (verbose)
+                std::cout << "      [collapse] boundary segments below hmin: collapsing " << n_surf
+                          << " node(s) before MMG (collapse path).\n";
             if (outside_material) {   // old id = c_new_to_old[s_new_to_old[id]]
                 for (int &n : s_new_to_old_node) n = c_new_to_old_node[n];
                 for (int &e : s_new_to_old_elem) e = c_new_to_old_elem[e];
@@ -4680,7 +4755,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             aug_metric.assign(mmetric, mmetric + mnode);
             int nn = mnode, ne = melem;
             presubdivide_interface_edges(aug_coord, aug_conn, aug_metric, req_node, req_elem,
-                                         iface_edges, nn, ne, nullptr, true);
+                                         iface_edges, nn, ne, nullptr, true, verbose);
             if (nn != mnode0) {
                 if (mmetric_aniso) {   // extend the aniso tensor for the new interior nodes (isotropic)
                     for (int i = mnode0; i < nn; ++i) {
@@ -4698,7 +4773,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         }
         if (!iface_edges.empty()) {
             ie_ptr = iface_edges.data(); n_ie = (int)iface_edges.size() / 2;
-            std::cout << "      [require] " << n_ie << " material-interface edge(s) handed to "
+            if (verbose)
+                std::cout << "      [require] " << n_ie << " material-interface edge(s) handed to "
                          "MMG as required (front tracking of the inflow-band layering).\n";
         }
     }
@@ -4706,6 +4782,36 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie, split_node.data() };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
+    // TEMPORARY repair of the bottom-snap fold (lift_to_unfold()): only when MMG returned a
+    // mesh that check_mesh_tangle() stops on (the same fold test), so a remesh that does not
+    // fold is untouched.
+    auto out_measure = [&](int e, double &m, double &tol) {
+        const double *x = mmg_out.coord.data();
+        const int *cn = &mmg_out.conn[3*e];
+        double maxedge2 = 0.0;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < i; ++j) {
+                const double dx = x[cn[i]*2] - x[cn[j]*2], dz = x[cn[i]*2+1] - x[cn[j]*2+1];
+                maxedge2 = std::max(maxedge2, dx*dx + dz*dz);
+            }
+        m = tri_measure(x, mmg_out.conn.data(), e);
+        tol = tangle_rel() * maxedge2;
+    };
+    if (first_folded_element(mmg_out.nelem, out_measure) >= 0) {
+        double max_lift;
+        const int nlifted = lift_to_unfold(mcoord, mconn1, mnode, melem, mseg1, mseg, max_lift);
+        if (nlifted > 0) {
+            std::cout << "      [fold] MMG returned a folded mesh; lifted " << nlifted
+                      << " interior node(s) of the inverted input triangle(s), by up to "
+                      << max_lift << " m, and re-ran MMG.\n";
+            mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
+        }
+        else
+            std::cout << "      [fold] MMG returned a folded mesh, and "
+                      << (nlifted == 0 ? "the input has no inverted triangle"
+                                       : "no interior node lift unfolds the input, or the "
+                                         "passes ran out") << ".\n";
+    }
 
     var.nnode = mmg_out.nnode;
     var.nelem = mmg_out.nelem;
@@ -4993,10 +5099,8 @@ static double tangle_orient2d(const double *a, const double *b, const double *c)
 void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
                        int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
 {
-    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and the tolerance
-    // REL * maxedge^NDIMS: round-off in m is ~1e-15 of maxedge^NDIMS, a fold is O(1), so 1e-9
-    // (not tuned) ignores noise and leaves anything flatter to the tiny/quality triggers.
-    const double REL = 1e-9;
+    // Signed measure of element e (2x area in 2D / 6x volume in 3D) and its tolerance.
+    const double REL = tangle_rel();
     auto elem_measure = [&](int e, double &m, double &tol) {
         const auto &cn = connectivity[e];
         double maxedge2 = 0.0;
@@ -5020,18 +5124,10 @@ void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &con
     };
 
     // (1) folded element -- opposite orientation to the mesh's dominant sign.
-    // Pass 1: dominant orientation sign (ignoring near-degenerate elements).
-    int npos = 0, nneg = 0;
-    for (int e = 0; e < nelem; ++e) {
-        double m, tol; elem_measure(e, m, tol);
-        if (m >  tol) ++npos;
-        else if (m < -tol) ++nneg;
-    }
-    const double ref = (npos >= nneg) ? 1.0 : -1.0;   // majority winding is the "correct" one
-    // Pass 2: flag the first element wound against the majority.
-    for (int e = 0; e < nelem; ++e) {
-        double m, tol; elem_measure(e, m, tol);
-        if (std::fabs(m) > tol && m * ref < 0.0) {
+    {
+        const int e = first_folded_element(nelem, elem_measure);
+        if (e >= 0) {
+            double m, tol; elem_measure(e, m, tol);
             const auto &cn = connectivity[e];
             std::cerr << "Error: tangled mesh (" << when << "): element #" << e
                       << " is folded (signed measure = " << m << ", opposite the mesh's orientation). ";
@@ -5589,7 +5685,6 @@ void restore_side_fields(const Param &param, Variables &var,
     // in-band tolerance = the flatten_* deletion distance (min_dist)
     const double tol = refine_floors(param.mesh).min_dist;
     int count_n = 0, count_e = 0;   // distinct: two 3D walls' bands can overlap
-    bool rose = false;   // a receiving wall's top moved: SideProfile::top_rise's temperature caveat
     std::vector<char> node_done(var.nnode, 0), elem_done(var.nelem, 0);
     for (int t = 0; t < NSIDEWALL; ++t) {
         if (!sis.in[t]) continue;   // no incoming material at this side
@@ -5607,7 +5702,6 @@ void restore_side_fields(const Param &param, Variables &var,
         if (top_z == -std::numeric_limits<double>::max())   // option 13 rebuilds every wall
             die(EXIT_INTERNAL_ASSERT, "restore_side_fields: receiving wall without nodes");
         const double ref_z = top_z - prof.top_rise;
-        if (prof.top_rise != 0.) rose = true;
 
         SideProfileAt at;
         for (int n = 0; n < var.nnode; ++n) {
@@ -5735,42 +5829,42 @@ void restore_side_fields(const Param &param, Variables &var,
             ++count_bot;
     }
 
-    if (count_n || count_e) {
-        // list the cumulative shift of the RECEIVING wall(s) only -- a static wall's is noise
-        std::cout << "      [restore] side profile: re-imposed recorded fields on " << count_n
-                  << " incoming node(s) and " << count_e << " incoming element(s)"
-                  << " (cumulative wall shift";
-        const char *sep = " ";
-        for (int t = 0; t < NSIDEWALL; ++t) {
-            if (!sis.in[t]) continue;
-            std::cout << sep << SIDEWALL_NAME[t] << ": "
-                      << var.side_profile[t].wall_shift;
-            sep = ", ";
+    if (param.mesh.meshing_verbosity >= 0) {
+        if (count_n || count_e) {
+            // the RECEIVING walls' cumulative shift and top rise only -- a static wall's is noise
+            std::cout << "      [restore] " << count_n << " node(s), " << count_e
+                      << " element(s) in through";
+            const char *sep = " ";
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                if (!sis.in[t]) continue;
+                std::cout << sep << SIDEWALL_NAME[t];
+                sep = ", ";
+            }
+            std::cout << "; wall shift";
+            sep = " ";
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                if (!sis.in[t]) continue;
+                std::cout << sep << SIDEWALL_NAME[t] << ' ' << var.side_profile[t].wall_shift;
+                sep = ", ";
+            }
+            std::cout << " m; top rise";
+            sep = " ";
+            for (int t = 0; t < NSIDEWALL; ++t) {
+                if (!sis.in[t]) continue;
+                std::cout << sep << var.side_profile[t].top_rise;
+                sep = ", ";
+            }
+            std::cout << " m\n";
         }
-        std::cout << " m; surface-process top rise";
-        sep = " ";
-        for (int t = 0; t < NSIDEWALL; ++t) {
-            if (!sis.in[t]) continue;
-            std::cout << sep << SIDEWALL_NAME[t] << ": "
-                      << var.side_profile[t].top_rise;
-            sep = ", ";
+        if (n_strike || n_top || n_bot) {
+            std::cout << "      [restore] re-seated coord0: ";
+            if (n_strike) std::cout << count_strike << "/" << n_strike << " along-strike, ";
+            std::cout << count_top << "/" << n_top << " top, "
+                      << count_bot << "/" << n_bot << " side-wall bottom node(s)\n";
         }
-        std::cout << " m)";
-        if (rose)
-            std::cout << "; incoming T is the recorded column's, not re-conducted under the top "
-                         "rise, so it can differ from the domain beside the wall by up to the "
-                         "near-surface T gradient x the rise (see mesh.remeshing_option in --help)";
-        std::cout << ".\n";
     }
-    if (n_strike)
-        std::cout << "      [restore] re-seated the along-strike coord0 of " << count_strike << " of "
-                  << n_strike << " incoming node(s) from a neighbour inside the old mesh.\n";
-    if (n_top || n_bot)
-        std::cout << "      [restore] re-seated the coord0 of " << count_top << " of " << n_top
-                  << " top and " << count_bot << " of " << n_bot
-                  << " side-wall bottom node(s) outside the old mesh beyond any inflow band.\n";
     if (n_other)
-        std::cout << "      [restore] warning: " << n_other << " node(s) outside the old mesh off the "
+        std::cout << "      [restore] WARNING: " << n_other << " node(s) outside the old mesh off the "
                      "top and bottom and beyond any inflow band keep the coord0 copied from the "
                      "nearest old node, up to an element away.\n";
 }
@@ -5839,8 +5933,6 @@ void relocate_wall_division_nodes(const Param &param, Variables &var,
 {
     const double depth_tol = side_profile_depth_tol(param);
     int count = 0, ndiv = 0, deferred = 0;
-    int_vec shifts;                 // relocated node ids and their applied z displacement
-    double_vec zshift;
     double_vec div;
     for (int t = 0; t < NSIDEWALL; ++t) {
         if (!sis.in[t]) continue;
@@ -5888,21 +5980,15 @@ void relocate_wall_division_nodes(const Param &param, Variables &var,
             if (std::abs(dz) > 0.49 * gap) continue;     // out of reach -- next remesh
             if (!snap_keeps_quality(param, var, n, -dz)) { ++deferred; continue; }   // next remesh
             (*var.coord)[n][NDIMS-1] -= dz;              // deeper rel = smaller z
-            shifts.push_back(n);
-            zshift.push_back(-dz);                       // applied z displacement
             ++count;
         }
     }
-    if (count || deferred) {
+    if ((count || deferred) && param.mesh.meshing_verbosity >= 0) {
         std::cout << "      [restore] relocated " << count << " inflow-wall node(s) onto their "
-                  << "side-profile material division (" << ndiv << " division(s) in all)";
-        for (std::size_t k = 0; k < shifts.size(); ++k)
-            std::cout << (k ? "," : ":") << " node #" << shifts[k]
-                      << " dz = " << std::showpos << zshift[k] << std::noshowpos << " m";
+                     "side-profile material division (" << ndiv << " division(s) in all)";
         if (deferred)
-            std::cout << "; deferred " << deferred << " move(s) that would invert or degrade a "
-                         "neighbouring element";
-        std::cout << ".\n";
+            std::cout << "; " << deferred << " move(s) deferred (would invert or degrade a neighbour)";
+        std::cout << "\n";
     }
 }
 #endif  // !THREED
@@ -5944,7 +6030,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             detect_side_profile(param, var, late);
     }
 #ifdef ACC
-    {
+    if (param.mesh.meshing_verbosity >= 0) {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
         std::cout << "      [GPU mem] remesh start: free="
@@ -6101,7 +6187,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         // This gives CUDA a sync point to reclaim migrated managed-memory pages.
         #pragma acc wait
 #ifdef ACC
-        {
+        if (param.mesh.meshing_verbosity >= 0) {
             size_t free_bytes, total_bytes;
             knn_bvh_mem_info(&free_bytes, &total_bytes);
             std::cout << "      [GPU mem] before reallocate_tmp: free="
@@ -6171,7 +6257,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // gives CUDA a chance to reclaim managed-memory pages before new allocations.
     #pragma acc wait
 #ifdef ACC
-    {
+    if (param.mesh.meshing_verbosity >= 0) {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
         std::cout << "      [GPU mem] before reallocate_variables: free="
@@ -6325,7 +6411,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     #pragma acc wait
 
 #ifdef ACC
-    {
+    if (param.mesh.meshing_verbosity >= 0) {
         size_t free_bytes, total_bytes;
         knn_bvh_mem_info(&free_bytes, &total_bytes);
         std::cout << "      [GPU mem] remesh end:   free="
@@ -6335,6 +6421,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing finished.\n";
 
+    // Marker positions and population changed wholesale; rebuild the
+    // serpentinization grid (mat.phase_change_option 3 with
+    // mat.has_serpentinization) from the new mesh.
+    build_serpentinization_grid(param, var);
 
     var.nremesh += 1;
     var.func_time.remesh_time += get_nanoseconds() - time_tmp;

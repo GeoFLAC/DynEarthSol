@@ -13,6 +13,7 @@
 #include "matprops.hpp"
 #include "output.hpp"
 #include "utils.hpp"
+#include "mesh.hpp"
 
 #ifdef WIN32
 #ifdef _MSC_VER
@@ -53,7 +54,11 @@ Output::Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,
     manifest(manifest),
     peak_rss_gib(0),
     start_time(start_time),
-    is_averaged(param.sim.is_outputting_averaged_fields),
+    // A one-step window IS the instantaneous field, and average_fields() opens a
+    // window on steps % interval == 1, which never happens for an interval of 1:
+    // the averaged buffers would stay empty and be written as zero-length arrays.
+    is_averaged(param.sim.is_outputting_averaged_fields &&
+                param.mesh.quality_check_step_interval > 1),
     average_interval(param.mesh.quality_check_step_interval),
     has_marker_output(param.sim.has_marker_output),
     hdf5_compression_level(param.sim.hdf5_compression_level),
@@ -145,7 +150,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     double dt = var.dt;
     double inv_dt = 0; // only used when is_averaged
     if (!disable_averaging && is_averaged) {
-        dt = (var.time - time0) / average_interval;
+        // time0 is the time after the window's first step: the span holds the
+        // average_interval - 1 steps after it.
+        dt = (var.time - time0) / (average_interval - 1);
         inv_dt = 1.0 / (var.time - time0);
     }
 
@@ -231,7 +238,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
-        double tmp = 1.0 / (average_interval + 1);
+        double tmp = 1.0 / average_interval;   // one sample per step of the window
         #pragma omp parallel for default(none) shared(var, stress_avg, tmp, s)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
@@ -359,6 +366,8 @@ void Output::average_fields(Variables& var)
     // In the first time step of each interval, some old fields are
     // stored for later use.
     // It is guaranteed that remeshing won't occur within the interval.
+    // In GPU builds the loops run on the device: a host loop here would pull
+    // the managed fields off the device every step.
     if (var.steps % average_interval == 1) {
         time0 = var.time;
 
@@ -366,34 +375,81 @@ void Output::average_fields(Variables& var)
             double *tmp = new double[(var.coord)->num_elements()];
             coord0.reset(tmp, var.coord->size());
         }
-        std::copy(var.coord->begin(), var.coord->end(), coord0.begin());
-
         if (strain0.size() != var.strain->size()) {
             double *tmp = new double[(var.strain)->num_elements()];
             strain0.reset(tmp, var.strain->size());
         }
-        std::copy(var.strain->begin(), var.strain->end(), strain0.begin());
-
         if (stress_avg.size() != var.stress->size()) {
             double *tmp = new double[(var.stress)->num_elements()];
             stress_avg.reset(tmp, var.stress->size());
         }
-        std::copy(var.stress->begin(), var.stress->end(), stress_avg.begin());
+        delta_plstrain_avg.resize(var.delta_plstrain->size());
 
-        delta_plstrain_avg = *var.delta_plstrain;
+        double *c0 = coord0.data();
+        const double *c = var.coord->data();
+        int n = coord0.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(c0, c, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            c0[i] = c[i];
+        }
+
+        double *e0 = strain0.data();
+        double *s_avg = stress_avg.data();
+        const double *e = var.strain->data();
+        const double *s = var.stress->data();
+        n = strain0.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(e0, s_avg, e, s, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            e0[i] = e[i];
+            s_avg[i] = s[i];
+        }
+
+        // The rates are differences from the snapshots above, which hold the state
+        // after this step, so the plastic increments count from the next step on.
+        double *dp_avg = delta_plstrain_avg.data();
+        n = delta_plstrain_avg.size();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(dp_avg, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            dp_avg[i] = 0.0;
+        }
     }
     else {
         // Averaging stress & plastic strain
         // (PS: dt-weighted average would be better, but difficult to do)
         double *s_avg = stress_avg.data();
         const double *s = var.stress->data();
-        for (int i=0; i<stress_avg.num_elements(); ++i) {
+        int n = stress_avg.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(s_avg, s, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
             s_avg[i] += s[i];
         }
-        for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
-            delta_plstrain_avg[i] += (*var.delta_plstrain)[i];
+
+        double *dp_avg = delta_plstrain_avg.data();
+        const double *dp = var.delta_plstrain->data();
+        n = delta_plstrain_avg.size();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(dp_avg, dp, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            dp_avg[i] += dp[i];
         }
     }
+    // Drain the async loops above: the writers and ~Output (via end()) read these
+    // buffers on the host.
+    #pragma acc wait
 }
 
 
@@ -518,6 +574,28 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_array(*var.stressyy, "stressyy", var.stressyy->size());
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+    }
+    // Serialize the cached marker-cell index (mat.phase_change_option 3, see
+    // VirtualTopology in mesh.hpp) so a restart carries forward the EXACT lagged
+    // binning the continuous run had at this step, instead of a fresher rebuild
+    // against current marker positions -- serpentinization reads this index
+    // every phase_changes() step, so a mismatch here can change which markers
+    // convert and make the restarted run diverge. vtopo_int is variable length,
+    // so vtopo_len records its size for read_array() to pre-size the buffer
+    // on restart. (var.vtopo is null unless uses_serpentinization_grid() ->
+    // nothing written.)
+    if (var.vtopo) {
+        int_vec vt_i;
+        double_vec vt_d;
+        var.vtopo->serialize(vt_i, vt_d);
+        int_vec vt_len(1, static_cast<int>(vt_i.size()));
+        bin.write_aux_array(vt_len, "vtopo_len", vt_len.size());
+        bin.write_aux_array(vt_i, "vtopo_int", vt_i.size());
+        bin.write_aux_array(vt_d, "vtopo_dbl", vt_d.size());
+        // vtopo_dbl is variable length too (VirtualTopology::serialize()), so
+        // its length is recorded alongside vtopo_len for the restart reader.
+        int_vec vt_dlen(1, static_cast<int>(vt_d.size()));
+        bin.write_aux_array(vt_dlen, "vtopo_dbl_len", vt_dlen.size());
     }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {

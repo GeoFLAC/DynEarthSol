@@ -52,7 +52,8 @@ void mmg_adapt_quality_gated(const Param&, const MMGInput &in, MMGOutput &out,
 void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &conn,
                                   std::vector<double> &metric, std::vector<char> &reqn,
                                   std::vector<char> &reqe, std::vector<int> &iface,
-                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down);
+                                  int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down,
+                                  bool verbose);
 #endif
 #endif
 
