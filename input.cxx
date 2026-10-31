@@ -47,7 +47,7 @@ static void declare_parameters(po::options_description &cfg,
         ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
-         ">0: must be a multiple of mesh.quality_check_step_interval.")
+         ">0: rounded up to a multiple of mesh.quality_check_step_interval.")
         ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
          "Print the .manifest's sections on screen at run start, one line each,\n"
          "[build] then [runtime]. On by default: it is the start-of-run report every\n"
@@ -157,7 +157,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
          "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
         ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
-         "Output verbose during mesh/remeshing. -1 for no output.")
+         "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
+         "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
+         "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
+         "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top. Warnings print "
+         "at every level.")
         ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
          "Refine the elements with sediment marker during remeshing.")
         ("mesh.tetgen_optlevel", po::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
@@ -1386,7 +1390,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.");
     }
 
-    // Ensure info_display_step_interval is a multiple of quality_check_step_interval
+    // The status line prints only on quality-check steps, so round the interval up to a
+    // multiple of quality_check_step_interval.
     if (p.sim.info_display_step_interval <= 0)
         p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
@@ -1396,7 +1401,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << p.sim.info_display_step_interval
                   << " (must be a multiple of quality_check_step_interval="
                   << q << ")\n";
-        die(EXIT_CONFIG_VALUE);
     }
     if (p.sim.earthquake_output_step_interval < 1) {
         die(EXIT_CONFIG_VALUE, "sim.earthquake_output_step_interval must be >= 1.");

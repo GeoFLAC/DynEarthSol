@@ -2208,7 +2208,7 @@ void correct_inflow_band_marker_mattype(const Param& param, const Variables& var
             }
         }
     }
-    if (ncorr)
+    if (ncorr && param.mesh.meshing_verbosity >= 0)
         std::cout << "      [restore] corrected " << ncorr
                   << " stray marker mattype(s) in the inflow band (element-location rule).\n";
 }

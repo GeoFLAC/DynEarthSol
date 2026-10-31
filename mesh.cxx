@@ -1017,7 +1017,7 @@ static void mmg_refine_init_mesh_3d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    std::cerr << "MMG init refinement done: "
+    std::cout << "MMG init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
 #endif // THREED
@@ -1081,7 +1081,7 @@ static void mmg_refine_init_mesh_2d(
         for (int n = 0; n < cn; ++n)
             corner[n] = on_iface[n] && vertex.count(point_at(&cc[n*NDIMS]));
         const long n_corner = std::count(corner.begin(), corner.end(), 1);
-        if (n_corner)
+        if (n_corner && mesh.meshing_verbosity >= 0)
             std::cout << "      [corner] " << n_corner << " input vertex(es) on a material "
                          "interface of the initial mesh handed to MMG as corners.\n";
     }
@@ -1132,7 +1132,7 @@ static void mmg_refine_init_mesh_2d(
     else
         std::fill(pregattr, pregattr + nelem, 0.0);
 
-    std::cerr << "MMG2D init refinement done: "
+    std::cout << "MMG2D init refinement done: "
                 << nnode << " nodes, " << nelem << " elements\n";
 }
 
@@ -1588,12 +1588,13 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
         ne0 = in_nelem;
         const int nn0 = in_nnode;
         presubdivide_interface_edges(in_coord, in_conn, tgt, req_node, req_elem, iface,
-                                     in_nnode, in_nelem, &eref, false);
+                                     in_nnode, in_nelem, &eref, false,
+                                     param.mesh.meshing_verbosity >= 0);
         // `metric` (MMG's sizes) takes each midpoint's h, as at a remesh; `tgt` its graded size.
         metric.insert(metric.end(), tgt.begin() + nn0, tgt.end());
         for (int n = nn0; n < in_nnode; ++n) tgt[n] = graded(&in_coord[(std::size_t)n*NDIMS]);
     }
-    if (!iface.empty())
+    if (!iface.empty() && param.mesh.meshing_verbosity >= 0)
         std::cout << "      [require] " << iface.size() / 2 << " material-interface edge(s) of the "
                      "initial wall band handed to MMG as required.\n";
     MMGInput  mmg_in = { in_nnode, in_nelem, nseg, in_coord.data(), in_conn.data(), pseg, psegflag,

@@ -1486,6 +1486,8 @@ void spr_node_to_elem(const Param &param, const Variables &var,
                 (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
         }
     }
+    // Drain the async loop above: it reads stress_nn and stressyy_nn, which return frees.
+    #pragma acc wait
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();

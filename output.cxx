@@ -366,6 +366,8 @@ void Output::average_fields(Variables& var)
     // In the first time step of each interval, some old fields are
     // stored for later use.
     // It is guaranteed that remeshing won't occur within the interval.
+    // In GPU builds the loops run on the device: a host loop here would pull
+    // the managed fields off the device every step.
     if (var.steps % average_interval == 1) {
         time0 = var.time;
 
@@ -373,36 +375,81 @@ void Output::average_fields(Variables& var)
             double *tmp = new double[(var.coord)->num_elements()];
             coord0.reset(tmp, var.coord->size());
         }
-        std::copy(var.coord->begin(), var.coord->end(), coord0.begin());
-
         if (strain0.size() != var.strain->size()) {
             double *tmp = new double[(var.strain)->num_elements()];
             strain0.reset(tmp, var.strain->size());
         }
-        std::copy(var.strain->begin(), var.strain->end(), strain0.begin());
-
         if (stress_avg.size() != var.stress->size()) {
             double *tmp = new double[(var.stress)->num_elements()];
             stress_avg.reset(tmp, var.stress->size());
         }
-        std::copy(var.stress->begin(), var.stress->end(), stress_avg.begin());
+        delta_plstrain_avg.resize(var.delta_plstrain->size());
+
+        double *c0 = coord0.data();
+        const double *c = var.coord->data();
+        int n = coord0.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(c0, c, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            c0[i] = c[i];
+        }
+
+        double *e0 = strain0.data();
+        double *s_avg = stress_avg.data();
+        const double *e = var.strain->data();
+        const double *s = var.stress->data();
+        n = strain0.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(e0, s_avg, e, s, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            e0[i] = e[i];
+            s_avg[i] = s[i];
+        }
 
         // The rates are differences from the snapshots above, which hold the state
         // after this step, so the plastic increments count from the next step on.
-        delta_plstrain_avg.assign(var.delta_plstrain->size(), 0.0);
+        double *dp_avg = delta_plstrain_avg.data();
+        n = delta_plstrain_avg.size();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(dp_avg, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            dp_avg[i] = 0.0;
+        }
     }
     else {
         // Averaging stress & plastic strain
         // (PS: dt-weighted average would be better, but difficult to do)
         double *s_avg = stress_avg.data();
         const double *s = var.stress->data();
-        for (int i=0; i<stress_avg.num_elements(); ++i) {
+        int n = stress_avg.num_elements();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(s_avg, s, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
             s_avg[i] += s[i];
         }
-        for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
-            delta_plstrain_avg[i] += (*var.delta_plstrain)[i];
+
+        double *dp_avg = delta_plstrain_avg.data();
+        const double *dp = var.delta_plstrain->data();
+        n = delta_plstrain_avg.size();
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(dp_avg, dp, n)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int i=0; i<n; ++i) {
+            dp_avg[i] += dp[i];
         }
     }
+    // Drain the async loops above: the writers and ~Output (via end()) read these
+    // buffers on the host.
+    #pragma acc wait
 }
 
 

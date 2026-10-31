@@ -490,7 +490,7 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
             for (int j=0;j<NDIMS;j++) {
                 if ((force[i][j]<0) == ((*var.vel)[i][j]<0)) {
                     // strong damping
-                    force[i][j] -= param.control.damping_factor * force[i][j], (*var.vel)[i][j];
+                    force[i][j] -= param.control.damping_factor * force[i][j];
                 }
                 else {
                     // weak acceleration
