@@ -121,6 +121,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- A GoSPL-coupled run sent GoSPL velocities of hundreds of m/yr after a remesh
+  that kept the surface node count, differencing unrelated nodes; the coupling
+  after any remesh now uses the instantaneous velocity.
 - The thermal mass was built before the initial temperature was set, so thermal
   diffusion ran 5.4 % slow on hot silicate ([#96]).
 - A NaN velocity stops the run with exit code 50 instead of writing frames until
