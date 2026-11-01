@@ -7,6 +7,7 @@
 #include "markerset.hpp"
 
 #include "ic-read-temp.hpp"
+#include "gwb.hpp"
 #include "ic.hpp"
 #include "utils.hpp"
 
@@ -1047,6 +1048,13 @@ void initial_temperature(const Param &param, const Variables &var,
         break;
     case 90:
         read_external_temperature_from_comsol(param, var, *var.temperature);
+        break;
+    case 936:
+        for (int i=0; i<var.nnode; ++i) {
+            double x[NDIMS];
+            for (int d=0; d<NDIMS; ++d) x[d] = (*var.coord)[i][d];
+            temperature[i] = gwb_temperature(param, x);
+        }
         break;
     default:
         std::cout << "Error: unknown ic.temperature option: " << param.ic.temperature_option << '\n';

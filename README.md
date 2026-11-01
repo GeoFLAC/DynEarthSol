@@ -185,6 +185,19 @@ defaults are not what you want.
     reference for build, runtime and coupling details, and
     `gospl_driver/examples/` holds the example configs. The Docker image below
     ships the whole stack ready to run.
+* [Geodynamic World Builder](https://github.com/GeodynamicWorldBuilder/WorldBuilder)
+  (GWB), `usegwb=1`, to set the initial temperature (`ic.temperature_option = 936`)
+  and the initial marker materials (`ic.mattype_option = 936`) from a GWB world file
+  of plates, slabs and faults; `examples/gwb-subduction.cfg` is a 2D example.
+  * Build GWB as a shared library and install it:
+    ```bash
+    git clone https://github.com/GeodynamicWorldBuilder/WorldBuilder.git
+    cd WorldBuilder && mkdir build && cd build
+    cmake .. -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$HOME/opt/WorldBuilder
+    make install
+    ```
+  * `GWB_DIR` (default `~/opt/WorldBuilder`) names the install; GWB puts its
+    library in `bin/`, which `GWB_LIB_DIR` overrides.
 
 <div id="llvm"></div>
 
@@ -317,6 +330,9 @@ make hdf5=1
 
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
+
+# enable Geodynamic World Builder initial conditions (requires an installed GWB)
+make usegwb=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1

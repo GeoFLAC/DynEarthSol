@@ -412,6 +412,8 @@ struct IC {
     double_vec weakzone_segments_y_min;
     double_vec weakzone_segments_y_max;
 
+    std::string gwb_filename;   // Geodynamic World Builder world (temperature/mattype_option 936)
+
     int temperature_option;
     std::string Temp_filename;
     std::string Nodes_filename;

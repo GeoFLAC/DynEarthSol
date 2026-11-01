@@ -12,6 +12,7 @@
 #include "earthquake_state.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
+#include "gwb.hpp"
 #include "ic.hpp"
 #include "input.hpp"
 #include "matprops.hpp"
@@ -218,6 +219,7 @@ void init(const Param& param, Variables& var)
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
     }
+    gwb_close();   // the initial fields are set: nothing queries the world after this
 
     // init viscosity
     #pragma omp parallel for default(none) shared(var)
