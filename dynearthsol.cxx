@@ -551,6 +551,7 @@ void restart(const Param& param, Variables& var)
         std::cout << "  Creating new weakzone...\n";
         const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
+        gwb_close();   // weakzone_option 936 read the world
         // Shift the R2 baseline by the re-seed only; growth since the last remesh still counts.
         for (int e = 0; e < var.nelem; ++e)
             (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];

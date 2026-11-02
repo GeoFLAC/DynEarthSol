@@ -532,6 +532,20 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
 void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,
                        const conn_t &connectivity, double_vec &plstrain)
 {
+    if (param.ic.weakzone_option == 936) {
+        // the GWB world's fault features; a host loop, since GWB runs only on the CPU
+        for (int e=0; e<nelem; ++e) {
+            ConstArrayIndirectAccessor coord = coord_all.view_const(connectivity[e]);
+            double center[NDIMS] = {0};
+            for (int i=0; i<NODES_PER_ELEM; ++i)
+                for (int d=0; d<NDIMS; ++d)
+                    center[d] += coord[i][d] / NODES_PER_ELEM;
+            if (gwb_in_fault(param, center))
+                plstrain[e] = param.ic.weakzone_plstrain;
+        }
+        return;
+    }
+
     Zone *weakzone;
     Value *weakvalue;
 

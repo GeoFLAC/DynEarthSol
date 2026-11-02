@@ -831,7 +831,9 @@ static void declare_parameters(po::options_description &cfg,
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
          "2: ellipsoidal weak zone with specified center location and semi-axes.\n"
          "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n"
-         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n")
+         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n"
+         "936: the fault features of the Geodynamic World Builder world ic.gwb_filename (needs a build with "
+         "usegwb=1): weakzone_plstrain in the elements whose centroid lies in one.\n")
         ("ic.is_restarting_weakzone", po::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
         ("ic.weakzone_plstrain", po::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
@@ -2030,13 +2032,14 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
 
         // Geodynamic World Builder initial conditions
-        if (p.ic.temperature_option == 936 || p.ic.mattype_option == 936) {
+        if (p.ic.temperature_option == 936 || p.ic.mattype_option == 936 || p.ic.weakzone_option == 936) {
 #ifndef USEGWB
-            die(EXIT_UNSUPPORTED_LIB, "ic.temperature_option or ic.mattype_option 936 needs the "
-                "Geodynamic World Builder: build with usegwb=1.");
+            die(EXIT_UNSUPPORTED_LIB, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                "936 needs the Geodynamic World Builder: build with usegwb=1.");
 #endif
             if (p.ic.gwb_filename.empty())
-                die(EXIT_CONFIG_VALUE, "ic.temperature_option or ic.mattype_option 936 needs ic.gwb_filename.");
+                die(EXIT_CONFIG_VALUE, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                    "936 needs ic.gwb_filename.");
             if (! std::ifstream(p.ic.gwb_filename)) {
                 std::cerr << "Error: cannot open ic.gwb_filename '" << p.ic.gwb_filename << "'.\n";
                 die(EXIT_IO_OPEN);

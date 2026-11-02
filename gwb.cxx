@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <exception>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -11,10 +14,12 @@
 #ifdef USEGWB
 
 #include "world_builder/wrapper_c.h"
+#include "rapidjson/document.h"
 
 namespace {
 
 void *world = nullptr;
+std::vector<int> fault_tags;   // GWB tag indices of the world's fault features
 
 // GWB reports a bad world file or query by throwing; turn that into a config error.
 [[noreturn]] void gwb_failed(const Param &param, const char *what)
@@ -22,6 +27,34 @@ void *world = nullptr;
     std::cerr << "Error: Geodynamic World Builder, world '" << param.ic.gwb_filename
               << "': " << what << '\n';
     die(EXIT_CONFIG_VALUE);
+}
+
+// GWB's tag property is the index of a feature's tag in the list of distinct tags, in feature
+// order; a feature's tag is its "tag" entry or, if empty, its model name. Rebuild that list from
+// the world file, as GWB does, and keep the indices that a "fault" feature's tag has.
+void find_fault_tags(const Param &param)
+{
+    std::ifstream f(param.ic.gwb_filename);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    rapidjson::Document doc;
+    // GWB's own flags: comments and nan/inf allowed
+    doc.Parse<rapidjson::kParseCommentsFlag | rapidjson::kParseNanAndInfFlag>(ss.str().c_str());
+    std::vector<std::string> tags;
+    fault_tags.clear();
+    if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("features") || !doc["features"].IsArray())
+        return;   // GWB read the file, so this cannot happen; without a features array there is no fault
+    for (const auto &feat : doc["features"].GetArray()) {
+        if (!feat.IsObject() || !feat.HasMember("model") || !feat["model"].IsString()) continue;
+        const std::string model = feat["model"].GetString();
+        std::string tag = (feat.HasMember("tag") && feat["tag"].IsString()) ? feat["tag"].GetString() : "";
+        if (tag.empty()) tag = model;
+        auto it = std::find(tags.begin(), tags.end(), tag);
+        const int index = static_cast<int>(it - tags.begin());
+        if (it == tags.end()) tags.push_back(tag);
+        if (model == "fault" && std::find(fault_tags.begin(), fault_tags.end(), index) == fault_tags.end())
+            fault_tags.push_back(index);
+    }
 }
 
 void *open_world(const Param &param)
@@ -35,6 +68,7 @@ void *open_world(const Param &param)
     }
     catch (const std::exception &e) { gwb_failed(param, e.what()); }
     catch (...) { gwb_failed(param, "unknown error while reading the world"); }
+    find_fault_tags(param);
     return world;
 }
 
@@ -98,10 +132,26 @@ int gwb_mattype(const Param &param, const double *x)
 }
 
 
+bool gwb_in_fault(const Param &param, const double *x)
+{
+    open_world(param);
+    if (fault_tags.empty()) {
+        std::cerr << "Error: ic.weakzone_option 936 needs a fault feature in the Geodynamic World "
+                     "Builder world '" << param.ic.gwb_filename << "'; it has none.\n";
+        die(EXIT_CONFIG_DATA);
+    }
+    const unsigned int props[1][3] = {{4, 0, 0}};   // tag; -1 outside every feature
+    double tag;
+    query(param, x, props, 1, &tag);
+    return std::find(fault_tags.begin(), fault_tags.end(), static_cast<int>(tag)) != fault_tags.end();
+}
+
+
 void gwb_close()
 {
     if (world) release_world(world);
     world = nullptr;
+    fault_tags.clear();
 }
 
 #else  // !USEGWB: validate_parameters rejects option 936 in this build
@@ -112,6 +162,11 @@ double gwb_temperature(const Param &, const double *)
 }
 
 int gwb_mattype(const Param &, const double *)
+{
+    die(EXIT_UNSUPPORTED_LIB, "Geodynamic World Builder is not compiled in (build with usegwb=1).");
+}
+
+bool gwb_in_fault(const Param &, const double *)
 {
     die(EXIT_UNSUPPORTED_LIB, "Geodynamic World Builder is not compiled in (build with usegwb=1).");
 }
