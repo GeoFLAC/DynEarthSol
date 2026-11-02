@@ -186,9 +186,15 @@ defaults are not what you want.
     `gospl_driver/examples/` holds the example configs. The Docker image below
     ships the whole stack ready to run.
 * [Geodynamic World Builder](https://github.com/GeodynamicWorldBuilder/WorldBuilder)
-  (GWB), `usegwb=1`, to set the initial temperature (`ic.temperature_option = 936`)
-  and the initial marker materials (`ic.mattype_option = 936`) from a GWB world file
-  of plates, slabs and faults; `examples/gwb-subduction.cfg` is a 2D example.
+  (GWB), `usegwb=1`, to build initial conditions from a GWB world file of plates,
+  slabs and faults, named by `ic.gwb_filename`. Option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes,
+  each on its own, the initial temperature, the initial marker materials (GWB
+  composition *i* is mattype *i*; the world must give every point one) and the
+  weak zone (`weakzone_plstrain` inside the world's `fault` features) from it.
+  Examples: `examples/gwb-subduction.cfg` (2D, all three),
+  `examples/gwb-slab-3d.cfg` (3D, all three) and `examples/gwb-core-complex.cfg`
+  (2D, only the weak zone: `core-complex.cfg` with its seed fault from GWB).
   * Build GWB as a shared library and install it:
     ```bash
     git clone https://github.com/GeodynamicWorldBuilder/WorldBuilder.git
