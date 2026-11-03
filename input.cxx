@@ -2032,6 +2032,9 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
 
         // Geodynamic World Builder initial conditions
+        if (p.sim.is_restarting && p.ic.is_restarting_weakzone && p.ic.weakzone_option == 936)
+            die(EXIT_CONFIG_VALUE, "ic.weakzone_option 936 cannot re-seed the weak zone of a restart: "
+                "set ic.is_restarting_weakzone = no, or choose another ic.weakzone_option.");
         if (p.ic.temperature_option == 936 || p.ic.mattype_option == 936 || p.ic.weakzone_option == 936) {
 #ifndef USEGWB
             die(EXIT_UNSUPPORTED_LIB, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "

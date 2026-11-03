@@ -13,7 +13,8 @@ application, at the same points:
   - plastic strain: weakzone_plstrain exactly in the elements whose centroid
     gwb-dat tags as a "fault" feature, 0 elsewhere.
 It then checks that a world without a fault (exit 12), a world leaving a marker
-without a material (exit 12) and a missing world (exit 20) stop the run.
+without a material (exit 12), a missing world (exit 20) and a restart with
+is_restarting_weakzone (exit 11) stop the run.
 --unsupported checks that a build without usegwb=1 refuses option 936 (exit 31).
 
 gwb-dat is queried in 3D, at (x, 0, z) for a 2D model, whose world must then
@@ -58,14 +59,15 @@ plstrain = float(key('weakzone_plstrain'))
 failures = []
 
 
-def run(tmp, world_path, weakzone_option=None):
-    """Run the cfg for 0 steps in tmp with gwb_filename = world_path; return the exit code."""
+def run(tmp, world_path, weakzone_option=None, extra=''):
+    """Run the cfg for 0 steps in tmp with gwb_filename = world_path, and extra appended;
+    return the exit code."""
     text = re.sub(r'^(\s*gwb_filename\s*=).*$', r'\1 ' + world_path, cfg_text, flags=re.M)
     text = re.sub(r'^\s*max_time_in_yr\s*=.*$', 'max_steps = 0', text, flags=re.M)
     if weakzone_option is not None:
         text = re.sub(r'^(\s*weakzone_option\s*=).*$', r'\g<1> %d' % weakzone_option, text, flags=re.M)
     with open(os.path.join(tmp, 'run.cfg'), 'w') as f:
-        f.write(text)
+        f.write(text + extra)
     with open(os.path.join(tmp, 'run.log'), 'w') as log:
         return subprocess.call([exe, 'run.cfg'], cwd=tmp, stdout=log, stderr=subprocess.STDOUT)
 
@@ -155,6 +157,11 @@ try:
 
         code = run(tmp, os.path.join(tmp, 'missing.wb'))
         expect('a missing world stops (exit 20)', code == 20, 'exit %d' % code)
+
+        code = run(tmp, world, extra='\n[sim]\nis_restarting = yes\nrestarting_from_modelname = %s\n'
+                   'restarting_from_frame = 0\n[ic]\nis_restarting_weakzone = yes\n' % key('modelname'))
+        expect('a restart re-seeding the weak zone with weakzone_option 936 stops (exit 11)',
+               code == 11, 'exit %d' % code)
 finally:
     shutil.rmtree(tmp)
 
