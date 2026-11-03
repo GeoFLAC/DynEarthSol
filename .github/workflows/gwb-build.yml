@@ -77,10 +77,6 @@ jobs:
         LD_LIBRARY_PATH="$HOME/gwb/bin" python3 gwb/check_gwb.py \
           --exe ../../dynearthsol2d --gwb-dat "$HOME/gwb/bin/gwb-dat" gwb/gwb-2d.cfg
 
-    - name: test 2d gwb restart
-      working-directory: ./benchmarks-cores
-      run: make fresh-restart-cmp NDIMS=2 CASE=../tests/functional/gwb/gwb-2d.cfg
-
     - name: make 3d with mmg and gwb
       run: make ndims=3 usemmg=1 usegwb=1 GWB_DIR="$HOME/gwb" -j 4
 

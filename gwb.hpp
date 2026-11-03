@@ -14,7 +14,7 @@
 // GWB is queried at a point x of the initial mesh (z = 0 at the surface): depth -z, and in
 // 2D the point lies on the world's cross section, x along it. The world is opened at the
 // first query and stays open until gwb_close(), which init() calls once the initial
-// fields are set, and a restart after re-seeding the weak zone (is_restarting_weakzone).
+// fields are set.
 
 double gwb_temperature(const Param &param, const double *x);
 int gwb_mattype(const Param &param, const double *x);

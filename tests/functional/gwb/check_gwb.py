@@ -51,8 +51,7 @@ def key(name):
 
 
 ndims = 3 if exe.endswith('3d') else 2
-world = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(a.cfg)), '..', '..', '..',
-                                      'benchmarks-cores', key('gwb_filename')))
+world = os.path.join(os.path.dirname(os.path.abspath(a.cfg)), key('gwb_filename'))
 zlength = float(key('zlength'))
 nmat = int(key('num_materials'))
 plstrain = float(key('weakzone_plstrain'))
