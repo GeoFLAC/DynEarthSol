@@ -168,6 +168,7 @@ void init(const Param& param, Variables& var)
 #endif
     std::cout << "Initializing mesh and field data...\n";
 
+    gwb_build(param);   // ic options 936 query the world from meshing on
     create_new_mesh(param, var);
     create_boundary_flags(var);
     create_boundary_nodes(var);
@@ -219,7 +220,7 @@ void init(const Param& param, Variables& var)
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
     }
-    gwb_close();   // the initial fields are set: nothing queries the world after this
+    gwb_release();   // the initial fields are set: nothing queries the world after this
 
     // init viscosity
     #pragma omp parallel for default(none) shared(var)

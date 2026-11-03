@@ -57,9 +57,34 @@ void find_fault_tags(const Param &param)
     }
 }
 
-void *open_world(const Param &param)
+// The GWB properties (temperature: {1,0,0}, composition c: {2,c,0}) at DES point x.
+void query(const Param &param, const double *x, const unsigned int props[][3],
+           unsigned int nprops, double *values)
 {
-    if (world) return world;
+    if (!world)
+        die(EXIT_INTERNAL_ASSERT, "Geodynamic World Builder queried before gwb_build().");
+    const double depth = -x[NDIMS-1];
+    // GWB's vertical coordinate is the height above the base; only the depth places features.
+    const double z = param.mesh.zlength + x[NDIMS-1];
+    try {
+#ifdef THREED
+        properties_3d(world, x[0], x[1], z, depth, props, nprops, values);
+#else
+        properties_2d(world, x[0], z, depth, props, nprops, values);
+#endif
+    }
+    catch (const std::exception &e) { gwb_failed(param, e.what()); }
+    catch (...) { gwb_failed(param, "unknown error in a query"); }
+}
+
+} // anonymous namespace
+
+
+void gwb_build(const Param &param)
+{
+    if (param.ic.temperature_option != 936 && param.ic.mattype_option != 936 &&
+        param.ic.weakzone_option != 936)
+        return;
     std::cout << "  Reading the Geodynamic World Builder world " << param.ic.gwb_filename << '\n';
     const bool has_output_dir = false;
     try {
@@ -69,29 +94,12 @@ void *open_world(const Param &param)
     catch (const std::exception &e) { gwb_failed(param, e.what()); }
     catch (...) { gwb_failed(param, "unknown error while reading the world"); }
     find_fault_tags(param);
-    return world;
-}
-
-// The GWB properties (temperature: {1,0,0}, composition c: {2,c,0}) at DES point x.
-void query(const Param &param, const double *x, const unsigned int props[][3],
-           unsigned int nprops, double *values)
-{
-    void *w = open_world(param);
-    const double depth = -x[NDIMS-1];
-    // GWB's vertical coordinate is the height above the base; only the depth places features.
-    const double z = param.mesh.zlength + x[NDIMS-1];
-    try {
-#ifdef THREED
-        properties_3d(w, x[0], x[1], z, depth, props, nprops, values);
-#else
-        properties_2d(w, x[0], z, depth, props, nprops, values);
-#endif
+    if (param.ic.weakzone_option == 936 && fault_tags.empty()) {
+        std::cerr << "Error: ic.weakzone_option 936 needs a fault feature in the Geodynamic World "
+                     "Builder world '" << param.ic.gwb_filename << "'; it has none.\n";
+        die(EXIT_CONFIG_DATA);
     }
-    catch (const std::exception &e) { gwb_failed(param, e.what()); }
-    catch (...) { gwb_failed(param, "unknown error in a query"); }
 }
-
-} // anonymous namespace
 
 
 double gwb_temperature(const Param &param, const double *x)
@@ -134,12 +142,6 @@ int gwb_mattype(const Param &param, const double *x)
 
 bool gwb_in_fault(const Param &param, const double *x)
 {
-    open_world(param);
-    if (fault_tags.empty()) {
-        std::cerr << "Error: ic.weakzone_option 936 needs a fault feature in the Geodynamic World "
-                     "Builder world '" << param.ic.gwb_filename << "'; it has none.\n";
-        die(EXIT_CONFIG_DATA);
-    }
     const unsigned int props[1][3] = {{4, 0, 0}};   // tag; -1 outside every feature
     double tag;
     query(param, x, props, 1, &tag);
@@ -147,7 +149,7 @@ bool gwb_in_fault(const Param &param, const double *x)
 }
 
 
-void gwb_close()
+void gwb_release()
 {
     if (world) release_world(world);
     world = nullptr;
@@ -155,6 +157,8 @@ void gwb_close()
 }
 
 #else  // !USEGWB: validate_parameters rejects option 936 in this build
+
+void gwb_build(const Param &) {}
 
 double gwb_temperature(const Param &, const double *)
 {
@@ -171,6 +175,6 @@ bool gwb_in_fault(const Param &, const double *)
     die(EXIT_UNSUPPORTED_LIB, "Geodynamic World Builder is not compiled in (build with usegwb=1).");
 }
 
-void gwb_close() {}
+void gwb_release() {}
 
 #endif

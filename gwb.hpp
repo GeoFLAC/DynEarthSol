@@ -12,13 +12,16 @@
 // weakzone_plstrain, in the elements whose centroid lies in a GWB "fault" feature.
 //
 // GWB is queried at a point x of the initial mesh (z = 0 at the surface): depth -z, and in
-// 2D the point lies on the world's cross section, x along it. The world is opened at the
-// first query and stays open until gwb_close(), which init() calls once the initial
-// fields are set.
+// 2D the point lies on the world's cross section, x along it.
+//
+// init() calls gwb_build() before it meshes (MMG refines around the weak zone), which reads
+// ic.gwb_filename and builds the world in memory if any of the three options is 936, and
+// gwb_release() once the initial fields are set. A query outside that span is a bug.
 
+void gwb_build(const Param &param);
 double gwb_temperature(const Param &param, const double *x);
 int gwb_mattype(const Param &param, const double *x);
 bool gwb_in_fault(const Param &param, const double *x);
-void gwb_close();
+void gwb_release();
 
 #endif
