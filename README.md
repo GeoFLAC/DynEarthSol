@@ -195,15 +195,33 @@ defaults are not what you want.
   Examples: `examples/gwb-subduction.cfg` (2D, all three),
   `examples/gwb-slab-3d.cfg` (3D, all three) and `examples/gwb-core-complex.cfg`
   (2D, only the weak zone: `core-complex.cfg` with its seed fault from GWB).
-  * Build GWB as a shared library and install it:
+  * GWB needs CMake 3.5 or newer and a C++14 compiler. Build it as a shared
+    library and install it (under a minute on 4 cores):
     ```bash
     git clone https://github.com/GeodynamicWorldBuilder/WorldBuilder.git
-    cd WorldBuilder && mkdir build && cd build
-    cmake .. -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$HOME/opt/WorldBuilder
-    make install
+    cmake -S WorldBuilder -B WorldBuilder/build -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=ON -DWB_ENABLE_TESTS=OFF -DWB_ENABLE_PYTHON=OFF \
+      -DWB_MAKE_FORTRAN_WRAPPER=OFF -DCMAKE_INSTALL_PREFIX=$HOME/opt/WorldBuilder
+    cmake --build WorldBuilder/build -j 4
+    cmake --install WorldBuilder/build
     ```
-  * `GWB_DIR` (default `~/opt/WorldBuilder`) names the install; GWB puts its
-    library in `bin/`, which `GWB_LIB_DIR` overrides.
+    DES links `libWorldBuilder` as a shared library, so keep
+    `-DBUILD_SHARED_LIBS=ON`. The three `OFF` options skip parts DES does not
+    use; with Python on, the install also runs GWB's `setup.py install` into
+    the active Python.
+  * The install puts the headers in `include/` and the library in `bin/`, not
+    `lib/`. Build DES with `make usegwb=1`; `GWB_DIR` (default
+    `~/opt/WorldBuilder`) names another install prefix, and `GWB_LIB_DIR`
+    (default `$(GWB_DIR)/bin`) the library's directory. `make usegwb=1 config`
+    prints both. The executable records the library's directory, so no
+    `LD_LIBRARY_PATH` is needed.
+  * CI tests GWB at the commit pinned by `GWB_SHA` in
+    `.github/workflows/gwb-build.yml`; to build the same one, run
+    `git -C WorldBuilder checkout <GWB_SHA>` before `cmake`.
+  * GWB's `gwb-dat`, which prints a world's temperature and compositions at
+    given points, is not installed: it stays in `WorldBuilder/build/bin/`. It
+    helps when writing a world, and `tests/functional/gwb/check_gwb.py` compares
+    DES with it.
 
 <div id="llvm"></div>
 

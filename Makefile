@@ -412,7 +412,8 @@ endif
 
 ifeq ($(usegwb), 1)
 	# Geodynamic World Builder (github.com/GeodynamicWorldBuilder/WorldBuilder) for
-	# ic.temperature_option / ic.mattype_option 936. Build it as a shared library and install it:
+	# ic.temperature_option, ic.mattype_option and ic.weakzone_option 936. Build it as a
+	# shared library and install it (README.md, "Optional packages"):
 	#   cmake .. -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$(GWB_DIR) && make install
 	# Its install puts the headers in include/ and the library in bin/.
 	GWB_DIR ?= $(HOME)/opt/WorldBuilder
@@ -422,6 +423,7 @@ ifeq ($(usegwb), 1)
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		GWB_LDFLAGS += -Wl,-rpath=$(GWB_LIB_DIR)
 	endif
+	GWB_RPATH = $(GWB_LIB_DIR)   # Darwin: added by install_name_tool after the link
 endif
 
 
@@ -1163,8 +1165,9 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# already there: install_name_tool fails outright on a duplicate, and
 		@# these two are the same directory whenever Boost and libomp come from
 		@# one prefix (an activated conda env, say). An empty OPENMP_RPATH --
-		@# openmp=0, or a runtime that was not found -- drops out of the loop.
-		@for d in $(BOOST_LIB_DIR) $(OPENMP_RPATH); do \
+		@# openmp=0, or a runtime that was not found -- drops out of the loop, as
+		@# does GWB_RPATH without usegwb=1 (GWB's library names itself @rpath/...).
+		@for d in $(BOOST_LIB_DIR) $(OPENMP_RPATH) $(GWB_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
