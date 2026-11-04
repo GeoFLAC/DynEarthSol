@@ -50,7 +50,14 @@ jobs:
               $(ls /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null)
             apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=3 update
           fi
-          apt-get install -y --no-install-recommends libboost-program-options-dev
+          # gcc:8's snapshot.debian.org mirror has returned 503 for minutes.
+          # apt retries within seconds, so retry after a pause; 3 x 60 s is a guess.
+          for try in 1 2 3; do
+            apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              libboost-program-options-dev && break
+            [ $try = 3 ] && exit 1
+            echo "install failed, retrying in 60 s"; sleep 60
+          done
 
       - name: g++ version
         run: g++ --version
