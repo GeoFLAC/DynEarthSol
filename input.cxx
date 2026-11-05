@@ -1,6 +1,7 @@
 #include <algorithm>  // For std::is_sorted
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -813,7 +814,10 @@ static void declare_parameters(po::options_description &cfg,
          "How to set the initial material type of markers?\n"
          "0: marker's mattype is determined by regional attribute (currently can be modified only in the code or in a poly file).\n"
          "1: marker's mattype is layered.\n"
-         "101: custom mattype.")
+         "101: custom mattype.\n"
+         "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1): "
+         "a marker takes mattype i where GWB composition i is at least 0.5, i < mat.num_materials. "
+         "The world must define a material at every marker; a marker without one is an error.")
         ("ic.num_mattype_layers", po::value<int>(&p.ic.num_mattype_layers)->default_value(2),
          "Number of material layers")
         ("ic.layer_mattypes", po::value<std::string>()->default_value("[0,1]"),
@@ -827,7 +831,9 @@ static void declare_parameters(po::options_description &cfg,
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
          "2: ellipsoidal weak zone with specified center location and semi-axes.\n"
          "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n"
-         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n")
+         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n"
+         "936: the fault features of the Geodynamic World Builder world ic.gwb_filename (needs a build with "
+         "usegwb=1): weakzone_plstrain in the elements whose centroid lies in one.\n")
         ("ic.is_restarting_weakzone", po::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
         ("ic.weakzone_plstrain", po::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
@@ -900,7 +906,8 @@ static void declare_parameters(po::options_description &cfg,
          "1: continental thermal gradient.\n"
          "2: equilibrium temperature for crustal radiogenic heating.\n"
          "3: continental thermal gradient with adiabatic mantle.\n"
-         "90: temperature read from an external grid\n")
+         "90: temperature read from an external grid\n"
+         "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1).\n")
 
         // for temperature_option = 0
 	    ("ic.oceanic_plate_age_in_yr", po::value<double>(&p.ic.oceanic_plate_age_in_yr)->default_value(60e6),
@@ -943,6 +950,13 @@ static void declare_parameters(po::options_description &cfg,
          "<0: Infinite width; thermal profile is uniform along y-axis (ridge/hinge).\n")
         ("ic.radiogenic_heat_dome_azimuth", po::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
          "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
+
+        // for temperature_option, mattype_option and/or weakzone_option = 936
+        ("ic.gwb_filename", po::value<std::string>(&p.ic.gwb_filename)->default_value(""),
+         "Geodynamic World Builder world (.wb) for ic.temperature_option, ic.mattype_option "
+         "and/or ic.weakzone_option 936. It is queried at each node, marker and element "
+         "centroid of the initial mesh at depth -z; a 2D DES model needs a world with a cross "
+         "section, x running along it.")
 
         // for temperature_option = 90
         ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
@@ -2016,6 +2030,24 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             const std::string msg = "ic.temperature_option 1 needs mat.mattype_continental_crust ("
                 + std::to_string(p.mat.mattype_continental_crust) + ") in [0, mat.num_materials).";
             die(EXIT_CONFIG_VALUE, msg.c_str());
+        }
+
+        // Geodynamic World Builder initial conditions
+        if (p.sim.is_restarting && p.ic.is_restarting_weakzone && p.ic.weakzone_option == 936)
+            die(EXIT_CONFIG_VALUE, "ic.weakzone_option 936 cannot re-seed the weak zone of a restart: "
+                "set ic.is_restarting_weakzone = no, or choose another ic.weakzone_option.");
+        if (p.ic.temperature_option == 936 || p.ic.mattype_option == 936 || p.ic.weakzone_option == 936) {
+#ifndef USEGWB
+            die(EXIT_UNSUPPORTED_LIB, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                "936 needs the Geodynamic World Builder: build with usegwb=1.");
+#endif
+            if (p.ic.gwb_filename.empty())
+                die(EXIT_CONFIG_VALUE, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                    "936 needs ic.gwb_filename.");
+            if (! std::ifstream(p.ic.gwb_filename)) {
+                std::cerr << "Error: cannot open ic.gwb_filename '" << p.ic.gwb_filename << "'.\n";
+                die(EXIT_IO_OPEN);
+            }
         }
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {

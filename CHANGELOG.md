@@ -52,6 +52,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
   a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
   markers. `examples/subduction.cfg` runs it ([#110]).
+- Initial conditions from a [Geodynamic World Builder](https://geodynamicworldbuilder.github.io/)
+  world (`ic.gwb_filename`, build with `usegwb=1`): option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes
+  the temperature, each marker's material (GWB composition *i* is mattype *i*)
+  and a weak zone in the world's faults from it; `examples/gwb-*.cfg` show
+  all three ([#117]).
 
 ### Changed
 
@@ -342,3 +348,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117

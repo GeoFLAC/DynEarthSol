@@ -185,6 +185,43 @@ defaults are not what you want.
     reference for build, runtime and coupling details, and
     `gospl_driver/examples/` holds the example configs. The Docker image below
     ships the whole stack ready to run.
+* [Geodynamic World Builder](https://github.com/GeodynamicWorldBuilder/WorldBuilder)
+  (GWB), `usegwb=1`, to build initial conditions from a GWB world file of plates,
+  slabs and faults, named by `ic.gwb_filename`. Option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes,
+  each on its own, the initial temperature, the initial marker materials (GWB
+  composition *i* is mattype *i*; the world must give every point one) and the
+  weak zone (`weakzone_plstrain` inside the world's `fault` features) from it.
+  Examples: `examples/gwb-subduction.cfg` (2D, all three),
+  `examples/gwb-slab-3d.cfg` (3D, all three) and `examples/gwb-core-complex.cfg`
+  (2D, only the weak zone: `core-complex.cfg` with its seed fault from GWB).
+  * GWB needs CMake 3.5 or newer and a C++14 compiler. Build it as a shared
+    library and install it (under a minute on 4 cores):
+    ```bash
+    git clone https://github.com/GeodynamicWorldBuilder/WorldBuilder.git
+    cmake -S WorldBuilder -B WorldBuilder/build -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=ON -DWB_ENABLE_TESTS=OFF -DWB_ENABLE_PYTHON=OFF \
+      -DWB_MAKE_FORTRAN_WRAPPER=OFF -DCMAKE_INSTALL_PREFIX=$HOME/opt/WorldBuilder
+    cmake --build WorldBuilder/build -j 4
+    cmake --install WorldBuilder/build
+    ```
+    DES links `libWorldBuilder` as a shared library, so keep
+    `-DBUILD_SHARED_LIBS=ON`. The three `OFF` options skip parts DES does not
+    use; with Python on, the install also runs GWB's `setup.py install` into
+    the active Python.
+  * The install puts the headers in `include/` and the library in `bin/`, not
+    `lib/`. Build DES with `make usegwb=1`; `GWB_DIR` (default
+    `~/opt/WorldBuilder`) names another install prefix, and `GWB_LIB_DIR`
+    (default `$(GWB_DIR)/bin`) the library's directory. `make usegwb=1 config`
+    prints both. The executable records the library's directory, so no
+    `LD_LIBRARY_PATH` is needed.
+  * CI tests GWB at the commit pinned by `GWB_SHA` in
+    `.github/workflows/gwb-build.yml`; to build the same one, run
+    `git -C WorldBuilder checkout <GWB_SHA>` before `cmake`.
+  * GWB's `gwb-dat`, which prints a world's temperature and compositions at
+    given points, is not installed: it stays in `WorldBuilder/build/bin/`. It
+    helps when writing a world, and `tests/functional/gwb/check_gwb.py` compares
+    DES with it.
 
 <div id="llvm"></div>
 
@@ -317,6 +354,9 @@ make hdf5=1
 
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
+
+# enable Geodynamic World Builder initial conditions (requires an installed GWB)
+make usegwb=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
