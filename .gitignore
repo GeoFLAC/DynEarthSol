@@ -44,3 +44,4 @@ dynearthsol-gospl
 .build-flags-*
 .link-flags.*
 .feature-deps.*
+/runs/

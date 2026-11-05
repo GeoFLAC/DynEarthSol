@@ -144,7 +144,9 @@ defaults are not what you want.
   remeshing, in 2D and 3D. It is the `mmg` submodule: `make usemmg=1` initializes
   it and builds `libmmg2d` or `libmmg3d` under `mmg/build`, so nothing is
   installed by hand. The configure step ignores an exported `CFLAGS`; a tree
-  configured earlier keeps its cached flags until `mmg/build` is removed.
+  configured earlier keeps its cached flags until `mmg/build` is removed. A
+  `mmg/build` configured at another path (the tree mounted into a container,
+  say) is removed and rebuilt automatically.
   `MMG_INCLUDE` and `MMG_LIB_DIR` point at a different build.
 * [HDF5](https://www.hdfgroup.org/solutions/hdf5/), `hdf5=1`, for writing
   results in the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
@@ -163,22 +165,21 @@ defaults are not what you want.
   GoSPL handles erosion, deposition and hillslope diffusion; DES handles
   tectonics. At each coupling event DES surface velocities are passed to GoSPL,
   which returns the erosion/deposition increment applied to DES surface nodes.
-  * Requires a GoSPL conda environment, following
-    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html),
-    and the [gospl_extensions](https://github.com/GeoFLAC/gospl_extensions) C++
-    interface library:
+  * Requires a GoSPL conda (or mamba) environment and the
+    [gospl_extensions](https://github.com/GeoFLAC/gospl_extensions) C++
+    interface library, built in it:
     ```bash
+    conda create -n gospl -c geodels -c conda-forge "gospl>=2026.6.30" python=3.11
+    conda activate gospl
     git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
     cd ~/opt/gospl_extensions/cpp_interface
-    conda activate gospl
-    make install-local
+    make install-local      # macOS: add PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib"
     ```
-  * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
-    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make usegospl=1`
-    also generates the `dynearthsol-gospl` wrapper script.
-  * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
-    conda environment does not matter unless it has its own Boost or compilers;
-    `make config` shows what was picked.
+  * Coupling is 3D only. With the environment active, build with
+    `make ndims=3 usegospl=1 usemmg=1 CONDA_ENV_PATH=$CONDA_PREFIX`.
+    `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
+    and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
+    `dynearthsol-gospl` wrapper script.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
@@ -270,20 +271,41 @@ Nothing else to configure: `make` locates the header and the library itself.
 ### Docker
 
 * Build the image. `build.sh` sets the dimension (`NDIMS=2`) and the compiler
-  (`gcc-11`; also `gcc-8`, `clang-14`) at its top; edit them there or pass them
-  in the environment.
+  (`gcc-11`, or `clang-14`) at its top; edit them there or pass them in the
+  environment. It needs Docker with BuildKit (the `docker buildx`
+  plugin) and a regular clone, not a `git worktree`. Building needs network
+  unless the clone already has the `mmg` and `nanoflann` submodules. It reads
+  the compiler and conda layers from the cache that CI publishes on ghcr.io
+  (`ghcr.io/geoflac/dynearthsol/docker-cache`). It builds them itself when the
+  cache cannot be reached, or was built from another `Dockerfile` or another
+  `ubuntu:22.04`.
   ```bash
   ./build.sh
   ```
-* Run it
+  The image includes HDF5, so `make hdf5=1` in the container builds with
+  `.vtkhdf` output. The GoSPL image uses the `gospl` conda env's HDF5, and its
+  login shell exports `HDF5_INCLUDE_DIR`/`HDF5_LIB_DIR` so that build links
+  that same one.
+* Run it. The shell starts in `~/DynEarthSol`, and `./runs` on the host is
+  mounted at `~/DynEarthSol/runs`: run models there, since results written
+  there stay on the host and anything written elsewhere in the container is
+  lost when it exits (`--rm`). Create `runs` first: on Linux, Docker would
+  create it owned by root. The container user has your uid (`USER_ID`, which
+  `build.sh` takes from `id -u`, or 1000 under `sudo`), so it can write there.
+  OpenMP uses every CPU the container has; `omp N` sets `OMP_NUM_THREADS`.
+  `--network none` is optional: the image holds everything a build or run
+  needs, so the mount is its only link to the host.
   ```bash
-  docker run --rm -it dynearthsol/gcc-11
+  mkdir -p runs && docker run --rm -it --network none -v "$PWD/runs":/home/human/DynEarthSol/runs dynearthsol/gcc-11
   ```
-* `GOSPL=1 ./build.sh` builds `dynearthsol/gcc-11-gospl` instead: a 3D
-  executable with GoSPL coupling, the `gospl` conda environment and
-  `gospl_extensions` included, so no conda setup is needed on the host. Mount a
+* `GOSPL=1 ./build.sh` builds `dynearthsol/gcc-11-gospl` instead
+  (`dynearthsol/clang-14-gospl` with `CXXVERSION=clang-14`): a 3D
+  executable with GoSPL coupling and MMG remeshing (`usemmg=1`), the `gospl`
+  conda environment and `gospl_extensions` included, so no conda setup is needed on the host. Mount a
   directory holding the cfg and the GoSPL YAML and run `dynearthsol-gospl`
-  inside it; see `gospl_driver/README.md`.
+  inside it; see `gospl_driver/README.md`. Miniforge, `gospl` and
+  `gospl_extensions` are pinned in the `Dockerfile`
+  (`--build-arg GOSPL_VERSION=...` and the like override them).
 * `docker/Dockerfile.cuda` is the NVHPC image the GPU CI builds in.
 
 ### Common make invocations

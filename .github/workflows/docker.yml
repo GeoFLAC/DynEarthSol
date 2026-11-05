@@ -1,0 +1,203 @@
+name: Docker
+
+# Builds and tests every build.sh image on amd64 and arm64, then publishes
+# the tested layers as a cache on ghcr.io:
+#   <variant>-<arch>      from master; build.sh and every run read it
+#   <variant>-<arch>-pr<N> from a pull request; only that pull request reads it
+# Only GeoFLAC/DynEarthSol publishes; a fork cannot write its packages.
+
+permissions:
+  contents: read
+  packages: read
+
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'build.sh'
+      - 'Makefile'
+      - '.gitmodules'
+      - '.github/workflows/docker.yml'
+      - '.github/workflows/scripts/docker-cache-prune.sh'
+      # read by the tests below
+      - 'gospl_driver/**'
+      - 'examples/defaults.cfg'
+  push:
+    branches: [ "master" ]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'build.sh'
+      - 'Makefile'
+      - '.gitmodules'
+      - '.github/workflows/docker.yml'
+      - '.github/workflows/scripts/docker-cache-prune.sh'
+      # read by the tests below
+      - 'gospl_driver/**'
+      - 'examples/defaults.cfg'
+  # Weekly, without the cache: catches a new Ubuntu or conda package that
+  # breaks an image before a user does.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Runs on master queue, so two never write master's tag at once. A newer
+# queued run replaces a waiting one, even the weekly run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - { name: gcc-11,         cxx: gcc-11,   gospl: 0, ndims: 2 }
+          - { name: clang-14,       cxx: clang-14, gospl: 0, ndims: 2 }
+          - { name: gcc-11-gospl,   cxx: gcc-11,   gospl: 1, ndims: 3 }
+          - { name: clang-14-gospl, cxx: clang-14, gospl: 1, ndims: 3 }
+        # Native runners: conda under QEMU is far slower.
+        arch:
+          - { name: amd64, runner: ubuntu-latest }
+          - { name: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.arch.runner }}
+    permissions:
+      contents: read
+      packages: write
+    name: ${{ matrix.variant.name }} ${{ matrix.arch.name }}
+    env:
+      BUILD_ARGS: >-
+        --build-arg CXXVERSION=${{ matrix.variant.cxx }}
+        --build-arg GOSPL=${{ matrix.variant.gospl }}
+        --build-arg NDIMS=${{ matrix.variant.ndims }}
+    steps:
+    # Keep the token out of .git/config, which the image copies.
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - uses: docker/setup-buildx-action@v3
+
+    # As build.sh: the runner's uid, or 1000 for root.
+    - name: set the image uid
+      run: |
+        uid=$(id -u); [ "$uid" = 0 ] && uid=1000
+        echo "IMAGE_UID=$uid" >> $GITHUB_ENV
+
+    # Read: master's tag, plus the pull request's own (none weekly).
+    # Write: master's tag from master; -pr<N> from a same-repo pull request.
+    - name: pick the cache tags
+      env:
+        TAG: ghcr.io/geoflac/dynearthsol/docker-cache:${{ matrix.variant.name }}-${{ matrix.arch.name }}
+        EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        PR: ${{ github.event.pull_request.number }}
+        SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        UPSTREAM: ${{ github.repository == 'GeoFLAC/DynEarthSol' }}
+      run: |
+        from=; to=
+        if [ "$EVENT" = pull_request ]; then
+          from="--cache-from type=registry,ref=$TAG --cache-from type=registry,ref=$TAG-pr$PR"
+          [ "$SAME_REPO" = true ] && to=$TAG-pr$PR
+        else
+          [ "$EVENT" != schedule ] && from="--cache-from type=registry,ref=$TAG"
+          [ "$REF" = refs/heads/master ] && to=$TAG
+        fi
+        [ "$UPSTREAM" = true ] || to=
+        echo "CACHE_FROM=$from" >> $GITHUB_ENV
+        echo "CACHE_TO=$to" >> $GITHUB_ENV
+
+    # act has no token.
+    - name: log in to ghcr.io
+      if: ${{ !env.ACT }}
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: build the image
+      run: |
+        docker buildx build --load -t des-test $BUILD_ARGS $CACHE_FROM \
+          --build-arg USER_ID=$IMAGE_UID .
+
+    # Offline: the image must hold everything a build needs.
+    - name: test the plain image
+      if: matrix.variant.gospl == 0
+      run: |
+        docker run --rm --network none -e CXX_ARG=${{ matrix.variant.cxx == 'clang-14' && 'CXX=clang++' || '' }} des-test bash -c '
+          set -e
+          mkdir -p /tmp/t && cd /tmp/t
+          sed -e "s/^max_steps = .*/max_steps = 200/" \
+              -e "s/^output_step_interval = .*/output_step_interval = 100/" \
+              ~/DynEarthSol/examples/defaults.cfg > t.cfg
+          ~/DynEarthSol/dynearthsol2d t.cfg
+          python3 -c "import numpy, scipy"
+          cd ~/DynEarthSol
+          make -j$(nproc) ndims=3 hdf5=1 usemmg=1 $CXX_ARG
+        '
+
+    # The coupled example from ./runs, run with the image's executable and
+    # with an hdf5=1 usemmg=1 rebuild.
+    - name: test the GoSPL image
+      if: matrix.variant.gospl == 1
+      run: |
+        mkdir -p runs && chown $IMAGE_UID runs
+        # 400 steps = 2 couplings at gospl_coupling_frequency = 200.
+        sed -e 's/^#max_steps = .*/max_steps = 400/' \
+          gospl_driver/examples/gaussian-weakzone-3d-with-gospl.cfg > runs/t.cfg
+        grep -qx 'max_steps = 400' runs/t.cfg
+        grep -q '^gospl_coupling_frequency = 200\b' runs/t.cfg
+        cp gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml runs/
+        docker run --rm --network none -e CXX_ARG=${{ matrix.variant.cxx == 'clang-14' && 'CXX=clang++' || '' }} -v "$PWD/runs":/home/human/DynEarthSol/runs des-test bash -lc '
+          set -e
+          cd runs
+          ../dynearthsol-gospl t.cfg > run-default.log 2>&1
+          grep -q "GoSPL: 2 couplings" run-default.log
+          ! grep -q "MMG not compiled in" run-default.log
+          cd .. && make -j$(nproc) usegospl=1 ndims=3 hdf5=1 usemmg=1 $CXX_ARG
+          cd runs && ../dynearthsol-gospl t.cfg > run-hdf5mmg.log
+          grep -q "GoSPL: 2 couplings" run-hdf5mmg.log
+        '
+
+    # After the tests pass. Rebuilds nothing; exports the layers up to env-*,
+    # since later layers hold CI's uid and source. image-manifest=true: the
+    # format ghcr.io accepts.
+    - name: publish the layer cache
+      if: env.CACHE_TO != '' && !env.ACT
+      run: |
+        docker buildx build $BUILD_ARGS --target env-${{ matrix.variant.gospl }} \
+          --cache-to type=registry,ref=$CACHE_TO,mode=max,image-manifest=true .
+
+    # build.sh once, on the default builder a user has.
+    - name: build with build.sh
+      if: matrix.variant.name == 'gcc-11' && matrix.arch.name == 'amd64'
+      run: BUILDX_BUILDER=default ./build.sh
+
+
+  # Delete replaced (untagged) caches and closed pull requests' caches.
+  # Runs where a publish can. act skips it with an event file {"act": true}.
+  prune-cache:
+    needs: image
+    if: >-
+      always() && !github.event.act &&
+      github.repository == 'GeoFLAC/DynEarthSol' &&
+      (github.ref == 'refs/heads/master' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - name: delete stale cache versions
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      run: .github/workflows/scripts/docker-cache-prune.sh
