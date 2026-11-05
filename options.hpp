@@ -111,6 +111,34 @@ inline std::string trim(const std::string &s)
     return s.substr(b, s.find_last_not_of(" \t\r") - b + 1);
 }
 
+// True if `v` is a list as the old parser read it: "[" elements "]", the elements
+// separated by commas, one trailing comma allowed, "[]" empty. An element is plain
+// text with no brackets, quotes or blanks, so the reader that converts it and the
+// text CLI11 would hand over agree. Anything else, such as "[[1]]", "[\"1\"]",
+// "[1,,2]" or "[1 2]", was an error before and stays one.
+inline bool is_plain_list(const std::string &v)
+{
+    if (v.size() < 2 || v.front() != '[' || v.back() != ']') return false;
+    const std::string inner = trim(v.substr(1, v.size() - 2));
+    if (inner.empty()) return true;
+
+    std::size_t begin = 0;
+    for (;;) {
+        const std::size_t comma = inner.find(',', begin);
+        const bool last = comma == std::string::npos;
+        const std::string item = trim(inner.substr(begin, last ? std::string::npos : comma - begin));
+        if (item.empty()) {
+            // Only a trailing comma leaves the last item empty, and then not alone.
+            if (! (last && begin > 0)) return false;
+        }
+        else if (item.find_first_not_of("0123456789+-.abcdefghijklmnopqrstuvwxyz"
+                                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
+            return false;
+        if (last) return true;
+        begin = comma + 1;
+    }
+}
+
 inline std::string join_tokens(const std::vector<std::string> &v)
 {
     std::string s = "[";
@@ -308,13 +336,31 @@ public:
             // A key at the top of the file may carry its own section, "mat.rho0".
             const std::string key = section.empty() ? name : section + "." + name;
             const std::string value = detail::trim(line.substr(eq + 1));
+
+            // CLI11 strips quotes from a key, so it would find an option that this
+            // scan does not know by that name. Boost took the quotes as part of the
+            // name and found no such option, so refuse them the same way.
+            if (key.find_first_of("\"'") != std::string::npos)
+                defer("unrecognised option '" + key + "' (a misspelled or retired key; "
+                      "a key cannot be quoted)");
             if (! raw.emplace(key, value).second)
                 defer("option '" + key + "' cannot be specified more than once");
 
+            // CLI11 reads on past the end of the line for a value that opens with
+            // three quotes (a multi-line string) or with an unclosed "[" (an array),
+            // and the keys after it vanish without a word. DES takes neither.
             const detail::Entry *e = find(key);
-            if (e && e->tokens && (value.empty() || value.front() != '[' || value.back() != ']'))
-                defer("option '" + key + "' must be a list written as "
-                      "'[d0, d1, ...]', got '" + value + "'");
+            if (value.compare(0, 3, "\"\"\"") == 0 || value.compare(0, 3, "'''") == 0)
+                defer("option '" + key + "' cannot start with three quotes (multi-line "
+                      "strings are not supported), got '" + value + "'");
+            else if (e && e->tokens) {
+                if (! detail::is_plain_list(value))
+                    defer("option '" + key + "' must be a list written as "
+                          "'[d0, d1, ...]' of plain numbers, got '" + value + "'");
+            }
+            else if (! value.empty() && value.front() == '[')
+                defer("option '" + key + "' is not a list, but its value starts with '[': '"
+                      + value + "'");
         }
         if (deferred) throw *deferred;
         return raw;
