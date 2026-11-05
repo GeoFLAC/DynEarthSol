@@ -721,21 +721,6 @@ endif
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
-## Conda environments can disrupt gcc's default header search order, so name the
-## multiarch directory ahead of /usr/include (keeps bits/stdint-least.h
-## resolvable). Detected from gcc, else dpkg; empty on macOS and other layouts,
-## where gcc is Apple clang without -print-multiarch: two shell-outs per make
-## invocation for nothing.
-ifneq ($(OSNAME), Darwin)
-	MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
-	ifeq ($(MULTIARCH),)
-		MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
-	endif
-	ifneq ($(MULTIARCH),)
-		CXXFLAGS += -I/usr/include/$(MULTIARCH) -I/usr/include
-	endif
-endif
-
 ## CLI11 is a single vendored header, third_party/CLI11/CLI11.hpp. Only input.cxx
 ## includes it.
 CLI11_DIR = third_party/CLI11
