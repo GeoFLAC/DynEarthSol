@@ -137,6 +137,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- NVHPC CI installs Boost development headers and Python before compiling,
+  including when the published build container lacks those dependencies.
+
 - PT step-based output keeps a finite checkpoint clock when the time-output
   interval is omitted, including fresh and resumed runs with either scheduler.
 

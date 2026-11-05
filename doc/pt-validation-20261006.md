@@ -555,3 +555,9 @@ outputs and logs are retained under `/tmp/pr106-*`; the isolated worktrees are
 `/home/sungho/bin/des-pr106`, `des-pr106-parent` and `des-pr106-master`.
 NVHPC/GPU, MMG, Exodus and GoSPL runtime validation were not run in this merge
 check. The earlier scientific/convergence limits remain unchanged.
+
+The first post-merge NVHPC CI run failed in both dimensions because the published
+container lacked Boost headers; its build tooling also reported missing Python.
+The workflow now installs `libboost-program-options-dev` and `python3` before
+either dimension's build. Workflow YAML/shell validation and both CPU builds
+pass; this dependency-only correction changes no solver sources or algorithms.
