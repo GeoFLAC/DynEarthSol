@@ -154,7 +154,6 @@ else
 		endif
 	endif
 endif
-CXX_BACKEND = ${CXX}
 
 ifeq ($(hdf5), 1)
 ## Every stage below fills only what is still blank, so a path set by hand is
@@ -422,7 +421,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
 	endif
 
-else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
+else ifneq (, $(findstring g++, $(CXX))) # if using any version of g++
 	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++17 $(WARNFLAGS) -Wno-unknown-pragmas
 	LDFLAGS = -lm
@@ -456,26 +455,6 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 
 	ifeq ($(shell expr $(GCCVERSION) \> 8), 1)
 		CXXFLAGS += -DGPP1X
-	endif
-
-else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tested with v14
-	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -std=c++17
-	LDFLAGS = -lm
-
-	ifeq ($(opt), 1)
-		CXXFLAGS += -O1
-	else ifeq ($(opt), 2)
-		CXXFLAGS += -O2
-	else ifeq ($(opt), 3) # experimental, use at your own risk :)
-		CXXFLAGS += -fast -fast-transcendentals -fp-model fast=2
-	else # debugging flags
-		CXXFLAGS += -O0 -check=uninit -check-pointers=rw -check-pointers-dangling=all -fp-trap-all=all
-	endif
-
-	ifeq ($(openmp), 1)
-		CXXFLAGS += -fopenmp
-		LDFLAGS += -fopenmp
 	endif
 
 else ifneq (, $(findstring nvc++, $(CXX)))
@@ -882,7 +861,7 @@ endif
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
-		echo "g++, icpc, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
+		echo "g++, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX)))
