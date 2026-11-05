@@ -951,11 +951,12 @@ static void declare_parameters(po::options_description &cfg,
         ("ic.radiogenic_heat_dome_azimuth", po::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
          "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
 
-        // for temperature_option and/or mattype_option = 936
+        // for temperature_option, mattype_option and/or weakzone_option = 936
         ("ic.gwb_filename", po::value<std::string>(&p.ic.gwb_filename)->default_value(""),
-         "Geodynamic World Builder world (.wb) for ic.temperature_option and/or "
-         "ic.mattype_option 936. It is queried at each node and marker of the initial mesh at "
-         "depth -z; a 2D DES model needs a world with a cross section, x running along it.")
+         "Geodynamic World Builder world (.wb) for ic.temperature_option, ic.mattype_option "
+         "and/or ic.weakzone_option 936. It is queried at each node, marker and element "
+         "centroid of the initial mesh at depth -z; a 2D DES model needs a world with a cross "
+         "section, x running along it.")
 
         // for temperature_option = 90
         ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
