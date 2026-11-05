@@ -1,22 +1,46 @@
+// Geodynamic World Builder world for gwb-subduction.cfg: a continental plate,
+// an oceanic plate subducting beneath it, and a fault along the plate
+// interface, on a 600 x 200 km cross section.
+//
+// The compositions are DES's materials, in the order of the cfg's [mat]
+// arrays: 0 oceanic crust, 1 continental crust, 2 mantle. With
+// mattype_option = 936 every point of the domain needs one of them, so the
+// mantle layer fills the domain and each plate and the slab give their
+// mantle part composition 2.
+//
+// Where features overlap, the later one in the list wins, and a composition
+// model sets the compositions it does not list to zero. Distances are in
+// metres, temperatures in kelvin, velocities in m/yr.
 {
   "version":"1.2",
   "coordinate system":{"model":"cartesian"},
+  // DES x runs along this line of the world's map, from (0,0) to (600 km,0),
+  // and the depth is -z. The features below extend 100 km past it on every
+  // side, so their edges stay outside the domain.
   "cross section":[[0,0],[600e3,0]],
+  // Global parameters of GWB's temperature models. bc.mantle_temperature in
+  // the cfg matches the potential mantle temperature.
   "surface temperature":273, "potential mantle temperature":1573,
   "thermal expansion coefficient":3e-5, "specific heat":1000, "thermal diffusivity":1.0e-6,
   "features":
   [
+    // Background: mantle at a uniform 1573 K, deeper than the 200 km domain.
     {"model":"mantle layer", "name":"mantle", "max depth":300e3,
      "coordinates":[[-100e3,-100e3],[-100e3,100e3],[700e3,100e3],[700e3,-100e3]],
      "temperature models":[{"model":"uniform", "temperature":1573}],
      "composition models":[{"model":"uniform", "compositions":[2]}]},
 
+    // Overriding plate, x < 250 km: a 100 km lithosphere with a linear
+    // geotherm, 35 km of continental crust over mantle.
     {"model":"continental plate", "name":"overriding plate", "max depth":100e3,
      "coordinates":[[-100e3,-100e3],[-100e3,100e3],[250e3,100e3],[250e3,-100e3]],
      "temperature models":[{"model":"linear", "max depth":100e3, "top temperature":273, "bottom temperature":1573}],
      "composition models":[{"model":"uniform", "compositions":[1], "max depth":35e3},
                            {"model":"uniform", "compositions":[2], "min depth":35e3, "max depth":100e3}]},
 
+    // Subducting plate, x > 250 km: a cooling plate from a ridge 2000 km away
+    // (about 35 Myr old at the trench at 5 cm/yr), 7 km of oceanic crust over
+    // mantle.
     {"model":"oceanic plate", "name":"subducting plate", "max depth":100e3,
      "coordinates":[[250e3,-100e3],[250e3,100e3],[700e3,100e3],[700e3,-100e3]],
      "temperature models":[{"model":"plate model", "max depth":100e3,
@@ -25,6 +49,14 @@
      "composition models":[{"model":"uniform", "compositions":[0], "max depth":7e3},
                            {"model":"uniform", "compositions":[2], "min depth":7e3, "max depth":100e3}]},
 
+    // The slab: from the trench at x = 250 km it dips toward the dip point
+    // (-x, under the overriding plate), steepening from 0 to 25 degrees over
+    // the first 100 km, to 45 over the next 150 km, then straight, to about
+    // 180 km depth within the domain. Like the plate, it has 7 km of oceanic
+    // crust on top. Its temperature is GWB's mass-conserving slab model,
+    // referenced to the same plate model and ridge as the oceanic plate; it
+    // also applies 20 km above the slab top, cooling the mantle wedge next to
+    // the slab.
     {"model":"subducting plate", "name":"slab",
      "coordinates":[[250e3,-100e3],[250e3,100e3]], "dip point":[0,0], "max depth":300e3,
      "segments":[{"length":100e3, "thickness":[100e3], "angle":[0,25]},
@@ -40,6 +72,11 @@
         "coupling depth":80e3, "forearc cooling factor":20.0, "taper distance":100e3,
         "min distance slab top":-20e3, "max distance slab top":150e3}]},
 
+    // The plate interface, DES's weak zone (weakzone_option = 936): the slab's
+    // top surface, same trace and first two segments, to 80 km depth. It is
+    // 6 km thick, centred on the slab top. Without temperature or composition
+    // models it keeps those of the features above, and only marks the
+    // elements that get weakzone_plstrain.
     {"model":"fault", "name":"plate interface", "max depth":80e3,
      "coordinates":[[250e3,-100e3],[250e3,100e3]], "dip point":[0,0],
      "segments":[{"length":100e3, "thickness":[6e3], "angle":[0,25]},
