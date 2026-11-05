@@ -58,8 +58,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Boost is no longer a dependency. The config file is read with CLI11 2.7.2,
   vendored as a single header in `third_party/CLI11/`, and the build needs a
   C++17 compiler. `make BOOST_ROOT_DIR=...` is now ignored with a warning.
-  Config files read as before; the `-h` listing is reformatted and parse error
-  messages are worded differently ([#75]).
+  Valid config files read as before. The `-h` listing is reformatted, parse
+  error messages are worded differently, and three malformed inputs that Boost
+  took are now errors: an empty bool, and a string value that opens with three
+  quotes or with `[` ([#75]).
 - A GoSPL-coupled run prints its coupling as one summary line after each DES
   progress line, after the first event, instead of four lines per event,
   GoSPL's `--- step done` among them ([#105]).
