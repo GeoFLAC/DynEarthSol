@@ -25,8 +25,8 @@ CODE_PATHS="*.c *.h *.cxx *.hpp *.cpp *.cu Makefile 3x3-C/Makefile"
 # Empty is legitimate (no GPU_CC); UNSET means the Makefile and this script drifted apart.
 for v in DES_REV_DEFINES DES_REV_CXXFLAGS DES_REV_WARNFLAGS DES_REV_LDFLAGS \
          DES_REV_MK_OPTS DES_REV_GPU_CC DES_REV_SNAPSHOT_DIFF \
-         DES_REV_KNN_DIR DES_REV_ANN_DIR DES_REV_MMG_DIR \
-         DES_REV_PREFIX_BOOST DES_REV_PREFIX_HDF5 DES_REV_PREFIX_MMG \
+         DES_REV_KNN_DIR DES_REV_ANN_DIR DES_REV_CLI11_DIR DES_REV_MMG_DIR \
+         DES_REV_PREFIX_HDF5 DES_REV_PREFIX_MMG \
          DES_REV_PREFIX_OPENMP
 do
     eval "set_check=\${$v+set}"
@@ -53,7 +53,6 @@ cls() {
         *)                                                     echo system ;;
     esac
 }
-src_boost=$(cls "$DES_REV_PREFIX_BOOST")
 src_hdf5=$(cls "$DES_REV_PREFIX_HDF5")
 src_mmg=$(cls "$DES_REV_PREFIX_MMG")
 src_openmp=$(cls "$DES_REV_PREFIX_OPENMP")
@@ -103,6 +102,9 @@ subrev() {
 }
 knnrev=$(subrev "$DES_REV_KNN_DIR")
 nfrev=$(subrev "$DES_REV_ANN_DIR")
+# CLI11 is vendored, not a submodule: its version is in the header.
+cli11ver=$(sed -n 's/^#define CLI11_VERSION "\(.*\)"/\1/p' "$DES_REV_CLI11_DIR/CLI11.hpp" 2>/dev/null)
+[ -n "$cli11ver" ] || cli11ver=unknown
 
 # The stamp beside the mmg archive (the Makefile writes it) names what links in.
 mmgrev=""
@@ -142,8 +144,8 @@ tmp=$out.tmp.$$   # per process: two builds in one tree may run this at once
     printf '#define DES_GPU_CC "%s"\n'        "$DES_REV_GPU_CC"
     printf '#define DES_KNNBVH_REV "%s"\n'    "$knnrev"
     printf '#define DES_NANOFLANN_REV "%s"\n' "$nfrev"
+    printf '#define DES_CLI11_VERSION "%s"\n' "$cli11ver"
     printf '#define DES_MMG_REV "%s"\n'       "$mmgrev"
-    printf '#define DES_SRC_BOOST "%s"\n'     "$src_boost"
     printf '#define DES_SRC_HDF5 "%s"\n'      "$src_hdf5"
     printf '#define DES_SRC_MMG "%s"\n'       "$src_mmg"
     printf '#define DES_SRC_OPENMP "%s"\n'    "$src_openmp"

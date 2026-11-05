@@ -25,8 +25,8 @@
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
-## Boost, HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
-## the "Optional paths" block below for the Boost, HDF5 and NVHPC overrides; every
+## HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
+## the "Optional paths" block below for the HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
 
 ndims = 3
@@ -51,8 +51,8 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX \
-             BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX BOOST_ROOT_DIR \
+             HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
              PYTHON_VERSION PYTHON_INCLUDE_DIR PYTHON_LIB_DIR \
@@ -67,7 +67,7 @@ endif
 OSNAME := $(shell uname -s)
 
 ########################################################################
-## Optional paths -- Boost, HDF5 and NVHPC. All of these may stay blank.
+## Optional paths -- HDF5 and NVHPC. All of these may stay blank.
 ##
 ## The build locates them by itself; `make config` prints what it found. Set a
 ## variable here, or on the make command line, only to force one specific install
@@ -91,10 +91,6 @@ OSNAME := $(shell uname -s)
 ## but it is the one way these knobs surprise people, so unset what you no longer
 ## use rather than leaving it in a shell profile.
 ########################################################################
-
-## Boost. Either an install prefix, holding include/ and lib/, or a b2 build
-## directory, recognised by its stage/ subdirectory.
-BOOST_ROOT_DIR ?= # /path/to/boost
 
 ## HDF5, for hdf5=1. Set either or both; whichever is left blank is still
 ## detected. Layouts the search knows about, if you would rather name them:
@@ -238,111 +234,10 @@ e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
 endif
 endif
 
-## Candidate prefixes, in priority order. macOS has no system Boost, so /usr is
-## never the answer there and these tiers are what remove the old requirement to
-## pass BOOST_ROOT_DIR=$(brew --prefix boost) by hand.
-##
-## Package managers come BEFORE conda: a shell that auto-activates `base` has
-## conda on for everything, not just the work that wants it, so it is the weaker
-## signal of intent. A conda Boost is still used when it is the only one.
-## The `opt/boost` keg beats the bare $(BREW_PREFIX) farm -- it pins the version.
-## Linux keeps the tiers it had: conda, else the /usr default below.
-ifeq ($(OSNAME), Darwin)
-	BOOST_PREFIXES = $(BREW_PREFIX)/opt/boost $(MACPORTS_PREFIX) $(BREW_PREFIX) \
-		$(CONDA_PREFIX)
-else
-	BOOST_PREFIXES = $(CONDA_PREFIX)
-endif
-
-## Both halves required: a headers-only tree (extracted tarball, half-removed
-## keg, conda's libboost-headers without libboost) would otherwise be selected
-## and then fail at the link. The `libboost_program_options.*` glob matches
-## exactly what -lboost_program_options can link, and not MacPorts' `-mt` variant.
-## `override` so a command-line `BOOST_ROOT_DIR=` still falls through to
-## detection -- a command-line value otherwise outranks even the /usr fallback.
-ifndef BOOST_ROOT_DIR
-	override BOOST_ROOT_DIR := $(shell for d in $(BOOST_PREFIXES); do \
-		test -f $$d/include/boost/program_options.hpp || continue; \
-		set -- $$d/lib/libboost_program_options.*; \
-		test -f "$$1" || continue; \
-		echo $$d; break; done)
-endif
-
-## Nothing found: keep the historical /usr default so that `make clean`, `make
-## config` and a hand-set BOOST_LIB_DIR all still work, and record that this is
-## a failed search rather than a deliberate choice. On macOS the difference is
-## decisive -- there is no system Boost under /usr (this macOS has no
-## /usr/include at all), so the fallback there always means "not found", and
-## check-deps says so instead of letting the link produce a wall of undefined
-## symbols.
-ifndef BOOST_ROOT_DIR
-	override BOOST_ROOT_DIR = /usr
-	## Only on macOS does the fallback mean "the search failed" -- on Linux /usr
-	## is the normal, correct answer and the compiler finds Boost there on its
-	## own. Keeping that distinction is what lets check-deps be decisive on
-	## macOS without misreporting a healthy Linux build.
-	ifeq ($(OSNAME), Darwin)
-		BOOST_NOT_FOUND := yes
-	endif
-endif
-
 ########################################################################
 ## Select compiler and linker flags
 ## (Usually you won't need to modify anything below)
 ########################################################################
-
-BOOST_LDFLAGS = -lboost_program_options
-# Detect multiarch tuple (e.g. x86_64-linux-gnu on Debian/Ubuntu); empty on macOS/other.
-# Skipped on macOS, where there is no multiarch layout and `gcc` is Apple clang,
-# which has no -print-multiarch: two shell-outs per make invocation for nothing.
-ifneq ($(OSNAME), Darwin)
-	MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
-	ifeq ($(MULTIARCH),)
-		MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
-	endif
-endif
-ifdef BOOST_ROOT_DIR
-	# check existence of stage/ directory
-	has_stage_dir = $(wildcard $(BOOST_ROOT_DIR)/stage)
-	ifeq (, $(has_stage_dir))
-		# no stage dir, BOOST_ROOT_DIR is the installation directory
-		ifeq ($(BOOST_ROOT_DIR), /usr)
-			# Conda environments can disrupt gcc's default search order, so explicitly
-			# add the multiarch path before /usr/include (keeps bits/stdint-least.h
-			# resolvable) and use the multiarch lib dir where boost is installed.
-			ifneq ($(MULTIARCH),)
-				BOOST_CXXFLAGS = -I/usr/include/$(MULTIARCH) -I/usr/include
-				BOOST_LIB_DIR = /usr/lib/$(MULTIARCH)
-			else
-				BOOST_LIB_DIR = /usr/lib
-			endif
-		else
-			BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)/include
-			BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/lib
-		endif
-	else
-		# with stage dir, BOOST_ROOT_DIR is the build directory
-		BOOST_CXXFLAGS = -I$(BOOST_ROOT_DIR)
-		BOOST_LIB_DIR = $(BOOST_ROOT_DIR)/stage/lib
-	endif
-	## Full path on macOS, for the same reason as libomp above: a -L dir also
-	## answers the implicit -lc++, and a conda prefix ships its own libc++.dylib
-	## (left on -L, the executable loads two libc++ images and says nothing).
-	## Only when the .dylib exists -- a static-only Boost still needs -l -- and
-	## via firstfile so a dangling Cellar symlink falls back to -l too.
-	## Linux keeps -L/-l, right for .so versioning and the stage layout.
-	BOOST_DYLIB = $(call firstfile,libboost_program_options.dylib,$(BOOST_LIB_DIR))
-	ifeq ($(OSNAME)$(if $(BOOST_DYLIB),yes,), Darwinyes)
-		BOOST_LDFLAGS = $(BOOST_DYLIB)
-	else
-		BOOST_LDFLAGS += -L$(BOOST_LIB_DIR)
-	endif
-	ifneq ($(OSNAME), Darwin)
-		# Apple's ld supports -rpath only in the comma form, so Darwin gets its
-		# rpath from the install_name_tool step after the link instead.
-		BOOST_LDFLAGS += -Wl,-rpath=$(BOOST_LIB_DIR)
-	endif
-endif
 
 ifeq ($(useexo), 1)
 	# path to exodus header files
@@ -426,7 +321,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
 	## THREED-only axis, the ACC-only knn state, the hdf5-only compression level -- which
 	## is the same deliberate pattern, not a finding.
-	CXXFLAGS = -g -std=c++0x -DGPP1X $(WARNFLAGS) -Wno-unused-private-field
+	CXXFLAGS = -g -std=c++17 -DGPP1X $(WARNFLAGS) -Wno-unused-private-field
 	## Everything but opt=0 and opt=-1; those two are the builds that report acc pragmas.
 	ifeq (,$(filter 0 -1,$(opt)))
 		CXXFLAGS += -Wno-unknown-pragmas
@@ -458,7 +353,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 		## Apple clang ships no OpenMP runtime, so one has to be found. Set
 		## OPENMP_ROOT_DIR to force a prefix (its include/ and lib/), or
 		## OPENMP_INCLUDE_DIR / OPENMP_LIB_DIR when they are not siblings.
-		## Plain `=`: an exported value is ignored, as for BOOST_ROOT_DIR.
+		## Plain `=`: an exported value is ignored.
 		OPENMP_ROOT_DIR ?= # /path/to/openmp
 		ifneq ($(strip $(OPENMP_ROOT_DIR)),)
 			ifeq ($(strip $(OPENMP_INCLUDE_DIR)),)
@@ -529,7 +424,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 
 else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -std=c++0x $(WARNFLAGS) -Wno-unknown-pragmas
+	CXXFLAGS = -g -std=c++17 $(WARNFLAGS) -Wno-unknown-pragmas
 	LDFLAGS = -lm
 	TETGENFLAG = -Wno-unused-but-set-variable -Wno-int-to-pointer-cast
 
@@ -565,7 +460,7 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 
 else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tested with v14
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -g -std=c++0x
+	CXXFLAGS = -g -std=c++17
 	LDFLAGS = -lm
 
 	ifeq ($(opt), 1)
@@ -586,13 +481,13 @@ else ifneq (, $(findstring icpc, $(CXX_BACKEND))) # if using intel compiler, tes
 else ifneq (, $(findstring nvc++, $(CXX)))
 	CXX_SUPPORTED = yes
 	## No WARNFLAGS here: nvc++ rejects -Wno-unknown-pragmas outright ("Unknown switch"),
-	## and bare -Wall only adds a macro redefinition inside boost's own pgi.hpp.
+	## and bare -Wall added nothing but a macro redefinition inside Boost's pgi.hpp, which is no longer included.
 	## It does report unreferenced file statics by default, which is the class g++'s
 	## WARNFLAGS suppresses on purpose -- headers here carry helpers not every translation
 	## unit calls, and each dimension compiles the other's. --diag_suppress is nvc++'s
 	## spelling of that -Wno-unused-{variable,function}. Its set_but_not_used stays on, so
 	## that a value written and never read is still reported, as it is under g++.
-	CXXFLAGS = -g -Minfo=mp,accel --diag_suppress=declared_but_not_referenced
+	CXXFLAGS = -g -std=c++17 -Minfo=mp,accel --diag_suppress=declared_but_not_referenced
 	LDFLAGS =
 	TETGENFLAGS = 
 
@@ -654,7 +549,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 else ifneq (, $(findstring pgc++, $(CXX)))
 	CXX_SUPPORTED = yes
-	CXXFLAGS = -march=core2
+	CXXFLAGS = -std=c++17 -march=core2
 	LDFLAGS = 
 	TETGENFLAGS = 
 
@@ -826,6 +721,32 @@ endif
 ANN_DIR = nanoflann
 CXXFLAGS += -I$(ANN_DIR)/include
 
+## Conda environments can disrupt gcc's default header search order, so name the
+## multiarch directory ahead of /usr/include (keeps bits/stdint-least.h
+## resolvable). Detected from gcc, else dpkg; empty on macOS and other layouts,
+## where gcc is Apple clang without -print-multiarch: two shell-outs per make
+## invocation for nothing.
+ifneq ($(OSNAME), Darwin)
+	MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null)
+	ifeq ($(MULTIARCH),)
+		MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+	endif
+	ifneq ($(MULTIARCH),)
+		CXXFLAGS += -I/usr/include/$(MULTIARCH) -I/usr/include
+	endif
+endif
+
+## CLI11 is a single vendored header, third_party/CLI11/CLI11.hpp. Only input.cxx
+## includes it.
+CLI11_DIR = third_party/CLI11
+CXXFLAGS += -I$(CLI11_DIR)
+
+## Boost is no longer used. A command line that still names its prefix is told,
+## rather than stopped; an exported value is ignored silently.
+ifeq ($(origin BOOST_ROOT_DIR), command line)
+$(warning BOOST_ROOT_DIR is ignored: Boost is no longer a dependency)
+endif
+
 GOSPL_DIR = gospl_driver
 CXXFLAGS += -I$(GOSPL_DIR)
 
@@ -884,7 +805,7 @@ FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
 FEATURE_STAMPS = $(foreach f,$(FEATURES),$(call FEATURE_STAMP,$(f)))
 
 ## What is left once every feature chunk is removed (filter-out is exact-token).
-GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS) $(BOOST_CXXFLAGS))
+GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS))
 
 ## Stamps DELETE what they invalidate; mtime is not trustworthy here. make 3.81
 ## compares to the whole second and treats equal as up to date, and a 4-object
@@ -909,7 +830,7 @@ $(BUILD_STAMP): FORCE
 	fi
 
 $(LINK_STAMP): FORCE
-	@echo '$(CXX)|$(LDFLAGS)|$(BOOST_LDFLAGS)' > $@.tmp
+	@echo '$(CXX)|$(LDFLAGS)' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else \
 		test -f $@ && echo "   link flags changed since the last build -- relinking"; \
 		mv $@.tmp $@; rm -f $(EXE); \
@@ -964,28 +885,19 @@ FORCE:
 ## cannot build yet.
 ##
 ## Fatal on macOS only: there this detection is the sole source of -I/-L and
-## there is no system Boost nor Apple omp.h, so a miss is certain. Elsewhere the
+## there is no Apple omp.h, so a miss is certain. Elsewhere the
 ## toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
 ## module sysroot), so a failed guess must not block a working build.
 ifeq ($(OSNAME), Darwin)
 DEP_FATAL = exit 1
-BOOST_INSTALL_HINT = brew install boost
 else
 DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a module)"
-BOOST_INSTALL_HINT = apt install libboost-program-options-dev / dnf install boost-devel
 endif
 
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
 		echo "g++, icpc, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
-	@test -f "$(BOOST_ROOT_DIR)/include/boost/program_options.hpp" \
-	  || test -f "$(BOOST_ROOT_DIR)/boost/program_options.hpp" \
-	  || test -f /usr/include/boost/program_options.hpp || { \
-		echo "Missing: Boost.ProgramOptions.   Install: $(BOOST_INSTALL_HINT)"; \
-		echo "         Searched: $(strip $(BOOST_PREFIXES)) /usr"; \
-		echo "         Or name one: make BOOST_ROOT_DIR=/prefix   (now $(BOOST_ROOT_DIR))"; \
-		$(DEP_FATAL); }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX)))
@@ -1015,12 +927,7 @@ ifeq ($(openmp), 1)
 	@echo "  omp.h from       $(if $(strip $(OPENMP_INCLUDE_DIR)),$(OPENMP_INCLUDE_DIR),** NOT FOUND **)"
 	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
 endif
-	@echo "boost prefix       $(BOOST_ROOT_DIR)$(if $(BOOST_NOT_FOUND),   ** NOT FOUND -- fallback **)"
-else
-	@echo "boost prefix       $(BOOST_ROOT_DIR)"
 endif
-	@echo "  boost lib dir    $(BOOST_LIB_DIR)$(if $(filter Darwin,$(OSNAME)), [`lipo -archs $(BOOST_LIB_DIR)/libboost_program_options.dylib 2>/dev/null || echo 'no .dylib'`])"
-	@echo "  boost -I         $(if $(strip $(BOOST_CXXFLAGS)),$(BOOST_CXXFLAGS),none -- relying on the compiler default search path)"
 	@echo "hdf5               $(strip $(hdf5))"
 ifeq ($(hdf5), 1)
 	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
@@ -1035,8 +942,8 @@ ifeq ($(openacc), 1)
 	@echo "  knn-bvh archive  $(KNN_BVH_LIB)"
 endif
 	@echo
-	@echo "CXXFLAGS           $(CXXFLAGS) $(BOOST_CXXFLAGS)"
-	@echo "LDFLAGS            $(LDFLAGS) $(BOOST_LDFLAGS)"
+	@echo "CXXFLAGS           $(CXXFLAGS)"
+	@echo "LDFLAGS            $(LDFLAGS)"
 	@echo
 	@echo "rebuild scope      global compile flags -> all objects"
 	@echo "                   LDFLAGS              -> relink only"
@@ -1106,7 +1013,7 @@ build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 ## LINK_STAMP, not BUILD_STAMP: objects already carry the compile-flag edge, so
 ## only LDFLAGS is new here -- and that must relink without recompiling.
 $(EXE): $(M_OBJS) $(OBJS) $(C3X3_DIR)/lib$(C3X3_LIBNAME).a $(KNN_BVH_LIB) $(MMG_LIB) $(LINK_STAMP)
-		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) \
+		$(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) \
 			-L$(C3X3_DIR) -l$(C3X3_LIBNAME) \
 			-o $@
 
@@ -1127,16 +1034,11 @@ ifeq ($(usegospl), 1)
 	@echo ""
 endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
-		@# A Boost built by hand with b2 records a bare install name, which the
-		@# loader cannot resolve; rewrite it to the full path. A no-op for a
-		@# packaged Boost, whose install name is already absolute.
-		install_name_tool -change libboost_program_options.dylib $(BOOST_LIB_DIR)/libboost_program_options.dylib $@
 		@# Record each dependency's directory as an rpath, skipping any that is
-		@# already there: install_name_tool fails outright on a duplicate, and
-		@# these two are the same directory whenever Boost and libomp come from
-		@# one prefix (an activated conda env, say). An empty OPENMP_RPATH --
-		@# openmp=0, or a runtime that was not found -- drops out of the loop.
-		@for d in $(BOOST_LIB_DIR) $(OPENMP_RPATH); do \
+		@# already there: install_name_tool fails outright on a duplicate. An
+		@# empty OPENMP_RPATH -- openmp=0, or a runtime that was not found --
+		@# drops out of the loop.
+		@for d in $(OPENMP_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
@@ -1203,7 +1105,7 @@ SNAP_CXX_ORDERED = $(strip \
 ## -W% is gcc/clang; --diag_% is nvc++'s diagnostic control (one word via =).
 SNAP_WARN = $(strip $(filter -W% --diag_%,$(SNAP_CXX)))
 ## Link flags ranked the same, libraries last; search dirs, rpaths and paths stay out.
-SNAP_LD = $(filter -%,$(filter-out -L% -Wl$(comma)-rpath%,$(LDFLAGS) $(BOOST_LDFLAGS)))
+SNAP_LD = $(filter -%,$(filter-out -L% -Wl$(comma)-rpath%,$(LDFLAGS)))
 SNAP_LD_ORDERED = $(strip \
     $(foreach p,$(SNAP_CODEGEN),$(filter $(p),$(SNAP_LD))) \
     $(filter-out $(SNAP_CODEGEN) -l%,$(SNAP_LD)) \
@@ -1224,9 +1126,9 @@ export DES_REV_GPU_CC    = $(strip $(GPU_CC))
 export DES_REV_SNAPSHOT_DIFF = $(strip $(snapshot_diff))
 export DES_REV_KNN_DIR   = $(KNN_BVH_DIR)
 export DES_REV_ANN_DIR   = $(ANN_DIR)
+export DES_REV_CLI11_DIR = $(CLI11_DIR)
 export DES_REV_MMG_DIR   = mmg
 ## Dependency prefixes: paths, which the script turns into provider labels.
-export DES_REV_PREFIX_BOOST  = $(strip $(BOOST_ROOT_DIR))
 export DES_REV_PREFIX_HDF5   = $(strip $(HDF5_INCLUDE_DIR))
 export DES_REV_PREFIX_MMG    = $(strip $(MMG_INCLUDE))
 export DES_REV_PREFIX_OPENMP = $(strip $(OPENMP_LIB_DIR))
@@ -1245,7 +1147,10 @@ runtime_info.$(ndims)d$(suffix).o: build_revision.hpp
 
 ## nanoflann.hpp reaches every unit through parameters.hpp.
 $(OBJS): %.$(ndims)d$(suffix).o : %.cxx $(INCS) $(ANN_DIR)/include/nanoflann.hpp $(BUILD_STAMP)
-	$(CXX) $(CXXFLAGS) $(BOOST_CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+## The config parser is the only unit that includes options.hpp and CLI11.hpp.
+input.$(ndims)d$(suffix).o: options.hpp $(CLI11_DIR)/CLI11.hpp
 
 $(KNN_BVH_LIB): FORCE
 	@$(MAKE) --no-print-directory -C $(KNN_BVH_DIR) NDIM=$(ndims) SM=$(GPU_CC)
