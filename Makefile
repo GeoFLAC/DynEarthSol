@@ -1121,10 +1121,10 @@ $(KNN_BVH_LIB): FORCE
 
 $(TRI_OBJS): %.$(ndims)d$(suffix).o : %.c $(TRI_INCS) $(BUILD_STAMP)
 	@# Triangle cannot be compiled with -O2
-	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c $< -o $@
+	$(CXX) $(CXXFLAGS) -O1 -DTRILIBRARY -DREDUCED -DANSI_DECLARATORS -c -x c++ $< -o $@
 
 triangle/triangle: triangle/triangle.c
-	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS triangle/triangle.c -o $@
+	$(CXX) $(CXXFLAGS) -O1 -DREDUCED -DANSI_DECLARATORS -x c++ triangle/triangle.c -o $@
 
 tetgen/predicates.$(ndims)d$(suffix).o: tetgen/predicates.cxx $(TET_INCS) $(BUILD_STAMP)
 	@# Compiling J. Shewchuk predicates, should always be

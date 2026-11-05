@@ -52,19 +52,6 @@
 #include "remeshing.hpp"
 #include "ic.hpp"
 
-#ifdef WIN32
-#ifndef _MSC_VER
-namespace std {
-  static std::string to_string(long double t)
-  {
-    char temp[32];
-    sprintf(temp,"%f",double(t));
-    return std::string(temp);
-  }
-}
-#endif //_MSC_VER
-#endif // WIN32
-
 // equilateral triangle area = 0.433*s^2, equilateral tetrahedron volume = 0.118*s^3
 #ifdef THREED
 const double sizefactor = 0.118;
@@ -702,7 +689,6 @@ void triangulate_polygon
  double **outpoints, int **triangles,
  int **outsegments, int **outsegflags, double **outregattr)
 {
-    char options[255];
     triangulateio in, out;
 
     std::string verbosity, vol, quality, steiner;
@@ -711,10 +697,9 @@ void triangulate_polygon
     set_2d_quality_str(quality, min_angle);
     set_steiner_str(steiner, max_steiner_factor, npoints, max_area);
 
+    std::string options = verbosity + quality + "pjz" + vol + steiner;
     if( nregions > 0 )
-        std::sprintf(options, "%s%spjz%s%sA", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
-    else
-        std::sprintf(options, "%s%spjz%s%s", verbosity.c_str(), quality.c_str(), vol.c_str(), steiner.c_str());
+        options += 'A';
 
     if( meshing_verbosity >= 0 )
         std::cout << "The meshing option is: " << options << '\n';
@@ -757,7 +742,7 @@ void triangulate_polygon
     out.edgemarkerlist = NULL;
 
     /*******************************/
-    triangulate(options, &in, &out, NULL);
+    triangulate(options.data(), &in, &out, NULL);
     /*******************************/
 
     *noutpoints = out.numberofpoints;
@@ -1634,7 +1619,6 @@ void tetrahedralize_polyhedron
     //
     // Setting Tetgen options.
     //
-    char options[255];
     double max_dihedral_angle = 180 - 3 * min_dihedral_angle;
 
     std::string verbosity, vol, quality;
@@ -1642,10 +1626,9 @@ void tetrahedralize_polyhedron
     set_volume_str(vol, max_volume);
     set_3d_quality_str(quality, max_ratio, min_dihedral_angle, max_dihedral_angle);
 
+    std::string options = verbosity + quality + vol + "pzs" + std::to_string(optlevel);
     if( nregions > 0 )
-        std::sprintf(options, "%s%s%spzs%dA", verbosity.c_str(), quality.c_str(), vol.c_str(), optlevel);
-    else
-        std::sprintf(options, "%s%s%spzs%d", verbosity.c_str(), quality.c_str(), vol.c_str(), optlevel);
+        options += 'A';
 
     if( meshing_verbosity >= 0 )
         std::cout << "The meshing option is: " << options << '\n';
@@ -1660,7 +1643,7 @@ void tetrahedralize_polyhedron
     in.pointlist = const_cast<double*>(points);
     in.numberofpoints = npoints;
 
-    tetgenio::polygon *polys;
+    tetgenio::polygon *polys = NULL;
     tetgenio::facet *fl;
     if (facets == NULL) {
         polys = new tetgenio::polygon[nsegments];
@@ -1696,7 +1679,7 @@ void tetrahedralize_polyhedron
 
     tetgenio out;
     /*******************************/
-    tetrahedralize(options, &in, &out, NULL, NULL);
+    tetrahedralize(options.data(), &in, &out, NULL, NULL);
     /*******************************/
 
     // the destructor of tetgenio will free any non-NULL pointer

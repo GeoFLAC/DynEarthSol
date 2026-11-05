@@ -19,6 +19,10 @@ public:
         T* ptr_;      // pointer to the start of the array (e.g., &a_[0])
         int stride_;  // stride = n_ (total elements) for SoA layout
 
+        // Declared copy ctor ends aggregate init in C++20, so Accessor{p, s} needs this ctor
+        Accessor(T* p, int s) : ptr_(p), stride_(s) {}
+        Accessor(const Accessor&) = default;  // copies the view; operator= copies the values
+
         T& operator[](const int dim) const {
             return ptr_[dim * stride_];
         }
