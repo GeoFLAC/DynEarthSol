@@ -55,6 +55,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- Boost is no longer a dependency. The config file is read with CLI11 2.7.2,
+  vendored as a single header in `third_party/CLI11/`, and the build needs a
+  C++17 compiler. `make BOOST_ROOT_DIR=...` is now ignored with a warning.
+  Config files read as before; the `-h` listing is reformatted and parse error
+  messages are worded differently ([#75]).
 - A GoSPL-coupled run prints its coupling as one summary line after each DES
   progress line, after the first event, instead of four lines per event,
   GoSPL's `--- step done` among them ([#105]).
@@ -326,6 +331,7 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#71]: https://github.com/GeoFLAC/DynEarthSol/pull/71
 [#72]: https://github.com/GeoFLAC/DynEarthSol/pull/72
 [#74]: https://github.com/GeoFLAC/DynEarthSol/pull/74
+[#75]: https://github.com/GeoFLAC/DynEarthSol/issues/75
 [#76]: https://github.com/GeoFLAC/DynEarthSol/pull/76
 [#78]: https://github.com/GeoFLAC/DynEarthSol/pull/78
 [#81]: https://github.com/GeoFLAC/DynEarthSol/pull/81

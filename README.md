@@ -45,32 +45,21 @@ own, with no paths to edit and none to pass on the command line.
 
 ```bash
 # macOS (Homebrew) -- libomp because Apple clang ships no OpenMP runtime
-brew install boost libomp
+brew install libomp
 
 # Debian / Ubuntu
-sudo apt install g++ make libboost-program-options-dev
+sudo apt install g++ make
 
 # Fedora / RHEL
-sudo dnf install gcc-c++ make boost-devel
+sudo dnf install gcc-c++ make
 ```
 
 The requirements in detail:
-* You will need a C++11 compiler. CI builds with g++ 8 through 15, Apple clang
+* You will need a C++17 compiler. CI builds with g++ 8 through 15, Apple clang
   and nvc++.
-* You will need `Boost::Program_options` (1.42 or newer). Packaged versions are
-  found automatically. On macOS the search order is the Homebrew `boost` keg,
-  then MacPorts, then the Homebrew prefix itself, then an activated conda
-  environment; elsewhere it is the conda environment, then the system Boost the
-  compiler finds on its own. A prefix is accepted only if it holds both the
-  headers and the library. Package managers come before conda deliberately: a
-  shell that auto-activates `base` has conda on for everything, so it is the
-  weaker signal of intent, but a conda Boost is still used when it is the only
-  one installed.
-  * To build Boost yourself: download the source from www.boost.org, run
-    `./bootstrap.sh` then `./b2 --with-program_options -q` in the untarred
-    directory, and point the build at it with `make BOOST_ROOT_DIR=/path/to/boost`.
-    A build directory is recognised by its `stage/` subdirectory, so name the
-    untarred directory, not `stage/lib`.
+* The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
+  vendored as a single header in `third_party/CLI11/`; there is nothing to
+  install for it.
 * The Python tools (`2vtk.py`, `Dynearthsol.py`) need Python 3 with NumPy and
   SciPy, plus h5py to read vtkhdf output.
 * **macOS users**: Apple clang has no built-in OpenMP, so the runtime has to
@@ -100,7 +89,7 @@ defaults are not what you want.
   Changing a flag rebuilds what it reaches, so no `make clean` is needed.
 * `make check-deps` verifies the external libraries, including their
   architecture, without building.
-* `BOOST_ROOT_DIR`, `HDF5_INCLUDE_DIR`, `HDF5_LIB_DIR` and `NVHPC_DIR` sit
+* `HDF5_INCLUDE_DIR`, `HDF5_LIB_DIR` and `NVHPC_DIR` sit
   together in an **Optional paths** block near the top of the `Makefile`. All
   may stay blank; set one only to force a specific install, which skips
   detection for that dependency. Every other dependency's path is declared
@@ -108,8 +97,7 @@ defaults are not what you want.
   An *exported* value is honoured too, which is how a module file or a conda
   activation hook names a prefix once; the catch is that a stale export in a
   shell profile silently defeats a good package-manager install. `make config`
-  shows which prefix was used, and an empty `BOOST_ROOT_DIR=` on the command
-  line forces detection.
+  shows which prefix was used.
 * `opt=2` is the default optimized build; `opt=3` adds `-march=native -O3`;
   `opt=0` is for debugging; `opt=-1` adds `-fsanitize=address`, which reports
   where a memory error occurs and where the memory was allocated without gdb or
@@ -177,7 +165,7 @@ defaults are not what you want.
     (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make usegospl=1`
     also generates the `dynearthsol-gospl` wrapper script.
   * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
-    conda environment does not matter unless it has its own Boost or compilers;
+    conda environment does not matter unless it has its own compilers;
     `make config` shows what was picked.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)

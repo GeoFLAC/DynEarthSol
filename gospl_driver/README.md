@@ -46,7 +46,7 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
 
 GoSPL coupling is 3D only. Which conda environment is active does not matter
 for this build: the Makefile finds GoSPL's Python through `CONDA_ENV_PATH`. Only
-an active environment with its own Boost or compilers changes it, and
+an active environment with its own compilers changes it, and
 `make config` shows what was picked.
 
 ```bash
