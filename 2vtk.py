@@ -190,6 +190,15 @@ def calculate_derived_data(des, frame):
     horizon = np.zeros((nnode), dtype=coord.dtype)
     horizon[:] = coord0[:,-1]
     point_data['horizon'] = (horizon, 1)
+
+    # initial (coord0) horizontal position: location_x, plus location_y in 3D
+    map0 = np.zeros((nnode), dtype=coord.dtype)
+    map0[:] = coord0[:,0]
+    point_data['location_x'] = (map0, 1)
+    if des.ndims == 3:
+        map1 = np.zeros((nnode), dtype=coord.dtype)
+        map1[:] = coord0[:,1]
+        point_data['location_y'] = (map1, 1)
     
     # Element-based
     # Strain Rate
@@ -463,14 +472,21 @@ def process_single_frame(args):
     # Converting marker
     #
     if output_markers:
-        # ordinary markerset
-        filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
-        output_vtp_file(des, frame, filename, 'markerset', time_in_yr, step)
-
-        # hydrous markerset
-        if 'hydrous-markerset size' in des.field_pos:
-            filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
-            output_vtp_file(des, frame, filename, 'hydrous-markerset', time_in_yr, step)
+        # Read the set names from the frame: des.field_pos (the binary header
+        # index) is empty for vtkhdf output. Convert the primary set first, so an
+        # error in another set cannot stop its .vtp being written.
+        marker_sets = des.marker_sets(frame)
+        marker_sets = ([m for m in marker_sets if m == 'markerset'] +
+                       [m for m in marker_sets if m != 'markerset'])
+        for markersetname in marker_sets:
+            if markersetname == 'markerset':
+                filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
+            elif markersetname == 'hydrous-markerset':
+                filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
+            else:
+                filename = '{0}.{1}.{2}.vtp'.format(output_prefix, markersetname,
+                                                    suffix)
+            output_vtp_file(des, frame, filename, markersetname, time_in_yr, step)
 
     return suffix, pt_residual_missing
 

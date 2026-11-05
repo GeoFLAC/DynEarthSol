@@ -276,6 +276,43 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
 }
 }
 
+// Normal velocity apply_vbcs prescribes on side wall t (0 = x0, 1 = x1, 2 = y0, 3 = y1) at
+// time_in_yr, before the 2D depth profile and homogeneous constraints: vbc_val_* times the wall's
+// period table; 0 for a code that leaves it free or holds it at 0 (1, 3, 6 set it, and 7 in 3D).
+namespace {
+double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
+{
+    const bool lo = (t % 2 == 0), y = (t >= 2);
+    const int code = y ? (lo ? bc.vbc_y0 : bc.vbc_y1) : (lo ? bc.vbc_x0 : bc.vbc_x1);
+#ifdef THREED
+    if (code != 1 && code != 3 && code != 6 && code != 7) return 0.;
+#else
+    if (code != 1 && code != 3 && code != 6) return 0.;
+#endif
+    const double v = y ? (lo ? bc.vbc_val_y0 : bc.vbc_val_y1)
+                       : (lo ? bc.vbc_val_x0 : bc.vbc_val_x1);
+    const double_vec &time = y ? (lo ? bc.vbc_period_y0_time_in_yr : bc.vbc_period_y1_time_in_yr)
+                               : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
+    const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
+                                : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
+    return v * interp1(time, ratio, time_in_yr);
+}
+} // anonymous namespace
+
+// True if side_wall_normal_vbc points into the domain (lower wall: > 0; upper wall: < 0).
+bool side_wall_vbc_is_inflow(const BC &bc, int t, double time_in_yr)
+{
+    const double v = side_wall_normal_vbc(bc, t, time_in_yr);
+    return (t % 2 == 0) ? (v > 0.) : (v < 0.);
+}
+
+// True if side_wall_normal_vbc points out of the domain (lower wall: < 0; upper wall: > 0).
+bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr)
+{
+    const double v = side_wall_normal_vbc(bc, t, time_in_yr);
+    return (t % 2 == 0) ? (v < 0.) : (v > 0.);
+}
+
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
 {
 #ifdef NPROF
@@ -292,57 +329,42 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
 
     const BC &bc = param.bc;
+    // normal velocity of each side wall, after its period table
+    const double t_now = var.time / YEAR2SEC;
+    double vbc_applied_x0 = side_wall_normal_vbc(bc, 0, t_now);
+    double vbc_applied_x1 = side_wall_normal_vbc(bc, 1, t_now);
 #ifdef THREED
-    // vel period is not ready for 3D
-
+    double vbc_applied_y0 = side_wall_normal_vbc(bc, 2, t_now);
+    double vbc_applied_y1 = side_wall_normal_vbc(bc, 3, t_now);
 #else
 
-    // new way to find vbc_applied_x
-    double t_now = var.time / YEAR2SEC;
-    double vbc_applied_x0 = bc.vbc_val_x0 * interp1(bc.vbc_period_x0_time_in_yr,bc.vbc_period_x0_ratio, t_now);
-    double vbc_applied_x1 = bc.vbc_val_x1 * interp1(bc.vbc_period_x1_time_in_yr,bc.vbc_period_x1_ratio, t_now);
-
     // find max and min coordinate for BOUNDX0
-    double BOUNDX0_max = 0.;
-    double BOUNDX0_min = 0.;
-    double BOUNDX1_max = 0.;
-    double BOUNDX1_min = 0.;
-    bool if_init0 = false;
-    bool if_init1 = false;
+    // Side-wall extents as device reductions (a host scan would migrate coord/bcflag every step).
+    // max/min are exact, so the result is order-independent; a wall with no node gets extent 0.
+    const double big = std::numeric_limits<double>::max();
+    double BOUNDX0_max = -big, BOUNDX0_min = big;
+    double BOUNDX1_max = -big, BOUNDX1_min = big;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) \
+        reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min)
+#endif
+    #pragma acc parallel loop gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
     for (int i=0; i<var.nnode; ++i) {
         if (! is_on_boundary(*var.bcflag, i)) continue;
-
         uint flag = (*var.bcflag)[i];
         if (flag & BOUNDX0) {
-            ConstArrayAccessor x = (*var.coord)[i];
-            if (!if_init0) {
-               BOUNDX0_max = x[1];
-               BOUNDX0_min = x[1];
-               if_init0 = true;
-            } else {
-                if (x[1]>BOUNDX0_max) {
-                    BOUNDX0_max = x[1];
-                }
-                if (x[1]<BOUNDX0_min) {
-                    BOUNDX0_min = x[1];
-                }
-            }
+            const double z = (*var.coord)[i][1];
+            if (z > BOUNDX0_max) BOUNDX0_max = z;
+            if (z < BOUNDX0_min) BOUNDX0_min = z;
         } else if (flag & BOUNDX1) {
-            ConstArrayAccessor x = (*var.coord)[i];
-            if (!if_init1) {
-               BOUNDX1_max = x[1];
-               BOUNDX1_min = x[1];
-               if_init1 = true;
-            } else {
-                if (x[1]>BOUNDX1_max) {
-                    BOUNDX1_max = x[1];
-                }
-                if (x[1]<BOUNDX1_min) {
-                    BOUNDX1_min = x[1];
-                }
-            }            
+            const double z = (*var.coord)[i][1];
+            if (z > BOUNDX1_max) BOUNDX1_max = z;
+            if (z < BOUNDX1_min) BOUNDX1_min = z;
         }
     }
+    #pragma acc wait
+    if (BOUNDX0_max < BOUNDX0_min) { BOUNDX0_max = 0.; BOUNDX0_min = 0.; }
+    if (BOUNDX1_max < BOUNDX1_min) { BOUNDX1_max = 0.; BOUNDX1_min = 0.; }
     double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
     double BOUNDX1_width = BOUNDX1_max - BOUNDX1_min;
 
@@ -353,7 +375,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     double_vec vbc_vertical_divisions_x1(4,0.);
     for (int i=0;i<4;i++) {
         vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
-        vbc_vertical_divisions_x1[i] = - (BOUNDX0_max - var.vbc_vertical_div_x1[i] * BOUNDX0_width);
+        vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - var.vbc_vertical_div_x1[i] * BOUNDX1_width);
     }
 #endif
 
@@ -386,13 +408,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         // Only 3D has y boundaries to hold at rest; in 2D y is not a boundary direction.
         bc_vy0 = 0.0;
         bc_vy1 = 0.0;
+        vbc_applied_y0 = 0.0;
+        vbc_applied_y1 = 0.0;
 #endif
         bc_vz0 = 0.0;
         bc_vz1 = 0.0;
-#ifndef THREED
         vbc_applied_x0 = 0.0;
         vbc_applied_x1 = 0.0;
-#endif
     }
 
     if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
@@ -406,14 +428,16 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 
 #ifdef THREED
     // Each lateral face is described by: boundary mask, normal component index (ni),
-    // lateral-shear component index (li), bc type, normal value (val), and lateral
-    // shear value (val_l). The vertical shear (v[2]) is always either free or fixed at 0.
-    struct LateralFace { uint mask; int ni; int li; int type; double val; double val_l; };
+    // lateral-shear component index (li), bc type, normal value (val_n, after the period table),
+    // tangential value of types 4 and 5 (val) and lateral shear value (val_l), both unscaled as
+    // in 2D. The vertical shear (v[2]) is always either free or fixed at 0.
+    struct LateralFace { uint mask; int ni; int li; int type;
+                         double val_n; double val; double val_l; };
     const LateralFace lateral_faces[] = {
-        {BOUNDX0, 0, 1, bc_x0, bc_vx0, bc_vx0_l},
-        {BOUNDX1, 0, 1, bc_x1, bc_vx1, bc_vx1_l},
-        {BOUNDY0, 1, 0, bc_y0, bc_vy0, bc_vy0_l},
-        {BOUNDY1, 1, 0, bc_y1, bc_vy1, bc_vy1_l},
+        {BOUNDX0, 0, 1, bc_x0, vbc_applied_x0, bc_vx0, bc_vx0_l},
+        {BOUNDX1, 0, 1, bc_x1, vbc_applied_x1, bc_vx1, bc_vx1_l},
+        {BOUNDY0, 1, 0, bc_y0, vbc_applied_y0, bc_vy0, bc_vy0_l},
+        {BOUNDY1, 1, 0, bc_y1, vbc_applied_y1, bc_vy1, bc_vy1_l},
     };
 #else
     double zmin = 0;
@@ -466,13 +490,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
             if (!(flag & f.mask)) continue;
             switch (f.type) {
             case 0: break;
-            case 1: v[f.ni] = prescribed*f.val; break;
+            case 1: v[f.ni] = prescribed*f.val_n; break;
             case 2: v[f.li] = 0; v[2] = 0; break;
-            case 3: v[f.ni] = prescribed*f.val; v[f.li] = 0; v[2] = 0; break;
+            case 3: v[f.ni] = prescribed*f.val_n; v[f.li] = 0; v[2] = 0; break;
             case 4: v[f.li] = prescribed*f.val; v[2] = 0; break;
             case 5: v[f.ni] = 0; v[f.li] = prescribed*f.val; v[2] = 0; break;
-            case 6: v[f.ni] = prescribed*f.val; v[f.li] = prescribed*f.val_l; break;
-            case 7: v[f.ni] = prescribed*f.val; v[f.li] = 0; break;
+            case 6: v[f.ni] = prescribed*f.val_n; v[f.li] = prescribed*f.val_l; break;
+            case 7: v[f.ni] = prescribed*f.val_n; v[f.li] = 0; break;
             }
         }
 #else
@@ -720,13 +744,10 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
         if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
         if (i==iboundz1 && !param.bc.has_water_loading) continue;
 
-        int bound, nbdry_nodes;
-
-        #pragma acc kernels
-        {
-            bound = static_cast<int>(var.bfacets[i]->size());
-            nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
-        }
+        // Plain host reads of two vector sizes: an `acc kernels` block here becomes a serial device
+        // kernel plus a synchronization per boundary per step (nvc++).
+        int bound = static_cast<int>(var.bfacets[i]->size());
+        int nbdry_nodes = static_cast<int>(var.bnodes[i]->size());
 
 #ifndef ACC
         #pragma omp parallel default(none) \
@@ -1215,10 +1236,15 @@ namespace {
         const int_vec& top_nodes = *var.bnodes[iboundz1];
         const std::size_t ntop = top_nodes.size();
 
-        std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
-                  << ntop << " surface nodes, vel_coupling="
-                  << (var.gospl_driver->velocity_coupling ? "on" : "off")
-                  << std::endl;
+        // Only the first event is logged in full, as a check on the setup; later
+        // ones go into the summary printed with DES's progress line.
+        const bool log_event = (var.gospl_driver->total_events == 0);
+
+        if (log_event)
+            std::cout << "GoSPL coupling: dt=" << total_dt << " yr, "
+                      << ntop << " surface nodes, vel_coupling="
+                      << (var.gospl_driver->velocity_coupling ? "on" : "off")
+                      << std::endl;
 
         // Build coordinate array for current DES surface nodes
         std::vector<double> coords(ntop * 3);
@@ -1234,11 +1260,13 @@ namespace {
         // that can interfere with the C++ heap.
         static std::vector<double> surface_coords_start;
         static bool has_surface_start = false;
+        // var.nremesh when surface_coords_start was recorded. A remesh renumbers the nodes
+        // (renumbering_mesh), so top_nodes[i] may name a different node afterwards even
+        // when the surface node count is unchanged.
+        static int nremesh_at_start = -1;
 
         // Re-initialize GoSPL topography on the first coupling event only.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
-        // Also invalidate surface_coords_start: after remeshing the node set changes,
-        // so time-averaged velocities cannot span across the remesh boundary.
         if (var.gospl_driver->needs_elevation_reset) {
             std::vector<double> des_elev(ntop);
             for (std::size_t i = 0; i < ntop; ++i)
@@ -1258,8 +1286,7 @@ namespace {
         // coupling event or after remeshing.
         if (var.gospl_driver->velocity_coupling) {
             std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
-            bool use_time_avg = has_surface_start &&
-                                surface_coords_start.size() == ntop * 3;
+            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh;
             for (std::size_t i = 0; i < ntop; ++i) {
                 int n = top_nodes[i];
                 if (use_time_avg) {
@@ -1292,11 +1319,24 @@ namespace {
             double vy_max = *std::max_element(vy_yr.begin(), vy_yr.end());
             double vz_min = *std::min_element(vz_yr.begin(), vz_yr.end());
             double vz_max = *std::max_element(vz_yr.begin(), vz_yr.end());
-            std::cout << "  vel DES->GoSPL (" << (use_time_avg ? "time-avg" : "instantaneous") << ", m/yr):"
-                      << " vx=[" << vx_min << ", " << vx_max << "]"
-                      << " vy=[" << vy_min << ", " << vy_max << "]"
-                      << " vz=[" << vz_min << ", " << vz_max << "]"
-                      << std::endl;
+            const double vmin[3] = {vx_min, vy_min, vz_min};
+            const double vmax[3] = {vx_max, vy_max, vz_max};
+            var.gospl_driver->record_velocity(vmin, vmax, !use_time_avg);
+            if (log_event)
+                std::cout << "  vel DES->GoSPL (" << (use_time_avg ? "time-avg" : "instantaneous") << ", m/yr):"
+                          << " vx=[" << vx_min << ", " << vx_max << "]"
+                          << " vy=[" << vy_min << ", " << vy_max << "]"
+                          << " vz=[" << vz_min << ", " << vz_max << "]"
+                          << std::endl;
+            else if (!use_time_avg) {
+                // The fallback after the first event means a remesh. "same count" marks
+                // the case a node-count check cannot see.
+                const std::size_t nstart = surface_coords_start.size() / 3;
+                std::cout << "GoSPL: instantaneous velocity at t=" << var.time / YEAR2SEC
+                          << " yr: remeshed since the last coupling (surface nodes "
+                          << nstart << " -> " << ntop
+                          << (nstart == ntop ? ", same count" : "") << ")" << std::endl;
+            }
         }
 
         // Run GoSPL and get net dh in one call.
@@ -1305,10 +1345,10 @@ namespace {
         std::vector<double> net_erosion(ntop, 0.0);
         int run_result = var.gospl_driver->run_and_get_erosion(
             total_dt, coords.data(), ntop, net_erosion.data(), 3, 1.0);
-        if (run_result != 0) {
-            std::cerr << "Error: GoSPL run_and_get_erosion failed" << std::endl;
-            return;
-        }
+        if (run_result != 0)
+            // A failed call can leave GoSPL's surface partly advanced, so the
+            // coupling cannot continue from it.
+            die(EXIT_RUNTIME_GOSPL, "GoSPL run_and_get_erosion failed");
 
         // Apply dh to all DES surface nodes.
         // net_erosion contains only erosion+diffusion (uplift stripped in Python);
@@ -1330,10 +1370,13 @@ namespace {
         // Done after GoSPL returns; surface_coords_start is a static vector allocated in
         // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
         surface_coords_start = coords;
+        nremesh_at_start = var.nremesh;
         has_surface_start = true;
 
-        std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
-                  << " mean=" << sum_dh / ntop << std::endl;
+        var.gospl_driver->record_coupling(total_dt, min_dh, max_dh, sum_dh / ntop);
+        if (log_event)
+            std::cout << "GoSPL: dh [" << min_dh << ", " << max_dh << "]"
+                      << " mean=" << sum_dh / ntop << std::endl;
     }
 #endif
 
@@ -1674,22 +1717,21 @@ namespace {
 }
 
 
-void surface_plstrain_diffusion(const Param &param, \
-    const Variables& var, double_vec& plstrain)
+void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
     double half_life = 1.e2 * YEAR2SEC;
     double lambha = 0.69314718056 / half_life; // ln2
-    // Not parallelized: the loop is over top elements only and runs once per step.
-    // #pragma omp parallel for default(none) shared(param, var, plstrain, lambha)
-    for (auto e=(*var.top_elems).begin();e<(*var.top_elems).end();e++) {
-        // Find the most abundant marker mattype in this element
-        int_vec &a = (*var.elemmarkers)[*e];
-        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-        if (mat != param.mat.mattype_oceanic_crust)
-            plstrain[*e] -= plstrain[*e] * lambha * var.dt;
+    // Top elements only, but a host loop here would drag plstrain off the device on every call.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, plstrain, lambha)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int ti = 0; ti < var.ntop_elems; ++ti) {
+        const int e = (*var.top_elems)[ti];
+        plstrain[e] -= plstrain[e] * lambha * var.dt;
     }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -1871,6 +1913,8 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
     if (var.steps != 0) {
+        // The main loop rebuilds the serpentinization grid under this same step
+        // test, because it must index every marker; change the two together.
         if ( var.steps % param.mesh.quality_check_step_interval == 0) {
             markersets[0]->correct_surface_marker(param, var, *var.surfinfo.dhacc, elemmarkers, markers_in_elem);
 
@@ -1882,7 +1926,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
             // set marker of sediment.
-            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sed, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sediment, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
     }
 
@@ -1891,10 +1935,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #else
     if (!(var.steps % param.mesh.quality_check_step_interval &&  var.steps != 0))
         // correct the plastic strain of urface element for preventing surface landslide.
-        surface_plstrain_diffusion(param,var,plstrain);
+        surface_plstrain_diffusion(var,plstrain);
 
     if ( param.control.is_reporting_terrigenous_info && var.steps%10000 == 0 &&  var.steps != 0  ) {
-        double max_dh = 0., min_dh = 0., max_dh_oc = 0.;
+        double max_dh = 0., min_dh = 0.;
         for (int i=0;i<var.surfinfo.ntop;i++) {
             max_dh = std::max(max_dh, (*var.surfinfo.dh)[i]);
             min_dh = std::min(min_dh, (*var.surfinfo.dh)[i]);

@@ -41,6 +41,26 @@ For a release, the full auto-generated list of merged pull requests is in its
   runs' `.manifest`, and links the earlier frames under the model's name; the
   new `-hdf` writes updated `.vtkhdf` copies, and `-u` and `-hdf` list the
   frames in a `.vtkhdf.series` for ParaView ([#97]).
+- Conservative MMG remeshing (`usemmg=1`) in 2D and 3D: a remesh keeps most
+  quiet elements (not yielding, distorted or tiny) as they are, so it no longer
+  diffuses the far field, and a yielding band keeps its plastic strain ([#95]).
+- With `remeshing_option = 13`, material entering through a restored side wall
+  (all four walls in 3D) takes the wall's temperature, layering and radiogenic
+  source, and with MMG the mesh along those walls is kept at about `resolution`
+  ([#95]).
+- A VirtualTopology grid: a background grid that bins markers by cell, so a
+  rule can ask which material lies below a marker. It is rebuilt at each
+  quality check and after each remesh, ends below the deepest mantle that can
+  serpentinize, and checkpoints carry it, so a restart continues with the same
+  grid ([#110]).
+- `mat.phase_change_option = 3`: geoflac's subduction phase changes (eclogite,
+  mantle and serpentinite, chlorite-out, the sediment chain), read with the
+  depth below the current surface and the element mean stress or, with
+  `mat.phase_change_pressure_option = 1`, the reference lithostat. Mantle
+  serpentinizes above wet crust (oceanic crust, sediment or sedimentary rock)
+  that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
+  a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
+  markers. `examples/subduction.cfg` runs it ([#110]).
 
 ### Changed
 
@@ -49,7 +69,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 - PT stagnation warns once and continues to the iteration cap; failed or
   nonfinite solves restore mechanical history and stop before physical updates.
 - Failed PT solves report the requested stopping threshold alongside the
-  residual, without changing convergence criteria.
+  residual, without changing convergence criteria. Mechanical nonconvergence
+  uses exit code 54; code 53 remains reserved for GoSPL failures.
+- A GoSPL-coupled run prints its coupling as one summary line after each DES
+  progress line, after the first event, instead of four lines per event,
+  GoSPL's `--- step done` among them ([#105]).
 - `README.md` matches the current build and tools again: several statements
   were stale, among them exported `BOOST_ROOT_DIR` being ignored, a default
   input file, and MMG built from a hand clone rather than the submodule ([#96]).
@@ -61,13 +85,55 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
   ([#97]).
-- **Breaking.** `make use_gospl=1` looks for the gospl environment in
+- **Breaking.** `make usegospl=1` looks for the gospl environment in
   `~/miniforge3/envs/gospl`, where GoSPL's install now puts it; a Miniconda
   install sets `CONDA_ENV_PATH`, which, like `GOSPL_EXT_DIR`, may now also be
   exported ([#104]).
+- **Breaking.** The make option `use_gospl` is now `usegospl`, matching
+  `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
+  error.
+- A GoSPL step that fails stops the run with exit code 53 instead of skipping
+  that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
+  overshoot of the coupling interval ("bad hmax", PETSc error 77).
 - The GoSPL docs follow the des3d coupling tutorial and explain when GoSPL
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
+- **Breaking.** `mmg_hmin_factor` and `mmg_hmax_factor` are retired: MMG takes
+  its size band from `smallest_size` and `largest_size`, and
+  `examples/defaults.cfg` gives the conversion. With `use_mmg_init`, a `.poly`
+  region without a size constraint is no longer refined to `resolution` ([#95]).
+- **Breaking.** `meshing_option = 2` meshes are finer; multiplying
+  `largest_size` by 3.46 (2D) or 5.93 (3D) keeps the old initial mesh ([#95]).
+- **Breaking.** Checkpoints written before this change do not restart ([#95]).
+- **Breaking.** More cfgs stop at startup: `remeshing_option = 13` on an
+  unstructured mesh without MMG (`usemmg=1`), `remeshing_option = 2` or
+  `is_discarding_internal_segments = no` with MMG, a velocity period table
+  without exactly `num_vbc_period_*` points in non-decreasing time, and a
+  one-value `ic.radiogenic_heat_boundry` with radiogenic layers. A remesh now
+  stops the run, instead of continuing, when it leaves a broken mesh or when
+  the top surface has necked down to near the restored bottom ([#95]).
+- **Breaking.** Results change for remeshing on every mesher, for 3D side walls,
+  which now follow their velocity period tables as in 2D, and for a one-value
+  `ic.radiogenic_heat_mat_in_layer`, now given to every layer. With MMG, a
+  plastically strained zone is meshed less finely and keeps the finest size it
+  has reached unless `mmg_metric_refine_recover = yes`, and the initial mesh is
+  refined in its weak zone ([#95]).
+- **Breaking.** `mat.mattype_crust` and `mat.mattype_sed` are renamed
+  `mat.mattype_continental_crust` and `mat.mattype_sediment`; the old names stop
+  at startup ([#110]).
+- **Breaking.** `mat.mattype_continental_crust` and `mat.mattype_oceanic_crust`
+  default to -1 (unset), so `ic.temperature_option = 1` and an active
+  `phase_change_option = 3` rule stop at startup until the material they read
+  is set ([#110]).
+- In 2D, the surface plastic strain decays in every top element, oceanic crust
+  included, so 2D runs with oceanic crust at the surface change ([#110]).
+- An MMG remesh prints only its trigger, "Remeshing starts", "New mesh" and
+  "Remeshing finished" at the default `meshing_verbosity = -1`; `0` restores
+  the stage log. Each MMG quality retry prints one line naming the bad elements
+  ([#114]).
+- GPU runs with averaged output (the default) are faster: the averaging no
+  longer moves fields off the device every step (3D 7.9 to 1.6 ms/step on an
+  RTX A5000) ([#114]).
 
 ### Fixed
 
@@ -95,6 +161,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   step/time schedules. Older checkpoints retain legacy scheduling with a warning.
 - PT restarts at a mesh-quality check now complete the pending remeshing stage
   before advancing to the next physical step.
+- A GoSPL-coupled run sent GoSPL velocities of hundreds of m/yr after a remesh
+  that kept the surface node count, differencing unrelated nodes; the coupling
+  after any remesh now uses the instantaneous velocity.
 - The thermal mass was built before the initial temperature was set, so thermal
   diffusion ran 5.4 % slow on hot silicate ([#96]).
 - A NaN velocity stops the run with exit code 50 instead of writing frames until
@@ -112,6 +181,37 @@ For a release, the full auto-generated list of merged pull requests is in its
   old file as `.info.old`; a repeated restart appended duplicate rows. The
   parent frame a restart overwrites is backed up however the two model names
   are spelled ([#97]).
+- MMG remeshing removes material that drifted past a restored boundary instead
+  of stopping with "BAD ENDING", and a 3D Triangle/TetGen remesh no longer
+  moves a steep free surface by hundreds of metres ([#95]).
+- With `remeshing_option = 13`, a remesh no longer skews the displacement output
+  beside the restored walls ([#95]).
+- Averaged output (the default) divides by the steps its window holds, so it
+  changes by about 1 % at the default `quality_check_step_interval`; with an
+  interval of 1 it is no longer averaged, and a restart from such a frame works
+  ([#110]).
+- The lumped masses are rebuilt after phase changes convert markers, so runs
+  with `phase_change_option` 1 or 101 change ([#110]).
+- A 2D MMG remesh that folds the mesh above a bottom node snapped back to the
+  bottom (exit 42) now lifts the interior nodes there and remeshes again; a
+  remesh that does not fold is unchanged. This repair is temporary: the full
+  fix, `bc.has_winkler_bottom_restore`, comes in a later release ([#110]).
+- `remeshing_option = 12` works with MMG remeshing in 2D; its first remesh used
+  to scatter the mesh. With Triangle it deletes only the nodes cut off under
+  the slanted x0 wall; it used to delete interior nodes too, coarsening the
+  mesh at every remesh. 3D MMG builds refuse it at startup ([#113]).
+- `vbc_val_division_x1_min/max` are fractions of the x1 wall's height, as
+  documented; they were taken on the x0 wall ([#113]).
+- `--help` gives `bottom_shear_zone_thickness` in metres, the unit the code has
+  always used; it said km ([#113]).
+- GPU builds: the monitor could record stress and strain from before the
+  step's rotation, and a remesh could free arrays a kernel was still reading
+  ([#114]).
+- `2vtk.py` converts the hydrous marker set of `hdf5=1` runs; it was skipped
+  ([#114]).
+- An `info_display_step_interval` that is not a multiple of
+  `quality_check_step_interval` is rounded up as the message says; the run
+  used to stop ([#114]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -274,6 +374,11 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#91]: https://github.com/GeoFLAC/DynEarthSol/pull/91
 [#92]: https://github.com/GeoFLAC/DynEarthSol/pull/92
 [#93]: https://github.com/GeoFLAC/DynEarthSol/pull/93
+[#95]: https://github.com/GeoFLAC/DynEarthSol/pull/95
 [#96]: https://github.com/GeoFLAC/DynEarthSol/pull/96
 [#97]: https://github.com/GeoFLAC/DynEarthSol/pull/97
 [#104]: https://github.com/GeoFLAC/DynEarthSol/pull/104
+[#105]: https://github.com/GeoFLAC/DynEarthSol/pull/105
+[#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
+[#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
+[#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114

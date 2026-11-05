@@ -4,6 +4,8 @@
 #include <string>
 #include "barycentric-fn.hpp"
 
+struct SurfaceTopo;   // geometry.hpp -- surface-relative reference depth for get_ZPT()
+
 class MarkerSet
 {
 
@@ -33,7 +35,7 @@ public:
     void check_marker_elem_consistency(const Variables &var) const;
     void correct_surface_marker(const Param& param, const Variables& var, const double_vec& dhacc, int_vec2D &elemmarkers, int_vec2D &markers_in_elem);
     void set_surface_marker(const Param& param ,const Variables& var, const double smallest_size, \
-                        const int mattype_sed, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
+                        const int mattype_sediment, double_vec& edvacc, int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
     void remap_marker(const Variables &var, const double *m_coord, const int e, int &new_elem, double *new_eta, int &inc);
     void append_random_marker_in_elem( int el, int mt, int genesis, int seed);
     void append_random_marker_in_elem( int el, int mt, double time, int genesis);
@@ -56,6 +58,7 @@ public:
     inline std::string get_name() const { return _name; }
 
     inline int get_nmarkers() const { return _nmarkers; }
+    inline int get_last_id() const { return _last_id; }
     inline void set_nmarkers(int n) { _nmarkers = n; }
 
     inline bool if_melt(const int mat) const { return (std::find((*_mattype).begin(), (*_mattype).end(), mat) != (*_mattype).end()); }
@@ -71,6 +74,17 @@ public:
 
     inline double get_time(int m) const { return (*_time)[m]; }
     inline void set_time(const int m, const double ti) { (*_time)[m] = ti; }
+
+    // Lowest-index marker of mattype mt in an element's markers_in_elem list, -1 if none: the
+    // survivor whose time a replenishment copies. Index order, unlike list order, survives a
+    // restart, which rebuilds every list in index order.
+    inline int lowest_index_marker(const int_vec &markers, int mt) const
+    {
+        int m0 = -1;
+        for (int m : markers)
+            if ((*_mattype)[m] == mt && (m0 < 0 || m < m0)) m0 = m;
+        return m0;
+    }
 
     inline double get_z(int m) const { return (*_z)[m]; }
     inline void set_z(const int m, const double z) { (*_z)[m] = z; }
@@ -91,6 +105,13 @@ public:
 
     #pragma acc routine seq
     void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
+    // phase_change_option 3: Z = topo.zeff(x), below the CURRENT free surface, so a rigid
+    // vertical motion of the whole mesh does not change it, and P is the pressure that
+    // mat.phase_change_pressure_option selects. xzeff is the marker's coordinate with its last
+    // axis replaced by Z: its position in the serpentinization grid's (x, zeff) space.
+    #pragma acc routine seq
+    void get_ZPT(const Param& param, const Variables& var, int m, const SurfaceTopo& topo,
+                 double &Z, double &P, double &T, double (&xzeff)[NDIMS]) const;
 
 private:
     const std::string _name;
@@ -110,7 +131,9 @@ private:
     int_vec *_mattype;
     // Unique id
     int_vec *_id;
-    // Cearte time
+    // Deposition time [yr]; 0 when none is set: run start, a hydrous marker, a homogeneous fill
+    // of a non-sediment element, replenishment_option 0 or 1, and the side-profile fill outside
+    // the deposit (even in a recorded mattype_sediment layer), so a sediment marker can carry 0
     double_vec *_time;
     // Sedimentation: Depth
     double_vec *_z;
@@ -144,8 +167,10 @@ private:
 
 };
 
-void remap_markers(const Param&, Variables &, 
+void remap_markers(const Param&, Variables &,
                    const array_t &, const conn_t &);
+void correct_inflow_band_marker_mattype(const Param&, const Variables&,
+                                        const bool *side_in);
 void advect_hydrous_markers(const Param &, const Variables &, double,
                             MarkerSet &, Array2D<int,1> &);
 

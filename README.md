@@ -159,7 +159,7 @@ defaults are not what you want.
     `make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
     Either one alone is enough; the other is still detected.
 * [GoSPL](https://gospl.readthedocs.io/) (Global Scalable Paleo Landscape
-  Evolution), `use_gospl=1`, for two-way coupling with a surface process model.
+  Evolution), `usegospl=1`, for two-way coupling with a surface process model.
   GoSPL handles erosion, deposition and hillslope diffusion; DES handles
   tectonics. At each coupling event DES surface velocities are passed to GoSPL,
   which returns the erosion/deposition increment applied to DES surface nodes.
@@ -174,10 +174,11 @@ defaults are not what you want.
     make install-local
     ```
   * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
-    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make use_gospl=1`
+    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make usegospl=1`
     also generates the `dynearthsol-gospl` wrapper script.
-  * Coupling is 3D only, so build with `make ndims=3 use_gospl=1`, outside the
-    conda environment to keep the compiler off conda's libraries.
+  * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
+    conda environment does not matter unless it has its own Boost or compilers;
+    `make config` shows what was picked.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
@@ -315,7 +316,7 @@ make useexo=1
 make hdf5=1
 
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
-make use_gospl=1
+make usegospl=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1

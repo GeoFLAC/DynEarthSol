@@ -34,6 +34,7 @@ void allocate_variables(const Param &param, Variables& var)
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
+        var.plstrain_remesh = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
         // var.stress_old = new tensor_t(e, 0);
@@ -496,7 +497,7 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
             for (int j=0;j<NDIMS;j++) {
                 if ((force[i][j]<0) == ((*var.vel)[i][j]<0)) {
                     // strong damping
-                    force[i][j] -= param.control.damping_factor * force[i][j], (*var.vel)[i][j];
+                    force[i][j] -= param.control.damping_factor * force[i][j];
                 }
                 else {
                     // weak acceleration

@@ -526,8 +526,10 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
     }
 }
 
-void initial_weak_zone(const Param &param, const Variables &var,
-                       double_vec &plstrain)
+// The weak zone on any mesh: sets plstrain of the elements whose centroid lies in the zone and leaves
+// the others untouched.
+void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,
+                       const conn_t &connectivity, double_vec &plstrain)
 {
     Zone *weakzone;
     Value *weakvalue;
@@ -661,8 +663,8 @@ void initial_weak_zone(const Param &param, const Variables &var,
     }
 
     #pragma acc parallel loop gang vector
-    for (int e=0; e<var.nelem; ++e) {
-        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+    for (int e=0; e<nelem; ++e) {
+        ConstArrayIndirectAccessor coord = coord_all.view_const(connectivity[e]);
         // the coordinate of the center of this element
         double center[NDIMS] = {0};
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -676,13 +678,16 @@ void initial_weak_zone(const Param &param, const Variables &var,
 
         if (weakzone->contains(center))
             plstrain[e] = param.ic.weakzone_plstrain * weakvalue->contains(center);
-        // Find the most abundant marker mattype in this element
-        // int_vec &a = (*var.elemmarkers)[e];
-        // int material = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
     }
 
     delete weakzone;
     delete weakvalue;
+}
+
+void initial_weak_zone(const Param &param, const Variables &var,
+                       double_vec &plstrain)
+{
+    initial_weak_zone(param, var.nelem, *var.coord, *var.connectivity, plstrain);
 }
 
 void initial_friction_coeff(const Param &param, const Variables &var,
@@ -886,9 +891,9 @@ void initial_temperature(const Param &param, const Variables &var,
             // Continental geotherm
             const double pi = 3.14159265358979323846;
 
-            const int dens_c = param.mat.rho0[param.mat.mattype_crust];
+            const int dens_c = param.mat.rho0[param.mat.mattype_continental_crust];
             const int dens_m = param.mat.rho0[param.mat.mattype_mantle];
-            const double cond_c = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_crust)];
+            const double cond_c = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_continental_crust)];
             const double cond_m = param.mat.therm_cond[std::min(int(param.mat.therm_cond.size())-1, param.mat.mattype_mantle)];
             const double diff_m = cond_m/1000./dens_m;
 

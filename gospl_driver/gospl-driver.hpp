@@ -58,7 +58,45 @@ public:
     bool needs_elevation_reset;  // true only at init (GoSPL re-inits hGlobal from DES once);
                                   // never re-armed after remeshing in the current implementation
     bool velocity_coupling;      // if true, send all 3 DES velocity components each coupling step
-    
+
+    // Coupling statistics since the last DES progress line; printed and reset
+    // by print_coupling_summary(), so the log grows at DES's display frequency.
+    int    total_events;         // coupling events since the start of the run
+    int    summary_events;       // events since the last summary
+    double summary_years;        // GoSPL time advanced over those events (yr)
+    double summary_dh_min;       // extremes of the per-node dh over those events (m)
+    double summary_dh_max;
+    double summary_dh_net;       // sum of the per-event mean dh (m)
+    int    summary_vel_events;   // events that sent velocities
+    int    summary_vel_instant;  // ...of which used the instantaneous fallback
+    double summary_vmin[3];      // extremes of the velocities sent (m/yr)
+    double summary_vmax[3];
+
+    /**
+     * Add one coupling event to the running summary.
+     *
+     * @param dt_yr     GoSPL time step of the event (yr)
+     * @param dh_min    smallest per-node dh applied to DES (m)
+     * @param dh_max    largest per-node dh applied to DES (m)
+     * @param dh_mean   mean per-node dh applied to DES (m)
+     */
+    void record_coupling(double dt_yr, double dh_min, double dh_max, double dh_mean);
+
+    /**
+     * Add the velocity ranges sent in one coupling event to the running summary.
+     *
+     * @param vmin           per-component minimum (vx, vy, vz) in m/yr
+     * @param vmax           per-component maximum (vx, vy, vz) in m/yr
+     * @param instantaneous  true if the instantaneous-velocity fallback was used
+     */
+    void record_velocity(const double vmin[3], const double vmax[3], bool instantaneous);
+
+    /**
+     * Print one line summarising the coupling events since the last call, then
+     * reset the summary. Called after each DES progress line.
+     */
+    void print_coupling_summary();
+
     /**
      * Constructor
      */
@@ -275,6 +313,11 @@ public:
     void run_controlled_simulation_with_elevation_tracking(double duration = 5.0, double dt = 1.0);
 
 private:
+    /**
+     * Zero the statistics accumulated for print_coupling_summary().
+     */
+    void reset_coupling_summary();
+
     /**
      * Create a time-dependent velocity field at specified coordinates
      * 

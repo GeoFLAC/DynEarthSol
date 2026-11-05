@@ -42,11 +42,15 @@ void init_var(const Param& param, Variables& var)
     var.PT_skip_scale_update = false;
     var.steps = 0;
     var.nremesh = 0;
+    var.nremesh_prior = 0;
     var.noutput = 0;
+    var.nphasechange = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
+    var.func_time.phase_change_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
+    var.refined_elem_size_n = new double_vec(0);
     var.reference_frame_time = 0.0;
     var.output_start_time = 0.0;
     var.output_start_step = 0;
@@ -216,6 +220,7 @@ void init(const Param& param, Variables& var)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
 
     initial_weak_zone(param, var, *var.plstrain);
+    *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not R2 growth
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
@@ -228,13 +233,18 @@ void init(const Param& param, Variables& var)
 
     // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
     // and elemmarkers, which those calls are the first to write -- before them tmass was built at
-    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). This is also the
-    // LAST mass build on a static mesh: update_mesh and remesh are both gated on has_moving_mesh.
+    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). On a static mesh
+    // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
+    // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
+    // update_mesh() ungated before the loop.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
-    // After compute_mass: it is the only writer of var.volume_n, which this divides by.
+    // After compute_mass: it fills var.volume_n, which this divides by.
     initialize_elem_size_n(var, *var.init_elem_size_n);
+    // No refinement reached yet; the wait covers initialize_elem_size_n's async node kernel.
+    #pragma acc wait
+    *var.refined_elem_size_n = *var.init_elem_size_n;
 #endif
 
     report_mesh_info(var, "initial");
@@ -353,6 +363,7 @@ void restart(const Param& param, Variables& var)
     allocate_variables(param, var);
 #ifdef USEMMG
     var.init_elem_size_n->resize(var.nnode);
+    var.refined_elem_size_n->resize(var.nnode);
 #endif
 
     create_top_elems(var);
@@ -370,6 +381,7 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_scalar(var.max_global_vel_mag, "max_global_vel_mag");
         bin_chkpt.read_scalar(var.reference_frame_time, "reference_frame_time");
         bin_chkpt.read_scalar(var.last_remesh_time, "last_remesh_time");
+        bin_chkpt.read_scalar(var.nremesh_prior, "nremesh");
         if (param.control.has_PT && param.control.PT_use_running_scale) {
             const int fields = bin_chkpt.has_array("PT initial residual maximum") +
                 bin_chkpt.has_array("PT skip scale update");
@@ -408,6 +420,56 @@ void restart(const Param& param, Variables& var)
         var.steps >= var.info_display_next_step)
         var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
 
+    // Restore the cached marker-cell index (mat.phase_change_option 3, see
+    // VirtualTopology in mesh.hpp) so the restart carries forward the EXACT
+    // lagged binning the checkpoint captured, instead of a fresher rebuild.
+    // Only when uses_serpentinization_grid(), the one case that builds it: a
+    // checkpoint restarted with another option, or with serpentinization off,
+    // leaves var.vtopo null, so the hooks and checkpoints do not carry a dead
+    // index. has_array-gated: a checkpoint written by a run without the grid
+    // has no vtopo arrays -> var.vtopo stays null and the first
+    // phase_changes rebuilds it lazily.
+    if (uses_serpentinization_grid(param) && bin_chkpt.has_array("vtopo_int")) {
+        // read_array does not auto-resize; pre-size from the known layout.
+        // vtopo_int is variable length (VirtualTopology::serialize()), so
+        // vtopo_len records that length up front.
+        int_vec vt_len(1);
+        bin_chkpt.read_array(vt_len, "vtopo_len");
+        if (vt_len[0] < 1)
+            die(EXIT_IO_RESTART, "vtopo_len is not a length");
+        int_vec vt_i(vt_len[0]);
+        bin_chkpt.read_array(vt_i, "vtopo_int");
+        // vtopo_dbl is variable length too (VirtualTopology::serialize()),
+        // recorded in vtopo_dbl_len like vtopo_len.
+        int_vec vt_dlen(1);
+        bin_chkpt.read_array(vt_dlen, "vtopo_dbl_len");
+        if (vt_dlen[0] < 1)
+            die(EXIT_IO_RESTART, "vtopo_dbl_len is not a length");
+        double_vec vt_d(vt_dlen[0]);
+        bin_chkpt.read_array(vt_d, "vtopo_dbl");
+        delete var.vtopo;
+        var.vtopo = VirtualTopology::deserialize(vt_i, vt_d);
+        // The input checks validated the cfg's cell size, not the checkpoint's:
+        // a restart that changed mesh.resolution or mesh.vt_size drops the
+        // restored grid, and the next phase_changes or remesh builds one at the
+        // cfg's size. The run then no longer continues the checkpointed one exactly.
+        // A restart that raises mat.serpentinization_thickness or
+        // mat.serpentinization_max_depth keeps the checkpoint's grid bottom until
+        // the next rebuild, at most one quality check later, so a look-down near
+        // the depth cap may stop at its last row, and a mantle marker below that
+        // row (label -1) does not serpentinize. One that changes
+        // mat.wet_crust_fraction_threshold keeps the checkpoint's dominant cells
+        // until then.
+        const double cell_size = param.mesh.resolution * param.mesh.vt_size;
+        if (var.vtopo->cell_size() != cell_size) {
+            std::cerr << "Warning: the checkpoint's serpentinization grid has " << var.vtopo->cell_size()
+                      << " m cells, but mesh.resolution * mesh.vt_size is " << cell_size
+                      << " m; the grid is rebuilt at the next phase change or remesh.\n";
+            delete var.vtopo;
+            var.vtopo = nullptr;
+        }
+    }
+
     // Initializing field variables
     {
         bin_save.read_array(*var.vel, "velocity");
@@ -415,6 +477,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.strain, "strain");
         bin_save.read_array(*var.stress, "stress");
         bin_save.read_array(*var.plstrain, "plastic strain");
+        // the R2 baseline, so the first remesh after a restart refines as in a continuous run
+        bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         if (param.control.has_hydraulic_diffusion) {
@@ -446,9 +510,80 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
+        bin_chkpt.read_array(*var.refined_elem_size_n, "refined_elem_size_n");
+        {   // the last surface-process dh, stored per node (Output::write_checkpoint)
+            double_vec dh_n(var.nnode);
+            bin_chkpt.read_array(dh_n, "surface dh");
+            for (int i = 0; i < var.surfinfo.ntop; ++i)
+                (*var.surfinfo.dh)[i] = dh_n[(*var.surfinfo.top_nodes)[i]];
+        }
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
+    // column and no shift at the checkpoint. remesh()'s side-profile lifecycle handles a side that
+    // changed at the restart. A restart without option 13 drops them: nothing would erase them,
+    // and the marker replenishment would keep refilling from them.
+    if (param.mesh.remeshing_option == 13 && bin_chkpt.has_array("side_prof_sizes")) {
+        int_vec psz(3 * NSIDEWALL);
+        bin_chkpt.read_array(psz, "side_prof_sizes");
+        char aname[64];
+        double_vec shifts(NSIDEWALL, 0.), rises(NSIDEWALL, 0.);   // wall-restore shifts, top rises
+        bin_chkpt.read_array(shifts, "side_prof_wall_shift");
+        bin_chkpt.read_array(rises, "side_prof_top_rise");
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[t];
+            prof.clear_column();
+            prof.wall_shift = shifts[t];
+            prof.top_rise = rises[t];
+            const int nn = psz[t], ne = psz[NSIDEWALL + t], ns = psz[2 * NSIDEWALL + t];
+            if (nn <= 0) continue;
+            const char *sfx_t = SIDEWALL_NAME[t];
+            auto rd = [&](double_vec &a, const char *name, int size) {
+                a.resize(size);
+                std::snprintf(aname, 64, "side_prof_%s.%s", name, sfx_t);
+                bin_chkpt.read_array(a, aname);
+            };
+            rd(prof.node_reldepth, "node_reldepth", nn);
+            rd(prof.node_coord0_z, "node_coord0_z", nn);
+            rd(prof.node_temperature, "node_temperature", nn);
+#ifdef USEMMG
+            // written only under USEMMG; without MMG it must stay empty, which restore_side_fields
+            // tests before it indexes var.init_elem_size_n
+            rd(prof.node_init_elem_size, "node_init_elem_size", nn);
+#endif
+#ifdef THREED
+            rd(prof.node_strike, "node_strike", nn);
+            prof.facet_node.resize(ns * NODES_PER_FACET);
+            std::snprintf(aname, 64, "side_prof_facet_node.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_node, aname);
+            prof.facet_elem.resize(ns);
+            std::snprintf(aname, 64, "side_prof_facet_elem.%s", sfx_t);
+            bin_chkpt.read_array(prof.facet_elem, aname);
+#else
+            prof.node_support_idx.resize(nn + 1);
+            std::snprintf(aname, 64, "side_prof_node_support_idx.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_idx, aname);
+            prof.node_support_arr.resize(ns);
+            std::snprintf(aname, 64, "side_prof_node_support_arr.%s", sfx_t);
+            bin_chkpt.read_array(prof.node_support_arr, aname);
+            rd(prof.elem_reldepth, "elem_reldepth", ne);
+#endif
+            prof.elem_mattype.resize(ne);
+            std::snprintf(aname, 64, "side_prof_elem_mattype.%s", sfx_t);
+            bin_chkpt.read_array(prof.elem_mattype, aname);
+            rd(prof.elem_radiogenic_source, "elem_radiogenic_source", ne);
+            side_profile_index_elems(prof);
+        }
+        std::cout << "  Restored incoming side profiles from checkpoint:";
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (psz[t] > 0 || shifts[t] != 0.)
+                std::cout << " " << SIDEWALL_NAME[t] << " (" << psz[t] << " nodes, "
+                          << psz[NSIDEWALL + t] << " elements, wall shift " << shifts[t]
+                          << " m, top rise " << rises[t] << " m)";
+        std::cout << ".\n";
     }
 
     // the following fields are not required for restarting, yet
@@ -475,7 +610,11 @@ void restart(const Param& param, Variables& var)
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
+        const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
+        // Shift the R2 baseline by the re-seed only; growth since the last remesh still counts.
+        for (int e = 0; e < var.nelem; ++e)
+            (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];
     }
 
     // Restore the RSF state variable when available, then rebuild the derived
@@ -532,9 +671,25 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
-    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate,
-                      *var.plstrain, *var.volume, *var.volume_n,
-                      var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+    // option 13: each profiled wall's top rise (SideProfile::top_rise)
+    double top_before[NSIDEWALL] = {};
+    const bool track_tops = param.mesh.remeshing_option == 13 &&
+                            param.control.surface_process_option != 0;
+    if (track_tops) {
+        for (int t = 0; t < NSIDEWALL; ++t)
+            if (!var.side_profile[t].empty())
+                top_before[t] = side_wall_top_z(var, t);
+    }
+    surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
+                  *var.plstrain, *var.volume, *var.volume_n, \
+                  var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+    if (track_tops) {
+        for (int t = 0; t < NSIDEWALL; ++t) {
+            SideProfile &prof = var.side_profile[t];
+            if (!prof.empty())
+                prof.top_rise += side_wall_top_z(var, t) - top_before[t];
+        }
+    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
@@ -714,10 +869,29 @@ int main(int argc, const char* argv[])
 
         var.dt = compute_dt(param, var);
 
+        // Option 13: record the inflow walls' columns (detect_side_profile) after mesh and markers
+        // exist and before the initial checkpoint. A restart reads the checkpointed ones instead.
+        if (param.mesh.remeshing_option == 13) {
+            const double t_now = var.time / YEAR2SEC;
+            uint bits = 0;
+            for (int t = 0; t < NSIDEWALL; ++t)
+                if (side_wall_vbc_is_inflow(param.bc, t, t_now)) bits |= SIDEWALL_FLAG[t];
+            if (bits)
+                detect_side_profile(param, var, bits);
+        }
+
+        // Build the serpentinization grid (mat.phase_change_option 3 with
+        // mat.has_serpentinization) up front rather than at the first
+        // phase_changes step.  Built after isostasy adjustment so the
+        // bounding box sees the settled mesh.
+        build_serpentinization_grid(param, var);
+
         if (param.sim.has_initial_checkpoint && !param.control.has_PT)
             var.output->write_checkpoint(param, var);
     }
     else {
+        // The serpentinization grid is not built here: restart() restores it
+        // or leaves var.vtopo null (see the gate there).
         restart(param, var);
     }
 
@@ -887,6 +1061,21 @@ int main(int argc, const char* argv[])
         if(param.control.has_hydraulic_diffusion)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
+        // The functions of a slow step are expensive and their inputs change
+        // slowly, so they run every slow_updates_interval steps.
+        const int slow_updates_interval = 10;
+        const bool slow_step = var.steps % slow_updates_interval == 0;
+        // phase_changes() converts nothing with one material or option 0.
+        const bool phase_change_step = slow_step && param.mat.nmat > 1 &&
+                                       param.mat.phase_change_option != 0;
+        if (phase_change_step) {
+            // Before update_mesh(): its compute_mass() then sees the converted
+            // composition, for the next step and for a restart from this step,
+            // which rebuilds the masses from it.
+            phase_changes(param, var);
+            var.mat->refresh_elem_cache();
+        }
+
         // Objective rotation still belongs to the current physical step, even
         // if the update below selects var.dt for the next step.
         const double rotation_dt = var.dt;
@@ -901,22 +1090,32 @@ int main(int argc, const char* argv[])
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
         }
+        else if (phase_change_step) {
+            // A fixed mesh has no update_mesh() to rebuild them.
+            compute_mass(param, var, var.max_vbc_val, *var.volume_n,
+                         *var.mass, *var.tmass, *var.hmass, *var.ymass,
+                         *var.tmp_result);
+        }
+
+        // Rebuild the serpentinization grid at each quality check. Markers of
+        // markersets[0] are added or removed only by the surface processes in
+        // update_mesh() above, under this same step test, and by a remesh, which
+        // builds the grid at its end. So the grid always indexes every marker,
+        // and it does not go stale in a run that seldom remeshes. A checkpoint
+        // holds the grid the run reads.
+        if (var.steps % param.mesh.quality_check_step_interval == 0)
+            build_serpentinization_grid(param, var);
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
             rotate_stress(var, *var.stress, *var.strain, rotation_dt);
 
+        // Drain the async rotate_stress: the monitor and the slow-step updates below read
+        // stress and strain on the host.
+        #pragma acc wait
         monitor_write_if_due(param, var);
 
-        #pragma acc wait
-        const int slow_updates_interval = 10;
-        if (var.steps % slow_updates_interval == 0) {
-            // The functions inside this if-block are expensive in computation is expensive,
-            // and only changes slowly. Don't have to do it every time step
-            phase_changes(param, var);
-            // phase_changes() moved elemmarkers; compute_dt() below reads them.
-            var.mat->refresh_elem_cache();
-
+        if (slow_step) {
             if (param.control.has_hydration_processes)
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
@@ -981,6 +1180,10 @@ int main(int argc, const char* argv[])
                 std::cout << ", wt = ";
                 print_time_ns(now_ns - var.func_time.start_time);
                 std::cout << "\n";
+#ifdef HAS_GOSPL_CPP_INTERFACE
+                if (var.gospl_driver != nullptr)
+                    var.gospl_driver->print_coupling_summary();
+#endif
 
 
                 var.info_display_next_step = var.steps + param.sim.info_display_step_interval;
@@ -995,6 +1198,12 @@ int main(int argc, const char* argv[])
               (param.sim.is_outputting_averaged_fields &&
                var.steps % param.mesh.quality_check_step_interval != 0)));
 
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Report the coupling events since the last progress line, if any.
+    if (var.gospl_driver != nullptr && var.gospl_driver->summary_events > 0)
+        var.gospl_driver->print_coupling_summary();
+#endif
+
     monitor_finalize(var);
 
     // Before end() deletes the Output that keeps the run's peak.
@@ -1005,7 +1214,8 @@ int main(int argc, const char* argv[])
 
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
-    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time - init_time;
+    int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time
+        - var.func_time.phase_change_time - init_time;
     double computation_time_avg = computation_time * 1.e-9 / var.steps;
 
     std::cout << "Time summary...\n  Execute : ";
@@ -1026,6 +1236,14 @@ int main(int argc, const char* argv[])
         std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
             << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
             << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
+    }
+    if (var.nphasechange > 0) {
+        double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+        std::cout << "  PhaseChg: ";
+        print_time_ns(var.func_time.phase_change_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.phase_change_time/duration_ns << "%)/ " << var.nphasechange
+            << " = " << std::setprecision(6) << phase_change_time_avg << " s/call\n";
     }
     if (var.noutput > 0) {
         double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;

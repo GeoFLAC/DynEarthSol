@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <iostream>
@@ -63,6 +64,7 @@ static inline double mass_scaling_modulus(
 }
 
 /* Given two points, returns the distance^2 */
+#pragma acc routine seq
 template <typename T>
 double dist2(T a, T b)
 {
@@ -682,7 +684,7 @@ static void spr_fused_fields(const Variables &var,
 #endif
 }
 
-void SurfaceTopo::build(const Param& param, const Variables& var)
+void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only)
 {
     on = false;
     atten = false;
@@ -712,6 +714,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
         z[i] = (*var.coord)[order[i]][NDIMS-1];
     }
     on = true;
+
+    if (elev_only) return;
 
     // Attenuation table: resample z_surf onto a uniform grid (Nyquist for the
     // surface nodes, capped), take its DCT-I cosine series, and tabulate
@@ -961,6 +965,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var)
     }
     on = true;
 
+    if (elev_only) return;
+
     // --- separable 2-D DCT-I attenuation table h_eff(x_i, y_j, d_l) ---
     // forward: A[m][n] = (2/(M-1))^2 sum''_i sum''_j gh[i][j] cos(pn m i) cos(pn n j)
     // (sum'' = half-weight end samples; square grid so one cos table serves both axes)
@@ -1061,7 +1067,15 @@ double SurfaceTopo::elev(const double* p) const
     const double xq = p[0];
     if (xq <= x.front()) return z.front();
     if (xq >= x.back())  return z.back();
-    const std::size_t i = std::upper_bound(x.begin(), x.end(), xq) - x.begin();
+    // The first i with x[i] > xq, as std::upper_bound finds it; written out
+    // because device code calls this (iterator algorithms are not safe there).
+    std::size_t lo = 0, hi = x.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        if (xq < x[mid]) hi = mid;
+        else lo = mid + 1;
+    }
+    const std::size_t i = lo;
     const double dx = x[i] - x[i-1];
     if (dx <= 0.0) return z[i];   // coincident nodes (degenerate surface): no interpolation
     return z[i-1] + (z[i] - z[i-1]) * (xq - x[i-1]) / dx;
@@ -1473,6 +1487,8 @@ void spr_node_to_elem(const Param &param, const Variables &var,
                 (*stressyy)[e] = w * stressyy_nn[e] + (1.0 - w) * (*stressyy)[e];
         }
     }
+    // Drain the async loop above: it reads stress_nn and stressyy_nn, which return frees.
+    #pragma acc wait
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -1923,15 +1939,34 @@ double elem_quality(const array_t &coord, const conn_t &connectivity,
 double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
                           const double_vec &volume, int &worst_elem)
 {
+    // Two device passes (min, then first element attaining it) reproduce the serial scan's
+    // "first strict minimum" exactly; min is order-independent. A host loop would migrate
+    // coord/connectivity/volume off the device on every quality check.
+    int n = (int)volume.size();
     double q = 1;
-    worst_elem = 0;
-    for (std::size_t e=0; e<volume.size(); e++) {
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(coord, connectivity, volume, n) reduction(min:q)
+#endif
+    #pragma acc parallel loop gang vector reduction(min:q) async
+    for (int e=0; e<n; e++) {
         double quality = elem_quality(coord, connectivity, volume, e);
-        if (quality < q) {
-            q = quality;
-            worst_elem = e;
-        }
+        if (quality < q) q = quality;
     }
+    #pragma acc wait
+    int w = INT_MAX;
+    if (q < 1) {
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(coord, connectivity, volume, n, q) reduction(min:w)
+#endif
+        #pragma acc parallel loop gang vector reduction(min:w) async
+        for (int e=0; e<n; e++) {
+            if (e < w && elem_quality(coord, connectivity, volume, e) == q) w = e;
+        }
+        #pragma acc wait
+        if (w == INT_MAX)   // the two passes must evaluate elem_quality identically
+            die(EXIT_INTERNAL_ASSERT, "worst_elem_quality: no element attains the minimum quality");
+    }
+    worst_elem = (w < INT_MAX) ? w : 0;   // 0 when no element is below 1
     return q;
 }
 

@@ -506,3 +506,52 @@ under `final/`. Earlier intermediate builds/tests were superseded after the
 clock correction; only the final builds qualify that change. No long runs,
 new acceleration, full-application sanitizer, MMG/Exodus/GoSPL or full hydraulic
 GPU qualification is claimed.
+
+## Merge with current master (2026-11-05)
+
+The conflict-resolution merge incorporates master through "Merge pull request
+#112 from GeoFLAC/fix/gospl-remesh-velocity". It keeps the newer side-wall period
+scaling and surface-column tracking alongside PT's homogeneous/projected boundary
+map, and preserves both branches' checkpoint, remesh and phase-change state.
+GoSPL retains exit code 53; PT mechanical nonconvergence now uses 54. Nonfinite
+PT candidates still use 50. The earlier exit-53 reports above describe older
+executables.
+
+Validation on GNU 13.3 with system Boost 1.83 and HDF5 1.10.10:
+
+- Both dimensions build with OpenMP and HDF5. The focused real-routine suites
+  pass 6,832 assertions in 2D and 10,143 in 3D on four-thread OpenMP and
+  ASan/UBSan. The additional 504 assertions check time-varying 3D side-wall
+  normal velocities, unscaled tangential velocities and homogeneous PT
+  constraints on the x and y walls.
+- Parent `make set` on current master and merged `make cmp` report BIT-EXACT
+  for `test-rect-tiny.cfg` (2D) and `test-3d-equ-tiny.cfg` (3D). Comparing instead
+  against the old PT branch changes 2D surface plastic strain: master's
+  `surface_plstrain_diffusion` now acts on every surface element. This incoming
+  master behavior is retained.
+- Both dimensions and both PT options pass the held-load/reload force diagnostic
+  and 100-step Maxwell reference regressions. Across 440 save files, every
+  existing dataset and layout matches the pre-merge PT branch exactly, excluding
+  runtime/provenance. Maximum Maxwell normalized reference error is 2.171e-6.
+- Exact continuation passes for hydrostatic initial equilibrium in both
+  dimensions, dynamic-dt restart in both dimensions, 2D oblique boundaries,
+  and four schedule cases (2D/3D disabled-time defaults with option 0, and
+  2D/3D mixed schedules with option 1).
+- Actual remesh/restart continuation passes in both dimensions and both options.
+  The fixture now uses uniform initial resolution (`meshing_option=1`). Its
+  previous refined-zone setup crashes in Triangle during initialization on
+  both the merged tree and current master with PT disabled, before mechanics.
+  The uniform fixture still requires changed connectivity and completed
+  remeshing in both fresh and resumed runs. This avoids the unrelated mesher
+  failure; it does not repair or qualify refined-zone meshing.
+- Forced iteration-cap failures in both dimensions and both options return 54
+  and report mechanical-history restoration. The focused suites separately
+  verify rollback values and ownership.
+
+Commands use `make ndims=2 hdf5=1 BOOST_ROOT_DIR=/usr` and its 3D equivalent,
+with `CONDA_PREFIX` unset to avoid mixing Conda libraries with system HDF5.
+Functional tests use `OMP_NUM_THREADS=1` for exact comparisons. Raw inputs,
+outputs and logs are retained under `/tmp/pr106-*`; the isolated worktrees are
+`/home/sungho/bin/des-pr106`, `des-pr106-parent` and `des-pr106-master`.
+NVHPC/GPU, MMG, Exodus and GoSPL runtime validation were not run in this merge
+check. The earlier scientific/convergence limits remain unchanged.

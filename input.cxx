@@ -10,6 +10,7 @@ namespace po = boost::program_options;
 
 #include "parameters.hpp"
 #include "matprops.hpp"
+#include "phasechanges.hpp"
 #include "utils.hpp"
 
 
@@ -46,7 +47,7 @@ static void declare_parameters(po::options_description &cfg,
         ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
-         ">0: must be a multiple of mesh.quality_check_step_interval.")
+         ">0: rounded up to a multiple of mesh.quality_check_step_interval.")
         ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
          "Print the .manifest's sections on screen at run start, one line each,\n"
          "[build] then [runtime]. On by default: it is the start-of-run report every\n"
@@ -156,7 +157,11 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
          "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
         ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
-         "Output verbose during mesh/remeshing. -1 for no output.")
+         "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
+         "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
+         "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
+         "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top. Warnings print "
+         "at every level.")
         ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
          "Refine the elements with sediment marker during remeshing.")
         ("mesh.tetgen_optlevel", po::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
@@ -172,9 +177,25 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.resolution", po::value<double>(&p.mesh.resolution)->required(),
          "Spatial resolution (in meters)")
         ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
-         "The size of smallest element relative to an element with typical resolution")
+         "The size of smallest element relative to an element with typical resolution. It sets the "
+         "tiny-element remesh trigger smallest_vol = smallest_size * sizefactor * resolution^NDIMS "
+         "(sizefactor 0.433 in 2D, 0.118 in 3D: a unit-edge equilateral element's measure) and two "
+         "lengths, hmin = smallest_size^(1/NDIMS) * resolution and min_dist = (smallest_size * "
+         "sizefactor)^(1/NDIMS) * resolution. hmin is the Triangle/TetGen node-spacing floor (a "
+         "remesh deletes interior nodes closer than hmin to a retained node), with MMG in 2D the "
+         "boundary-segment length below which a remesh merges the segment's two nodes (never a "
+         "domain corner), and the necking-stop distance of remeshing_option 1, 11 and 13 (see "
+         "remeshing_option). With options 1, 11 and 13 a remesh removes the nodes off a restored "
+         "boundary that lie past it or within min_dist of it, and option 2 the interior nodes within "
+         "min_dist of the new bottom; with options 1 and 10-12 Triangle keeps a boundary node whose "
+         "two segments are both longer than min_dist, and in 3D TetGen's boundary edge flips move a "
+         "boundary by at most min_dist; at a receiving wall, option 13 gives the side profile to new "
+         "material up to min_dist inland of the old wall. With MMG it also sets MMG's size floors "
+         "(see mmg_remesh_defensive_tiny_ratio).")
         ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
-         "The size of largest element relative to an element with typical resolution")
+         "The size of largest element relative to an element with typical resolution, which also "
+         "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
+         "length, hmax = largest_size^(1/NDIMS) * resolution")
         ("mesh.sediment_size", po::value<double>(&p.mesh.sediment_size)->default_value(1.),
          "The size threshold of the refined sediment elements")
         // for 2D only
@@ -196,7 +217,7 @@ static void declare_parameters(po::options_description &cfg,
 
         // for meshing_option = 2 only
         /* read the value as string, then parse as two numbers later */
-        ("mesh.refined_zonex", po::value<std::string>()->default_value("[0.4, 0,6]"),
+        ("mesh.refined_zonex", po::value<std::string>()->default_value("[0.4, 0.6]"),
          "Refining portion of xlength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only")
         ("mesh.refined_zoney", po::value<std::string>()->default_value("[0.4, 0.6]"),
          "Refining portion of ylength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only, for 3D only")
@@ -230,12 +251,98 @@ static void declare_parameters(po::options_description &cfg,
         ("mesh.remeshing_option", po::value<int>(&p.mesh.remeshing_option)->default_value(0),
          "How to deal with the boundaries during remeshing?\n"
          " 0: no modification on any boundary.\n"
-         " 1: move all bottom nodes to initial depth, other boundaries are intact.\n"
-         " 2: create a new bottom boundary at the initial depth, other boundaries are intact (2D only).\n"
-         "10: no modification on any boundary, except small boundary segments might get merged.\n"
-         "11: move all bottom nodes to initial depth, other boundaries are intact, small boundary segments might get merged.\n"
-         "12: flatten x0 when using fixed bottom boundary.\n"
-         "13: move all bottom, left, and right nodes to initial dimensions.\n")
+         " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact.\n"
+         " 2: create a new bottom boundary at the initial depth, other boundaries are intact "
+         "(2D only, not with MMG remeshing).\n"
+         "10: no modification on any boundary, except small boundary segments might get merged "
+         "(in 3D with TetGen, see smallest_size).\n"
+         "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
+         "above or below it; other boundaries are intact, except small boundary segments might "
+         "get merged.\n"
+         "12: move all x0 (left) wall nodes to the x of the wall's top corner and delete the "
+         "nodes left outside, other boundaries are intact. For a wall pushed over a fixed bottom "
+         "with its push tapered toward it (vbc_x0 = 3 with bottom_shear_zone_thickness), whose "
+         "foot lags its top. With MMG remeshing, 2D only.\n"
+         "13: move all bottom and side-wall nodes (left/right; also front/back in 3D) to initial "
+         "dimensions, and give material entering through a side wall the structure recorded at that "
+         "wall (its side profile). A wall receives while its nodes drift inward between remeshes (by "
+         "any amount when its vbc at the remesh is inflow, else by more than min(1e-3, "
+         "max_boundary_distortion) * resolution). It keeps the column (2D) or wall face (3D) "
+         "recorded when it started receiving (at run start when its vbc is inflow, else at the first "
+         "remesh at which it receives), and drops it when it neither receives nor has an inflow vbc. "
+         "Incoming material gets the recorded temperature, layering, radiogenic source, coord0 "
+         "reference and zero strain at its depth below the wall's top point less the rise surface "
+         "processes gave it, and in 3D at its along-strike position (a point off the recorded face "
+         "takes the values of the face's nearest point). A deposit on the wall top gets the profile "
+         "top's values. Markers a remesh creates in an element at the wall take the layering at the "
+         "element's centroid and time 0; in an element centred in the deposit, mattype_sediment and the "
+         "time of a sediment marker of the element, else the remesh time. Temperatures are not "
+         "re-conducted under a risen surface, so they can differ from the domain beside the wall by "
+         "up to the near-surface temperature gradient times the rise. Requires MMG when "
+         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG "
+         "collapses. With MMG on an unstructured mesh, a Triangle/TetGen initial mesh first gets its "
+         "restored-wall elements refined to ~resolution, whatever use_mmg_init says (in 3D under "
+         "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
+         "every remesh caps the size target at every restored-wall node at resolution (see "
+         "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
+         "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
+         "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
+         "of the restored bottom, or below it: the domain has necked through.\n")
+
+        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
+         "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
+         "(frozen) and rebuilds the rest. This key is the plastic-strain increment since the last "
+         "remesh above which an element is refined: MMG may split it (not along an edge it shares "
+         "with a frozen, MMG-required element) but keeps its existing nodes, so the band's plastic "
+         "strain is "
+         "carried verbatim. Distorted or tiny elements are repaired with node motion (see "
+         "mmg_remesh_defensive_quality_ratio and mmg_remesh_defensive_tiny_ratio), and so is the "
+         "mesh that restoring a boundary squashed or collapsed or that merging a short boundary "
+         "segment (see smallest_size) reshaped. Elements far "
+         "from their size target are freed (see mmg_remesh_size_recovery_ratio), as is the band beside "
+         "a receiving or outward-drifting restored wall (remeshing_option 13). Boundary nodes stay "
+         "pinned except the free-surface nodes a surface process moves by more than 1% of resolution "
+         "per remesh interval (2D only, surface_process_option 1 or 102), the off-bottom nodes of "
+         "unrestored side walls and slant boundaries, the nodes of repaired elements and the band "
+         "nodes off an outward-drifting restored wall. Keep it > "
+         "0: at 0, incidental yielding makes quiet far-field elements splittable at every remesh. "
+         "Default 0.01, heuristic: above the increment of incidental yielding, below a localizing "
+         "band's increment over a remesh interval.")
+        ("mesh.mmg_remesh_defensive_tiny_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
+         "Gap, in element measure, between the tiny-element remesh trigger smallest_vol (see "
+         "smallest_size) and the smallest elements MMG builds (usemmg=1, meshing_elem_shape = 0; "
+         "remeshing and MMG-built initial meshes). MMG's minimum edge length is hmin * "
+         "ratio^(1/NDIMS) (hmin: see smallest_size), so MMG aims to build every element at "
+         "smallest_vol * ratio or more, which must shrink by this factor before it re-triggers, and "
+         "a remesh rebuilds any element below "
+         "smallest_vol * ratio. The ratio also sets MMG's metric floor one step higher, hmin * "
+         "ratio^(2/NDIMS) (at most MMG's hmax), and the post-remesh quality gate at smallest_vol * "
+         "sqrt(ratio). Must be >= 1 (at 1 a just-remeshed element re-triggers under any "
+         "compression); a ratio at or above largest_size / smallest_size is capped just below it, "
+         "with a warning. Default 1.5 (a 2/3 measure gap), heuristic.")
+        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
+         "MMG remeshing repairs (unfreezes, with its nodes movable except where disjoint material "
+         "bodies meet) every element of quality below "
+         "min_quality * this ratio, so a marginal element is rebuilt before it crosses the "
+         "min_quality remesh trigger instead of triggering another remesh a few steps later. The "
+         "trigger itself stays at min_quality. Must be >= 1 (1: repair only below the trigger). "
+         "Default 1.5, heuristic.")
+        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+         "Size recovery in MMG remeshing. A quiet element (e.g. one that entered at ~resolution "
+         "through a restored inflow wall and advected inland) is freed to coarsen when it is finer "
+         "by more than this factor than the gradation envelope, the smallest size MMG's gradation "
+         "(hgrad) allows there given every intentionally fine size target; an element at least 2x "
+         "its own plastic-strain size target is freed to split. Neither frees an element refined for "
+         "plastic-strain growth (mmg_remesh_active_plstrain), one on the top surface, one at a "
+         "material interface (by its own and its neighbours' markers) or one within 4 rings of a "
+         "restored wall that receives no material, and neither unpins a restored-wall or bottom "
+         "node; the remesh log's '[unfreeze] size recovery' line counts the top-surface, interface "
+         "and wall-band skips. On a moving "
+         "mesh, a Triangle/TetGen initial mesh also gets the 2x split in its weak zone before any "
+         "field exists, except on a top-surface node or a region boundary ('[weakzone]' log lines). "
+         "0 disables all three; otherwise must be > 1 (a margin against re-freeing the legal size "
+         "transition). Default 1.4 ~ sqrt(2) in edge length (one 2D bisection level), heuristic.")
 
         ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
@@ -255,27 +362,80 @@ static void declare_parameters(po::options_description &cfg,
          "the switch sharper. The window width is otherwise untuned.")
 
         ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
-         "Discarding internal segments after initial mesh is created? "
-         "Using it when remeshing process can modify segments (e.g. remeshing_option=11).")
+         "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
+         "'no' keeps them as Triangle/TetGen constraints across remeshes, but a remesh that deletes "
+         "one of their nodes (tiny-element repair, node cleanup near a restored boundary) misroutes "
+         "them, which can make the mesher fail or hang; in 3D with remeshing_option 1 or 10-12 the "
+         "first remesh that deletes a boundary node drops them all. MMG remeshing (usemmg=1, "
+         "meshing_elem_shape = 0) requires 'yes': MMG keeps no internal segment.")
 
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", po::value<int>(&p.mesh.mmg_debug)->default_value(0),
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
         ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hmax_factor", po::value<double>(&p.mesh.mmg_hmax_factor)->default_value(2.0),
-         "Factor multiplied to param.mesh.resolution to set the maximum element size\n")
-        ("mesh.mmg_hmin_factor", po::value<double>(&p.mesh.mmg_hmin_factor)->default_value(0.2),
-         "Factor multiplied to param.mesh.resolution to set the minimum element size\n")
         ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
-         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces.\n")
+         "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces. "
+         "At 0.01 MMG refines a sharply bent free surface down to its size floor and builds elements "
+         "below the tiny-element trigger there, so the trigger fires at nearly every quality check: "
+         "use 0.02-0.05 along a 3D fault scarp and 0.1 on the top/wall ridges next to restored side "
+         "walls. MMG3D does not bound its top-surface edge swaps between pinned nodes by this "
+         "distance.\n")
         ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
          "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
         ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
-         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init.")
+         "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
+         "(MMG still refines its restored walls under remeshing_option 13 and, on a moving mesh, "
+         "its weak zone: see mmg_remesh_size_recovery_ratio). Under "
+         "mattype_option 0, which reads the regional attributes as mattypes, a boundary between "
+         "them stays on the .poly line in 2D and can move by up to about half a coarse element in "
+         "3D (see mmg_init_coarsening_factor).")
+        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+         "Plastic-strain sensitivity of the MMG remeshing metric: the target element volume is "
+         "scaled by 1/(1 + coeff*plastic_strain), so the target edge length by that ratio^(1/NDIMS) "
+         "(whether a node keeps its finest target: see mmg_metric_refine_recover). 0 disables "
+         "plastic refinement from "
+         "a fresh start (the metric floor, the surface-motion inflation of shrinking top elements "
+         "and the option-13 restored-wall cap still apply). MMG starts from this target except at a "
+         "node on a required edge (an edge of a frozen element or, in 2D, an option-13 "
+         "material-interface edge) that belongs to no refined element (see "
+         "mmg_remesh_active_plstrain): there it starts from the mean length of the required edges "
+         "through the node, MMG's own rule. Larger values mesh a plastically strained zone finer, "
+         "down to the metric floor (see mmg_remesh_defensive_tiny_ratio): a shear band can localize "
+         "narrower, at more elements and, where an elastic, advection or diffusion limit sets dt, a "
+         "shorter time step. Default 5.")
+        ("mesh.mmg_metric_refine_recover",
+         po::value<bool>(&p.mesh.mmg_metric_refine_recover)->default_value(false),
+         "no (default): each node keeps the finest plastic-strain size target (see "
+         "mmg_metric_refine_coeff) it has had at a remesh, so a refined zone stays refined where the "
+         "target coarsens, chiefly where plastic strain drops (the remap of rebuilt elements, the 2D "
+         "top-element plastic-strain decay, a growing top element); the mesh can then hold more "
+         "elements. Size recovery (mmg_remesh_size_recovery_ratio) measures against the kept size, and "
+         "material entering through a restored side wall starts unrefined. yes: the target follows "
+         "the current plastic strain. The record is checkpointed: with no, a restart that lowers "
+         "mmg_metric_refine_coeff (even to 0) keeps the sizes recorded before it, and a restart that "
+         "switches from yes to no holds from the last remesh's targets.")
+        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+         "Anisotropic MMG metric at inflow restored side walls (remeshing_option 13). 0 (default): "
+         "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
+         "normal to the wall and kept fine along it, so the incoming column is carried by thin, wide "
+         "elements. MMG's hmax (see largest_size) caps the aspect (~5.5 in 2D, "
+         "~3.1 in 3D at the default largest_size). Other values below 1 are rejected. Requires "
+         "USEMMG.")
+
+        // for virtual topology
+        ("mesh.vt_size", po::value<double>(&p.mesh.vt_size)->default_value(0.5),
+         "Cell size of the virtual-topology marker grid (in unit of mesh.resolution), used by the "
+         "serpentinization grid (mat.phase_change_option 3 with mat.has_serpentinization). 0.5 = half an "
+         "element edge: the one-element-thick slab crust "
+         "gets its own wet-crust-dominant cell row instead of averaging with the mantle above, while a "
+         "cell nominally (elements of edge mesh.resolution) holds ~2.3 markers in 2D (~4.2 in 3D) at the "
+         "default 4 per element; a refined mesh puts more in each cell. Heuristic, untuned. With serpentinization "
+         "on it must be > 0, and mesh.resolution * mesh.vt_size must not exceed mat.serpentinization_thickness. "
+         "The grid is rebuilt at each mesh.quality_check_step_interval and after each remesh.")
         ;
 
     cfg.add_options()
@@ -286,14 +446,23 @@ static void declare_parameters(po::options_description &cfg,
         ("markers.markers_per_element", po::value<int>(&p.markers.markers_per_element)->default_value(4),
          "Number of markers per element. Used when init_marker_option=1.")
         ("markers.init_marker_spacing", po::value<double>(&p.markers.init_marker_spacing)->default_value(0.3),
-         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2.")
+         "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2. An "
+         "element the grid misses gets min_num_markers_in_element (at least 1) markers of its "
+         "initial material, with a warning.")
         ("markers.min_num_markers_in_element", po::value<int>(&p.markers.min_num_markers_in_element)->default_value(3),
          "When the number of markers in an element is less than this number, a new marker will be replenished in the element.")
         ("markers.replenishment_option", po::value<int>(&p.markers.replenishment_option)->default_value(2),
          "How to determine the mattype of replenished markers?\n"
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
-         "2: same as the mattype of the nearest marker (slowest option).")
+         "2: same as the mattype of the nearest marker (slowest option).\n"
+         "12: if the element's surviving markers are all one mattype, use that mattype directly "
+         "(deposit-time interpolated for mattype_sediment, as in option 2); otherwise fall back "
+         "to option 2 (nearest marker). Exact in single-material elements.\n"
+         "At a remesh, independently of this option, an element whose part inside the old mesh lies "
+         "in one old element whose markers were all one mattype gets that mattype, and with "
+         "remeshing_option 13 an element at a receiving wall gets the wall's recorded layering (see "
+         "remeshing_option).")
         ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;
@@ -558,17 +727,20 @@ static void declare_parameters(po::options_description &cfg,
          "Ratio of the velocity at the bottom of the left boundary width (for option = 1 and 3)")
 
         ("bc.num_vbc_period_x0", po::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
-         "Number of velocity period at x0")
+         "Number of points in the x0 velocity period table")
         ("bc.num_vbc_period_x1", po::value<int>(&p.bc.num_vbc_period_x1)->default_value(1),
-         "Number of velocity period at x1")
+         "Number of points in the x1 velocity period table")
         ("bc.vbc_period_x0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x0 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x0 velocity period table '[t0, t1, ...]' (num_vbc_period_x0 of them, in yr, "
+         "non-decreasing): the ratio is linear between them and constant outside; repeat a time "
+         "for a step")
         ("bc.vbc_period_x1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
-         "End time of BC velocity periods at x1 side '[t0, t1, t2, ...]' (in yr)")
+         "Times of the x1 velocity period table (in yr), as for x0")
         ("bc.vbc_period_x0_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x0 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x0 at each time of the x0 period table '[r0, r1, r2, ...]'. It scales "
+         "the normal velocity only: tangential values (types 4 and 5, vbc_val_x0_l) stay constant")
         ("bc.vbc_period_x1_ratio", po::value<std::string>()->default_value("[1.]"),
-         "rate ratio of BC velocity periods at x1 side '[r0, r1, r2, ...]'")
+         "Ratio of vbc_val_x1 at each time of the x1 period table, as for x0")
 
         ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
@@ -599,6 +771,18 @@ static void declare_parameters(po::options_description &cfg,
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
          "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
+        ("bc.num_vbc_period_y0", po::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
+         "Number of points in the y0 velocity period table (3D only)")
+        ("bc.num_vbc_period_y1", po::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
+         "Number of points in the y1 velocity period table (3D only)")
+        ("bc.vbc_period_y0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y0 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+         "Times of the y1 velocity period table (in yr, 3D only), as for x0")
+        ("bc.vbc_period_y0_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y0 at each time of the y0 period table (3D only), as for x0")
+        ("bc.vbc_period_y1_ratio", po::value<std::string>()->default_value("[1.]"),
+         "Ratio of vbc_val_y1 at each time of the y1 period table (3D only), as for x0")
 
         ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
@@ -633,7 +817,8 @@ static void declare_parameters(po::options_description &cfg,
          "outward normal direction is positive; if stress, unit is Pa)")
         
         ("bc.bottom_shear_zone_thickness", po::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
-         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, unit is km.")
+         "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, in m: the x0 wall velocity "
+         "tapers linearly to 0 from this height above the bottom down to the bottom. 0 disables it.")
         ;
 
     cfg.add_options()
@@ -740,7 +925,7 @@ static void declare_parameters(po::options_description &cfg,
         "The layer boundry of radiogenic heating from the top to the bottom (depth -> positive, in meters).\n"
         "Using -1 to indicate the top and bottom of the model.\n")
         ("ic.radiogenic_heat_mat_in_layer",  po::value<std::string>()->default_value("[0]"),
-        "The material type of radiogenic heating in each layer.\n")
+        "The material type of radiogenic heating in each layer (one value: the same in every layer).\n")
         // for temperature_option = 1 and 2
         ("ic.radiogenic_folding_depth", po::value<double>(&p.ic.radiogenic_folding_depth)->default_value(10.e3),
          "Radiogenic folding depth (in meters), used for the temperature profile on the plate.\n")
@@ -822,27 +1007,77 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.phase_change_option", po::value<int>(&p.mat.phase_change_option)->default_value(0),
          "What kind of phase changes?\n"
          "0: no phase changes.\n"
-         "1: simple rules of subduction-related phase changes. See SimpleSubduction class in phasechanges.cxx for more details.\n"
-         "2: simple rules of middle ocean ridge formation. See SimpleRifting class in phasechanges.cxx for more details.\n"
-         "101: custom phase changes.")
+         "1: simple rules of subduction-related phase changes. See simple_subduction() in phasechanges.cxx for more details.\n"
+         "3: subduction phase-change rule engine (see subduction_phase_changes() in phasechanges.cxx). A marker "
+         "converts to a metamorphic product when it crosses a pressure-temperature reaction boundary (pressure: "
+         "see mat.phase_change_pressure_option; depth: below the local "
+         "surface; chlorite-out and the first two sediment steps read depth only); each transition "
+         "activates only when its target mat.mattype_* is set to a distinct material and its switch is on "
+         "(mat.has_eclogitization and mat.has_serpentinization default on, mat.has_hydrous_mantle_dehydration "
+         "and mat.has_sediment_metamorphism off). Transitions: oceanic crust->"
+         "eclogite (Hacker 2003), mantle<->serpentinite (Ulmer & Trommsdorff 1995; serpentinization also needs "
+         "wet crust -- oceanic crust, sediment or sedimentary rock -- within mat.serpentinization_thickness below "
+         "the marker, and no deeper than mat.serpentinization_max_depth), "
+         "hydrous mantle->mantle (Grove 2009), and "
+         "sediment->sedimentary rock->metasediment->schist (compaction uses geoflac's unsourced thresholds, "
+         "the next step Montanez & Crossey 2017, the last Wei 2004).\n"
+         "101: custom phase changes (custom_phase_change() in phasechanges.cxx).")
+        ("mat.phase_change_pressure_option", po::value<int>(&p.mat.phase_change_pressure_option)->default_value(0),
+         "The pressure the mat.phase_change_option 3 rules read (options 1 and 101 always use ref_pressure()).\n"
+         "0: the mean stress of the marker's element, compression positive, in 2D the in-plane mean. Tectonic "
+         "over- and underpressure move the reaction boundaries.\n"
+         "1: the reference pressure, ref_pressure() (control.ref_pressure_option), at the marker's depth below "
+         "the local surface. The phase diagrams are drawn for a lithostat, and geoflac reads one.")
         ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
         ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
          "Index of reference material. For compute_dt(), compute_mass() and ref_pressure()")
         ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
-         "Index of mantle material. For continental thermal gradient")
+         "Index of mantle material. For continental thermal gradient. With mat.phase_change_option 3: what "
+         "serpentinizes above the slab and what serpentinite and hydrous mantle dehydrate to; no rule may "
+         "start from it, and it must be set in the cfg when option 3 reads it.")
         ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
-         "Index of depleted mantle material. For phase change of middle ocean ridge")
+         "Index of depleted mantle material. Unused: no phase change reads it.")
         ("mat.mattype_partial_melting_mantle", po::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
-         "Index of parital melting mantle material. For phase change of middle ocean ridge")
-        ("mat.mattype_crust", po::value<int>(&p.mat.mattype_crust)->default_value(0),
-         "Index of crust material.  For continental thermal gradient")
-        ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(0),
-         "Index of oceanic crust. For formation of middle ocean ridge in phasechanges.cxx")
-        ("mat.mattype_sed", po::value<int>(&p.mat.mattype_sed)->default_value(0),
-         "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion")
+         "Index of partial melting mantle material. Unused: no phase change reads it.")
+        ("mat.mattype_continental_crust", po::value<int>(&p.mat.mattype_continental_crust)->default_value(-1),
+         "Index of continental crust. Read only by the continental geotherm (ic.temperature_option 1), "
+         "which needs it in [0, mat.num_materials). Default -1 (unset).")
+        ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(-1),
+         "Index of oceanic crust. Read only by mat.phase_change_option 3: the source of the eclogite "
+         "rule (with mat.has_eclogitization) and wet crust for the serpentinization grid (with "
+         "mat.has_serpentinization); either needs it in [0, mat.num_materials). Default -1 (unset).")
+        ("mat.mattype_serpentinite", po::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
+         "Index of serpentinite material, for mat.phase_change_option 3 with mat.has_serpentinization: what "
+         "mantle above the slab turns into, and the source of serpentinite->mantle dehydration. Default -1 "
+         "(unset); with serpentinization on it must be in [0, mat.num_materials) and distinct from "
+         "mattype_mantle and the wet-crust materials (mattype_oceanic_crust, mattype_sediment, and "
+         "mattype_sediment_rock when set).")
+        ("mat.mattype_eclogite", po::value<int>(&p.mat.mattype_eclogite)->default_value(-1),
+         "Index of eclogite material. For the mat.phase_change_option 3 rule engine: oceanic-crust markers past the "
+         "basalt->eclogite P-T boundary (Hacker 2003) convert to this. Default -1 (unset); must be set while "
+         "mat.has_eclogitization is on.")
+        ("mat.mattype_hydrous_mantle", po::value<int>(&p.mat.mattype_hydrous_mantle)->default_value(-1),
+         "Index of hydrous (chlorite-bearing) mantle material. For mat.phase_change_option 3: dehydrates to "
+         "mattype_mantle above the chlorite-out boundary (Grove et al. 2009). Default -1 (unset); must be set while "
+         "mat.has_hydrous_mantle_dehydration is on.")
+        ("mat.mattype_sediment_rock", po::value<int>(&p.mat.mattype_sediment_rock)->default_value(-1),
+         "Index of consolidated sedimentary-rock material. For mat.phase_change_option 3: mattype_sediment compacts to "
+         "this, which then metamorphoses to mattype_metasediment; when set, it is also wet crust for the "
+         "serpentinization grid. Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
+        ("mat.mattype_metasediment", po::value<int>(&p.mat.mattype_metasediment)->default_value(-1),
+         "Index of metamorphic-sediment material. For mat.phase_change_option 3: mattype_sediment_rock -> this -> "
+         "mattype_schist. Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
+        ("mat.mattype_schist", po::value<int>(&p.mat.mattype_schist)->default_value(-1),
+         "Index of schist material. For mat.phase_change_option 3: mattype_metasediment dehydrates to this "
+         "(Wei et al. 2004). Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
+        ("mat.mattype_sediment", po::value<int>(&p.mat.mattype_sediment)->default_value(0),
+         "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion. "
+         "With mat.phase_change_option 3: wet crust for the serpentinization grid (with mat.has_serpentinization) "
+         "and the source of the sediment chain (with mat.has_sediment_metamorphism); with either it must be "
+         "set in the cfg.")
         ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
-         "Index of mddle ocean ridge extrusion. For formation of middle ocean ridge in phasechanges.cxx")
+         "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
         ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
          "Index of asthenosphere.")
         ("mat.max_viscosity", po::value<double>(&p.mat.visc_max)->default_value(1e24),
@@ -854,7 +1089,58 @@ static void declare_parameters(po::options_description &cfg,
         ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
         ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
-         "Converting rate from melting to oceanic crust. For formation of middle ocean ridge in bc.cxx")
+         "Converting rate from melting to oceanic crust. Unused: no phase change reads it.")
+        ("mat.serpentinization_thickness", po::value<double>(&p.mat.serpentinization_thickness)->default_value(10e3),
+         "Thickness (in m) of the mantle layer above wet crust (oceanic crust, sediment or sedimentary rock) that turns into serpentinite "
+         "(mat.phase_change_option is 3 with mat.has_serpentinization). Counted in whole background-grid "
+         "cells below the marker's own "
+         "cell (cell size mesh.resolution * mesh.vt_size), down to a wet-crust-dominant cell "
+         "(mat.wet_crust_fraction_threshold), so the effective "
+         "reach differs from it by up to two cells, and the thickness must be positive and at least one cell. "
+         "Default 10e3: heuristic, untuned.")
+        ("mat.serpentinization_wet_crust_margin", po::value<double>(&p.mat.serpentinization_wet_crust_margin)->default_value(-1.0),
+         "Horizontal margin (in m) for the serpentinization wet-crust-below test. When >= 0, a wet-crust-dominant "
+         "grid cell triggers conversion only if the marker's horizontal position lies within the cell's "
+         "wet-crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
+         "column-quantization false positive at a slab bend, where a cell is wet-crust-dominant from wet crust "
+         "up to a whole cell size away horizontally. < 0 (default) disables: whole-column behavior.")
+        ("mat.serpentinization_max_depth", po::value<double>(&p.mat.serpentinization_max_depth)->default_value(150e3),
+         "mat.phase_change_option 3 with mat.has_serpentinization: no mantle deeper than this (in m below the "
+         "local free surface) serpentinizes. It also ends the serpentinization grid, at this depth plus "
+         "mat.serpentinization_thickness and one cell. Must be positive. Default 150e3, heuristic, untuned: slab "
+         "dehydration, the water source, is essentially complete by ~150 km, shallower than the antigorite "
+         "stability field's cold-slab extrapolation (> 200 km at 500 C).")
+        ("mat.wet_crust_fraction_threshold", po::value<double>(&p.mat.wet_crust_fraction_threshold)->default_value(0.5),
+         "mat.phase_change_option 3 with mat.has_serpentinization: a serpentinization grid cell is wet-crust-dominant, "
+         "so it can serpentinize the mantle above it, when more than this fraction of its markers is wet crust. "
+         "In [0, 1). A cell holds markers.markers_per_element times (cell / element measure) markers, nominally "
+         "~2.3 in 2D and ~4.2 in 3D at mesh.vt_size 0.5, so at 0.5 a two-marker cell needs both. Default 0.5, "
+         "untuned: geoflac's 0.8 (of an element, with no source) leaves out the cell that straddles the slab top "
+         "and cuts the serpentinite band of examples/subduction.cfg by more than half.")
+        ("mat.has_serpentinization", po::value<bool>(&p.mat.has_serpentinization)->default_value(true),
+         "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
+         "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
+         "Needs mattype_serpentinite and mattype_oceanic_crust, and mattype_sediment set in the cfg. "
+         "Off: no serpentinization grid is built, and the checks on its inputs are skipped: mattype_mantle, "
+         "mattype_serpentinite and the wet-crust materials distinct, mattype_serpentinite in range and set, "
+         "mattype_sediment set, serpentinization_thickness positive and at least one grid cell, mesh.vt_size positive. "
+         "mattype_mantle and mattype_sediment stay range-checked with the other base material "
+         "indices, and the rule "
+         "checks still run (see the other has_* switches); every key an active rule reads must be set in "
+         "the cfg.")
+        ("mat.has_eclogitization", po::value<bool>(&p.mat.has_eclogitization)->default_value(true),
+         "mat.phase_change_option 3: enable oceanic crust->eclogite (Hacker 2003). Default on. Needs "
+         "mattype_oceanic_crust and mattype_eclogite set, distinct, and not mattype_mantle, and "
+         "mattype_sediment different from mattype_oceanic_crust (deposits would turn into eclogite). "
+         "Like every has_* switch, no two active rules may start from one material.")
+        ("mat.has_hydrous_mantle_dehydration", po::value<bool>(&p.mat.has_hydrous_mantle_dehydration)->default_value(false),
+         "mat.phase_change_option 3: enable hydrous (chlorite) mantle->mantle dehydration (Grove 2009). "
+         "Default off. Needs mattype_hydrous_mantle.")
+        ("mat.has_sediment_metamorphism", po::value<bool>(&p.mat.has_sediment_metamorphism)->default_value(false),
+         "mat.phase_change_option 3: enable the sediment chain sediment->sedimentary rock->metasediment->schist "
+         "(compaction uses geoflac's unsourced thresholds, the next step Montanez & Crossey 2017, the last "
+         "Wei 2004). Default off. "
+         "Needs mattype_sediment_rock / mattype_metasediment / mattype_schist.")
 
         // these parameters need to parsed later
         ("mat.rho0", po::value<std::string>()->default_value("[3210]"),
@@ -966,6 +1252,16 @@ static void read_parameters_from_file
         std::cerr << e.what() << " from option: " << e.get_option_name() << '\n';
         die(EXIT_CONFIG_VALUE);
     }
+    catch (const boost::program_options::unknown_option& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << " (a misspelled or retired key)\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+    catch (const boost::program_options::validation_error& e) {
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << "\n";
+        die(EXIT_CONFIG_VALUE);
+    }
     catch (std::exception& e) {
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
@@ -1012,30 +1308,38 @@ static int read_numbers(const std::string &input, std::vector<T> &vec, int len)
 }
 
 
+// Read exactly len numbers from key name; len_name says what sets len.
+// With one_for_all, a single number is also accepted and repeated len times.
 template<class T>
 static void get_numbers(const po::variables_map &vm, const char *name,
-                        std::vector<T> &values, int len, int optional_size=0)
+                        std::vector<T> &values, int len, const char *len_name,
+                        bool one_for_all=false)
 {
     if ( ! vm.count(name) ) {
         std::cerr << "Error: " << name << " is not provided.\n";
         die(EXIT_CONFIG_VALUE);
     }
+    if (len < 0) {
+        std::cerr << "Error: " << name << " cannot list " << len << " numbers ("
+                  << len_name << ").\n";
+        die(EXIT_CONFIG_VALUE);
+    }
 
     std::string str = vm[name].as<std::string>();
     int err = read_numbers(str, values, len);
-    if (err && optional_size > 0) {
-        err = read_numbers(str, values, optional_size);
-    } else if (err && optional_size == -1) {
+    if (err && one_for_all) {
         err = read_numbers(str, values, 1);
         if (!err) {
-            values.resize(len);
-            std::fill(values.begin(), values.end(), values[0]);
+            const T v = values[0];
+            values.assign(len, v);
         }
     }
 
     if (err) {
-        std::cerr << "Error: incorrect format for " << name << ",\n"
-                  << "       must be '[d0, d1, d2, ...]'\n";
+        std::cerr << "Error: " << name << " must list " << len
+                  << (len == 1 ? " number (" : " numbers (") << len_name << ")"
+                  << (one_for_all && len != 1 ? " or 1 for all" : "")
+                  << " as '[d0, d1, ...]', got '" << str << "'.\n";
         die(EXIT_CONFIG_VALUE);
     }
 }
@@ -1055,6 +1359,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.sim.max_steps = std::numeric_limits<int>::max();
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
+
+#ifdef USEMMG
+    // An aspect ratio: in (0,1) it would refine the wall-normal axis; a negative one means nothing.
+    if ( p.mesh.mmg_aniso_wall_ratio != 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
+        std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
+                     "a smaller ratio would refine the wall or mean nothing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
@@ -1090,7 +1403,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "sim.output_step_interval must be a multiple of mesh.quality_check_step_interval!.");
     }
 
-    // Ensure info_display_step_interval is a multiple of quality_check_step_interval
+    // The status line prints only on quality-check steps, so round the interval up to a
+    // multiple of quality_check_step_interval.
     if (p.sim.info_display_step_interval <= 0)
         p.sim.info_display_step_interval = p.mesh.quality_check_step_interval * 100;
     if (p.sim.info_display_step_interval % p.mesh.quality_check_step_interval != 0) {
@@ -1100,7 +1414,6 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                   << p.sim.info_display_step_interval
                   << " (must be a multiple of quality_check_step_interval="
                   << q << ")\n";
-        die(EXIT_CONFIG_VALUE);
     }
     if (p.sim.earthquake_output_step_interval < 1) {
         die(EXIT_CONFIG_VALUE, "sim.earthquake_output_step_interval must be >= 1.");
@@ -1126,22 +1439,9 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     //
-    // these parameters are required in mesh.meshing_option == 2
+    // mesh.refined_zone{x,y,z}, read only for mesh.meshing_option == 2
     //
     if (p.mesh.meshing_option == 2) {
-        if ( ! vm.count("mesh.refined_zonex") ||
-#ifdef THREED
-             ! vm.count("mesh.refined_zoney") ||
-#endif
-             ! vm.count("mesh.refined_zonez") ) {
-        std::cerr << "Must provide mesh.refined_zonex, "
-#ifdef THREED
-                  << "mesh.refined_zoney, "
-#endif
-                  << "mesh.refined_zonez.\n";
-        die(EXIT_CONFIG);
-        }
-
         /* get 2 numbers from the string */
         double_vec tmp;
         int err;
@@ -1149,8 +1449,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zonex"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zonex,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zonex,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonex.first = tmp[0];
@@ -1159,8 +1459,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zoney"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zoney,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zoney,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zoney.first = tmp[0];
@@ -1169,8 +1469,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         str = vm["mesh.refined_zonez"].as<std::string>();
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
-            std::cerr << "Error: incorrect value for mesh.refine_zonez,\n"
-                      << "       must in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
+            std::cerr << "Error: incorrect value for mesh.refined_zonez,\n"
+                      << "       must be in this format '[d0, d1]', 0 <= d0 <= d1 <= 1.\n";
             die(EXIT_CONFIG_VALUE);
         }
         p.mesh.refined_zonez.first = tmp[0];
@@ -1180,6 +1480,59 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     if (p.mesh.smallest_size > p.mesh.largest_size) {
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
     }
+
+#ifdef USEMMG
+    // Only MMG reads the mmg_* keys checked in this block.
+    if (p.mesh.mmg_metric_refine_coeff < 0) {
+        // 1 + coeff*plstrain divides the target volume: it must stay positive.
+        std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
+                     "(0 disables plastic-strain refinement).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // ratio < 1 puts MMG's floor below the trigger: a just-remeshed element re-triggers at once.
+    if (p.mesh.mmg_remesh_defensive_tiny_ratio < 1.0)
+        die(EXIT_CONFIG_VALUE, "mesh.mmg_remesh_defensive_tiny_ratio must be >= 1 "
+            "(1 = MMG builds at the trigger; larger = a wider gap above it).");
+
+    // MMG needs hmin < hmax: cap the ratio just under largest_size/smallest_size. 1e-9 clears the
+    // round-off of mmg_adapt's pow() products (~1e-16) and changes no size that matters. Equal
+    // sizes cap it at 1 - 1e-9 < 1, so the >= 1 check must stay above this cap.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.smallest_size * p.mesh.mmg_remesh_defensive_tiny_ratio >= p.mesh.largest_size) {
+        const double cap = (1 - 1e-9) * p.mesh.largest_size / p.mesh.smallest_size;
+        std::cerr << "Warning: mesh.mmg_remesh_defensive_tiny_ratio = "
+                  << p.mesh.mmg_remesh_defensive_tiny_ratio << " puts MMG's size floor "
+                  << "(smallest_size x ratio) at or above largest_size; capped just below "
+                  << "largest_size / smallest_size = " << p.mesh.largest_size / p.mesh.smallest_size
+                  << ". MMG builds closer to the tiny-element trigger: expect frequent "
+                  << "tiny-element remeshes unless smallest_size < largest_size / ratio.\n";
+        p.mesh.mmg_remesh_defensive_tiny_ratio = cap;
+    }
+
+    if (p.mesh.mmg_remesh_defensive_quality_ratio < 1.0) {
+        // ratio < 1 can leave a below-trigger element frozen, re-triggering at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_defensive_quality_ratio must be >= 1 (1 = repair only below the trigger).\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // Quality <= 1, so near a product of 1 R1 frees almost every element at every remesh.
+    // Threshold 0.9, heuristic; written 0.875 because 0.6 * 1.5 rounds below 0.9.
+    if (p.mesh.meshing_elem_shape == 0 &&
+        p.mesh.min_quality * p.mesh.mmg_remesh_defensive_quality_ratio >= 0.875) {
+        std::cerr << "Warning: mesh.min_quality * mesh.mmg_remesh_defensive_quality_ratio "
+                     ">= 0.875: at every remesh the MMG freeze unfreezes every element of quality "
+                     "below that product (all of them at >= 1) for MMG to repair, and an element "
+                     "MMG rebuilds is re-interpolated; the remesh log's 'R1 repair "
+                     "(low-quality/tiny)' count gives their number, tiny elements included.\n";
+    }
+
+    if (p.mesh.mmg_remesh_size_recovery_ratio != 0.0 && p.mesh.mmg_remesh_size_recovery_ratio <= 1.0) {
+        // ratio <= 1 frees elements on the gradation envelope itself, at every remesh.
+        std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+#endif
 
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
@@ -1197,20 +1550,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "monitor.num_points must be >= 0.");
         }
 
-        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points);
+        const char *npts = "monitor.num_points";
+        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points, npts);
 #ifdef THREED
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points);
+        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
+        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
-        const std::string points_y_raw = vm["monitor.points_y"].as<std::string>();
-        const std::string points_z_raw = vm["monitor.points_z"].as<std::string>();
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y,
-                    (points_y_raw == "[]") ? 0 : p.monitor.num_points);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z,
-                    (points_z_raw == "[]") ? 0 : p.monitor.num_points);
-        if (points_z_raw == "[]") {
-            p.monitor.points_z = p.monitor.points_y; // 2D legacy alias: points_y means z
-        }
+        // 2D legacy alias: points_y means z when points_z is not given
+        const bool z_from_y = vm["monitor.points_z"].as<std::string>() == "[]" &&
+                              vm["monitor.points_y"].as<std::string>() != "[]";
+        get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
+                    p.monitor.num_points, npts);
 #endif
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
@@ -1278,12 +1628,61 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
 #endif
+#if defined(USEMMG) && defined(THREED)
+    // optimize_mesh (3D MMG) has no flatten_x0_corner case.
+    if (p.mesh.remeshing_option == 12 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available with MMG remeshing "
+            "in 3D (usemmg=1, mesh.meshing_elem_shape = 0); use a build without MMG.");
+#endif
+#ifdef USEMMG
+    // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
+    if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available with MMG remeshing "
+            "(usemmg=1, mesh.meshing_elem_shape = 0); use 1 or 11, or a build without MMG.");
+#endif
+    // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
+    if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
+#ifdef USEMMG
+        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available with "
+            "MMG remeshing (usemmg=1, mesh.meshing_elem_shape = 0): MMG keeps no internal "
+            "segment. Use yes, or a build without MMG.");
+#else
+        std::cerr << "Warning: mesh.is_discarding_internal_segments = no: a remesh that deletes a "
+                     "node of an internal segment (tiny-element repair, node cleanup near a "
+                     "restored boundary) misroutes it, which can make the mesher fail or hang; "
+                     "in 3D with remeshing_option 1 or 10-12, the first remesh that deletes a "
+                     "boundary node drops them all.\n";
+#endif
+    }
 
 #ifndef USEMMG
     if (p.mesh.use_mmg_init) {
         p.mesh.use_mmg_init = false;
         std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
     }
+    // Without USEMMG nothing reads the mmg_* keys: name the ones the cfg set, not the defaulted ones.
+    {
+        const char *mmg_only[] = {
+            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
+            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
+            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
+            "mesh.mmg_metric_refine_coeff", "mesh.mmg_metric_refine_recover",
+            "mesh.mmg_aniso_wall_ratio",
+            "mesh.mmg_remesh_defensive_tiny_ratio",
+        };
+        for (const char *name : mmg_only)
+            if (vm.count(name) && ! vm[name].defaulted())
+                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
+                          << " has no effect.\n";
+    }
+    // Option 13 re-flattens the side walls at every remesh, which breeds sub-hmin wall elements. Only
+    // MMG collapses them: decimate_below_hmin keeps boundary nodes, and the tiny-element repair
+    // skips corners.
+    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
+        die(EXIT_UNSUPPORTED_LIB, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
+            "Without it the restored side wall accumulates sub-hmin elements that the "
+            "Triangle/TetGen path cannot collapse. Uniform meshes (mesh.meshing_elem_shape > 0) "
+            "are unaffected.");
 #endif
 
     //
@@ -1375,25 +1774,29 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     {
         if ( p.ic.weakzone_option == 5 ) {
             int n = p.ic.weakzone_num_segments;
-            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, -1);
-            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, -1);
-            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, -1);
+            const char *nseg = "ic.weakzone_num_segments";
+            get_numbers(vm, "ic.weakzone_segments_xcenter",     p.ic.weakzone_segments_xcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_zcenter",     p.ic.weakzone_segments_zcenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_azimuth",     p.ic.weakzone_segments_azimuth,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_inclination", p.ic.weakzone_segments_inclination, n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_halfwidth",   p.ic.weakzone_segments_halfwidth,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_min",       p.ic.weakzone_segments_x_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_x_max",       p.ic.weakzone_segments_x_max,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_min",   p.ic.weakzone_segments_depth_min,   n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_depth_max",   p.ic.weakzone_segments_depth_max,   n, nseg, true);
 #ifdef THREED
-            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, -1);
-            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, -1);
+            get_numbers(vm, "ic.weakzone_segments_ycenter",     p.ic.weakzone_segments_ycenter,     n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_min",       p.ic.weakzone_segments_y_min,       n, nseg, true);
+            get_numbers(vm, "ic.weakzone_segments_y_max",       p.ic.weakzone_segments_y_max,       n, nseg, true);
 #endif
         }
 
         if ( p.ic.mattype_option == 1) {
-            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers);
-            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1);
+            if (p.ic.num_mattype_layers < 1) {
+                die(EXIT_CONFIG_VALUE, "ic.num_mattype_layers must be >= 1.");
+            }
+            get_numbers(vm, "ic.layer_mattypes", p.ic.layer_mattypes, p.ic.num_mattype_layers, "ic.num_mattype_layers");
+            get_numbers(vm, "ic.mattype_layer_depths", p.ic.mattype_layer_depths, p.ic.num_mattype_layers-1, "ic.num_mattype_layers - 1");
             // mattype_layer_depths must be already sorted
             if (! std::is_sorted(p.ic.mattype_layer_depths.begin(), p.ic.mattype_layer_depths.end())) {
                 std::cerr << "Error: the content of ic.mattype_layer_depths is not ordered from"
@@ -1407,7 +1810,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             die(EXIT_CONFIG_VALUE,
                 "ic.initial_stress_option must be 0 or 1.");
         }
-        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR);
+        get_numbers(vm, "ic.initial_stress", p.ic.initial_stress, NSTR, "one per stress component");
         if (p.ic.initial_stress_option == 1) {
             if (p.control.gravity != 0.0) {
                 die(EXIT_CONFIG_VALUE,
@@ -1498,27 +1901,117 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
 #endif
 
+        // phase_changes() implements only these; any other value would run to its first
+        // phase-change step and die there.
+        switch (p.mat.phase_change_option) {
+        case 0: case 1: case 3: case 101:
+            break;
+        default:
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_option must be 0, 1, 3 or 101 (see --help).");
+        }
+        if (p.mat.phase_change_pressure_option != 0 && p.mat.phase_change_pressure_option != 1) {
+            die(EXIT_CONFIG_VALUE, "mat.phase_change_pressure_option must be 0 or 1 (see --help).");
+        }
         if (p.mat.phase_change_option != 0 && p.mat.nmat == 1) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is chosen, but mat.num_materials is 1.");
         }
         if (p.mat.phase_change_option == 1 && p.mat.nmat < 8) {
             die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 1, but mat.num_materials is less than 8.");
         }
+        // A base key left out of the cfg keeps its default 0, which names a real
+        // material, so a rule that reads it would convert material 0. Every key
+        // option 3 reads must be set. Checked before the alias checks below, which
+        // would blame the symptom; a key whose default -1 is unset is left to the
+        // range checks and check_phase_transition_rules(), which name it.
+        if (p.mat.phase_change_option == 3)
+            for (const char* key : phase_change_keys(p)) {
+                const po::variable_value& v = vm[std::string("mat.") + key];
+                if (v.defaulted() && v.as<int>() >= 0) {
+                    const std::string msg = std::string("mat.phase_change_option 3 reads mat.") + key
+                        + ", but the cfg does not set it, and its default " + std::to_string(v.as<int>())
+                        + " would name material " + std::to_string(v.as<int>()) + ".";
+                    die(EXIT_CONFIG_VALUE, msg.c_str());
+                }
+            }
+        // The serpentinization grid's inputs, checked only where it is built.
+        if (uses_serpentinization_grid(p)) {
+            const std::pair<const char*, int> serp_types[] = {
+                {"mattype_mantle", p.mat.mattype_mantle},
+                {"mattype_serpentinite", p.mat.mattype_serpentinite},
+                {"mattype_oceanic_crust", p.mat.mattype_oceanic_crust},
+                {"mattype_sediment", p.mat.mattype_sediment},
+            };
+            for (const auto& t : serp_types)
+                if (t.second < 0 || t.second >= p.mat.nmat) {
+                    const std::string msg = std::string("mat.phase_change_option 3 with "
+                        "mat.has_serpentinization needs mat.") + t.first + " in [0, mat.num_materials).";
+                    die(EXIT_CONFIG_VALUE, msg.c_str());
+                }
+            // The grid counts these as wet crust (counts_as_wet_crust() in phasechanges.cxx);
+            // the mantle or serpentinite among them would trigger itself.
+            const int wet_crust_types[] = { p.mat.mattype_oceanic_crust, p.mat.mattype_sediment,
+                                            p.mat.mattype_sediment_rock };
+            bool aliased = p.mat.mattype_mantle == p.mat.mattype_serpentinite;
+            for (int t : wet_crust_types)
+                aliased = aliased || t == p.mat.mattype_mantle || t == p.mat.mattype_serpentinite;
+            if (aliased) {
+                die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 3, but mattype_mantle, mattype_serpentinite "
+                    "and the wet-crust materials (mattype_oceanic_crust, mattype_sediment, and "
+                    "mattype_sediment_rock when set) are not distinct.");
+            }
+            if (p.mat.serpentinization_thickness <= 0) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness must be positive.");
+            }
+            if (p.mat.serpentinization_max_depth <= 0) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_max_depth must be positive.");
+            }
+            // The dominance test is a strict '>': at 1 no cell could be dominant.
+            if (p.mat.wet_crust_fraction_threshold < 0 || p.mat.wet_crust_fraction_threshold >= 1) {
+                die(EXIT_CONFIG_VALUE, "mat.wet_crust_fraction_threshold must be in [0, 1).");
+            }
+            if (p.mesh.vt_size <= 0) {
+                die(EXIT_CONFIG_VALUE, "mesh.vt_size must be positive.");
+            }
+            // The wet-crust-below search steps down in whole grid cells; a thickness
+            // under one cell examines no cell at all and serpentinization never fires.
+            if (p.mat.serpentinization_thickness < p.mesh.resolution * p.mesh.vt_size) {
+                die(EXIT_CONFIG_VALUE, "mat.serpentinization_thickness is smaller than one virtual-topology "
+                    "cell (mesh.resolution * mesh.vt_size); the wet-crust-below search would examine no cell. "
+                    "Raise the thickness or lower mesh.vt_size.");
+            }
+        }
+        if (p.mat.phase_change_option == 3) {
+            // Metamorphic products for the phase-change rule engine
+            // (subduction_phase_changes): -1 (the default) or an in-range
+            // material index. check_phase_transition_rules() then requires
+            // the ones an active switch reads to be set.
+            const int metamorphic_types[] = {
+                p.mat.mattype_eclogite, p.mat.mattype_hydrous_mantle,
+                p.mat.mattype_sediment_rock, p.mat.mattype_metasediment,
+                p.mat.mattype_schist };
+            for (int t : metamorphic_types)
+                if (t != -1 && (t < 0 || t >= p.mat.nmat)) {
+                    die(EXIT_CONFIG_VALUE, "mat.phase_change_option is 3, but a metamorphic "
+                        "mat.mattype_* index is neither -1 (unset) nor in [0, mat.num_materials).");
+                }
+            check_phase_transition_rules(p);
+        }
 
         if (p.mat.nmat < 1) {
             die(EXIT_CONFIG_VALUE, "mat.num_materials must be greater than 0.");
         }
 
-        // Every mat.mattype_* indexes the per-material arrays (rho0, therm_cond,
-        // elemmarkers[e], ...) unchecked, so each must name an existing material.
+        // Each base mat.mattype_* below indexes the per-material arrays (rho0,
+        // therm_cond, elemmarkers[e], ...) unchecked, so each must name an existing
+        // material. The rule engine's indices (-1 = unset) are checked with
+        // mat.phase_change_option 3 above, mattype_continental_crust with the
+        // continental geotherm below.
         const std::pair<const char*, int> mattypes[] = {
             {"mattype_ref", p.mat.mattype_ref},
             {"mattype_mantle", p.mat.mattype_mantle},
             {"mattype_depleted_mantle", p.mat.mattype_depleted_mantle},
             {"mattype_partial_melting_mantle", p.mat.mattype_partial_melting_mantle},
-            {"mattype_crust", p.mat.mattype_crust},
-            {"mattype_sed", p.mat.mattype_sed},
-            {"mattype_oceanic_crust", p.mat.mattype_oceanic_crust},
+            {"mattype_sediment", p.mat.mattype_sediment},
             {"mattype_mor_extrusion", p.mat.mattype_mor_extrusion},
             {"mattype_asthenosphere", p.mat.mattype_asthenosphere},
         };
@@ -1530,6 +2023,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                 die(EXIT_CONFIG_VALUE);
             }
         }
+        // The continental geotherm indexes rho0 and therm_cond with it.
+        if (p.ic.temperature_option == 1 &&
+                (p.mat.mattype_continental_crust < 0 || p.mat.mattype_continental_crust >= p.mat.nmat)) {
+            const std::string msg = "ic.temperature_option 1 needs mat.mattype_continental_crust ("
+                + std::to_string(p.mat.mattype_continental_crust) + ") in [0, mat.num_materials).";
+            die(EXIT_CONFIG_VALUE, msg.c_str());
+        }
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {
             p.control.ref_pressure_option = 0;
@@ -1540,57 +2040,83 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
 
-        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, 1);
-        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, 1);
-        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, 1);
+        // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
+        // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.
+        if (std::min({p.bc.num_vbc_period_x0, p.bc.num_vbc_period_x1,
+                      p.bc.num_vbc_period_y0, p.bc.num_vbc_period_y1}) < 1) {
+            die(EXIT_CONFIG_VALUE, "bc.num_vbc_period_* must be positive.");
+        }
+        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
+        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
+        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
+        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
+        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
+        const std::pair<const char*, const double_vec*> period_times[] = {
+            {"vbc_period_x0_time_in_yr", &p.bc.vbc_period_x0_time_in_yr},
+            {"vbc_period_x1_time_in_yr", &p.bc.vbc_period_x1_time_in_yr},
+            {"vbc_period_y0_time_in_yr", &p.bc.vbc_period_y0_time_in_yr},
+            {"vbc_period_y1_time_in_yr", &p.bc.vbc_period_y1_time_in_yr},
+        };
+        for (const auto& t : period_times) {
+            if (! std::is_sorted(t.second->begin(), t.second->end())) {
+                std::cerr << "Error: bc." << t.first << " must be non-decreasing.\n";
+                die(EXIT_CONFIG_VALUE);
+            }
+        }
 
-        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, 1);
+        if (p.ic.nhlayer < 0) {
+            die(EXIT_CONFIG_VALUE, "ic.num_radiogenic_heat_layer must be >= 0.");
+        }
+        get_numbers(vm, "ic.radiogenic_heat_boundry", p.ic.radiogenic_heat_boundry, p.ic.nhlayer+1, "ic.num_radiogenic_heat_layer + 1");
         if (p.ic.radiogenic_heat_boundry[0] == -1)
             p.ic.radiogenic_heat_boundry[0] = 0;
         if (p.ic.radiogenic_heat_boundry[p.ic.nhlayer] == -1)
             p.ic.radiogenic_heat_boundry[p.ic.nhlayer] = p.mesh.zlength;
 
-        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, 1);
+        get_numbers(vm, "ic.radiogenic_heat_mat_in_layer", p.ic.radiogenic_heat_mat_in_layer, p.ic.nhlayer, "ic.num_radiogenic_heat_layer", true);
 
-        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, -1);
+        const char *nmat_key = "mat.num_materials";
+        get_numbers(vm, "mat.rho0", p.mat.rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.alpha", p.mat.alpha, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, -1);
+        get_numbers(vm, "mat.bulk_modulus", p.mat.bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.shear_modulus", p.mat.shear_modulus, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, -1);
-        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, -1);
+        get_numbers(vm, "mat.visc_exponent", p.mat.visc_exponent, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_coefficient", p.mat.visc_coefficient, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_energy", p.mat.visc_activation_energy, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.visc_activation_volume", p.mat.visc_activation_volume, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, -1);
-        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, -1);
+        get_numbers(vm, "mat.heat_capacity", p.mat.heat_capacity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.therm_cond", p.mat.therm_cond, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.radiogenic_heat_prod", p.mat.radiogenic_heat_prod, p.mat.nmat, nmat_key, true);
 
-        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, -1);
+        get_numbers(vm, "mat.pls0", p.mat.pls0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pls1", p.mat.pls1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion0", p.mat.cohesion0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.cohesion1", p.mat.cohesion1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle0", p.mat.friction_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, nmat_key, true);
 
         // Hydraulic parameters
-        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, -1);
-        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, -1);
-        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, -1);
-        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, -1);
+        get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, nmat_key, true);
         // Rate-and-state friction parameters
-        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, -1);
-        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, -1);
-        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, -1);
+        get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_velocity", p.mat.characteristic_velocity, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.characteristic_distance", p.mat.characteristic_distance, p.mat.nmat, nmat_key, true);
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }

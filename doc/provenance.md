@@ -90,11 +90,13 @@ The other fields:
 | `cpu_time`, `mem_peak_rss_gib` | what it cost |
 | `init_time`, `compute_time`, `remesh_time`, `output_time` | the screen's time summary |
 | `compute_sec_per_step` | the compute time over `steps_this_run` |
-| `remeshings`, `remesh_sec_per_remesh` | the remesh count and average |
+| `remeshings`, `remesh_sec_per_remesh` | this run's remesh count and average (the log's `Remeshing starts (#N` counts the model's) |
 | `outputs`, `output_sec_per_output` | the output count and average |
+| `phase_change_time`, `phase_changes`, `phase_change_sec_per_call` | the time phase changes took, their count and average (only `mat.phase_change_option` 3 times them) |
 
-* As on screen, wall = init + compute + remesh + output.
-* `remesh_sec_per_remesh` is left out when the run did not remesh.
+* As on screen, wall = init + compute + remesh + output + phase changes.
+* `remesh_sec_per_remesh` is left out when the run did not remesh, and the three phase-change
+  fields when no phase change was timed.
 * Every total is written twice, to read and in seconds to the millisecond:
   `wall_time = 3d 01:01:11` (the day part from one day up) and `wall_time_sec = 262871.412`.
 

@@ -121,7 +121,9 @@ Absolute tolerance has nodal-force units: N/m in 2D, N in 3D. Stagnation is diag
 tolerance or stopping the iterations; 0 disables this warning. This replaces
 the previous fatal stagnation behavior, which could interrupt recovering
 transients. Results distinguish `converged`, `max_iterations` and `nonfinite`; a failed solve restores mechanical history and stops before output,
-transport or mesh movement can consume the candidate.
+transport or mesh movement can consume the candidate. Mechanical nonconvergence
+uses exit code 54; nonfinite candidates retain exit code 50. Exit code 53 is
+reserved for GoSPL failures.
 
 Boundary constraints use the same ordered dispatch as `apply_vbcs`, evaluated in
 affine and homogeneous modes. Corrected PT normalizes oblique type-11 and edge

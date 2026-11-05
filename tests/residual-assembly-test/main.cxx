@@ -459,6 +459,41 @@ static void test_constraints() {
         for(int n=0;n<m->var.nnode;++n)
             for(int d=0;d<NDIMS;++d) check("affine fixed point",m->vel[n][d],m->force[n][d]);
     }
+#ifdef THREED
+    // Period-scaled normal motion must coexist with PT's homogeneous map;
+    // lateral shear remains unscaled by the normal-velocity period table.
+    m->var.time = 0.5*YEAR2SEC;
+    m->param.bc.vbc_x0 = 0;
+    m->param.bc.vbc_y0 = 0;
+    m->param.bc.vbc_period_x0_ratio = {2,4};
+    m->param.bc.vbc_period_y0_time_in_yr = {0,1};
+    m->param.bc.vbc_period_y0_ratio = {4,6};
+    m->param.bc.vbc_val_x0 = m->param.bc.vbc_val_y0 = 2;
+    m->param.bc.vbc_val_x0_l = m->param.bc.vbc_val_y0_l = 7;
+    for (int axis=0; axis<NDIMS-1; ++axis) {
+        int& code = axis == 0 ? m->param.bc.vbc_x0 : m->param.bc.vbc_y0;
+        for (int type : {1,3,4,5,6,7}) {
+            code = type;
+            for (int n=0;n<m->var.nnode;++n) (*flags)[n] = axis == 0 ? BOUNDX0 : BOUNDY0;
+            for (bool homogeneous : {false,true}) {
+                for (int n=0;n<m->var.nnode;++n)
+                    for (int d=0;d<NDIMS;++d) m->vel[n][d] = 11;
+                apply_vbcs(m->param,m->var,m->vel,homogeneous,true);
+                #pragma acc wait
+                const double prescribed = homogeneous ? 0 : 1;
+                const double normal = type == 4 ? 11 : (type == 5 ? 0 : prescribed*2*(axis == 0 ? 3 : 5));
+                const double shear = type == 1 ? 11 : (type == 4 || type == 5 ? prescribed*2 :
+                                                      (type == 6 ? prescribed*7 : 0));
+                for (int n=0;n<m->var.nnode;++n) {
+                    check("period-scaled side normal",m->vel[n][axis],normal);
+                    check("unscaled lateral shear",m->vel[n][1-axis],shear);
+                    check("vertical side constraint",m->vel[n][NDIMS-1],type == 1 || type == 6 || type == 7 ? 11 : 0);
+                }
+            }
+        }
+        code = 0;
+    }
+#endif
     delete c; delete normals; delete flags; delete m;
 }
 
