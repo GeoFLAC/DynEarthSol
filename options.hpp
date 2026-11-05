@@ -26,6 +26,7 @@
  */
 
 #include <any>
+#include <cctype>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -137,6 +138,23 @@ inline bool is_plain_list(const std::string &v)
         if (last) return true;
         begin = comma + 1;
     }
+}
+
+// A name is letters, digits and _, and does not start with a digit.
+inline bool is_identifier(const std::string &s)
+{
+    if (s.empty() || std::isdigit(static_cast<unsigned char>(s[0]))) return false;
+    for (char c : s)
+        if (! (std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+    return true;
+}
+
+// "section.name" with both parts an identifier, and exactly one dot.
+inline bool is_option_name(const std::string &key)
+{
+    const std::size_t dot = key.find('.');
+    return dot != std::string::npos
+        && is_identifier(key.substr(0, dot)) && is_identifier(key.substr(dot + 1));
 }
 
 inline std::string join_tokens(const std::vector<std::string> &v)
@@ -295,8 +313,13 @@ public:
             if (kv.second.required && kv.second.opt->count() == 0)
                 throw ConfigError("the option '" + kv.first + "' is required but missing", false);
             // A string is the raw text: the whole value, quotes and commas kept.
-            if (kv.second.text && kv.second.opt->count() > 0)
-                *kv.second.text = raw.at(kv.first);
+            if (kv.second.text && kv.second.opt->count() > 0) {
+                const auto it = raw.find(kv.first);
+                if (it == raw.end())   // CLI11 set an option the line scan never saw
+                    throw ConfigError("option '" + kv.first + "' was read from the "
+                                      "file, but not by name; check how it is written", true);
+                *kv.second.text = it->second;
+            }
         }
     }
 
@@ -306,6 +329,7 @@ public:
     {
         std::map<std::string, std::string> raw;
         std::string line, section;
+        bool in_section = false;
         // An invalid line stops the scan at once. A repeated key or an unbracketed
         // list is held back until the whole file has been read, so that a
         // malformed line further down is reported first, as the Boost parser did.
@@ -325,35 +349,44 @@ public:
             if (line[0] == '[') {
                 if (line.back() != ']') throw bad_line();
                 section = detail::trim(line.substr(1, line.size() - 2));
+                in_section = true;
                 continue;
             }
             const auto eq = line.find('=');
             if (eq == std::string::npos) throw bad_line();
             const std::string name = detail::trim(line.substr(0, eq));
-            if (name.empty())
-                throw ConfigError("unrecognised option '' (a misspelled or retired key)", true);
 
             // A key at the top of the file may carry its own section, "mat.rho0".
-            const std::string key = section.empty() ? name : section + "." + name;
+            const std::string key = in_section ? section + "." + name : name;
             const std::string value = detail::trim(line.substr(eq + 1));
 
-            // CLI11 strips quotes from a key, so it would find an option that this
-            // scan does not know by that name. Boost took the quotes as part of the
-            // name and found no such option, so refuse them the same way.
-            if (key.find_first_of("\"'") != std::string::npos)
-                defer("unrecognised option '" + key + "' (a misspelled or retired key; "
-                      "a key cannot be quoted)");
+            // From here on a key is "section.name", each part letters, digits and _
+            // and not starting with a digit, and it names a registered option. CLI11
+            // reads names more freely: it strips quotes and backticks, folds "[[a]]"
+            // into the section a, reads "[default]" as no section, and takes a line
+            // that starts with ";" as a comment. Refusing every other name here keeps
+            // the name CLI11 finds the one this scan saw. Boost found no such option
+            // for any of them either.
+            if (! detail::is_option_name(key)) {
+                defer("unrecognised option '" + key + "' (a misspelled or retired key; a "
+                      "name may only use letters, digits and _, and cannot start with a digit)");
+                continue;
+            }
+            const detail::Entry *e = find(key);
+            if (! e) {
+                defer("unrecognised option '" + key + "' (a misspelled or retired key)");
+                continue;
+            }
             if (! raw.emplace(key, value).second)
                 defer("option '" + key + "' cannot be specified more than once");
 
             // CLI11 reads on past the end of the line for a value that opens with
             // three quotes (a multi-line string) or with an unclosed "[" (an array),
             // and the keys after it vanish without a word. DES takes neither.
-            const detail::Entry *e = find(key);
             if (value.compare(0, 3, "\"\"\"") == 0 || value.compare(0, 3, "'''") == 0)
                 defer("option '" + key + "' cannot start with three quotes (multi-line "
                       "strings are not supported), got '" + value + "'");
-            else if (e && e->tokens) {
+            else if (e->tokens) {
                 if (! detail::is_plain_list(value))
                     defer("option '" + key + "' must be a list written as "
                           "'[d0, d1, ...]' of plain numbers, got '" + value + "'");

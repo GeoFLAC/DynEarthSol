@@ -33,6 +33,9 @@ BASE_CFG = HERE.parent / "plane_strain_elastic" / "plane_strain_elastic.cfg"
 EXIT_CONFIG = 10
 EXIT_CONFIG_VALUE = 11
 
+# Part of the message for a key or section name that is not letters, digits and _
+NAME_RULE = "letters, digits and _"
+
 
 def replace(old: str, new: str):
     """An edit that swaps one line; it fails loudly if the base cfg changed."""
@@ -70,14 +73,39 @@ REJECTED = [
      prepend("mat.rho0 = [5]"), EXIT_CONFIG_VALUE, "more than once"),
     ("key in double quotes",
      replace("modelname = plane-strain-elastic", '"modelname" = plane-strain-elastic'),
-     EXIT_CONFIG_VALUE, "cannot be quoted"),
+     EXIT_CONFIG_VALUE, NAME_RULE),
     ("key in single quotes",
      replace("modelname = plane-strain-elastic", "'modelname' = plane-strain-elastic"),
-     EXIT_CONFIG_VALUE, "cannot be quoted"),
+     EXIT_CONFIG_VALUE, NAME_RULE),
     ("section name in quotes",
-     replace("[sim]", '["sim"]'), EXIT_CONFIG_VALUE, "cannot be quoted"),
+     replace("[sim]", '["sim"]'), EXIT_CONFIG_VALUE, NAME_RULE),
     ("quoted key that repeats a list key",
-     replace("rho0 = [1]", 'rho0 = [1]\n"rho0" = [2]'), EXIT_CONFIG_VALUE, "cannot be quoted"),
+     replace("rho0 = [1]", 'rho0 = [1]\n"rho0" = [2]'), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("key in backticks",
+     replace("modelname = plane-strain-elastic", "`modelname` = plane-strain-elastic"),
+     EXIT_CONFIG_VALUE, NAME_RULE),
+    ("quoted key that repeats a list key, in backticks",
+     replace("rho0 = [1]", "rho0 = [1]\n`rho0` = [2]"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("section header in double brackets",
+     replace("[sim]", "[[sim]]"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("section named default",
+     replace("[sim]", "[default]"), EXIT_CONFIG_VALUE, "misspelled or retired"),
+    ("section name that starts with a digit",
+     replace("[sim]", "[1sim]"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("key that starts with a digit",
+     replace("[sim]\n", "[sim]\n1steps = 5\n"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("key with a hyphen",
+     replace("max_steps = 2", "max-steps = 2"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("key with a blank in it",
+     replace("max_steps = 2", "max steps = 2"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("key with a dot inside a section",
+     replace("[bc]\n", "[bc]\nvbc.x0 = 1\n"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("line that starts with a semicolon",
+     replace("[bc]\n", "[bc]\n; vbc_x0 = 1\n"), EXIT_CONFIG_VALUE, NAME_RULE),
+    ("unknown key whose value looks like a list",
+     replace("[mesh]\n", "[mesh]\nbogus_key = [3]\n"), EXIT_CONFIG_VALUE, "misspelled or retired"),
+    ("unknown key whose value opens with three quotes",
+     replace("[mesh]\n", '[mesh]\nbogus_key = """x\n'), EXIT_CONFIG_VALUE, "misspelled or retired"),
     ("text for a number",
      replace("resolution = 0.25", "resolution = abc"), EXIT_CONFIG_VALUE, "decimal number"),
     ("empty number",
@@ -147,6 +175,8 @@ ACCEPTED = [
      replace("max_steps = 2", "max_steps = 02"), None),
     ("list with a trailing comma and blanks",
      replace("rho0 = [1]", "rho0 = [ 1 , ]"), None),
+    ("a key written with its section, at the top of the file",
+     lambda text: prepend("mat.rho0 = [1]")(delete("rho0 = [1]")(text)), None),
     ("a single quote that is never closed",
      replace("modelname = plane-strain-elastic", "modelname = 'abc"), "'abc"),
     ("string kept whole: commas, spaces and quotes",

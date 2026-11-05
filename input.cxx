@@ -1234,6 +1234,13 @@ static void read_parameters_from_file(const char* filename, opt::Registry &cfg)
         std::cerr << e.what() << "\n";
         die(e.bad_value ? EXIT_CONFIG_VALUE : EXIT_CONFIG);
     }
+    catch (const std::exception& e) {
+        // Anything the parser did not foresee is still a problem with the file, not
+        // a crash of the run.
+        std::cerr << "Error reading config_file '" << filename << "'\n";
+        std::cerr << e.what() << "\n";
+        die(EXIT_CONFIG);
+    }
 }
 
 
