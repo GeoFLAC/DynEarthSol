@@ -83,6 +83,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** The make option `use_gospl` is now `usegospl`, matching
   `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
   error.
+- **Breaking.** The Intel classic `icpc` and PGI `pgc++` branches of the
+  Makefile are removed; build with g++ 8 or newer, nvc++ 25.7 or newer, or
+  clang++ 5 or newer. A build that overrides the standard with one older than
+  C++17 now stops at compile time ([#125]).
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
@@ -350,3 +354,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
