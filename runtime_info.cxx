@@ -40,7 +40,6 @@
 #include <utility>
 #endif
 
-#include <boost/version.hpp>
 #include <nanoflann.hpp>
 #ifdef HDF5
 #include <H5public.h>
@@ -112,7 +111,7 @@ __attribute__((used)) const char snapshot_sentinel[] =
 #elif defined(__GLIBCXX__)
     " libstdcxx=" DES_STR(__GLIBCXX__) "(toolchain)"
 #endif
-    " boost=" BOOST_LIB_VERSION "(" DES_SRC_BOOST ")"
+    " cli11=" DES_CLI11_VERSION "(vendored)"
     "\nbuild.snapshot.toolchain  :"
     // nvc++ and clang also define __GNUC__, so they go first. nvc++'s __VERSION__ names its
     // g++ mode and g++'s names no compiler ("8.5.0 20210514 (Red Hat 8.5.0-28)"): name both.
