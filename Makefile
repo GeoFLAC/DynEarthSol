@@ -941,6 +941,16 @@ endif
 ifeq ($(usemmg), 1)
 	$(call ensure_submodule,mmg,CMakeLists.txt,usemmg=1)
 
+	@# An mmg/build configured at another path (a mounted or copied tree) holds
+	@# another host's objects: rebuild it. -ef compares directories, not strings,
+	@# so a path reached through a symlink (macOS /tmp) still matches.
+	@if [ -f mmg/build/CMakeCache.txt ]; then \
+		cached=$$(sed -n 's/^CMAKE_CACHEFILE_DIR:INTERNAL=//p' mmg/build/CMakeCache.txt); \
+		if [ ! "$$cached" -ef mmg/build ]; then \
+			echo "   MMG was configured in $$cached, not here; rebuilding it..."; \
+			rm -rf mmg/build; \
+		fi; \
+	fi
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
 	@# from the environment on the FIRST configure, so an exported one is baked in.
