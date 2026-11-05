@@ -29,7 +29,10 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
    ```
    With mamba, write `mamba` for `conda`; mamba 2 needs
    `mamba shell init --shell bash` (or `zsh`) once, then a new shell, before
-   `mamba activate` works. See also
+   `mamba activate` works. If conda prints "retrying with next repodata
+   source" and then stalls, it is using the slow classic solver: add
+   `--solver=libmamba` (conda 23.10 or later), or set it once with
+   `conda config --set solver libmamba`. See also
    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html).
 
 2. **gospl_extensions**, the bridge between GoSPL (Python) and DES (C++). It
