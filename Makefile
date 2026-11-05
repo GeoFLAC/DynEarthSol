@@ -1088,9 +1088,10 @@ ifeq ($(usemmg), 1)
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
 	@# from the environment on the FIRST configure, so an exported one is baked in.
+	@# USE_VTK=OFF: DES needs no VTK, and the gospl env's VTK breaks MMG's configure.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DUSE_VTK=OFF ..; \
 	fi
 	@# The revision IN the archive, stamped only when it is built: the archive is reused
 	@# while the checkout drifts, and one built without a stamp claims no revision.
