@@ -232,7 +232,14 @@ def main():
                     cfg["mat"]["porosity"]="[0.01]"
                     cfg["mat"]["hydraulic_perm"]="[1e-20]"
                 if name=="pt-hydraulic":
-                    cfg["control"].update(has_PT="yes",PT_max_iter="4")
+                    # The physical-step solver must converge, including its
+                    # initial equilibrium; a four-iteration legacy smoke case
+                    # no longer exercises a valid PT solve.
+                    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+                    cfg.optionxform = str
+                    cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
+                    cfg["sim"].update(modelname="result", max_steps="8", max_time_in_yr="1e20",
+                                      output_step_interval="2", output_time_interval_in_yr="1e20")
             label=f"optional-{name}-{ndims}d"
             reference,_=run(label+"-parent",cfg,executables["serial" if ndims==2 else "serial3d"])
             current,timing=run(label+"-mpi2",cfg,executables["mpi" if ndims==2 else "mpi3d"],2)

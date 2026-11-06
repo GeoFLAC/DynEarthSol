@@ -29,6 +29,7 @@
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
+#include "pseudo_transient.hpp"
 
 namespace {
 struct Fields {
@@ -81,6 +82,8 @@ void metadata(MpiState& a,Variables& v) {
     F(time); F(last_remesh_time); F(dt); F(steps); F(nremesh); F(max_vbc_val);
     F(max_global_vel_mag); F(global_dt_min); F(compensation_pressure); F(bottom_temperature);
     F(nnode); F(nelem); F(vbc_val_z1_loading_period);
+    F(PT_initial_residual_max); F(PT_skip_scale_update); F(PT_force_residual_valid);
+    F(info_display_next_step);
     for(int i=0;i<nbdrytypes;++i) {
         a.value(v.vbc_types[i]);a.value(v.vbc_values[i]);a.value(v.stress_bc_values[i]);
         a.value(v.bnodes[i]);a.value(v.bfacets[i]);
@@ -159,7 +162,8 @@ void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
 #define F(x) v.x=g.x
     F(time);F(last_remesh_time);F(dt);F(steps);F(nremesh);F(max_vbc_val);
     F(max_global_vel_mag);F(global_dt_min);F(compensation_pressure);F(bottom_temperature);
-    F(vbc_val_z1_loading_period);F(edge_vec);F(vbc_vertical_div_x0);F(vbc_vertical_div_x1);
+    F(PT_initial_residual_max);F(PT_skip_scale_update);F(PT_force_residual_valid);
+    F(info_display_next_step);F(vbc_val_z1_loading_period);F(edge_vec);F(vbc_vertical_div_x0);F(vbc_vertical_div_x1);
     F(vbc_vertical_ratio_x0);F(vbc_vertical_ratio_x1);F(surfinfo.max_surf_vel);
 #undef F
     v.nnode=p.nodes.size();v.nelem=p.elements.size();
@@ -217,7 +221,7 @@ const char* op_name(MpiOp op) {
 #define F(x) case MpiOp::x:return #x
         F(State);F(Temperature);F(PorePressure);F(StrainRate);F(Stress);F(Force);F(Velocity);
         F(Coordinate);F(Rotation);F(Volume);F(Dvoldt);F(Edvoldt);F(Nmd);F(Mass);F(TimeStep);
-        F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(Surface);F(SwapVolume);
+        F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SwapVolume);
         F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Geometry);F(Boundary);F(Sample);F(Average);F(Metrics);
         F(Report);F(Stop);F(Count);
 #undef F
@@ -230,7 +234,7 @@ bool management(MpiOp op) {
 struct Command {
     int operation,steps;
     double time,dt,max_vbc,max_vel,global_dt,surface_vel,argument;
-    bool hydraulic,pt_jump,body_adjustment;
+    bool hydraulic,body_adjustment;
 };
 }
 
@@ -250,6 +254,7 @@ struct MpiSimulation::Impl {
     bool active=false,inside=false;
     MpiOp current=MpiOp::State;
     double scalar=0,measurements[2]={};
+    PTResult pt;
     std::uint64_t version=0,root_version=0,surface_version=~std::uint64_t(0);
     std::uint64_t calls[int(MpiOp::Count)]={},payload_bytes=0,state_bytes=0,root_bytes=0,all_payload_bytes=0;
     double elapsed[int(MpiOp::Count)]={},communication_s=0;
@@ -273,7 +278,7 @@ struct MpiSimulation::Impl {
         local.steps=c.steps;local.time=c.time;local.dt=c.dt;local.max_vbc_val=c.max_vbc;
         local.max_global_vel_mag=c.max_vel;local.global_dt_min=c.global_dt;
         local.surfinfo.max_surf_vel=c.surface_vel;
-        param.control.has_hydraulic_diffusion=c.hydraulic;param.control.PT_jump=c.pt_jump;
+        param.control.has_hydraulic_diffusion=c.hydraulic;
         param.ic.has_body_force_adjustment=c.body_adjustment;
     }
     void trace() {
@@ -472,6 +477,16 @@ struct MpiSimulation::Impl {
         case MpiOp::Friction:refresh_rsf_friction(param,v,*v.dyn_fric_coeff,*v.state_variable);break;
         case MpiOp::TimeStep:scalar=compute_dt(param,v,arg!=0);if(rank==0){master->max_global_vel_mag=v.max_global_vel_mag;master->global_dt_min=v.global_dt_min;}break;
         case MpiOp::Residual:scalar=calculate_residual_force(v,*v.force_residual);if(rank==0)master->l2_residual=scalar;break;
+        case MpiOp::PhysicalPT:
+        case MpiOp::InitialPT:
+            pt = op==MpiOp::InitialPT ? run_initial_equilibrium_pt(param,v) : run_physical_step_pt(param,v);
+            if(rank==0) {
+                master->l2_residual=v.l2_residual;
+                master->PT_initial_residual_max=v.PT_initial_residual_max;
+                master->PT_skip_scale_update=v.PT_skip_scale_update;
+                master->PT_force_residual_valid=v.PT_force_residual_valid;
+            }
+            break;
         case MpiOp::SwapVolume:std::swap(v.volume,v.volume_old);if(rank==0)std::swap(master->volume,master->volume_old);break;
         case MpiOp::Surface: {
             bool whole=v.steps%param.mesh.quality_check_step_interval==0 || (param.control.surface_process_option!=0 && param.control.surface_process_option!=1);
@@ -561,13 +576,14 @@ int MpiSimulation::owned_nodes()const{return impl_->part.owned_nodes;}
 int MpiSimulation::owned_elements()const{return impl_->part.owned_elements;}
 int MpiSimulation::global_nodes()const{return impl_->global_n;}
 double MpiSimulation::result()const{return impl_->scalar;}
+PTResult MpiSimulation::pt_result()const{return impl_->pt;}
 void MpiSimulation::attach(Variables& v){impl_->master=&v;impl_->active=true;synchronize(v);}
 void MpiSimulation::synchronize(Variables& v){dispatch(MpiOp::State,v);}
 bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
     auto& m=*impl_;if(!distributed() || !m.active || m.inside || m.master!=&v)return false;
     Command c{};c.operation=int(op);c.steps=v.steps;c.time=v.time;c.dt=v.dt;c.max_vbc=v.max_vbc_val;
     c.max_vel=v.max_global_vel_mag;c.global_dt=v.global_dt_min;c.surface_vel=v.surfinfo.max_surf_vel;c.argument=arg;
-    c.hydraulic=m.param.control.has_hydraulic_diffusion;c.pt_jump=m.param.control.PT_jump;c.body_adjustment=m.param.ic.has_body_force_adjustment;
+    c.hydraulic=m.param.control.has_hydraulic_diffusion;c.body_adjustment=m.param.ic.has_body_force_adjustment;
     MPI_Bcast(&c,sizeof(c),MPI_BYTE,0,MPI_COMM_WORLD);m.command(c);m.execute(op,arg);return true;
 }
 int MpiSimulation::worker_loop()try {
@@ -594,6 +610,8 @@ bool MpiSimulation::metrics(const Variables& v,double& s,double& p){if(!dispatch
 void MpiSimulation::minimum(double* data,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,data,n,MPI_DOUBLE,MPI_MIN,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 double MpiSimulation::maximum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
 double MpiSimulation::sum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
+void MpiSimulation::sum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
+void MpiSimulation::maximum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 int MpiSimulation::sum(int v){int r;double t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
 void MpiSimulation::maximum(int* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_INT,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 void MpiSimulation::report() {

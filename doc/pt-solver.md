@@ -1,0 +1,332 @@
+# Physical-step pseudo-transient mechanics
+
+This refactor defines the mechanical trial/commit boundary for future coupling.
+Validation coverage and convergence limits are stated below; it does not replace
+the existing constitutive integration algorithms.
+
+With `control.has_PT=yes`, mechanics starts from the physical-step baseline,
+solves on fixed reference geometry, and leaves one accepted constitutive state.
+The no-PT path keeps its existing constitutive and velocity-update ordering.
+
+The obsolete `control.PT_jump` option has been removed; delete it from older
+input files. Initial equilibrium uses explicit homogeneous velocity constraints,
+and mesh motion and surface processes run outside the PT iterations.
+
+`MechanicalState`, declared and implemented in the PT module, captures stress,
+strain, out-of-plane stress, plastic history, per-step plastic increment,
+pressure correction, viscosity and RSF history.
+`evaluate_mechanical_trial` restores that baseline in place before computing the
+candidate; material-property aliases remain valid. The physical dt and current
+pressure inputs are fixed during each mechanical solve. NMD applies to every
+candidate before force evaluation. Trial Maxwell volume strain uses the corrected
+strain-rate trace times physical dt on the fixed reference mesh.
+
+The ordinary `update_stress` return maps remain the constitutive authority. For PT,
+Maxwell normal stresses receive the pending isotropic pressure increment once.
+Plane strain includes yy in mean/deviatoric stress, the EVP branch comparison and
+NMD; the selected EVP candidate supplies yy as well as the in-plane components.
+Pure viscous replacement stress uses the current pore-pressure level rather than
+repeated increments. Non-PT callers retain the existing defaults. Material trial
+tests cover these pressure and plane-strain paths. This does not qualify a new
+coupled hydraulic formulation.
+
+The residual is the RMS assembled undamped force projected onto admissible velocity
+perturbations, normalized by the free rank. Gravity, Neumann traction and foundation
+loads remain in the force. Only constrained reactions and artificial damping are
+excluded. All-constrained models have zero free residual. Convergence requires
+
+```
+R <= PT_absolute_tolerance + PT_relative_tolerance * R_warm
+```
+
+Regular save files expose the accepted projected undamped vector as
+`PT residual force` (N/m in 2D, N in 3D). Its RMS over the free rank is the
+reported PT residual; the legacy `force` field retains artificial damping and
+constrained reactions. PT skips damping during trials and computes the legacy
+field once on acceptance. The diagnostic records the accepted reference-geometry
+solve, before physical mesh motion or stress rotation, even with averaged output.
+It is omitted before any accepted solve, after remeshing and at failed solves.
+New save files retain it on restart; older saves remain readable and omit it
+until the next accepted solve. It creates no checkpoint requirement. Both the
+Python reader and `2vtk.py` support the optional vector.
+
+The relative scale is the first candidate's imbalance, not the gross prestress.
+
+The first candidate uses the preceding physical velocity. If it does not meet
+this stopping criterion, a physical-step solve also checks the affine prescribed
+velocity with zero free motion. It keeps the finite candidate with the smaller
+projected force residual. Each candidate restores the same mechanical baseline
+and evaluates the complete physical-dt constitutive update, including viscous
+relaxation, pending pressure and aging; old stress alone is not an equilibrium
+test. An already accepted warm candidate is left unchanged. This avoids replaying
+a completed load increment while retaining warm starts for ongoing flow. A rejected
+stationary candidate is replaced by re-evaluating the warm candidate. No second
+history snapshot is allocated.
+
+The printed `initial` is the residual of the selected starting candidate.
+`warm_initial` records the first warm trial, which still sets the relative
+reference and roundoff scale before candidate comparison. The threshold formulas
+and defaults are unchanged. `evaluations` counts full constitutive/force trials,
+including a discarded candidate and any warm-trial restoration; `iterations`
+counts loop passes. A solve accepted with `iterations=1` needs no relaxation
+update but can have more than one evaluation. The record explicitly states
+`stage=before_physical_updates`: its residuals precede transport, mesh motion
+and stress rotation. Initial instantaneous equilibration retains its existing
+zero-velocity initialization.
+An opt-in alternative, `control.PT_use_running_scale=yes`, uses for physical steps:
+
+```
+R <= max(1e-6 * R_n, 1000 * epsilon_double * F_abs)
+```
+
+`R_n` is the largest first residual of accepted physical solves. Initial
+equilibration does not enter this history and retains the absolute/relative
+criterion above. Explicitly configured `PT_relative_tolerance` or
+`PT_absolute_tolerance` emits a warning when the running-scale option is enabled:
+these values do not control physical-step convergence, but still control initial
+equilibrium. `F_abs` is calculated once from the first physical trial's
+element-force cache, including gravity, then held fixed throughout the solve.
+Absolute element components are summed at each node and mapped with absolute
+free-projector coefficients before the free-rank RMS reduction. Thus oblique
+constraints cannot cancel the magnitude estimate. Assembly and the scaled RMS
+reductions share the CPU/OpenMP/OpenACC implementation.
+
+The approximate minimum resolvable load, expressed as a nodal-force RMS, is
+`C * u * F_abs`, with `C=1000` and double machine epsilon `u`. This is a heuristic
+roundoff allowance, not a rigorous attainable-residual bound or a bound on field
+error. It is not directly a boundary traction in Pa. Large earlier loads can mask
+later small perturbations. Initial gravity equilibrium must be sufficiently
+resolved; excluding its residual from `R_n` does not remove a residual left in
+the physical fields.
+
+The maximum and a post-remesh exclusion flag belong to `Variables` and are
+checkpointed together. Enabled restarts require both fields; old checkpoints
+without them cannot silently start a new history. Failed solves commit neither
+field. A completed remesh retains `R_n` and excludes the next successful physical
+solve's first residual from updating it, then clears the flag. The roundoff
+scale is recomputed on the new mesh. This prevents that first interpolation
+imbalance from inflating the history, but does not guarantee mesh-independent
+tolerances under large resolution changes or exclude contamination in later
+steps. A zero history after remeshing uses the roundoff term alone.
+
+General use with history-dependent plastic, viscous or RSF material laws remains
+unvalidated. Earlier homogeneous fixed-grid Maxwell relaxation/compression tests
+are limited evidence, not qualification of arbitrary viscous flow, changing
+geometry, or irreversible state evolution. This criterion does not define a
+dynamic-mode or inertia policy. The default is `PT_use_running_scale=no`, which
+retains the existing tolerance and checkpoint behavior.
+
+Absolute tolerance has nodal-force units: N/m in 2D, N in 3D. Stagnation is diagnostic, not convergence.
+`PT_stagnation_window` (default 500) warns once per solve without changing the
+tolerance or stopping the iterations; 0 disables this warning. This replaces
+the previous fatal stagnation behavior, which could interrupt recovering
+transients. Results distinguish `converged`, `max_iterations` and `nonfinite`; a failed solve restores mechanical history and stops before output,
+transport or mesh movement can consume the candidate. Mechanical nonconvergence
+uses exit code 54; nonfinite candidates retain exit code 50. Exit code 53 is
+reserved for GoSPL failures.
+
+Boundary constraints use the same ordered dispatch as `apply_vbcs`, evaluated in
+affine and homogeneous modes. Corrected PT normalizes oblique type-11 and edge
+operations, then derives an orthogonal free-space projector from the fixed-point
+constraints. The default legacy boundary calls retain their previous operations.
+The final PT velocity is already constrained and is not passed through the legacy
+map a second time. Incompatible affine fixed-point constraints are rejected.
+
+Localized dual-time stress/velocity relaxation uses mesh heights, effective
+viscosity, `PT_CFL` and `PT_Re`. Lagged stress is solver scratch. Acceptance always
+uses the full constitutive candidate, so a small residual of lagged stress cannot
+commit an inconsistent material state. No plastic-yield heuristic is introduced.
+The factor construction follows the effective-viscosity/dual-time approach in
+[Räss et al. (2022)](https://gmd.copernicus.org/articles/15/5757/2022/); convergence
+remains dependent on the material response, mesh, loading and requested tolerance.
+
+`PT_option=1` replaces this relaxation with adaptive dynamic relaxation
+(Underwood 1983, "Dynamic relaxation", in *Computational Methods for Transient
+Analysis*; Papadrakakis 1981, *Comput. Methods Appl. Mech. Eng.* 25). Each node
+receives a fictitious mass equal to the Gershgorin row sum of its elastic/viscous
+velocity stiffness (`compute_pt_mass`). The row-sum construction bounds the
+magnitude of the mass-scaled eigenvalues of that linear reference operator by 1;
+it does not establish a positive lower bound or a stability bound for the full
+nonlinear, constrained, mixed-stress or height-dependent boundary-load response.
+The damping uses an estimate of a low mode, obtained each iteration as the Rayleigh quotient
+of the secant stiffness along the latest velocity increment, and the update is the
+corresponding second-order (heavy-ball) step. Momentum is dropped when it opposes
+the current force, as in kinetic damping (Cundall 1976) and gradient restart
+(O'Donoghue & Candès 2015, *Found. Comput. Math.* 15). There is
+no lagged stress. Each ordinary pass has one force assembly; the first-pass
+candidate comparison can add evaluations as reported above. `PT_CFL` and `PT_Re` are
+not used; the tolerance, acceptance and failure handling are unchanged.
+
+Measured against `PT_option=0` at the same tolerance (serial CPU): Terzaghi 2D/3D
+and Mandel need 8–10 times fewer iterations, with analytical errors unchanged to
+< 1e-8 of the load; Maxwell and the EP/RSF shear benchmark are identical. In the
+core-complex example, 100 steps need 44 times fewer iterations, and a solve that
+reached `PT_max_iter=50000` with `PT_option=0` converges.
+
+These are implementation-stage measurements recorded in the ADR commit, not
+general performance guarantees. The separate [finalization record](pt-validation-20261006.md)
+distinguishes checks rerun for submission from those earlier measurements.
+OpenMP ADR reductions can change the last bits across restarts; use one thread
+when byte-exact continuation is required. Multi-thread comparisons need an
+explicit numerical tolerance and cannot be described as bit-exact.
+
+Neither scheme can converge where no stable quasi-static equilibrium exists.
+Rate-independent strain softening (for example a mature core-complex shear band)
+can introduce directions of negative stiffness; successful convergence before
+localization does not qualify the later response. Regularised rheology (e.g.
+viscoplastic) or an inertial formulation requires a separate physical assessment.
+
+Physical mesh motion, stress rotation, transport and remeshing remain outside the
+trial loop. Equilibrium is established on the reference geometry; it does not
+claim equilibrium after moving that geometry. No live baseline crosses a remesh.
+
+Even a fixed-grid elastic example need not have exactly equal consecutive
+mechanical-solve residuals. A finite convergence tolerance can leave a small
+spatial spin; the physical Jaumann rotation after acceptance changes stress
+slightly. In the 2D option-0 example, step 1 reports `residual=0.03417443769`
+before rotation. Force assembled independently from its saved post-rotation
+stress is `0.03420140654`, matching step 2's selected `initial`. Step 3's
+`initial` matches step 2's residual because step 2 has zero velocity and no
+rotation. The saved step-1 and step-2 physical stress arrays are identical.
+The regression independently integrates simplex forces from the saved stress
+and inverts the Jaumann update to check both diagnostic time levels.
+
+For a moving-mesh physical PT step, height-dependent pressure boundary laws
+(Winkler foundation, water and side support) use the candidate facet height
+`z_reference + physical_dt * mean(candidate_vertical_velocity)`. Facet normals,
+areas, internal-force gradients and body-force volumes remain at the reference
+configuration. This is an incremental pressure-load correction, not a complete
+finite-deformation follower-load formulation. Initial equilibration, fixed-grid
+runs and non-PT calls retain reference-height loads. The candidate height is
+computed afresh; no trial writes coordinates or advances surface diffusion.
+
+Surface processes run in `update_mesh` after accepted mechanics. Their `dh`
+buffer is cleared at each physical call; `dhacc` intentionally records physical
+surface changes for marker correction. Neither is advanced by mechanical trials.
+This boundary-load correction removes the frozen-foundation force-compatibility
+obstruction, but does not guarantee convergence with the default PT iteration
+limit. Core-complex long-time morphology remains unqualified until the remaining
+slow-convergence/residual-floor behavior is resolved.
+
+Initial body-force equilibration uses the instantaneous elastic/plastic skeleton
+with homogeneous supports and no transport, viscous relaxation or physical aging.
+RSF friction and state are frozen at the initial physical values, independent of
+numerical correction velocities. Plastic history is committed only for the accepted
+initial candidate. Maxwell and EVP initialization use their instantaneous skeletons.
+Pure viscous material has no such skeleton and is explicitly rejected for this
+initialization contract. Duration-based isostasy retains its physical-time process.
+Initial equilibrium precedes frame-zero output and monitor initialization.
+Completion state is checkpointed so a restart does not repeat initial adjustment.
+
+Hydraulic checkpoints now store the pending signed pressure increment consumed
+by the next mechanical step. Old hydraulic checkpoints lacking it are rejected:
+the missing increment cannot be inferred exactly from a pressure level alone.
+Dry checkpoints do not require this hydraulic field. Existing barycentric remapping
+transfers the pending increment with the other nodal hydraulic fields.
+
+PT restart preserves the saved velocity, next-step dt and velocity scale. It does
+not reapply the legacy velocity boundary map or select a new dt merely because
+execution resumed. The next PT solve imposes its constraints at the next physical
+time; mesh and slow-update stages retain ownership of subsequent dt selection.
+Exact continuation assumes unchanged controls. Changed timestep controls take
+effect at those existing selection stages, rather than in the restart loader.
+A pending remesh can therefore still select dt before the next step, just as in
+uninterrupted execution. Non-PT restart retains its existing boundary/dt behavior.
+
+The hydraulic transport equation and its existing in-plane mean-stress coupling
+remain unchanged; this refactor does not implement a new poroelastic formulation.
+At corners the ordered boundary dispatch retains its precedence rules; the affine
+fixed-point construction is not a simultaneous enforcement of every conflicting
+boundary prescription. The focused constraint tests cover the stated projection and precedence semantics;
+arbitrary contradictory boundary specifications are not supported.
+
+## Validation and limits
+
+The [focused tests](../tests/residual-assembly-test/README.md) exercise actual force,
+constraint, material, residual and failed-solve paths in 2D/3D on ASan/UBSan,
+OpenMP and OpenACC. Separate [functional tests](../tests/functional/pt_restart.md)
+cover initial checkpoints, pending remesh stages and regular output scheduling.
+The existing [EP/RSF benchmark](../benchmarks/simple_shear_rsf/README.md) has an
+opt-in PT mode. Maxwell relaxation has also been checked against its discrete
+update and continuum time-convergence reference. Those checks do not establish
+convergence for every material/loading combination.
+
+- A solve that reaches the iteration limit or a nonfinite state fails;
+  it must not commit a discarded candidate or silently relax its tolerance.
+- In the default tolerance mode, a relative-only target can fall below floating-point cancellation accuracy near
+  equilibrium. No automatic residual floor or time-step retry is introduced.
+- Weak volumetric modes in some 2D viscous cases require more than the default
+  iteration cap. Difficult finite-increment 3D plastic cases can also fail.
+  The existing incremental Mohr–Coulomb return is preserved; nonsmooth behavior
+  is not a reason to change that algorithm within this refactor.
+- Checkpoint tests cover the regular output schedule with unchanged output controls.
+  Earthquake-event history and averaged-output accumulators are outside that scope.
+- Dry GPU mechanical correctness and dry remesh/restart have scoped coverage;
+  full hydraulic GPU qualification and realistic-size GPU performance are not
+  claimed. Small-mesh launch overhead remains a known cost.
+
+No experimental secant extrapolation, tuned coefficients or new plastic
+corner-return algorithm is part of this implementation; `PT_option=1` derives its
+mass from a linear reference stiffness and damping from successive residuals. Such changes require
+separate numerical contracts and validation.
+
+## Short runnable example
+
+`examples/pt-elastic-load.cfg` applies a -1e5 Pa top traction to a unit elastic
+cell with roller sides and a clamped base. It runs three 0.01 s physical steps
+on a fixed mesh without hydraulic diffusion. From the repository root:
+
+```sh
+make ndims=2
+OMP_NUM_THREADS=1 ./dynearthsol2d examples/pt-elastic-load.cfg
+```
+
+The supplied configuration uses `PT_option=0` (localized stress/velocity
+relaxation). Change that line to `PT_option=1` for adaptive dynamic relaxation;
+change `sim.modelname` to keep both outputs. The same config also runs with
+`make ndims=3` and `./dynearthsol3d`. Each physical step reports its iteration
+count, residual and threshold. The applied traction gives a nonzero initial
+imbalance, so the first physical step requires relaxation. The example explicitly
+uses `PT_use_running_scale=yes` to keep its force precision tied to the applied
+load across subsequent physical steps; the solver default remains `no`. With
+this setting and the candidate comparison, steps 2 and 3 are accepted in their
+first loop pass without further velocity updates. Per-step relative scaling
+remains available and can intentionally demand a tighter residual as the next
+step's initial imbalance shrinks. Absolute tolerance has nodal-force units,
+not stress units in Pa. This short elastic example does not qualify long-term
+plastic or hydraulic models.
+
+For the 2D example, the laterally constrained elastic modulus is
+`K + 4G/3 = 23.3333 MPa`. A 100 kPa compressive load therefore gives
+`epsilon_zz = -0.004285714`, or about 4.286 mm shortening over the 1 m height.
+Both PT options recover this response: the first physical step applies the
+compression, and the next two retain approximately the same stress and strain
+under the constant load. The vertical stress is approximately -100 kPa.
+Because mesh motion is disabled, the shortening is an equivalent displacement
+reconstructed as `sum(velocity * physical_dt)`, not a change in saved coordinates.
+
+The output regression independently removes legacy damping, projects the known
+axis constraints, and checks the new vector and reported free-rank RMS, then
+checks that a restart retains the accepted diagnostic:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-0 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-1 --option 1
+```
+
+Use distinct output directories; repeat with the 3D executable as needed.
+
+A companion Maxwell creep regression keeps the same traction and constraints,
+uses a 3D constitutive state (plane strain in 2D), and checks continued deformation
+against an independent homogeneous Crank-Nicolson reference. The default run is
+100 steps, spanning ten shear relaxation times; stress, strain and velocity are
+checked throughout, including nonzero motion after loading:
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-0 --ndims 2 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-1 --ndims 2 --option 1
+```
+
+For 3D, replace the executable with `./dynearthsol3d` and use `--ndims 3`.
+The elastic regression also doubles the traction after restarting from a held
+step, so a stale equilibrium cannot suppress a genuinely changed load.

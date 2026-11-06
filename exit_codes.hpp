@@ -26,6 +26,7 @@ enum ExitCode {
     EXIT_RUNTIME_LOOKUP       = 51,  // marker/geometry lookup failed
     EXIT_RUNTIME_RESOURCE     = 52,  // resource exhausted
     EXIT_RUNTIME_GOSPL        = 53,  // GoSPL step failed
+    EXIT_RUNTIME_NONCONVERGENCE = 54, // mechanical solve did not converge
 
     EXIT_INTERNAL_ASSERT      = 60,  // assertion / invariant violated
     EXIT_INTERNAL_UNREACHABLE = 61   // unreachable branch

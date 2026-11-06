@@ -6023,8 +6023,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         SideInflowState pre = side_inflow_state(param, t_now, var.nnode, *var.coord, *var.bcflag);
         uint late = 0;
         for (int t = 0; t < NSIDEWALL; ++t) {
-            // the wall's vbc now, without its PT_jump hold: remesh() can run inside the PT loop,
-            // where a receiving wall must not read as static
+            // Use prescribed inflow even if the accepted velocity is stationary.
             const bool inflow_bc = side_wall_vbc_is_inflow(param.bc, t, t_now);
             SideProfile &prof = var.side_profile[t];
             if (!pre.in[t] && !inflow_bc && !prof.empty()) {
@@ -6429,6 +6428,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
     std::cout << "  Remeshing finished.\n";
 
+    if (param.control.has_PT && param.control.PT_use_running_scale)
+        var.PT_skip_scale_update = true;
     // Marker positions and population changed wholesale; rebuild the
     // serpentinization grid (mat.phase_change_option 3 with
     // mat.has_serpentinization) from the new mesh.

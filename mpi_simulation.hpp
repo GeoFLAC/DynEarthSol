@@ -1,6 +1,7 @@
 #ifndef DES_MPI_SIMULATION_HPP
 #define DES_MPI_SIMULATION_HPP
 #include "parameters.hpp"
+struct PTResult;
 struct MpiNodeRows {const int* ids; int count;};
 #ifndef USEMPI
 enum class MpiEntity { Node, Element };
@@ -14,7 +15,7 @@ enum class MpiEntity { Node, Element };
 enum class MpiOp {
     State, Temperature, PorePressure, StrainRate, Stress, Force, Velocity,
     Coordinate, Rotation, Volume, Dvoldt, Edvoldt, Nmd, Mass, TimeStep,
-    OldMeanStress, Friction, VelocityBC, Residual, Surface, SwapVolume,
+    OldMeanStress, Friction, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SwapVolume,
     Remesh, PhaseChange, Hydrous, Collect, Geometry, Boundary, Sample, Average, Metrics, Report, Stop, Count
 };
 
@@ -32,6 +33,7 @@ public:
     void synchronize(Variables&);
     bool dispatch(MpiOp, const Variables&, double argument = 0);
     double result() const;
+    PTResult pt_result() const;
     int owned_nodes() const;
     int owned_elements() const;
     int global_nodes() const;
@@ -48,6 +50,8 @@ public:
     void minimum(double* data, int count);
     double maximum(double value);
     double sum(double value);
+    void sum(double* data, int count);
+    void maximum(double* data, int count);
     int sum(int value);
     void maximum(int* data, int count);
     void report();

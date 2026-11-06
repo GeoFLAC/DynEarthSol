@@ -393,36 +393,49 @@ static void elastic_effective(double bulkm, double shearm, const double* de, T s
 #pragma acc routine seq
 template <typename T>
 static void maxwell(double bulkm, double shearm, double viscosity, double dt,
-                    double dv, const double* de, T s)
+                    double dv, const double* de, T s, double* syy = nullptr, double dpp = 0)
 {
     // non-dimensional parameter: dt/ relaxation time
     double tmp = 0.5 * dt * shearm / viscosity;
     double f1 = 1 - tmp;
     double f2 = 1 / (1  + tmp);
 
-    double dev = trace(de) / NDIMS;
-    double s0 = trace(s) / NDIMS;
+    const int normal_components = syy ? 3 : NDIMS;
+    double dev = trace(de) / normal_components;
+    double s0 = syy ? (trace(s) + *syy)/3 : trace(s)/NDIMS;
+
+    if (syy)
+        *syy = ((*syy - s0)*f1 - 2*shearm*dev)*f2 + s0 + bulkm*dv;
 
     // convert back to total stress
     for (int i=0; i<NDIMS; ++i)
         s[i] = ((s[i] - s0) * f1 + 2 * shearm * (de[i] - dev)) * f2 + s0 + bulkm * dv;
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] = (s[i] * f1 + 2 * shearm * de[i]) * f2;
+    if (dpp != 0) {
+        for (int i=0; i<NDIMS; ++i) s[i] += dpp;
+        if (syy) *syy += dpp;
+    }
 }
 
 
 #pragma acc routine seq
 static void viscous(double bulkm, double viscosity, double total_dv,
-                    ConstTensorAccessor edot, TensorAccessor s)
+                    ConstTensorAccessor edot, TensorAccessor s, double* syy = nullptr, double pressure = 0)
 {
     /* Viscous Model + incompressibility enforced by bulk modulus */
 
-    double dev = trace(edot) / NDIMS;
+    double dev = trace(edot) / (syy ? 3 : NDIMS);
 
     for (int i=0; i<NDIMS; ++i)
         s[i] = 2 * viscosity * (edot[i] - dev) + bulkm * total_dv;
     for (int i=NDIMS; i<NSTR; ++i)
         s[i] = 2 * viscosity * edot[i];
+    if (syy) *syy = -2*viscosity*dev + bulkm*total_dv;
+    if (pressure != 0) {
+        for (int i=0; i<NDIMS; ++i) s[i] -= pressure;
+        if (syy) *syy -= pressure;
+    }
 }
 
 #pragma acc routine seq
@@ -821,7 +834,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    tensor_t& strain, double_vec& plstrain,
                    double_vec& delta_plstrain, tensor_t& strain_rate,
                    double_vec& ppressure, double_vec& dppressure, array_t& vel,
-                   double_vec& dyn_fric_coeff, double_vec& state_variable)
+                   double_vec& dyn_fric_coeff, double_vec& state_variable,
+                   bool trial_reference_geometry, bool initial_equilibrium)
 {
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Stress, var, 0.0)) return;
@@ -834,7 +848,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
-    const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    // Instantaneous initialization equilibrates the existing stress without
+    // consuming a pressure increment belonging to the next physical step.
+    const bool has_hydraulic_diffusion =
+        param.control.has_hydraulic_diffusion && !initial_equilibrium;
     // Only option 0 projects the centroid velocity; option 1 derives its rate
     // from the strain-rate invariant.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
@@ -845,10 +862,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             rsf_slip_rate_projection_maximum_shear;
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dppressure, \
+    #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
-        firstprivate(has_hydraulic_diffusion, needs_slip_rate, \
+        firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
                      needs_projected_velocity) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
     #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
@@ -876,7 +893,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         double vz = 0.0;
 #endif
         if (needs_projected_velocity) {
-            const array_t& vel = *var.vel;
             #pragma acc loop seq
             for (int j = 0; j < NODES_PER_ELEM; ++j) {
                 vx += vel[conn[j]][0] / double(NODES_PER_ELEM);
@@ -893,6 +909,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         TensorAccessor es = strain[e];
         TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
+        if (trial_reference_geometry && var.mat->is_plane_strain) old_s += syy;
 
         // // Calculate the center of the element
         // const int *conn = (*var.connectivity)[e];
@@ -976,7 +993,14 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 viscosity[e] = var.mat->visc(e);
                 double total_dv = trace(es);
-                viscous(bulkm, viscosity[e], total_dv, edot, s);
+                double pressure = 0;
+                if (trial_reference_geometry && has_hydraulic_diffusion) {
+                    for (int j=0; j<NODES_PER_ELEM; ++j)
+                        pressure += ppressure[conn[j]] / NODES_PER_ELEM;
+                    pressure *= var.mat->alpha_biot(e);
+                }
+                viscous(bulkm, viscosity[e], total_dv, edot, s,
+                        trial_reference_geometry && var.mat->is_plane_strain ? &syy : nullptr, pressure);
             }
             break;
         case MatProps::rh_maxwell:
@@ -984,8 +1008,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
-                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, s);
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, s,
+                        trial_reference_geometry && var.mat->is_plane_strain ? &syy : nullptr,
+                        trial_reference_geometry ? dpp : 0);
             }
             break;
         case MatProps::rh_ep:
@@ -1017,13 +1044,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
                 #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
-                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
-                double svII = second_invariant2(sv);
+                double svyy = syy;
+                const bool plane_trial = trial_reference_geometry && var.mat->is_plane_strain;
+                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv,
+                        plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
+                double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
                 double amc, anphi, anpsi, hardn, ten_max;
                 var.mat->plastic_props(e, plstrain[e],
@@ -1044,12 +1075,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                    de, depls, sp, failure_mode, 
                                    has_hydraulic_diffusion, dpp);
                 }
-                double spII = second_invariant2(sp);
+                double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
                 // use the smaller as the final stress
                 if (svII < spII) {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
+                    if (plane_trial) syy = svyy;
                 }
                 else {
                     #pragma acc loop seq
@@ -1083,7 +1115,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 var.mat->plastic_props_rsf(e, plstrain[e],
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
-                                       var.dt, param.mat.state_var_model);
+                                       var.dt, param.mat.state_var_model, initial_equilibrium);
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1105,13 +1137,17 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
-                double dv = (*var.volume)[e] / (*var.volume_old)[e] - 1;
+                double dv = trial_reference_geometry ? trace(edot)*var.dt
+                    : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
                 double sv[NSTR];
                 #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
-                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv);
-                double svII = second_invariant2(sv);
+                double svyy = syy;
+                const bool plane_trial = trial_reference_geometry && var.mat->is_plane_strain;
+                maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv,
+                        plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
+                double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
                  // calculate the shear direction in maximum shear stress
                 double slip_rate;
@@ -1130,7 +1166,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 var.mat->plastic_props_rsf(e, plstrain[e],
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
-                                       var.dt, param.mat.state_var_model);
+                                       var.dt, param.mat.state_var_model, initial_equilibrium);
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1147,12 +1183,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                    de, depls, sp, failure_mode, 
                                    has_hydraulic_diffusion, dpp);
                 }
-                double spII = second_invariant2(sp);
+                double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
                 // use the smaller as the final stress
                 if (svII < spII) {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
+                    if (plane_trial) syy = svyy;
                 }
                 else {
                     #pragma acc loop seq
@@ -1168,8 +1205,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 //            std::exit(1);
             break;
         }
-        if (param.control.is_using_mixed_stress)
-            dpressure[e] = trace(s) - old_s;
+        if (param.control.is_using_mixed_stress) {
+            const double new_trace = trial_reference_geometry && var.mat->is_plane_strain
+                ? trace(s)+syy : trace(s);
+            dpressure[e] = new_trace-old_s;
+        }
         // std::cerr << "stress " << e << ": ";
         // print(std::cerr, s, NSTR);
         // std::cerr << '\n';
