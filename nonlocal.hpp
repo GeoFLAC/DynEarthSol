@@ -17,6 +17,9 @@
 // kbar is lagged by one step (update_stress reads the value accumulated after the previous
 // step), so within a step only the local term moves the yield surface: update_stress scales the
 // softening modulus by (1 - m).
+//
+// Only softening is regularized: where khat >= pls1 the softening modulus is 0, the averaging
+// has nothing to act on, and flow there localizes as without this option.
 
 // After the initial weak zone: kbar = k.
 void init_nonlocal_plstrain(const Param& param, Variables& var);

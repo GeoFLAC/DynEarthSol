@@ -1180,9 +1180,11 @@ static void declare_parameters(po::options_description &cfg,
          "weighted by volume and the Gaussian exp(-r^2/l^2) (l: nonlocal_length_in_m, cut off at "
          "3 l, renormalized at boundaries), and accumulated into the nonlocal plastic strain kbar "
          "(output \"plastic strain nonlocal\"); weakening reads m*kbar + (1-m)*k (m: nonlocal_m). "
-         "kbar starts from k after the initial weak zone, so the seed is not smeared. The band "
-         "thickness then scales with l, not with the element size, once the band elements are "
-         "smaller than about l/2.")
+         "kbar starts from k after the initial weak zone, so the seed is not smeared. Once the band "
+         "elements are smaller than about l/2, the width of the weakened zone scales with l, not "
+         "with the element size. It acts only while softening lasts (k below pls1): flow in "
+         "fully weakened material is not regularized, so the active band can still narrow with "
+         "the mesh.")
         ("mat.nonlocal_length_in_m", po::value<double>(&p.mat.nonlocal_length)->default_value(0),
          "Length l of the Gaussian weight of nonlocal_option 1 (in meters)")
         ("mat.nonlocal_m", po::value<double>(&p.mat.nonlocal_m)->default_value(1.0),
