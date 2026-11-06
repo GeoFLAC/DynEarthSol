@@ -36,3 +36,6 @@ Dockerfile text eol=lf
 *.npz binary
 *.h5 binary
 *.vtkhdf binary
+
+# Unified diff context uses a space on otherwise blank lines.
+tests/functional/mpi/parmmg2d-merge.patch whitespace=-blank-at-eol
