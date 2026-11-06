@@ -113,7 +113,7 @@ ARG NDIMS=2
 RUN if [ "$CXXVERSION" = "clang-14" ]; then cxx=CXX=clang++; fi \
     && make ndims=$NDIMS cleanall \
     && if [ "$GOSPL" = "1" ]; then \
-      make ndims=3 usegospl=1 usemmg=1 -j$(nproc) $cxx \
+      make ndims=3 usegospl=1 -j$(nproc) $cxx \
         CONDA_ENV_PATH=$HOME/miniforge3/envs/gospl PYTHON_VERSION=3.11; \
     else \
       make ndims=$NDIMS -j$(nproc) $cxx; \

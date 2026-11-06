@@ -20,6 +20,7 @@ on:
       - 'Makefile'
       - '.github/workflows/cxx20-compat.yml'
       - '.github/workflows/scripts/cxx20-check.sh'
+      - '.github/workflows/scripts/install-debian-deps.sh'
   workflow_dispatch:
 
 concurrency:
@@ -39,6 +40,9 @@ jobs:
 
       - name: g++ version
         run: g++ --version
+
+      - name: install build dependencies
+        run: bash .github/workflows/scripts/install-debian-deps.sh
 
       - name: build as C++20
         run: bash .github/workflows/scripts/cxx20-check.sh opt=2 openmp=1 hdf5=0
