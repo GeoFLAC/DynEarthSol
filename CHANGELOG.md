@@ -17,6 +17,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- At startup the run prints each side's velocity and traction boundary condition as a type letter and a value per component, converted from the legacy `bc.vbc_*` and `bc.stress_bc_*` codes. It is informational only; boundary conditions are applied as before (#115).
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
