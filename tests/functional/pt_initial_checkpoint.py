@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check PT initialization and exact binary/HDF5 restart with a short PT config.
+"""Check PT initialization and exact restart with a short PT config.
 
 Usage: pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY [--restart-frame N] [--steps N]
 The output directory retains configs, logs and results for independent review.
@@ -13,29 +13,25 @@ from pathlib import Path
 import struct
 import subprocess
 
-from des_test_utils import checkpoint_file, native_offsets
+from des_test_utils import checkpoint_file
 
 
 def fields(path):
+    import h5py
+    import numpy as np
     found = checkpoint_file(path)
-    if found is not None and found != Path(path):
-        import h5py
-        import numpy as np
-        result = {}
-        with h5py.File(found, 'r') as stream:
-            def read_dataset(name, obj):
-                if isinstance(obj, h5py.Dataset):
-                    value = obj[...]
-                    if np.issubdtype(value.dtype, np.number):
-                        assert np.isfinite(value).all(), (found, name)
-                    result[name] = value.tobytes()
-                    result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
-            stream.visititems(read_dataset)
-        return result
-    data = Path(path).read_bytes()
-    entries = list(native_offsets(data).items())
-    return {name: data[pos:entries[i + 1][1] if i + 1 < len(entries) else len(data)]
-            for i, (name, pos) in enumerate(entries)}
+    assert found is not None, path
+    result = {}
+    with h5py.File(found, 'r') as stream:
+        def read_dataset(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                value = obj[...]
+                if np.issubdtype(value.dtype, np.number):
+                    assert np.isfinite(value).all(), (found, name)
+                result[name] = value.tobytes()
+                result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
+        stream.visititems(read_dataset)
+    return result
 
 
 def main():
