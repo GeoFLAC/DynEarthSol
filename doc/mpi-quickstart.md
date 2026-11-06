@@ -33,8 +33,8 @@ export REVIEW_WORK=/path/to/mounted/des-review
 mkdir -p "$REVIEW_WORK"
 git submodule update --init --recursive
 for dim in 2 3; do
-    make -j4 ndims="$dim" usemmg=1 hdf5=1
-    make -j4 ndims="$dim" usempi=1 usemmg=1 hdf5=1 MPI_CXX=mpicxx
+    make -j4 ndims="$dim" hdf5=1
+    make -j4 ndims="$dim" usempi=1 hdf5=1 MPI_CXX=mpicxx
 done
 OMP_NUM_THREADS=1 python3 tests/functional/mpi/run_mpi.py \
     --serial ./dynearthsol2d --mpi ./dynearthsol2d.mpi \
@@ -68,7 +68,7 @@ export GPU_MPI="$NVHPC_DIR/comm_libs/mpi/bin/mpicxx"
 for dim in 2 3; do
     OMPI_CXX="$NVHPC_DIR/compilers/bin/nvc++" \
     make -j4 ndims="$dim" usempi=1 openacc=1 openmp=0 \
-        NVHPC_DIR="$NVHPC_DIR" MPI_CXX="$GPU_MPI" usemmg=1 hdf5=1
+        NVHPC_DIR="$NVHPC_DIR" MPI_CXX="$GPU_MPI" hdf5=1
 done
 OMP_NUM_THREADS=1 python3 tests/functional/mpi/run_gpu_mpi.py \
     --cpu ./dynearthsol2d --gpu ./dynearthsol2d.mpi.gpu \
