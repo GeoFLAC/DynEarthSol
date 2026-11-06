@@ -132,6 +132,23 @@ For a release, the full auto-generated list of merged pull requests is in its
   Makefile are removed; build with g++ 8 or newer, nvc++ 25.7 or newer, or
   clang++ 5 or newer. A build that overrides the standard with one older than
   C++17 now stops at compile time ([#125]).
+- **Breaking.** MMG and HDF5 are required: every build builds the `mmg`
+  submodule, which needs cmake, and links HDF5. The make options `usemmg` and
+  `hdf5` are retired, so `make usemmg=1` or `make hdf5=1` stops with an
+  unknown-variable error ([#145]).
+- **Breaking.** A build that had no MMG now remeshes unstructured meshes with
+  MMG, so its results change; Triangle and TetGen still build the initial mesh.
+  A checkpoint from a build without MMG no longer restarts ([#145]).
+- **Breaking.** `remeshing_option` 2, 10 and 11 and the keys
+  `is_discarding_internal_segments`, `meshing_sediment` and `sediment_size`
+  stop at startup, as only the removed Triangle/TetGen remesher gave them an
+  effect of their own: use 0 for 10 and 1 for 11 (2 has no replacement), and
+  delete the keys ([#145]).
+- **Breaking.** DES writes only `.vtkhdf` frames and checkpoints: runs in the
+  binary format that the default build used to write (files without the
+  `.vtkhdf` extension) can no longer be read, converted or restarted, and
+  `Dynearthsol.py` drops `overwrite_field`, which wrote only that format
+  ([#145]).
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
@@ -458,3 +475,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
+[#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
