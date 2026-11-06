@@ -160,8 +160,6 @@ static void declare_parameters(opt::Registry &cfg,
          "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
          "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top, for the initial "
          "mesh. Warnings print at every level.")
-        ("mesh.meshing_sediment", opt::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
-         "Unused: no remesher reads it.")
         ("mesh.tetgen_optlevel", opt::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
          "Optimization level for tetgen. 0: no optimization; 1: multiple edge filps; 2: 1 & free vertex deletion; 3: 2 & new vertex insertion. High optimization level could slow down the speed of mesh generation. For the 3D initial mesh only.")
 
@@ -190,8 +188,6 @@ static void declare_parameters(opt::Registry &cfg,
          "The size of largest element relative to an element with typical resolution, which also "
          "caps the coarse zone of a meshing_option = 2 mesh. It also sets MMG's maximum edge "
          "length, hmax = largest_size^(1/NDIMS) * resolution")
-        ("mesh.sediment_size", opt::value<double>(&p.mesh.sediment_size)->default_value(1.),
-         "Unused: no remesher reads it.")
         // for 2D only
         ("mesh.min_angle", opt::value<double>(&p.mesh.min_angle)->default_value(32.),
          "Min. angle of the initial mesh's triangles (in degrees), for 2D only")
