@@ -34,7 +34,9 @@ Low priority:
   stops an older standard with a `static_assert`. C++17 features are fine, but
   the code must also compile as C++20, so use nothing C++20 removed and add no
   compiler extensions; the variable-length arrays left in `bc.cxx`, `ic.cxx`
-  and `remeshing.cxx` are the known exceptions.
+  and `remeshing.cxx` are the known exceptions. The oldest supported g++ is 8,
+  which needs `-lstdc++fs` to link `std::filesystem`; add that to the g++
+  branch of the Makefile with the first use of `<filesystem>`.
 * Parallel loops use `#pragma omp parallel for default(none)` and declare every
   variable in `shared`/`private`/`firstprivate`, so nothing is shared by
   accident. What a clause list may contain changed between g++ 8 and 9, so CI

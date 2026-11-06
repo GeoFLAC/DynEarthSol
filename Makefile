@@ -526,32 +526,6 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		endif
 		LDFLAGS += -g
 	endif
-else ifneq (, $(findstring pgc++, $(CXX)))
-	CXX_SUPPORTED = yes
-	CXXFLAGS = -std=c++17 -march=core2
-	LDFLAGS = 
-	TETGENFLAGS = 
-
-	ifeq ($(opt), 1)
-		CXXFLAGS += -O1
-	else ifeq ($(opt), 2)
-		CXXFLAGS += -O2 -silent
-	else ifeq ($(opt), 3)
-		CXXFLAGS += -O3 -fast -silent
-	endif
- 
-	ifeq ($(openmp), 1)
-		CXXFLAGS += -mp
-		LDFLAGS += -mp
-	endif
-
-	ifneq ($(nprof), 0)
-			CXXFLAGS += -Minfo=mp -I$(NVHPC_DIR)/cuda/include -DNPROF
-			ifeq ($(nprof), 2)
-				CXXFLAGS += -DNPROF_DETAIL
-			endif
-			LDFLAGS += -L$(NVHPC_DIR)/cuda/lib64 -Wl,-rpath,$(NVHPC_DIR)/cuda/lib64 -lnvToolsExt
-	endif
 else
 ## Unsupported compiler: leave CXX_SUPPORTED unset. `make config` says so, and
 ## check-deps refuses the build -- which used to be done with a second `all:`
@@ -861,7 +835,7 @@ endif
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
-		echo "g++, nvc++ or pgc++, e.g. make CXX=g++."; exit 1; }
+		echo "g++ or nvc++, e.g. make CXX=g++."; exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX)))
