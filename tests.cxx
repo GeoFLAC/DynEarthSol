@@ -224,7 +224,7 @@ void test_principal_stresses2()
 }
 
 // Compile with:
-//    g++ --std=c++11 tests.cxx 3x3-C/lib3x3.a
+//    g++ -std=c++17 tests.cxx 3x3-C/lib3x3.a
 //
 // int main(int, char**)
 // {

@@ -15,13 +15,6 @@
 #include "utils.hpp"
 #include "mesh.hpp"
 
-#ifdef WIN32
-#ifdef _MSC_VER
-#define snprintf _snprintf
-#endif // _MSC_VER
-namespace std { using ::snprintf; }
-#endif // WIN32
-
 namespace {
 
 // Where a model's files are: its directory resolved (".", "..", symlinks) plus the file prefix,

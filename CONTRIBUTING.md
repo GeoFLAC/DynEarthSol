@@ -30,6 +30,14 @@ Low priority:
 * The same sources build `dynearthsol2d` and `dynearthsol3d`, so every change
   must compile with both `make ndims=2` and `make ndims=3`; use `NDIMS`,
   `NODES_PER_ELEM` and `NSTR`, never a literal 2, 3, 4 or 6.
+* The code is C++17: the Makefile passes `-std=c++17` and `constants.hpp`
+  stops an older standard with a `static_assert`. C++17 features are fine, but
+  the code must also compile as C++20, so use nothing C++20 removed or
+  deprecates (the `cxx20-compat` workflow checks this with g++ and clang) and
+  add no compiler extensions; the variable-length arrays in `bc.cxx`, `ic.cxx`
+  and `remeshing.cxx` are the known exceptions. The oldest supported g++ is 8,
+  which needs `-lstdc++fs` to link `std::filesystem`; add that to the g++
+  branch of the Makefile with the first use of `<filesystem>`.
 * Parallel loops use `#pragma omp parallel for default(none)` and declare every
   variable in `shared`/`private`/`firstprivate`, so nothing is shared by
   accident. What a clause list may contain changed between g++ 8 and 9, so CI
