@@ -894,7 +894,8 @@ static void compute_init_metric(
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
             // A region without a size constraint (.poly size <= 0) keeps each element's as-meshed
-            // size, as on the non-MMG path (a mesh.resolution fallback would refine the region).
+            // size, as a plain Triangle/TetGen initial mesh does (a mesh.resolution fallback would
+            // refine the region).
             double target = (vol > 0)
                 ? std::pow(vol / sizefactor, 1.0 / NDIMS)
                 : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
@@ -3005,32 +3006,6 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
         die(EXIT_MESH_TETGEN);
     }
 
-}
-
-
-void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
-                           int n_init_segments, const int *init_segments, const int *init_segflags,
-                           int n_regions, const double *regattr,
-                           double max_elem_size, int vertex_per_polygon,
-                           int &nnode, int &nelem, int &nseg, double *&pcoord,
-                           int *&pconnectivity, int *&psegment, int *&psegflag, double *&pregattr)
-{
-#ifdef THREED
-    /* For triangulation of boundary surfaces in 3D */
-
-    triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity, mesh.max_steiner_factor,
-                        npoints, n_init_segments, points,
-                        init_segments, init_segflags,
-                        n_regions, regattr,
-                        &nnode, &nelem, &nseg,
-                        &pcoord, &pconnectivity,
-                        &psegment, &psegflag, &pregattr);
-
-    if (nelem <= 0) {
-        die(EXIT_MESH_TETGEN, "surface triangulation failed");
-    }
-#endif
 }
 
 

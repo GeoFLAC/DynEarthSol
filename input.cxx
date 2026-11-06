@@ -1603,7 +1603,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available in 3D on an "
             "unstructured mesh (mesh.meshing_elem_shape = 0).");
 #endif
-    // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
     if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
         die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available on an unstructured mesh "
             "(mesh.meshing_elem_shape = 0); use 1 or 11.");
