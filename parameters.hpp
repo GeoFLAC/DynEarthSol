@@ -177,7 +177,6 @@ struct Mesh {
     int meshing_option;
     int meshing_elem_shape;
     int meshing_verbosity;
-    bool meshing_sediment;
     int tetgen_optlevel;
     int quality_check_step_interval;
 
@@ -185,7 +184,6 @@ struct Mesh {
     double resolution;
     double smallest_size;
     double largest_size;
-    double sediment_size;
     double min_angle;  // for 2D only
     double max_steiner_factor; // cap Triangle Steiner points at factor*npoints; <=0 unlimited (2D only)
     double min_tet_angle, max_ratio; // for 3D only
