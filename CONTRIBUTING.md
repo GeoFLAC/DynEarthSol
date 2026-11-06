@@ -54,6 +54,7 @@ Low priority:
   40: Triangle/TetGen       41: MMG                       42: mesh quality/topology
   50: NaN/non-finite        51: marker/geometry lookup    52: resource exhausted
   53: GoSPL step failed
+  54: mechanical solve did not converge
   60: Assertion violated    61: unreachable branch
   These are renumbered: earlier builds used 1 input, 2 IO, 10 triangulation,
   11 runtime, 12 assertion, so 10-12 mean something different in older logs.

@@ -17,6 +17,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- PT save files expose the accepted projected undamped `PT residual force`
+  separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
+  demonstrates both PT options in 2D and 3D.
+
+- Physical-step PT trial/commit mechanics with projected undamped-force
+  convergence, rollback on failure, and optional adaptive dynamic relaxation
+  (`control.PT_option=1`; the default remains 0). See `doc/pt-solver.md`.
+- Optional `control.PT_use_running_scale` convergence history, including
+  restart persistence and exclusion of the first post-remesh scale update.
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
@@ -55,6 +64,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
+  existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
+- PT stagnation warns once and continues to the iteration cap; failed or
+  nonfinite solves restore mechanical history and stop before physical updates.
+- Failed PT solves report the requested stopping threshold alongside the
+  residual, without changing convergence criteria. Mechanical nonconvergence
+  uses exit code 54; code 53 remains reserved for GoSPL failures.
 - Boost is no longer a dependency. The config file is read with CLI11 2.7.2,
   vendored as a single header in `third_party/CLI11/`, and the build needs a
   C++17 compiler. `make BOOST_ROOT_DIR=...` is now ignored with a warning.
@@ -132,6 +148,33 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- NVHPC CI installs Boost development headers and Python before compiling,
+  including when the published build container lacks those dependencies.
+
+- PT step-based output keeps a finite checkpoint clock when the time-output
+  interval is omitted, including fresh and resumed runs with either scheduler.
+
+- PT logs distinguish the selected starting residual (`initial`) from the
+  first warm trial (`warm_initial`) used for convergence scaling, and report
+  actual trial evaluations and the residual's physical-update stage.
+
+- `2vtk.py` reports a missing optional PT residual once per conversion, including
+  parallel conversion and selected frame ranges.
+
+- Physical-step PT can retain equilibrium under a held load without replaying
+  the preceding deformation rate. The elastic example uses the existing
+  running force scale to preserve its load-relative accuracy across steps.
+
+- Darcy flux uses pressure-form mobility, avoiding division by fluid specific
+  weight when gravity is zero while retaining the existing density convention.
+- PT initial equilibrium preserves hydraulic sidewall support when physical
+  stepping begins, avoiding a spurious pore-pressure transient without an
+  applied top load.
+
+- PT checkpoints preserve regular output timing across restart, including RSF
+  step/time schedules. Older checkpoints retain legacy scheduling with a warning.
+- PT restarts at a mesh-quality check now complete the pending remeshing stage
+  before advancing to the next physical step.
 - A GoSPL-coupled run sent GoSPL velocities of hundreds of m/yr after a remesh
   that kept the surface node count, differencing unrelated nodes; the coupling
   after any remesh now uses the instantaneous velocity.
