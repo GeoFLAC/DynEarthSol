@@ -21,10 +21,10 @@
 ##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
-##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
+## MMG (the mmg submodule) is always built, which needs cmake.
 ## HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
@@ -35,7 +35,6 @@ openacc = 0
 openmp = 1
 nprof = 0
 gprof = 0
-usemmg = 0
 useexo = 0
 usegospl = 0
 hdf5 = 0
@@ -43,7 +42,7 @@ snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -76,8 +75,8 @@ OSNAME := $(shell uname -s)
 ##
 ## Every other dependency's path is declared beside the code that consumes it, so
 ## it is read together with the flags it feeds: OPENMP_* in the clang++ branch, and
-## EXO_*, MMG_* and the GoSPL and PYTHON_* group inside their useexo=1, usemmg=1
-## and usegospl=1 blocks.
+## MMG_* in the MMG block, and EXO_* and the GoSPL and PYTHON_* group inside their
+## useexo=1 and usegospl=1 blocks.
 ##
 ## Everything here uses `?=`, so an EXPORTED value is honoured -- that is how a
 ## module file or a conda activate hook can name a prefix once instead of every
@@ -252,24 +251,37 @@ ifeq ($(useexo), 1)
 	endif
 endif
 
-ifeq ($(usemmg), 1)
-	# path to MMG3D header files
-	MMG_INCLUDE = ./mmg/build/include
+## MMG, built from the mmg submodule by `prepare`.
+# path to MMG3D header files
+MMG_INCLUDE = ./mmg/build/include
 
-	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ./mmg/build/lib
+# path of MMG3D library files, if not in standard system location
+MMG_LIB_DIR = ./mmg/build/lib
 
-	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
-	ifeq ($(ndims), 3)	
-		MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg3d
-	else
-		MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
-	endif
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
-	endif
+MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
+ifeq ($(ndims), 3)
+	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg3d
+else
+	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
+endif
+ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+endif
 
-	MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
+MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
+
+## MMG's compilers come from CXX's toolchain, so the archive matches the objects'
+## architecture (a gcc on PATH can be another Homebrew's x86_64 one). nvc++ builds it
+## with GNU, whose C++ library it also uses.
+ifneq (, $(findstring clang++, $(CXX)))
+	MMG_CC = $(subst clang++,clang,$(CXX))
+	MMG_CXX = $(CXX)
+else ifneq (, $(findstring g++, $(CXX)))
+	MMG_CC = $(subst g++,gcc,$(CXX))
+	MMG_CXX = $(CXX)
+else
+	MMG_CC = gcc
+	MMG_CXX = g++
 endif
 
 ifeq ($(usegospl), 1)
@@ -654,10 +666,8 @@ ifeq ($(useexo), 1)
 	LDFLAGS += $(EXO_LDFLAGS)
 endif
 
-ifeq ($(usemmg), 1)
-	CXXFLAGS += $(MMG_CXXFLAGS)
-	LDFLAGS += $(MMG_LDFLAGS)
-endif
+CXXFLAGS += $(MMG_CXXFLAGS)
+LDFLAGS += $(MMG_LDFLAGS)
 
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
@@ -718,7 +728,7 @@ all: prepare
 ## Rebuild when the FLAGS change, not just when a source file does.
 ##
 ## Objects are named only for ndims and suffix, so every other switch -- openmp,
-## opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was built
+## opt, hdf5, the compiler under nprof=1 -- reuses whatever was built
 ## last. `make openmp=0` then `make` reports success, relinks nothing, and leaves
 ## a single-threaded executable behind. The stamp holds the last build's flags;
 ## its recipe runs every time (FORCE) but only rewrites the file when they
@@ -735,9 +745,8 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS
+FEATURES = HDF5 USEEXODUS
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
-FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
@@ -873,7 +882,7 @@ ifeq ($(hdf5), 1)
 	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
 	@echo "  hdf5 lib dir     $(HDF5_LIB_DIR)"
 endif
-	@echo "usemmg             $(strip $(usemmg))"
+	@echo "mmg archive        $(MMG_LIB)"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
 	@echo "openacc            $(strip $(openacc))"
@@ -929,24 +938,32 @@ prepare: check-deps $(FLAG_STAMPS)
 ifeq ($(openacc), 1)
 	$(call ensure_submodule,$(KNN_BVH_DIR),Makefile,openacc=1)
 endif
-ifeq ($(usemmg), 1)
-	$(call ensure_submodule,mmg,CMakeLists.txt,usemmg=1)
+	$(call ensure_submodule,mmg,CMakeLists.txt,DES)
 
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
 	@# from the environment on the FIRST configure, so an exported one is baked in.
+	@# MMG's optional SCOTCH, Elas and VTK stay off: cmake would take whichever the
+	@# environment offers (an active conda env's VTK can stop the configure), and DES
+	@# links none of them.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
+		command -v cmake >/dev/null || { \
+			echo "Missing: cmake, which configures the mmg submodule."; \
+			echo "         Install: brew install cmake (macOS), apt install cmake (Debian/Ubuntu)"; \
+			exit 1; }; \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" \
+		  cmake -DCMAKE_C_COMPILER="$(MMG_CC)" -DCMAKE_CXX_COMPILER="$(MMG_CXX)" \
+		        -DUSE_SCOTCH=OFF -DUSE_ELAS=OFF -DUSE_VTK=OFF ..; \
 	fi
 	@# The revision IN the archive, stamped only when it is built: the archive is reused
-	@# while the checkout drifts, and one built without a stamp claims no revision.
+	@# while the checkout drifts, and one built without a stamp claims no revision. It builds
+	@# only the two archives DES links, together, so that the one stamp names both.
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		rm -f mmg/build/.mmg-rev; \
-		$(MAKE) -C mmg/build && { git -C mmg describe --always --dirty \
+		$(MAKE) -C mmg/build libmmg2d_a libmmg3d_a && { git -C mmg describe --always --dirty \
 		  > mmg/build/.mmg-rev 2>/dev/null || rm -f mmg/build/.mmg-rev; }; \
 	fi
-endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
@@ -984,13 +1001,11 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif
-ifeq ($(usemmg), 1)  # fix for dynamic library problem on Mac
 ifeq ($(ndims), 3)
 		install_name_tool -change libmmg3d.dylib $(MMG_LIB_DIR)/libmmg3d.dylib $@
 else
 		install_name_tool -change libmmg2d.dylib $(MMG_LIB_DIR)/libmmg2d.dylib $@
 endif
-endif # end of usemmg
 endif # end of Darwin
 
 take-snapshot:

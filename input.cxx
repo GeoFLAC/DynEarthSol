@@ -158,12 +158,12 @@ static void declare_parameters(opt::Registry &cfg,
          "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
          "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
          "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
-         "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top. Warnings print "
-         "at every level.")
+         "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top, for the initial "
+         "mesh. Warnings print at every level.")
         ("mesh.meshing_sediment", opt::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
-         "Refine the elements with sediment marker during remeshing.")
+         "Unused: no remesher reads it.")
         ("mesh.tetgen_optlevel", opt::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
-         "Optimization level for tetgen. 0: no optimization; 1: multiple edge filps; 2: 1 & free vertex deletion; 3: 2 & new vertex insertion. High optimization level could slow down the speed of mesh generation. For 3D only.")
+         "Optimization level for tetgen. 0: no optimization; 1: multiple edge filps; 2: 1 & free vertex deletion; 3: 2 & new vertex insertion. High optimization level could slow down the speed of mesh generation. For the 3D initial mesh only.")
 
         ("mesh.xlength", opt::value<double>(&p.mesh.xlength)->required(),
          "Length of x (in meters)")
@@ -179,39 +179,34 @@ static void declare_parameters(opt::Registry &cfg,
          "tiny-element remesh trigger smallest_vol = smallest_size * sizefactor * resolution^NDIMS "
          "(sizefactor 0.433 in 2D, 0.118 in 3D: a unit-edge equilateral element's measure) and two "
          "lengths, hmin = smallest_size^(1/NDIMS) * resolution and min_dist = (smallest_size * "
-         "sizefactor)^(1/NDIMS) * resolution. hmin is the Triangle/TetGen node-spacing floor (a "
-         "remesh deletes interior nodes closer than hmin to a retained node), with MMG in 2D the "
-         "boundary-segment length below which a remesh merges the segment's two nodes (never a "
-         "domain corner), and the necking-stop distance of remeshing_option 1, 11 and 13 (see "
-         "remeshing_option). With options 1, 11 and 13 a remesh removes the nodes off a restored "
-         "boundary that lie past it or within min_dist of it, and option 2 the interior nodes within "
-         "min_dist of the new bottom; with options 1 and 10-12 Triangle keeps a boundary node whose "
-         "two segments are both longer than min_dist, and in 3D TetGen's boundary edge flips move a "
-         "boundary by at most min_dist; at a receiving wall, option 13 gives the side profile to new "
-         "material up to min_dist inland of the old wall. With MMG it also sets MMG's size floors "
+         "sizefactor)^(1/NDIMS) * resolution. hmin is, with MMG in 2D, the boundary-segment length "
+         "below which a remesh merges the segment's two nodes (never a domain corner), and the "
+         "necking-stop distance of remeshing_option 1, 11 and 13 (see remeshing_option). With "
+         "options 1, 11 and 13 a remesh removes the nodes off a restored boundary that lie past it "
+         "or within min_dist of it; at a receiving wall, option 13 gives the side profile to new "
+         "material up to min_dist inland of the old wall. It also sets MMG's size floors "
          "(see mmg_remesh_defensive_tiny_ratio).")
         ("mesh.largest_size", opt::value<double>(&p.mesh.largest_size)->default_value(30),
          "The size of largest element relative to an element with typical resolution, which also "
-         "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
+         "caps the coarse zone of a meshing_option = 2 mesh. It also sets MMG's maximum edge "
          "length, hmax = largest_size^(1/NDIMS) * resolution")
         ("mesh.sediment_size", opt::value<double>(&p.mesh.sediment_size)->default_value(1.),
-         "The size threshold of the refined sediment elements")
+         "Unused: no remesher reads it.")
         // for 2D only
         ("mesh.min_angle", opt::value<double>(&p.mesh.min_angle)->default_value(32.),
-         "Min. angle of all triangles (in degrees), for 2D only")
+         "Min. angle of the initial mesh's triangles (in degrees), for 2D only")
         ("mesh.max_steiner_factor", opt::value<double>(&p.mesh.max_steiner_factor)->default_value(30.),
-         "Cap on the number of Steiner points Triangle may insert while (re)meshing, "
+         "Cap on the number of Steiner points Triangle may insert while meshing the initial mesh, "
          "expressed as a multiple of the number of input nodes (2D only). This bounds the "
          "pathological, non-terminating segment splitting that Triangle can enter when two "
-         "boundary segments meet at a very small angle (e.g. a highly distorted mesh at "
-         "extreme strain), which would otherwise spin forever and exhaust memory. The cap is "
-         "far above any healthy remesh, so normal meshing is unaffected. Set <= 0 to disable "
-         "the cap (Triangle default: unlimited).")
+         "boundary segments meet at a very small angle, which would otherwise spin forever and "
+         "exhaust memory. The cap is far above any healthy mesh, so normal meshing is unaffected. "
+         "Set <= 0 to disable the cap (Triangle default: unlimited).")
         // for 3D only
         ("mesh.min_tet_angle", opt::value<double>(&p.mesh.min_tet_angle)->default_value(22.),
-         "Min. dihedral angle of all tetrahedra (in degrees), for 3D only")
+         "Min. dihedral angle of the initial mesh's tetrahedra (in degrees), for 3D only")
         ("mesh.max_ratio", opt::value<double>(&p.mesh.max_ratio)->default_value(2.),
-         "Max. radius / length ratio of all tetrahedra, for 3D only")
+         "Max. radius / length ratio of the initial mesh's tetrahedra, for 3D only")
 
         // for meshing_option = 2 only
         /* read the value as string, then parse as two numbers later */
@@ -251,17 +246,14 @@ static void declare_parameters(opt::Registry &cfg,
          " 0: no modification on any boundary.\n"
          " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact.\n"
-         " 2: create a new bottom boundary at the initial depth, other boundaries are intact "
-         "(2D only, not with MMG remeshing).\n"
-         "10: no modification on any boundary, except small boundary segments might get merged "
-         "(in 3D with TetGen, see smallest_size).\n"
-         "11: move all bottom nodes to initial depth and delete the side-wall nodes left just "
-         "above or below it; other boundaries are intact, except small boundary segments might "
-         "get merged.\n"
+         " 2: 2D only, and not on an unstructured mesh (meshing_elem_shape = 0).\n"
+         "10: same as 0.\n"
+         "11: same as 1.\n"
          "12: move all x0 (left) wall nodes to the x of the wall's top corner and delete the "
          "nodes left outside, other boundaries are intact. For a wall pushed over a fixed bottom "
          "with its push tapered toward it (vbc_x0 = 3 with bottom_shear_zone_thickness), whose "
-         "foot lags its top. With MMG remeshing, 2D only.\n"
+         "foot lags its top. 2D only on an unstructured mesh (meshing_elem_shape = 0); a uniform "
+         "mesh treats it as 0.\n"
          "13: move all bottom and side-wall nodes (left/right; also front/back in 3D) to initial "
          "dimensions, and give material entering through a side wall the structure recorded at that "
          "wall (its side profile). A wall receives while its nodes drift inward between remeshes (by "
@@ -277,9 +269,8 @@ static void declare_parameters(opt::Registry &cfg,
          "element's centroid and time 0; in an element centred in the deposit, mattype_sediment and the "
          "time of a sediment marker of the element, else the remesh time. Temperatures are not "
          "re-conducted under a risen surface, so they can differ from the domain beside the wall by "
-         "up to the near-surface temperature gradient times the rise. Requires MMG when "
-         "meshing_elem_shape = 0: the restored wall accumulates sub-hmin elements that only MMG "
-         "collapses. With MMG on an unstructured mesh, a Triangle/TetGen initial mesh first gets its "
+         "up to the near-surface temperature gradient times the rise. On an unstructured mesh, a "
+         "Triangle/TetGen initial mesh first gets its "
          "restored-wall elements refined to ~resolution, whatever use_mmg_init says (in 3D under "
          "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
          "every remesh caps the size target at every restored-wall node at resolution (see "
@@ -289,7 +280,7 @@ static void declare_parameters(opt::Registry &cfg,
          "of the restored bottom, or below it: the domain has necked through.\n")
 
         ("mesh.mmg_remesh_active_plstrain", opt::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
-         "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
+         "Conservative MMG remeshing (always on): a remesh keeps quiet elements as they are "
          "(frozen) and rebuilds the rest. This key is the plastic-strain increment since the last "
          "remesh above which an element is refined: MMG may split it (not along an edge it shares "
          "with a frozen, MMG-required element) but keeps its existing nodes, so the band's plastic "
@@ -309,7 +300,7 @@ static void declare_parameters(opt::Registry &cfg,
          "band's increment over a remesh interval.")
         ("mesh.mmg_remesh_defensive_tiny_ratio", opt::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
          "Gap, in element measure, between the tiny-element remesh trigger smallest_vol (see "
-         "smallest_size) and the smallest elements MMG builds (usemmg=1, meshing_elem_shape = 0; "
+         "smallest_size) and the smallest elements MMG builds (meshing_elem_shape = 0; "
          "remeshing and MMG-built initial meshes). MMG's minimum edge length is hmin * "
          "ratio^(1/NDIMS) (hmin: see smallest_size), so MMG aims to build every element at "
          "smallest_vol * ratio or more, which must shrink by this factor before it re-triggers, and "
@@ -361,11 +352,8 @@ static void declare_parameters(opt::Registry &cfg,
 
         ("mesh.is_discarding_internal_segments", opt::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
-         "'no' keeps them as Triangle/TetGen constraints across remeshes, but a remesh that deletes "
-         "one of their nodes (tiny-element repair, node cleanup near a restored boundary) misroutes "
-         "them, which can make the mesher fail or hang; in 3D with remeshing_option 1 or 10-12 the "
-         "first remesh that deletes a boundary node drops them all. MMG remeshing (usemmg=1, "
-         "meshing_elem_shape = 0) requires 'yes': MMG keeps no internal segment.")
+         "'no' is not available on an unstructured mesh (meshing_elem_shape = 0): MMG keeps no "
+         "internal segment.")
 
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", opt::value<int>(&p.mesh.mmg_debug)->default_value(0),
@@ -384,7 +372,7 @@ static void declare_parameters(opt::Registry &cfg,
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
          "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
         ("mesh.use_mmg_init", opt::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
-         "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
+         "Use two-stage TetGen+MMG initialization? "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
          "(MMG still refines its restored walls under remeshing_option 13 and, on a moving mesh, "
          "its weak zone: see mmg_remesh_size_recovery_ratio). Under "
@@ -421,8 +409,7 @@ static void declare_parameters(opt::Registry &cfg,
          "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
          "normal to the wall and kept fine along it, so the incoming column is carried by thin, wide "
          "elements. MMG's hmax (see largest_size) caps the aspect (~5.5 in 2D, "
-         "~3.1 in 3D at the default largest_size). Other values below 1 are rejected. Requires "
-         "USEMMG.")
+         "~3.1 in 3D at the default largest_size). Other values below 1 are rejected.")
 
         // for virtual topology
         ("mesh.vt_size", opt::value<double>(&p.mesh.vt_size)->default_value(0.5),
@@ -1618,21 +1605,20 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
 #if defined(USEMMG) && defined(THREED)
     // optimize_mesh (3D MMG) has no flatten_x0_corner case.
     if (p.mesh.remeshing_option == 12 && p.mesh.meshing_elem_shape == 0)
-        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available with MMG remeshing "
-            "in 3D (usemmg=1, mesh.meshing_elem_shape = 0); use a build without MMG.");
+        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available in 3D on an "
+            "unstructured mesh (mesh.meshing_elem_shape = 0).");
 #endif
 #ifdef USEMMG
     // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
     if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
-        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available with MMG remeshing "
-            "(usemmg=1, mesh.meshing_elem_shape = 0); use 1 or 11, or a build without MMG.");
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available on an unstructured mesh "
+            "(mesh.meshing_elem_shape = 0); use 1 or 11.");
 #endif
     // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
     if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
 #ifdef USEMMG
-        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available with "
-            "MMG remeshing (usemmg=1, mesh.meshing_elem_shape = 0): MMG keeps no internal "
-            "segment. Use yes, or a build without MMG.");
+        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available on an "
+            "unstructured mesh (mesh.meshing_elem_shape = 0): MMG keeps no internal segment.");
 #else
         std::cerr << "Warning: mesh.is_discarding_internal_segments = no: a remesh that deletes a "
                      "node of an internal segment (tiny-element repair, node cleanup near a "

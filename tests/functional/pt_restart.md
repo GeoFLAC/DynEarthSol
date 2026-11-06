@@ -28,8 +28,8 @@ The test checks the restored velocity before the next solve and compares every
 subsequent save/checkpoint physical payload exactly, excluding wall-clock duration
 and per-process provenance. HDF5 datasets must also have matching shapes and types and finite
 numeric values. `--require-remesh` requires completed remeshing in both runs and
-changed connectivity. The fixture deliberately triggers existing mesh-quality
-loop-limit warnings; a pass does not establish acceptable mesh quality. The
+changed connectivity. The fixture deliberately triggers MMG mesh-quality
+warnings; a pass does not establish acceptable mesh quality. The
 one-year output interval avoids unrelated output-clock rounding in this short,
 step-driven test. The harness suppresses extra remesh output frames so frame
 numbers match physical step numbers.
