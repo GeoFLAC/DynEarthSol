@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check PT initialization and exact binary/HDF5 restart with a short PT config.
+"""Check PT initialization and exact restart with a short PT config.
 
 Usage: pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY [--restart-frame N] [--steps N]
 The output directory retains configs, logs and results for independent review.
@@ -15,28 +15,20 @@ import subprocess
 
 
 def fields(path):
+    import h5py
+    import numpy as np
     hdf_path = Path(str(path) + '.vtkhdf')
-    if not path.is_file() and hdf_path.is_file():
-        import h5py
-        import numpy as np
-        result = {}
-        with h5py.File(hdf_path, 'r') as stream:
-            def read_dataset(name, obj):
-                if isinstance(obj, h5py.Dataset):
-                    value = obj[...]
-                    if np.issubdtype(value.dtype, np.number):
-                        assert np.isfinite(value).all(), (hdf_path, name)
-                    result[name] = value.tobytes()
-                    result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
-            stream.visititems(read_dataset)
-        return result
-    data = path.read_bytes()
-    entries = []
-    for line in data[:4096].split(b'\0', 1)[0].splitlines()[1:]:
-        name, pos = line.split(b'\t')
-        entries.append((name.decode(), int(pos)))
-    return {name: data[pos:entries[i + 1][1] if i + 1 < len(entries) else len(data)]
-            for i, (name, pos) in enumerate(entries)}
+    result = {}
+    with h5py.File(hdf_path, 'r') as stream:
+        def read_dataset(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                value = obj[...]
+                if np.issubdtype(value.dtype, np.number):
+                    assert np.isfinite(value).all(), (hdf_path, name)
+                result[name] = value.tobytes()
+                result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
+        stream.visititems(read_dataset)
+    return result
 
 
 def main():

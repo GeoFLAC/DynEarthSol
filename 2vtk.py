@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
-'''Convert the binary output of DynEarthSol to VTK files.
+'''Convert the output of DynEarthSol to VTK files.
 
 usage: 2vtk.py [options] modelname [start [end [delta]]]
 
@@ -21,8 +21,8 @@ frames (and may be restarted itself).
     2vtk.py -g -copy model      the whole series, the parents' frames written
                                 under this model's name instead of linked
 
-.vtkhdf frames (an HDF5 build): ParaView reads them as they are. Instead of
-writing .vtu files, -u or -hdf adds the calculated fields (requires h5py).
+.vtkhdf frames: ParaView reads them as they are. Instead of writing .vtu
+files, -u or -hdf adds the calculated fields.
     2vtk.py -u model            into the frames themselves, listed in
                                 model.save.vtkhdf.series for ParaView
     2vtk.py -hdf model          into copies, model.NNNNNN.vtkhdf, listed in
@@ -85,10 +85,7 @@ import numpy as np
 # Disable HDF5 file locking to avoid BlockingIOError on some filesystems
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-try:
-    import h5py
-except ImportError:
-    h5py = None
+import h5py
 from scipy import spatial
 from numpy.linalg  import eigh
 from fractions import Fraction
@@ -472,8 +469,7 @@ def process_single_frame(args):
     # Converting marker
     #
     if output_markers:
-        # Read the set names from the frame: des.field_pos (the binary header
-        # index) is empty for vtkhdf output. Convert the primary set first, so an
+        # Read the set names from the frame. Convert the primary set first, so an
         # error in another set cannot stop its .vtp being written.
         marker_sets = des.marker_sets(frame)
         marker_sets = ([m for m in marker_sets if m == 'markerset'] +
@@ -496,7 +492,6 @@ def process_vtkhdf_update(args):
     frame = des.frames[i]
     
     src_filename = des.get_fn(frame)
-    assert src_filename.endswith('.vtkhdf'), src_filename   # main() refuses des-binary runs
 
     suffix = '{0:0=6}'.format(frame)
 
@@ -709,11 +704,6 @@ def convert_batches(batches, prefix, target_func, imap, names):
 
 def main(modelname, start, end, delta):
     series = restart_series(modelname, generate_parent_frames)
-    binary = sorted({d.modelname for d, _ in series if d.format != 'hdf5'})
-    if (update_vtkhdf or hdf_copies) and binary:
-        print(f'Error: -u and -hdf update .vtkhdf frames; des-binary frames in {", ".join(binary)}.',
-              file=sys.stderr)
-        sys.exit(1)
     frames = [d.frames[i] for d, i in series]
     prefix = prefix_of(modelname)
 
@@ -1122,9 +1112,7 @@ if __name__ == '__main__':
         link_parent_frames = False
     if '-g' in sys.argv:
         generate_parent_frames = True
-    for bad, why in ((h5py is None and (update_vtkhdf or hdf_copies),
-                      '-u and -hdf need h5py, which is not installed'),
-                     (update_vtkhdf and hdf_copies,
+    for bad, why in ((update_vtkhdf and hdf_copies,
                       '-u updates the .save frames in place and -hdf writes updated copies: use one'),
                      (not link_parent_frames and not generate_parent_frames,
                       '-copy copies the parent frames that -g adds'),

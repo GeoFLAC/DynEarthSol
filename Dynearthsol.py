@@ -7,11 +7,8 @@ import numpy as np
 # must match constants.hpp
 YEAR2SEC = 365.2422 * 86400
 
-# must match binaryio.cxx
-HEADERLEN = 4096
 
-
-def _scan_frame_hdf5(fname):
+def _scan_frame(fname):
     import h5py
     with h5py.File(fname, 'r') as f:
         # HDF5Output links every dataset to the root under its plain name, so
@@ -30,58 +27,23 @@ def _scan_frame_hdf5(fname):
             raise KeyError('%s missing in %s' % (e, fname))
 
 
-def _scan_frame_binary(fname):
-    import struct
-    with open(fname, 'rb') as f:
-        header = f.read(HEADERLEN).splitlines()
-        if not header[0].startswith(b'# DynEarthSol'):
-            raise KeyError(fname + ' is not a DynEarthSol binary frame')
-        pos = {}
-        for line in header[1:]:
-            if not line or line[0] in (0, b'\x00'[0]):
-                break
-            name, p = line.split(b'\t')
-            pos[name.decode('ascii')] = int(p)
-
-        def get(name, fmt, default=None):
-            if name not in pos:
-                return default
-            f.seek(pos[name])
-            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
-
-        if 'steps' not in pos or 'time_sec' not in pos:
-            raise KeyError('steps/time_sec scalars missing in ' + fname +
-                           ' (frame predates the .info metadata in binary '
-                           'output; a .info file is required)')
-        return dict(
-            steps=get('steps', '<i'),
-            time=get('time_sec', '<d'),
-            dt=get('dt_sec', '<d'),
-            walltime=get('walltime_sec', '<d', 0.0),
-            nnode=get('nnode', '<i'),
-            nelem=get('nelem', '<i'),
-            nseg=get('nseg', '<i'),
-        )
-
-
 def scan_frames(modelname):
     '''Read the per-frame .info metadata (frame, steps, time, dt, walltime,
-    nnode, nelem, nseg) directly from <modelname>.save.NNNNNN[.vtkhdf] frame
-    files, sorted by frame number. dt/nseg are None for frames written
-    before they were added to the frame metadata.'''
+    nnode, nelem, nseg) directly from <modelname>.save.NNNNNN.vtkhdf frame
+    files, sorted by frame number.'''
     import glob, re
     pat = re.compile(re.escape(os.path.basename(modelname))
-                     + r'\.save\.(\d+)(\.vtkhdf)?$')
+                     + r'\.save\.(\d+)\.vtkhdf$')
     found = []
     for fname in glob.glob(modelname + '.save.*'):
         m = pat.search(os.path.basename(fname))
         if m:
-            found.append((int(m.group(1)), fname, bool(m.group(2))))
+            found.append((int(m.group(1)), fname))
     found.sort()
 
     rows = []
-    for frame, fname, is_hdf5 in found:
-        d = _scan_frame_hdf5(fname) if is_hdf5 else _scan_frame_binary(fname)
+    for frame, fname in found:
+        d = _scan_frame(fname)
         d['frame'] = frame
         rows.append(d)
     return rows
@@ -93,7 +55,6 @@ class Dynearthsol:
     def __init__(self, modelname):
         self.suffix = 'save'
         self.modelname = modelname
-        self.format = ''
         self.read_info()
         self.read_header(self.frames[0])
         return
@@ -129,122 +90,29 @@ class Dynearthsol:
 
 
     def get_fn(self, frame):
-        filename = '{0}.{1}.{2:0=6}'.format(self.modelname, self.suffix, frame)
-        if self.format == '':
-            # Take the format from a file that exists: a checkpoint is written
-            # only every sim.checkpoint_frame_interval frames.
-            if os.path.isfile(filename):
-                self.format = 'binary'
-            elif os.path.isfile(filename + '.vtkhdf'):
-                filename += '.vtkhdf'
-                self.format = 'hdf5'
-            else:
-                raise IOError('frame {0} has no {1} file: neither {2} nor '
-                              '{2}.vtkhdf exists'.format(frame, self.suffix,
-                                                         filename))
-            return filename
-        elif self.format == 'binary':
-            return filename
-        elif self.format == 'hdf5':
-            return filename + '.vtkhdf'
+        return '{0}.{1}.{2:0=6}.vtkhdf'.format(self.modelname, self.suffix, frame)
 
     def read_header(self, frame):
         self._header_frame = frame
-        headerlen = 4096
-        fname = self.get_fn(frame)
-        self.field_pos = {}
+        import h5py
+        with h5py.File(self.get_fn(frame), 'r') as f:
+            self.ndims = f.attrs['ndims']
+            self.revision = f.attrs['revision']
 
-        if self.format == 'hdf5':
-            import h5py
-            with h5py.File(fname, 'r') as f:
-                self.ndims = f.attrs['ndims']
-                self.revision = f.attrs['revision']
-                
-                if self.ndims == 2:
-                    self.nstr = 3
-                    self.component_names = ('XX', 'ZZ', 'XZ')
-                else:
-                    self.nstr = 6
-                    self.component_names = ('XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ')
-        else:
-            with open(fname, 'rb') as f:
-                header = f.read(headerlen).splitlines()
-                #print(header)
-
-            # parsing 1st line
-            first = header[0].split(b' ')
-            if (first[0] != b'#' or
-                first[1] != b'DynEarthSol' or
-                first[2].split(b'=')[0] != b'ndims' or
-                first[3].split(b'=')[0] != b'revision'):
-                print('Error:', fname, 'is not a valid DynEarthSol output file!')
-                sys.exit(1)
-
-            self.ndims = int(first[2].split(b'=')[1])
-            self.revision = int(first[3].split(b'=')[1])
             if self.ndims == 2:
                 self.nstr = 3
                 self.component_names = ('XX', 'ZZ', 'XZ')
             else:
                 self.nstr = 6
                 self.component_names = ('XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ')
-
-            # parsing other lines
-            for line in header[1:]:
-                # test for null in python3 bytes and python2 str
-                if line[0] in (0, '\x00'): break  # end of record
-                name, pos = line.split(b'\t')
-                self.field_pos[name.decode('ascii')] = int(pos)
-
-            #print(self.field_pos)
         return
-
-
-    def _get_dtype_count_shape(self, frame, name):
-        i = self.frames.index(frame)
-        nnode = self.nnode_list[i]
-        nelem = self.nelem_list[i]
-
-        dtype = np.float64 if name not in ('connectivity', 'bcflag') else np.int32
-
-        if name in set(['strain', 'strain-rate', 'stress', 'stress averaged']):
-            count = self.nstr * nelem
-            shape = (nelem, self.nstr)
-        elif name in set(['density', 'material', 'mesh quality',
-                          'plastic strain', 'plastic strain-rate',
-                          'viscosity', 'edvoldt', 'volume', 'radiogenic source',
-                          'dynamic friction coefficient', 'friction state variable']):
-            count = nelem
-            shape = (nelem, )
-        elif name in set(['connectivity']):
-            count = (self.ndims + 1) * nelem
-            shape = (nelem, self.ndims+1)
-        elif name in set(['coordinate', 'velocity', 'velocity averaged', 'force', 'PT residual force', 'coord0']):
-            count = self.ndims * nnode
-            shape = (nnode, self.ndims)
-        elif name in set(['bcflag', 'temperature', 'pore pressure', 'mass', 'tmass', 'volume_n']):
-            count = nnode
-            shape = (nnode, )
-        else:
-            raise NameError('uknown field name: ' + name)
-        return dtype, count, shape
 
 
     def read_field(self, frame, name):
         if frame != self._header_frame: self.read_header(frame)
-        fname = self.get_fn(frame)
-
-        if self.format == 'hdf5':
-            import h5py
-            with h5py.File(fname, 'r') as f:
-                field = f[name][:]
-        else:
-            dtype, count, shape = self._get_dtype_count_shape(frame, name)
-
-            pos = self.field_pos[name]
-            with open(fname,'r') as f:
-                f.seek(pos)
-                field = np.fromfile(f, dtype=dtype, count=count).reshape(shape)
+        import h5py
+        with h5py.File(self.get_fn(frame), 'r') as f:
+            field = f[name][:]
         return field
     
     def load_calculation(self, frame, name):
@@ -299,34 +167,11 @@ class Dynearthsol:
         
 
 
-    def overwrite_field(self, frame, name, data):
-        if frame != self._header_frame: self.read_header(frame)
-        if frame != self._header_frame: read_header(frame)
-        if name.startswith(('markerset.', 'hydrous-markerset.')):
-            dtype = data.dtype
-            count = len(data)
-            shape = (count,)
-        else:
-            dtype, count, shape = self._get_dtype_count_shape(frame, name)
-        if data.shape != shape:
-            raise Error('Shape of {0} field is changed! Expecting {1}, got {2}.'.format(name, shape, data.shape))
-
-        pos = self.field_pos[name]
-        fname = self.get_fn(frame)
-        with open(fname, 'r+') as f:
-            f.seek(pos)
-            f.write(data.tostring())
-        return
-
-
     def marker_sets(self, frame=None):
         '''Names of the marker sets in this frame; "hydrous-markerset" is there
         only with control.has_hydration_processes.'''
         if frame is None: frame = self._header_frame
         if frame != self._header_frame: self.read_header(frame)
-        if self.format == 'binary':
-            return sorted(n[:-len(' size')] for n in self.field_pos
-                          if n.endswith(' size'))
         import h5py
         with h5py.File(self.get_fn(frame), 'r') as f:
             return sorted(k[:-len('.nmarkers')] for k in f.keys()
@@ -336,57 +181,13 @@ class Dynearthsol:
     def read_markers(self, frame, markername):
         'Read and return marker data'
         if frame != self._header_frame: self.read_header(frame)
-        fname = self.get_fn(frame)
-        if self.format == 'hdf5':
-            import h5py
-            with h5py.File(fname, 'r') as f:
-                marker_data = {}
-                for var in f.keys():
-                    if var.startswith(markername):
-                        marker_data[var] = f[var][:]
-                marker_data['size'] = marker_data[markername+'.elem'].shape[0]
-        else:
-            with open(fname) as f:
-
-                pos = self.field_pos[markername+' size']
-                f.seek(pos)
-                nmarkers = np.fromfile(f, dtype=np.int32, count=1)[0]
-
-                marker_data = {'size': nmarkers}
-
-                # floating point
-                for name in (markername+'.coord',):
-                    pos = self.field_pos[name]
-                    f.seek(pos)
-                    tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*self.ndims)
-                    marker_data[name] = tmp.reshape(-1, self.ndims)
-                    #print(marker_data[name].shape, marker_data[name])
-
-                try:
-                    for name in (markername+'.eta',):
-                        pos = self.field_pos[name]
-                        f.seek(pos)
-                        tmp = np.fromfile(f, dtype=np.float64, count=nmarkers*(self.ndims+1))
-                        marker_data[name] = tmp.reshape(-1, (self.ndims+1))
-                except:
-                    pass
-
-                # int
-                for name in (markername+'.elem', markername+'.mattype', markername+'.id'):
-                    pos = self.field_pos[name]
-                    f.seek(pos)
-                    marker_data[name] = np.fromfile(f, dtype=np.int32, count=nmarkers)
-                    #print(marker_data[name].shape, marker_data[name])
-
-                # float
-                for name in (markername+'.time',markername+'.z',markername+'.distance',markername+'.slope'):
-                    try:
-                        pos = self.field_pos[name]
-                        f.seek(pos)
-                        marker_data[name] = np.fromfile(f, dtype=np.float64, count=nmarkers)
-                    except:
-                        pass
-
+        import h5py
+        with h5py.File(self.get_fn(frame), 'r') as f:
+            marker_data = {}
+            for var in f.keys():
+                if var.startswith(markername):
+                    marker_data[var] = f[var][:]
+            marker_data['size'] = marker_data[markername+'.elem'].shape[0]
         return marker_data
 
 
@@ -398,29 +199,9 @@ class DynearthsolCheckpoint(Dynearthsol):
     def __init__(self, modelname, frame):
         self.suffix = 'chkpt'
         self.modelname = modelname
-        self.format = ''
         self.read_info()
         self.read_header(frame)
         return
-
-
-    def _get_dtype_count_shape(self, frame, name):
-        i = self.frames.index(frame)
-        nnode = self.nnode_list[i]
-        nelem = self.nelem_list[i]
-
-        dtype = np.float64 if name != 'connectivity' else np.int32
-
-        if name in set(['volume_old', 'plstrain_remesh']):
-            count = nelem
-            shape = (nelem, )
-        elif name in set(['init_elem_size_n', 'refined_elem_size_n',
-                          'surface dh']):   # MMG builds only
-            count = nnode
-            shape = (nnode, )
-        else:
-            raise NameError('uknown field name: ' + name)
-        return dtype, count, shape
 
 
     def read_markers(self, frame, markername):
@@ -428,19 +209,10 @@ class DynearthsolCheckpoint(Dynearthsol):
         genesis. Positions, element, mattype and time are in the save frame
         (Dynearthsol.read_markers).'''
         if frame != self._header_frame: self.read_header(frame)
-        fname = self.get_fn(frame)
-        if self.format == 'hdf5':
-            import h5py
-            with h5py.File(fname, 'r') as f:
-                last_id = f[markername+'.last_id'][0]
-                reserved_space = f[markername+'.reserved_space'][0]
-                genesis = f[markername+'.genesis'][:]
-        else:
-            with open(fname, 'rb') as f:
-                # "<markername> size" = (nmarkers, last_id, reserved_space)
-                f.seek(self.field_pos[markername+' size'])
-                nmarkers, last_id, reserved_space = np.fromfile(f, dtype=np.int32, count=3)
-                f.seek(self.field_pos[markername+'.genesis'])
-                genesis = np.fromfile(f, dtype=np.int32, count=nmarkers)
+        import h5py
+        with h5py.File(self.get_fn(frame), 'r') as f:
+            last_id = f[markername+'.last_id'][0]
+            reserved_space = f[markername+'.reserved_space'][0]
+            genesis = f[markername+'.genesis'][:]
         return {'size': len(genesis), markername+'.last_id': int(last_id),
                 markername+'.reserved_space': int(reserved_space), markername+'.genesis': genesis}

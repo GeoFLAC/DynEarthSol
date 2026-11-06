@@ -1,14 +1,11 @@
 #!/usr/bin/env python
-'''Recreate <modelname>.info from DynEarthSol .save.NNNNNN[.vtkhdf] frame files.
+'''Recreate <modelname>.info from DynEarthSol .save.NNNNNN.vtkhdf frame files.
 
 Dynearthsol.py and restart fall back to the frame files when .info is missing,
 so this script is only needed to materialize the file again (e.g. for tools
-that parse .info themselves). It rebuilds it from the per-frame metadata written by output.cxx:
-FieldData in HDF5 (.vtkhdf) frames, or header scalars in plain binary frames.
-
-Frames written before this metadata was added get 0 in the missing columns
-(HDF5 frames always had steps/time; old binary frames have neither and are
-rejected). Dynearthsol.py does not read the dt/walltime/nseg columns.
+that parse .info themselves). It rebuilds it from the per-frame metadata that
+output.cxx writes as FieldData in every frame. Dynearthsol.py does not read the
+dt/walltime/nseg columns.
 
 Usage: python utils/recreate_info.py <modelname> [-f]
        <modelname> may include a directory prefix, no extension.
@@ -47,19 +44,9 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    rows = []
-    n_missing = 0
-    for d in frames:
-        if d['dt'] is None or d['nseg'] is None:
-            n_missing += 1
-        rows.append(ROW_FMT % (d['frame'], d['steps'], d['time'],
-                               d['dt'] or 0.0, d['walltime'],
-                               d['nnode'], d['nelem'], d['nseg'] or 0))
-
-    if n_missing:
-        print('Warning: %d/%d frames predate dt_sec/nseg frame metadata; '
-              'those columns are written as 0 (unused by Dynearthsol.py)'
-              % (n_missing, len(rows)), file=sys.stderr)
+    rows = [ROW_FMT % (d['frame'], d['steps'], d['time'], d['dt'], d['walltime'],
+                       d['nnode'], d['nelem'], d['nseg'])
+            for d in frames]
 
     if os.path.exists(info_path):
         os.replace(info_path, info_path + '.bak')
