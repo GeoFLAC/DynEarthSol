@@ -1137,7 +1137,7 @@ int main(int argc, const char* argv[])
         // builds the grid at its end. So the grid always indexes every marker,
         // and it does not go stale in a run that seldom remeshes. A checkpoint
         // holds the grid the run reads.
-        if (var.steps % param.mesh.quality_check_step_interval == 0) {
+        if (var.steps % param.mesh.quality_check_step_interval == 0 && uses_serpentinization_grid(param)) {
 #ifdef USEMPI
             if (var.mpi) var.mpi->collect(var);
 #endif

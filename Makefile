@@ -774,6 +774,7 @@ INCS =	\
 	mpi_partition.hpp \
 	mpi_local_fields.hpp \
 	mpi_transport.hpp \
+	mpi_halo_kernels.hpp \
 	exit_codes.hpp \
 	mpi_state.hpp \
 	monitor.hpp \

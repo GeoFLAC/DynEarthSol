@@ -18,6 +18,7 @@
 #include "mpi_partition.hpp"
 #include "mpi_local_fields.hpp"
 #include "mpi_transport.hpp"
+#include "mpi_halo_kernels.hpp"
 #include "bc.hpp"
 #include "earthquake_state.hpp"
 #include "fields.hpp"
@@ -57,13 +58,19 @@ Fields element_fields(Variables& v) {
 }
 void pack(const Fields& f,const int_vec& rows,double_vec& out) {
     out.resize(std::size_t(rows.size())*f.columns); std::size_t k=0;
-    for(int i=0;i<f.n;++i) for(int c=0;c<f.fields[i].columns;++c)
-        for(int r:rows) out[k++]=f.fields[i].data[std::size_t(c)*f.fields[i].stride+r];
+    if(rows.empty())return;
+    for(int i=0;i<f.n;++i) {
+        mpi_pack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows.data(),rows.size(),out.data()+k);
+        k+=std::size_t(rows.size())*f.fields[i].columns;
+    }
 }
 void unpack(const Fields& f,const int_vec& rows,const double* in) {
     std::size_t k=0;
-    for(int i=0;i<f.n;++i) for(int c=0;c<f.fields[i].columns;++c)
-        for(int r:rows) f.fields[i].data[std::size_t(c)*f.fields[i].stride+r]=in[k++];
+    if(rows.empty())return;
+    for(int i=0;i<f.n;++i) {
+        mpi_unpack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows.data(),rows.size(),in+k);
+        k+=std::size_t(rows.size())*f.fields[i].columns;
+    }
 }
 int count(std::size_t n) {
     if(n>INT_MAX) die(EXIT_RUNTIME_RESOURCE,"MPI message exceeds INT_MAX entries");
@@ -211,14 +218,14 @@ const char* op_name(MpiOp op) {
         F(State);F(Temperature);F(PorePressure);F(StrainRate);F(Stress);F(Force);F(Velocity);
         F(Coordinate);F(Rotation);F(Volume);F(Dvoldt);F(Edvoldt);F(Nmd);F(Mass);F(TimeStep);
         F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(Surface);F(SwapVolume);
-        F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Boundary);F(Sample);F(Average);F(Metrics);
+        F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Geometry);F(Boundary);F(Sample);F(Average);F(Metrics);
         F(Report);F(Stop);F(Count);
 #undef F
     } return "unknown";
 }
 bool management(MpiOp op) {
     return op==MpiOp::State || op==MpiOp::Remesh || op==MpiOp::Surface || op==MpiOp::PhaseChange ||
-           op==MpiOp::Hydrous || op==MpiOp::Report || op==MpiOp::Collect || op==MpiOp::Boundary || op==MpiOp::Sample;
+           op==MpiOp::Hydrous || op==MpiOp::Report || op==MpiOp::Collect || op==MpiOp::Geometry || op==MpiOp::Boundary || op==MpiOp::Sample;
 }
 struct Command {
     int operation,steps;
@@ -246,6 +253,14 @@ struct MpiSimulation::Impl {
     std::uint64_t version=0,root_version=0,surface_version=~std::uint64_t(0);
     std::uint64_t calls[int(MpiOp::Count)]={},payload_bytes=0,state_bytes=0,root_bytes=0,all_payload_bytes=0;
     double elapsed[int(MpiOp::Count)]={},communication_s=0;
+    double operation_comm[int(MpiOp::Count)]={},wait_s=0,interior_window_s=0;
+    double_vec rank_profile;
+    bool overlap_enabled=true,pending_active=false;
+    int pending=0;
+    bool pending_nodes=false;
+    Fields pending_fields;
+    double posted_at=0;
+    std::uint64_t geometry_version=~std::uint64_t(0),overlap_calls=0;
     std::vector<unsigned char> bytes;
     double_vec send,recv,scatter;
     int_vec counts,offsets,queries_n,queries_e;
@@ -280,7 +295,8 @@ struct MpiSimulation::Impl {
             std::cout<<"[mpi][partition] generation="<<generation<<" step="<<master->steps<<" rank="<<r
                      <<" owned_nodes="<<p.owned_nodes<<" owned_elements="<<p.owned_elements
                      <<" owned_markers="<<p.owned_markers<<" ghost_nodes="<<p.nodes.size()-p.owned_nodes
-                     <<" ghost_elements="<<p.elements.size()-p.owned_elements<<" neighbors="<<p.halos.size()<<'\n';
+                     <<" ghost_elements="<<p.elements.size()-p.owned_elements<<" neighbors="<<p.halos.size()
+                     <<" interior_nodes="<<p.interior_nodes.size()<<" interface_nodes="<<p.interface_nodes.size()<<'\n';
             if(!file)continue;
             for(int i=0;i<p.owned_nodes;++i) {int n=p.nodes[i];file<<"node,"<<n<<','<<r<<','<<(*master->coord)[n][0]<<','<<(*master->coord)[n][NDIMS-1];
 #ifdef THREED
@@ -326,7 +342,7 @@ struct MpiSimulation::Impl {
         double hydro=rank==0?master->mat->hydro_diff_max:0;
         MPI_Bcast(&hydro,1,MPI_DOUBLE,0,MPI_COMM_WORLD);local.mat->hydro_diff_max=hydro;
         peer.resize(part.halos.size());requests.resize(2*part.halos.size());transfers.resize(part.halos.size());
-        last_step=-1;root_version=version;surface_version=~std::uint64_t(0);
+        last_step=-1;root_version=version;surface_version=geometry_version=~std::uint64_t(0);
         communication_s+=MPI_Wtime()-start;
     }
     void gather_rows(bool nodes,const Fields& from,const Fields& to,bool surface=false,const int_vec* query=nullptr) {
@@ -387,6 +403,12 @@ struct MpiSimulation::Impl {
         gather_rows(true,node_fields(local),gn);gather_rows(false,element_fields(local),ge);
         if(rank==0) {master->mat->refresh_elem_cache();master->mat->hydro_diff_max=local.mat->hydro_diff_max;}root_version=version;
     }
+    void geometry() {
+        if(geometry_version==version || root_version==version)return;
+        Fields gn,ge,ln,le;ln.add(local.coord);le.add(local.volume);
+        if(rank==0){gn.add(master->coord);ge.add(master->volume);}
+        gather_rows(true,ln,gn);gather_rows(false,le,ge);geometry_version=version;
+    }
     Fields surface_n(Variables& v) {Fields f;f.add(v.coord);f.add(v.volume_n);return f;}
     Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
     void boundary() {
@@ -425,7 +447,7 @@ struct MpiSimulation::Impl {
         gather_rows(true,ln,gn);gather_rows(false,le,ge);
     }
     void execute(MpiOp op,double arg) {
-        current=op;inside=true;double started=MPI_Wtime();Variables& v=local;
+        current=op;inside=true;double started=MPI_Wtime(),comm_before=communication_s;Variables& v=local;
         if(!management(op) && last_step!=v.steps) {v.mat->refresh_elem_cache();last_step=v.steps;}
         switch(op) {
         case MpiOp::State:distribute(true);break;
@@ -465,17 +487,29 @@ struct MpiSimulation::Impl {
         case MpiOp::PhaseChange:full();if(rank==0){phase_changes(param,*master);master->mat->refresh_elem_cache();}distribute(false);break;
         case MpiOp::Hydrous:full();if(rank==0)advect_hydrous_markers(param,*master,arg,*master->markersets[master->hydrous_marker_index],*master->hydrous_elemmarkers);distribute(false);break;
         case MpiOp::Collect:full();if(arg!=0)collect_averages();break;
+        case MpiOp::Geometry:geometry();break;
         case MpiOp::Boundary:boundary();break;
         case MpiOp::Sample:query();break;
         case MpiOp::Average:average();break;
         case MpiOp::Metrics:compute_earthquake_metrics(v,measurements[0],measurements[1]);break;
-        case MpiOp::Report:MPI_Reduce(&payload_bytes,&all_payload_bytes,1,MPI_UINT64_T,MPI_SUM,0,MPI_COMM_WORLD);break;
+        case MpiOp::Report: {
+            MPI_Reduce(&payload_bytes,&all_payload_bytes,1,MPI_UINT64_T,MPI_SUM,0,MPI_COMM_WORLD);
+            double sample[3*int(MpiOp::Count)+3];
+            for(int i=0;i<int(MpiOp::Count);++i) {sample[3*i]=double(calls[i]);sample[3*i+1]=elapsed[i];sample[3*i+2]=operation_comm[i];}
+            sample[3*int(MpiOp::Count)]=wait_s;sample[3*int(MpiOp::Count)+1]=interior_window_s;
+            sample[3*int(MpiOp::Count)+2]=double(overlap_calls);
+            if(rank==0)rank_profile.resize(size*(3*int(MpiOp::Count)+3));
+            MPI_Gather(sample,3*int(MpiOp::Count)+3,MPI_DOUBLE,rank_profile.data(),3*int(MpiOp::Count)+3,MPI_DOUBLE,0,MPI_COMM_WORLD);
+            break;
+        }
         default:die(EXIT_INTERNAL_ASSERT,"unknown MPI operation");
         }
-        if(op!=MpiOp::Collect && op!=MpiOp::Boundary && op!=MpiOp::Sample && op!=MpiOp::Average && op!=MpiOp::Metrics) ++version;
-        ++calls[int(op)];elapsed[int(op)]+=MPI_Wtime()-started;inside=false;
+        if(op!=MpiOp::Collect && op!=MpiOp::Geometry && op!=MpiOp::Boundary && op!=MpiOp::Sample && op!=MpiOp::Average && op!=MpiOp::Metrics) ++version;
+        ++calls[int(op)];elapsed[int(op)]+=MPI_Wtime()-started;
+        operation_comm[int(op)]+=communication_s-comm_before;inside=false;
     }
-    void exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
+    void begin_exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
+        if(pending_active)die(EXIT_INTERNAL_ASSERT,"overlapping halo buffers reused before completion");
         const bool nodes=entity==MpiEntity::Node;Fields f;
         for(auto a:arrays) f.add(a.first,nodes?local.nnode:local.nelem,a.second);
         double start=MPI_Wtime();
@@ -486,9 +520,20 @@ struct MpiSimulation::Impl {
             transfers[i]={h.rank,peer[i].send.data(),peer[i].recv.data(),count(peer[i].send.size()),count(peer[i].recv.size())};
             payload_bytes+=peer[i].send.size()*sizeof(double);
         }
-        mpi_exchange_buffers(transfers.data(),transfers.size(),nodes?30:31,requests.data());
-        for(int i=0;i<int(part.halos.size());++i) unpack(f,nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].recv.data());
+        pending=mpi_post_buffers(transfers.data(),transfers.size(),nodes?30:31,requests.data());
+        pending_nodes=nodes;pending_fields=f;pending_active=true;posted_at=MPI_Wtime();
         communication_s+=MPI_Wtime()-start;
+    }
+    void finish_exchange() {
+        if(!pending_active)die(EXIT_INTERNAL_ASSERT,"halo completion without a posted exchange");
+        const double started=MPI_Wtime();interior_window_s+=started-posted_at;
+        mpi_finish_buffers(pending,requests.data());wait_s+=MPI_Wtime()-started;
+        for(int i=0;i<int(part.halos.size());++i)
+            unpack(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].recv.data());
+        communication_s+=MPI_Wtime()-started;pending_active=false;
+    }
+    void exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
+        begin_exchange(entity,arrays);finish_exchange();
     }
 };
 
@@ -496,6 +541,12 @@ MpiSimulation::MpiSimulation(Param& p):impl_(new Impl(p)) {
     int provided;MPI_Init_thread(nullptr,nullptr,MPI_THREAD_FUNNELED,&provided);
     if(provided<MPI_THREAD_FUNNELED)die(EXIT_RUNTIME_RESOURCE,"MPI_THREAD_FUNNELED required");
     MPI_Comm_rank(MPI_COMM_WORLD,&impl_->rank);MPI_Comm_size(MPI_COMM_WORLD,&impl_->size);
+    if(is_root()) {
+        const char* option=std::getenv("DES_MPI_OVERLAP");
+        if(option && std::string(option)!="0" && std::string(option)!="1")die(EXIT_CONFIG_VALUE,"DES_MPI_OVERLAP must be 0 or 1");
+        impl_->overlap_enabled=!option || std::string(option)=="1";
+    }
+    MPI_Bcast(&impl_->overlap_enabled,1,MPI_C_BOOL,0,MPI_COMM_WORLD);
     impl_->local.mpi=this;
     if(is_root())std::cout<<"[mpi] compact spatial partitions; ranks="<<impl_->size<<"; neighbor halos; centralized mesh management\n";
 }
@@ -525,20 +576,41 @@ int MpiSimulation::worker_loop()try {
 }catch(const std::bad_alloc&){die(EXIT_RUNTIME_RESOURCE,"MPI worker allocation failed");}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';die(EXIT_INTERNAL_UNREACHABLE,"MPI worker exception");}
 void MpiSimulation::exchange(MpiEntity e,std::initializer_list<std::pair<double*,int>> f){impl_->exchange(e,f);}
+void MpiSimulation::begin_exchange(MpiEntity e,std::initializer_list<std::pair<double*,int>> f){
+    impl_->begin_exchange(e,f);
+    if(!impl_->overlap_enabled)impl_->finish_exchange();else ++impl_->overlap_calls;
+}
+void MpiSimulation::finish_exchange(){impl_->finish_exchange();}
+bool MpiSimulation::overlap()const{return impl_->overlap_enabled;}
+MpiNodeRows MpiSimulation::gather_rows(int pass)const {
+    const auto& rows=pass==0?impl_->part.interior_nodes:impl_->part.interface_nodes;
+    return {rows.data(),int(rows.size())};
+}
 void MpiSimulation::collect(const Variables& v,bool a){dispatch(MpiOp::Collect,v,a?1:0);}
+void MpiSimulation::geometry(const Variables& v){dispatch(MpiOp::Geometry,v);}
 void MpiSimulation::boundary(const Variables& v){dispatch(MpiOp::Boundary,v);}
 void MpiSimulation::sample(const Variables& v,const int_vec& nodes,const int_vec& elements){impl_->queries_n=nodes;impl_->queries_e=elements;dispatch(MpiOp::Sample,v);}
 bool MpiSimulation::metrics(const Variables& v,double& s,double& p){if(!dispatch(MpiOp::Metrics,v))return false;s=impl_->measurements[0];p=impl_->measurements[1];return true;}
-void MpiSimulation::minimum(double* data,int n){MPI_Allreduce(MPI_IN_PLACE,data,n,MPI_DOUBLE,MPI_MIN,MPI_COMM_WORLD);}
-double MpiSimulation::maximum(double v){double r;MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);return r;}
-double MpiSimulation::sum(double v){double r;MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);return r;}
-int MpiSimulation::sum(int v){int r;MPI_Allreduce(&v,&r,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);return r;}
-void MpiSimulation::maximum(int* v,int n){MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_INT,MPI_MAX,MPI_COMM_WORLD);}
+void MpiSimulation::minimum(double* data,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,data,n,MPI_DOUBLE,MPI_MIN,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
+double MpiSimulation::maximum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
+double MpiSimulation::sum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
+int MpiSimulation::sum(int v){int r;double t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
+void MpiSimulation::maximum(int* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_INT,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 void MpiSimulation::report() {
     if(impl_->master) dispatch(MpiOp::Report,*impl_->master);
     const auto& m=*impl_;std::cout<<std::fixed<<std::setprecision(9);
     for(int i=0;i<int(MpiOp::Count);++i)if(m.calls[i])std::cout<<"[mpi][kernel] name="<<op_name(MpiOp(i))<<" calls="<<m.calls[i]<<" seconds="<<m.elapsed[i]<<'\n';
     std::cout<<"[mpi][communication] seconds="<<m.communication_s<<" halo_sent_bytes="<<m.all_payload_bytes
              <<" root_collection_bytes="<<m.root_bytes<<" state_bytes="<<m.state_bytes<<'\n';
+    const int stride=3*int(MpiOp::Count)+3;
+    for(int r=0;r<m.size && !m.rank_profile.empty();++r) {
+        const double* p=m.rank_profile.data()+r*stride;
+        for(int i=0;i<int(MpiOp::Count);++i)if(p[3*i])
+            std::cout<<"[mpi][rank-profile] rank="<<r<<" operation="<<op_name(MpiOp(i))<<" calls="<<p[3*i]
+                     <<" elapsed_s="<<p[3*i+1]<<" communication_s="<<p[3*i+2]
+                     <<" outside_communication_s="<<std::max(0.0,p[3*i+1]-p[3*i+2])<<'\n';
+        std::cout<<"[mpi][overlap] rank="<<r<<" calls="<<p[stride-1]<<" wait_s="<<p[stride-3]
+                 <<" work_window_s="<<p[stride-2]<<'\n';
+    }
 }
 #endif

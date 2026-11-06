@@ -453,11 +453,11 @@ void monitor_write_if_due(const Param& param, Variables& var)
 
 void monitor_before_remesh(const Param& param, Variables& var)
 {
+    if (!param.monitor.enabled || !g_monitor.initialized) return;
+    if (param.monitor.remesh_rebind_mode != monitor_rebind_pre_remesh_coord) return;
 #ifdef USEMPI
     if (var.mpi) var.mpi->collect(var);
 #endif
-    if (!param.monitor.enabled || !g_monitor.initialized) return;
-    if (param.monitor.remesh_rebind_mode != monitor_rebind_pre_remesh_coord) return;
     monitor_capture_rebind_coords_before_remesh(var, g_monitor);
 }
 

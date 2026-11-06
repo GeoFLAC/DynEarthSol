@@ -4894,7 +4894,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 int bad_mesh_quality(const Param &param, const Variables &var, int &index, double &min_quality)
 {
 #ifdef USEMPI
-    if (var.mpi) var.mpi->collect(var);
+    if (var.mpi) var.mpi->geometry(var);
 #endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);

@@ -202,15 +202,28 @@ void update_temperature(const Param &param, const Variables &var,
 
 #ifdef USEMPI
         #pragma omp master
-        { mpi_sync(var, tmp_result, MpiEntity::Element, NODES_PER_ELEM); }
+        {
+            mpi_begin_gather(var,tmp_result,NODES_PER_ELEM);
+        }
         #pragma omp barrier
-#endif
-
+        const int passes=mpi_gather_passes(var);
+        for(int pass=0;pass<passes;++pass) {
+            if(pass==1) {
+                #pragma omp master
+                { var.mpi->finish_exchange(); }
+                #pragma omp barrier
+            }
+            const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+            #pragma omp for
+            for(int row=0;row<rows.count;++row) {
+                const int n=rows.ids?rows.ids[row]:row;
+#else
 #ifndef ACC
         #pragma omp for
 #endif
         #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
+#endif
             if ((*var.bcflag)[n] & BOUNDZ1)
                 temperature[n] = param.bc.surface_temperature;
             else {
@@ -228,6 +241,9 @@ void update_temperature(const Param &param, const Variables &var,
                 temperature[n] -= var.dt * tdot / (*var.tmass)[n];
             }
         }
+#ifdef USEMPI
+        }
+#endif
     }
 
     // Combining temperature update and bc in the same loop for efficiency,
@@ -645,15 +661,28 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
 #ifdef USEMPI
         #pragma omp master
-        { mpi_sync(var, tmp_result, MpiEntity::Element, NODES_PER_ELEM*NDIMS); }
+        {
+            mpi_begin_gather(var,tmp_result,NODES_PER_ELEM*NDIMS);
+        }
         #pragma omp barrier
-#endif
-
+        const int passes=mpi_gather_passes(var);
+        for(int pass=0;pass<passes;++pass) {
+            if(pass==1) {
+                #pragma omp master
+                { var.mpi->finish_exchange(); }
+                #pragma omp barrier
+            }
+            const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+            #pragma omp for
+            for(int row=0;row<rows.count;++row) {
+                const int n=rows.ids?rows.ids[row]:row;
+#else
 #ifndef ACC
         #pragma omp for
 #endif
         #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
+#endif
             ArrayAccessor f = force[n];
             f = 0;
             ArrayAccessor f_residual = force_residual[n];
@@ -671,6 +700,9 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                 }
             }
         }
+#ifdef USEMPI
+        }
+#endif
     }
 
     apply_stress_bcs(param, var, force);

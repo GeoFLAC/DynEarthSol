@@ -25,6 +25,7 @@ void MpiPartition::index() {
 void MpiPartition::archive(MpiState& a) {
     a.value(owned_nodes); a.value(owned_elements); a.value(owned_markers);
     a.value(nodes); a.value(elements); a.value(surface_nodes); a.value(surface_elements);
+    a.value(interior_nodes); a.value(interface_nodes);
     a.value(surface_owned_nodes); a.value(surface_owned_elements);
     int n=halos.size(); a.value(n); if(a.reading()) halos.resize(n);
     for (auto& h:halos) h.archive(a);
@@ -156,6 +157,11 @@ std::vector<MpiPartition> mpi_partition_mesh(const Variables& v,int nr) {
         }
         for(int n=0;n<v.nnode;++n) if(needed_n[n] && node_owner[n]!=r) p.nodes.push_back(n);
         p.index();
+        for(int i=0;i<p.owned_nodes;++i) {
+            const int n=p.nodes[i];const int* patch=v.support.patch(n);bool interior=true;
+            for(int j=0;j<v.support.size(n);++j) if(elem_owner[patch[j]]!=r) {interior=false;break;}
+            (interior?p.interior_nodes:p.interface_nodes).push_back(i);
+        }
         for(int i=0;i<int(p.nodes.size());++i) if(surf_n[p.nodes[i]]) {
             p.surface_nodes.push_back(i); if(i<p.owned_nodes) p.surface_owned_nodes.push_back(i);
         }

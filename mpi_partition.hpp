@@ -20,6 +20,7 @@ struct MpiHalo {
 struct MpiPartition {
     int owned_nodes = 0, owned_elements = 0, owned_markers = 0;
     int_vec nodes, elements, node_rows, element_rows;
+    int_vec interior_nodes, interface_nodes;
     int_vec surface_nodes, surface_elements; // all local rows touched by root surface work
     int_vec surface_owned_nodes, surface_owned_elements;
     std::vector<MpiHalo> halos;

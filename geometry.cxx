@@ -2012,15 +2012,28 @@ void compute_mass(const Param &param, const Variables &var,
 
 #ifdef USEMPI
         #pragma omp master
-        { mpi_sync(var, tmp_result, MpiEntity::Element, 5); }
+        {
+            mpi_begin_gather(var,tmp_result,5);
+        }
         #pragma omp barrier
-#endif
-
+        const int passes=mpi_gather_passes(var);
+        for(int pass=0;pass<passes;++pass) {
+            if(pass==1) {
+                #pragma omp master
+                { var.mpi->finish_exchange(); }
+                #pragma omp barrier
+            }
+            const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+            #pragma omp for
+            for(int row=0;row<rows.count;++row) {
+                const int n=rows.ids?rows.ids[row]:row;
+#else
 #ifndef ACC
         #pragma omp for
 #endif
         #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
+#endif
             volume_n[n]=0;
             mass[n]=0;
             tmass[n]=0;
@@ -2039,6 +2052,9 @@ void compute_mass(const Param &param, const Variables &var,
                 ymass[n] += tr[4];
             }
         }
+#ifdef USEMPI
+        }
+#endif
     }
 
 #ifdef NPROF_DETAIL
