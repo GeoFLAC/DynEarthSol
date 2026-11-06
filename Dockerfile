@@ -17,6 +17,7 @@ ARG GOSPL=0
 # Update package list and install necessary software
 RUN apt-get update && apt-get install -y \
     build-essential \
+    cmake \
     python3 \
     python3-pip \
     git \
