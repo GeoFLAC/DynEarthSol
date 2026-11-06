@@ -11,8 +11,6 @@
 #include "utils.hpp"
 #include "mmg_utils.hpp"
 
-#ifdef USEMMG
-
 #ifdef THREED
 #include "mmg/mmg3d/libmmg3d.h"
 #else
@@ -367,5 +365,3 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 }
 
 #undef MMG_OK
-
-#endif // USEMMG

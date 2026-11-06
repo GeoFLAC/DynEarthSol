@@ -44,9 +44,7 @@
 #ifdef HDF5
 #include <H5public.h>
 #endif
-#ifdef USEMMG
 #include <mmg/common/mmgversion.h>
-#endif
 #include "binaryio.hpp"
 #include "constants.hpp"
 
@@ -93,9 +91,7 @@ __attribute__((used)) const char snapshot_sentinel[] =
     " knn-bvh=" DES_KNNBVH_REV   // no version macro, so the rev alone
 #endif
     " nanoflann=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
-#ifdef USEMMG
     " mmg=" MMG_VERSION_RELEASE DES_MMG_REV "(" DES_SRC_MMG ")"
-#endif
     // Ordered by how likely a version change explains a behaviour change.
     "\nbuild.snapshot.libs       :"
 #ifdef HDF5
