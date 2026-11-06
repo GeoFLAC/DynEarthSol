@@ -7,7 +7,7 @@
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
-## - A flag rebuilds only what it reaches (hdf5: a few units; LDFLAGS: relink
+## - A flag rebuilds only what it reaches (useexo: one unit; LDFLAGS: relink
 ##   only). `make feature-map` prints the reach; `make config` summarises it.
 ## Common configuration variables (set on the make command line or edit below):
 ##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
@@ -21,10 +21,9 @@
 ##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
-##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
-## MMG (the mmg submodule) is always built, which needs cmake.
+## MMG (the mmg submodule) is always built, which needs cmake. HDF5 is required.
 ## HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
@@ -37,12 +36,11 @@ nprof = 0
 gprof = 0
 useexo = 0
 usegospl = 0
-hdf5 = 0
 snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -91,7 +89,7 @@ OSNAME := $(shell uname -s)
 ## use rather than leaving it in a shell profile.
 ########################################################################
 
-## HDF5, for hdf5=1. Set either or both; whichever is left blank is still
+## HDF5. Set either or both; whichever is left blank is still
 ## detected. Layouts the search knows about, if you would rather name them:
 ##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
 ##   Fedora/RHEL    /usr/include              /usr/lib64
@@ -154,7 +152,65 @@ else
 	endif
 endif
 
-ifeq ($(hdf5), 1)
+ifeq ($(useexo), 1)
+	# path to exodus header files
+	EXO_INCLUDE = ./seacas/include
+
+	# path of exodus library files, if not in standard system location
+	EXO_LIB_DIR = ./seacas/lib
+
+	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
+	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		EXO_LDFLAGS += -Wl,-rpath=$(EXO_LIB_DIR)
+	endif
+
+	## libexodus reaches HDF5 through seacas's own netcdf, which links the HDF5
+	## seacas built: DES uses that one too, so one process loads one libhdf5.
+	ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(EXO_INCLUDE))
+		HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(EXO_LIB_DIR))
+	endif
+endif
+
+ifeq ($(usegospl), 1)
+	# GoSPL extensions library configuration
+	# Path to locally built gospl_extensions (clone from GitHub)
+	GOSPL_EXT_DIR ?= $(HOME)/opt/gospl_extensions
+	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
+	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
+	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
+
+	# Export PYTHONPATH for GoSPL extensions
+	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
+
+	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
+	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
+	endif
+
+	# Python include/lib dirs — override on the command line for non-conda builds:
+	#   make usegospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
+	CONDA_ENV_PATH ?= $(HOME)/miniforge3/envs/gospl
+	PYTHON_VERSION     ?= 3.11
+	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
+	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
+
+	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
+	GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
+	ifneq ($(OSNAME), Darwin)
+		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
+	endif
+
+	## The embedded Python's gospl loads h5py, which links the conda env's HDF5: DES
+	## uses that one too when the env has it, so one process loads one libhdf5.
+	ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(CONDA_ENV_PATH)/include)
+		HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(CONDA_ENV_PATH)/lib)
+	endif
+endif
+
 ## Every stage below fills only what is still blank, so a path set by hand is
 ## never overwritten, and setting just one of the two still leaves the other
 ## detected instead of empty (a blank -L would eat the -lhdf5 that follows it).
@@ -212,44 +268,12 @@ ifeq ($(HDF5_DETECT), yes)
 	ifeq ($(strip $(HDF5_LIB_DIR)),)
 		HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(HDF5_LIB_DIRS))
 	endif
-
-	## Checked separately: finding one without the other is still unbuildable,
-	## and failing here beats a confusing link error hundreds of lines later.
-	## Indented with SPACES, not a tab: a tab-indented $(error) this early
-	## reads as a recipe line and make reports "commands commence before first
-	## target" instead of the message below.
-	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-        $(error hdf5=1 but no HDF5 headers found. Install HDF5 (macOS: brew install hdf5; \
-Debian/Ubuntu: apt install libhdf5-dev; Fedora/RHEL: dnf install hdf5-devel), \
-or set the paths by hand: \
-make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib)
-	endif
-	ifeq ($(strip $(HDF5_LIB_DIR)),)
-        $(error hdf5=1: found HDF5 headers in $(HDF5_INCLUDE_DIR) but no libhdf5. \
-Set HDF5_LIB_DIR to the directory holding libhdf5, \
-e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
-	endif
-endif
 endif
 
 ########################################################################
 ## Select compiler and linker flags
 ## (Usually you won't need to modify anything below)
 ########################################################################
-
-ifeq ($(useexo), 1)
-	# path to exodus header files
-	EXO_INCLUDE = ./seacas/include
-
-	# path of exodus library files, if not in standard system location
-	EXO_LIB_DIR = ./seacas/lib
-
-	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
-	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		EXO_LDFLAGS += -Wl,-rpath=$(EXO_LIB_DIR)
-	endif
-endif
 
 ## MMG, built from the mmg submodule by `prepare`.
 # path to MMG3D header files
@@ -284,36 +308,6 @@ else
 	MMG_CXX = g++
 endif
 
-ifeq ($(usegospl), 1)
-	# GoSPL extensions library configuration
-	# Path to locally built gospl_extensions (clone from GitHub)
-	GOSPL_EXT_DIR ?= $(HOME)/opt/gospl_extensions
-	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
-	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
-	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
-	
-	# Export PYTHONPATH for GoSPL extensions
-    	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
-  
-	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
-	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
-	endif
-	
-	# Python include/lib dirs — override on the command line for non-conda builds:
-	#   make usegospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
-	CONDA_ENV_PATH ?= $(HOME)/miniforge3/envs/gospl
-	PYTHON_VERSION     ?= 3.11
-	PYTHON_INCLUDE_DIR ?= $(CONDA_ENV_PATH)/include/python$(PYTHON_VERSION)
-	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
-
-	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
-	GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
-	ifneq ($(OSNAME), Darwin)
-		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
-	endif
-endif
 
 
 ## Warnings belong in every build, not only the debug one. gcc's uninitialized and
@@ -500,8 +494,9 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 			GPU_CC := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
 			            | head -1 | tr -d '.')
 		endif
-		## $(warning) and $(error) indented with SPACES, not a tab -- see the note
-		## at the hdf5 $(error) above.
+		## $(warning) indented with SPACES, not a tab: a tab-indented one this early
+		## reads as a recipe line and make reports "commands commence before first
+		## target" instead of the message.
 		ifeq ($(GPU_CC),)
 			## 80 = A100, what the CI matrix targets. Nothing is known about
 			## the local host here, so this is a guess that at least links.
@@ -545,15 +540,10 @@ else
 ## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
-ifeq ($(hdf5), 1)
-	## Named, like MMG_CXXFLAGS, so the stamp split can subtract it. Folded into
-	## CXXFLAGS it would perturb the global stamp and rebuild everything.
-	HDF5_CXXFLAGS = -DHDF5 -I$(HDF5_INCLUDE_DIR)
-	CXXFLAGS += $(HDF5_CXXFLAGS)
-	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
-	ifneq ($(OSNAME), Darwin)
-		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
-	endif
+CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
+ifneq ($(OSNAME), Darwin)
+	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
 endif
 
 ## Is git in the path?
@@ -728,7 +718,7 @@ all: prepare
 ## Rebuild when the FLAGS change, not just when a source file does.
 ##
 ## Objects are named only for ndims and suffix, so every other switch -- openmp,
-## opt, hdf5, the compiler under nprof=1 -- reuses whatever was built
+## opt, the compiler under nprof=1 -- reuses whatever was built
 ## last. `make openmp=0` then `make` reports success, relinks nothing, and leaves
 ## a single-threaded executable behind. The stamp holds the last build's flags;
 ## its recipe runs every time (FORCE) but only rewrites the file when they
@@ -745,8 +735,7 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEEXODUS
-FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
+FEATURES = USEEXODUS
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
@@ -758,9 +747,9 @@ GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS))
 
 ## Stamps DELETE what they invalidate; mtime is not trustworthy here. make 3.81
 ## compares to the whole second and treats equal as up to date, and a 4-object
-## feature rebuild finishes in the same second the stamp was written -- two
-## back-to-back builds then linked an object still carrying -DHDF5 with no
-## -lhdf5. A deleted object has no mtime to be wrong about.
+## feature rebuild can finish in the same second the stamp was written, so an
+## object still carrying a feature's -D flag would link without its library.
+## A deleted object has no mtime to be wrong about.
 ##
 ## The delete must run in an earlier PROCESS: make 3.81 stats a target before its
 ## prerequisites' recipes and reuses that mtime, so deleting from the stamp
@@ -833,9 +822,9 @@ FORCE:
 ## $(error), so `make clean` and `make config` still work on a machine that
 ## cannot build yet.
 ##
-## Fatal on macOS only: there this detection is the sole source of -I/-L and
-## there is no Apple omp.h, so a miss is certain. Elsewhere the
-## toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
+## The OpenMP check is fatal on macOS only: there this detection is the sole
+## source of -I/-L and there is no Apple omp.h, so a miss is certain. Elsewhere
+## the toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
 ## module sysroot), so a failed guess must not block a working build.
 ifeq ($(OSNAME), Darwin)
 DEP_FATAL = exit 1
@@ -847,6 +836,19 @@ check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
 		echo "g++ or nvc++, e.g. make CXX=g++."; exit 1; }
+	@# Each half checked on its own: one without the other is still unbuildable, and
+	@# failing here beats a confusing compile or link error further down. Fatal on every
+	@# OS: a blank path leaves a bare -I or -L in the flags, which takes the next word.
+	@test -n "$(strip $(HDF5_INCLUDE_DIR))" || { \
+		echo "Missing: the HDF5 headers."; \
+		echo "         Install: brew install hdf5 (macOS), apt install libhdf5-dev (Debian/Ubuntu),"; \
+		echo "                  dnf install hdf5-devel (Fedora/RHEL)"; \
+		echo "         Or: make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
+		exit 1; }
+	@test -n "$(strip $(HDF5_LIB_DIR))" || { \
+		echo "Missing: libhdf5 (HDF5 headers found in $(HDF5_INCLUDE_DIR))."; \
+		echo "         Set HDF5_LIB_DIR to the directory holding it: make HDF5_LIB_DIR=/prefix/lib"; \
+		exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX)))
@@ -877,11 +879,8 @@ ifeq ($(openmp), 1)
 	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
 endif
 endif
-	@echo "hdf5               $(strip $(hdf5))"
-ifeq ($(hdf5), 1)
-	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
-	@echo "  hdf5 lib dir     $(HDF5_LIB_DIR)"
-endif
+	@echo "hdf5 include       $(if $(strip $(HDF5_INCLUDE_DIR)),$(HDF5_INCLUDE_DIR),** NOT FOUND **)"
+	@echo "hdf5 lib dir       $(if $(strip $(HDF5_LIB_DIR)),$(HDF5_LIB_DIR),** NOT FOUND **)"
 	@echo "mmg archive        $(MMG_LIB)"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
