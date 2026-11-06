@@ -44,9 +44,13 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
    ```bash
    git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
    cd ~/opt/gospl_extensions/cpp_interface
+   command -v python3        # must be $CONDA_PREFIX/bin/python3
    make install-local                                                     # Linux
    make install-local PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib" # macOS
    ```
+   The build takes its Python headers from the first `python3` on `PATH`. If
+   that is another Python (Homebrew's, say), it builds against the wrong
+   headers without a warning: put `$CONDA_PREFIX/bin` first on `PATH`.
    On success it reports
    `✅ Installed locally to gospl_extensions/lib and gospl_extensions/include`,
    having created `lib/libgospl_extensions.so` and `include/gospl_extensions.h`,
