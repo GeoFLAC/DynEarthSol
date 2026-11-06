@@ -6,6 +6,9 @@
 
 class Output
 {
+#ifdef USEMPI
+    friend class MpiSimulation;
+#endif
 private:
     const std::string &modelname;
     // Outlives this, like modelname.

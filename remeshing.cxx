@@ -12,6 +12,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 
 #include "barycentric-fn.hpp"
 #include "bc.hpp"
@@ -4892,6 +4893,9 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 
 int bad_mesh_quality(const Param &param, const Variables &var, int &index, double &min_quality)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -5998,6 +6002,10 @@ void relocate_wall_division_nodes(const Param &param, Variables &var,
 
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Remesh, var, bad_quality)) return;
+#endif
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif

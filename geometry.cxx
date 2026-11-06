@@ -6,6 +6,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "utils.hpp"
 #include "geometry.hpp"
@@ -222,15 +223,21 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 void compute_volume(const Variables &var,
                     double_vec &volume)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Volume, var, 0.0)) return;
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, volume)
+    #pragma omp parallel for default(none) shared(var, volume) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
@@ -254,6 +261,12 @@ void compute_volume(const Variables &var,
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Dvoldt, var, 0.0)) return;
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -264,10 +277,10 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var, etmp)
+        shared(var, etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0;e<var.nelem;e++) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee;e++) {
         ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
         // dj = (volume[e] - volume_old[e]) / volume_old[e] / dt
@@ -275,12 +288,14 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
         etmp[e] = dj * (*var.volume)[e];
     }
 
+    mpi_sync(var, etmp, MpiEntity::Element);
+
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var,dvoldt,etmp)
+        shared(var,dvoldt,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int n=0;n<var.nnode;n++) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
         double acc = 0.;
@@ -301,6 +316,12 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Edvoldt, var, 0.0)) return;
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -310,10 +331,10 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var, dvoldt, edvoldt)
+        shared(var, dvoldt, edvoldt) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dj = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -333,6 +354,12 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Nmd, var, 0.0)) return;
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -340,18 +367,20 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     // lumped onto the nodes.
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,etmp)
+    #pragma omp parallel for default(none) shared(var,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0;e<var.nelem;e++) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee;e++) {
         etmp[e] = (*var.dpressure)[e] * (*var.volume)[e];
     }
 
+    mpi_sync(var, etmp, MpiEntity::Element);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
+    #pragma omp parallel for default(none) shared(var,dp_nd,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int n=0;n<var.nnode;n++) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
         double acc = 0;
@@ -361,11 +390,13 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     }
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
+    mpi_sync(var, dp_nd, MpiEntity::Node);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, dp_nd, stress)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -1547,6 +1578,12 @@ double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit)
 
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::TimeStep, var, include_rsf_state_limit ? 1.0 : 0.0)) return var.mpi->result();
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -1582,12 +1619,12 @@ double compute_dt(const Param& param, Variables& var,
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) \
-        default(none) shared(param, var) firstprivate(rsf_dtheta_max)
+        default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
     #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) async
-    for (int e=0; e<var.nelem; ++e) {
+        reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
         int n0 = (*var.connectivity)[e][0];
@@ -1690,6 +1727,17 @@ double compute_dt(const Param& param, Variables& var,
 
     #pragma acc wait
 
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min};
+        var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
+        minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
+        dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
+        global_max_vem=var.mpi->maximum(global_max_vem);
+        nan_elem_count=var.mpi->sum(nan_elem_count);
+    }
+#endif
+
     // check_nan() is the broad detector, but the regular frame path Output::write() never
     // calls it (only write_exact() does), so this narrow check closes that gap. Not a
     // universal net: compute_dt runs every slow_updates_interval steps, so a NaN that
@@ -1700,7 +1748,7 @@ double compute_dt(const Param& param, Variables& var,
                   << " -- stopping before writing further frames.\n";
         // write_exact_error() runs check_nan(), which dies on any NaN it finds in vel;
         // the die() below still covers an element mean gone NaN from Inf - Inf.
-        var.output->write_exact_error(var);
+        if (var.output) var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
     }
 
@@ -1750,7 +1798,7 @@ double compute_dt(const Param& param, Variables& var,
         std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
                   << " " << dt_diffusion
                   << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
+        if (var.output) var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
     }
     
@@ -1859,6 +1907,12 @@ void compute_mass(const Param &param, const Variables &var,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
 
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Mass, var, max_vbc_val)) return;
+#endif
+    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
+    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -1896,17 +1950,17 @@ void compute_mass(const Param &param, const Variables &var,
 
 #ifndef ACC
 #ifdef GPP1X
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #else
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int e=0;e<var.nelem;e++) {
+        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
 
@@ -1951,17 +2005,22 @@ void compute_mass(const Param &param, const Variables &var,
 
             tr[0] = (*var.volume)[e];
             tr[1] = m;
-            if (param.control.has_thermal_diffusion)
-                tr[2] = tm;
+            tr[2] = param.control.has_thermal_diffusion ? tm : 0.0;
             tr[3] = hm; // check
             tr[4] = ym; 
         }
 
+#ifdef USEMPI
+        #pragma omp master
+        { mpi_sync(var, tmp_result, MpiEntity::Element, 5); }
+        #pragma omp barrier
+#endif
+
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int n=0;n<var.nnode;n++) {
+        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        for (int n=mpi_nb; n<mpi_ne;n++) {
             volume_n[n]=0;
             mass[n]=0;
             tmass[n]=0;

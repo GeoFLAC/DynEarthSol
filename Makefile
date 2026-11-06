@@ -22,6 +22,7 @@
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - usempi = 1 : experimental CPU MPI timestep kernels; builds dynearthsol[23]d.mpi.
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
@@ -36,6 +37,7 @@ openmp = 1
 nprof = 0
 gprof = 0
 usemmg = 0
+usempi = 0
 useexo = 0
 usegospl = 0
 hdf5 = 0
@@ -43,7 +45,7 @@ snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg usempi useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -51,7 +53,7 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX MPI_CXX \
              BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
@@ -158,7 +160,18 @@ else
 		endif
 	endif
 endif
+ifeq ($(usempi), 1)
+ifneq ($(filter-out 0,$(openacc) $(nprof) $(usegospl)),)
+$(error usempi=1 currently supports CPU builds without nprof or GoSPL)
+endif
+MPI_CXX ?= mpicxx
+CXX = $(MPI_CXX)
+## Open MPI and MPICH spell the wrapper introspection differently.
+CXX_BACKEND := $(shell $(CXX) --showme:command 2>/dev/null || $(CXX) -show 2>/dev/null)
+suffix = .mpi
+else
 CXX_BACKEND = ${CXX}
+endif
 
 ifeq ($(hdf5), 1)
 ## Every stage below fills only what is still blank, so a path set by hand is
@@ -420,7 +433,7 @@ endif
 ## drown in them, and -Wno-unused-private-field, which only clang has.
 WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
 
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
@@ -719,6 +732,8 @@ SRCS =	\
 	matprops.cxx \
 	mesh.cxx \
 	mmg_utils.cxx \
+	mpi_simulation.cxx \
+	mpi_partition.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -753,6 +768,12 @@ INCS =	\
 	matprops.hpp \
 	mesh.hpp \
 	mmg_utils.hpp \
+	mpi_simulation.hpp \
+	mpi_partition.hpp \
+	mpi_local_fields.hpp \
+	mpi_transport.hpp \
+	exit_codes.hpp \
+	mpi_state.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
@@ -809,6 +830,10 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(usempi), 1)
+	CXXFLAGS += -DUSEMPI -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
+endif
+
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
@@ -816,6 +841,10 @@ endif
 
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
+ifeq ($(usempi), 1)
+	# MPI changes the DES executable, not this CPU-only eigensolver library.
+	C3X3_LIBNAME = 3x3
+endif
 ## GPU_CC goes to the sub-make as itself: it folds the capability into the one -gpu= it
 ## assembles, and its flag stamp covers CFLAGS, so a changed capability deletes the
 ## objects it invalidates.
@@ -988,7 +1017,7 @@ check-deps:
 		$(DEP_FATAL); }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	@test -f "$(OPENMP_INCLUDE_DIR)/omp.h" \
 	  && test -f "$(OPENMP_LIB_DIR)/libomp.dylib" || { \
 		echo "Missing: an OpenMP runtime -- Apple clang has the pragmas, ships none."; \
@@ -1009,6 +1038,7 @@ config:
 	@echo "platform           $(OSNAME) $(shell uname -m)"
 	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
 	@echo "openmp             $(strip $(openmp))"
+	@echo "usempi             $(strip $(usempi))"
 ifeq ($(OSNAME), Darwin)
 	@echo "brew prefix        $(BREW_PREFIX)"
 ifeq ($(openmp), 1)

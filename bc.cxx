@@ -6,6 +6,7 @@
 #include <math.h>
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "markerset.hpp"
 #include "barycentric-fn.hpp"
@@ -264,6 +265,10 @@ bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr)
 
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::VelocityBC, var, 0.0)) return;
+#endif
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -312,6 +317,14 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         }
     }
     #pragma acc wait
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double extents[] = {-BOUNDX0_max, BOUNDX0_min, -BOUNDX1_max, BOUNDX1_min};
+        var.mpi->minimum(extents, 4);
+        BOUNDX0_max=-extents[0]; BOUNDX0_min=extents[1];
+        BOUNDX1_max=-extents[2]; BOUNDX1_min=extents[3];
+    }
+#endif
     if (BOUNDX0_max < BOUNDX0_min) { BOUNDX0_max = 0.; BOUNDX0_min = 0.; }
     if (BOUNDX1_max < BOUNDX1_min) { BOUNDX1_max = 0.; BOUNDX1_min = 0.; }
     double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
@@ -400,6 +413,9 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel)
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&zmin, 1);
+#endif
 #endif
 #ifndef ACC
 #ifdef THREED
@@ -1754,6 +1770,10 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
                        int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Surface, var, 0.0)) return;
+#endif
+
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif

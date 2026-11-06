@@ -12,6 +12,7 @@
 #include "markerset.hpp"
 #include "matprops.hpp"
 #include "output.hpp"
+#include "mpi_simulation.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
 
@@ -142,6 +143,9 @@ void Output::write_info(const Variables& var, double dt)
 
 void Output::_write(const Variables& var, bool disable_averaging)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var, is_averaged && !disable_averaging);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -363,6 +367,9 @@ void Output::write_exact_error(const Variables& var)
 
 void Output::average_fields(Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Average, var)) return;
+#endif
     // In the first time step of each interval, some old fields are
     // stored for later use.
     // It is guaranteed that remeshing won't occur within the interval.
@@ -455,6 +462,9 @@ void Output::average_fields(Variables& var)
 
 void Output::write_checkpoint(const Param& param, const Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif

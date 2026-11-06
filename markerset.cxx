@@ -18,6 +18,10 @@
 #include "knn.hpp"
 #include "matprops.hpp"
 #include "remeshing.hpp"
+#include "mpi_simulation.hpp"
+#ifdef USEMPI
+#include "mpi_state.hpp"
+#endif
 
 
 namespace {
@@ -126,6 +130,37 @@ void MarkerSet::allocate_markerdata( const int max_markers )
     _genesis = new int_vec( max_markers );
     _tmp = new double_vec( max_markers );
 }
+
+#ifdef USEMPI
+void MarkerSet::mpi_subset(const MarkerSet& source, const int_vec& ids, const int_vec& elements)
+{
+    _nmarkers=ids.size();_last_id=source._last_id;resize(_nmarkers);
+    for(int i=0;i<_nmarkers;++i) {
+        for(int d=0;d<NODES_PER_ELEM;++d) (*_eta)[i][d]=(*source._eta)[ids[i]][d];
+        (*_elem)[i]=elements[i];
+#define F(x) (*x)[i]=(*source.x)[ids[i]];
+        F(_mattype) F(_id) F(_genesis) F(_time) F(_z) F(_distance) F(_slope) F(_tmp)
+#undef F
+    }
+}
+
+void MarkerSet::mpi_state(MpiState& state)
+{
+    state.value(_nmarkers);
+    state.value(_last_id);
+    if (state.reading()) resize(_nmarkers);
+    state.prefix(*_eta, _nmarkers);
+    state.prefix(*_elem, _nmarkers);
+    state.prefix(*_mattype, _nmarkers);
+    state.prefix(*_id, _nmarkers);
+    state.prefix(*_genesis, _nmarkers);
+    state.prefix(*_time, _nmarkers);
+    state.prefix(*_z, _nmarkers);
+    state.prefix(*_distance, _nmarkers);
+    state.prefix(*_slope, _nmarkers);
+    state.prefix(*_tmp, _nmarkers);
+}
+#endif
 
 
 void MarkerSet::random_eta( double *eta )
@@ -2238,6 +2273,10 @@ namespace {
 void advect_hydrous_markers(const Param& param, const Variables& var, double dt_subtotal,
                             MarkerSet& hydms, Array2D<int,1>& hydem)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Hydrous, var, dt_subtotal)) return;
+#endif
+
     std::unordered_map<int, Barycentric_transformation*> cache;
     Barycentric_transformation *bary;
 

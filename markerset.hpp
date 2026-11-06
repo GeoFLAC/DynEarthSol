@@ -5,6 +5,9 @@
 #include "barycentric-fn.hpp"
 
 struct SurfaceTopo;   // geometry.hpp -- surface-relative reference depth for get_ZPT()
+#ifdef USEMPI
+class MpiState;
+#endif
 
 class MarkerSet
 {
@@ -47,6 +50,10 @@ public:
     void remove_marker_data(int is, int ie);
     void remove_markers(const Param& param, const Variables& var, int_vec& markers, int_vec2D& markers_in_elem);
     void resize(const int);
+#ifdef USEMPI
+    void mpi_state(MpiState&);
+    void mpi_subset(const MarkerSet&, const int_vec& ids, const int_vec& elements);
+#endif
     template <class T>
     void write_chkpt_file(T &bin) const;
     template <class T>

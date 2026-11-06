@@ -2,6 +2,10 @@
 #include <limits>
 #include <cstdlib>
 #include <fstream>
+#ifdef USEMPI
+#include <exception>
+#include <new>
+#endif
 
 
 #include "constants.hpp"
@@ -18,6 +22,7 @@
 #include "markerset.hpp"
 #include "mesh.hpp"
 #include "monitor.hpp"
+#include "mpi_simulation.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
@@ -614,6 +619,9 @@ void update_mesh(const Param& param, Variables& var)
         const bool track_tops = param.mesh.remeshing_option == 13 &&
                                 param.control.surface_process_option != 0;
         if (track_tops) {
+#ifdef USEMPI
+            if (var.mpi) var.mpi->boundary(var);
+#endif
             for (int t = 0; t < NSIDEWALL; ++t)
                 if (!var.side_profile[t].empty())
                     top_before[t] = side_wall_top_z(var, t);
@@ -632,6 +640,10 @@ void update_mesh(const Param& param, Variables& var)
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
+#endif
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::SwapVolume, var)) {}
+    else
 #endif
     {
         double_vec *tmp = var.volume;
@@ -790,6 +802,12 @@ int main(int argc, const char* argv[])
     Param param;
     get_input_parameters(argv[1], param);
 
+#ifdef USEMPI
+    MpiSimulation mpi(param);
+    if (!mpi.is_root()) return mpi.worker_loop();
+    try {
+#endif
+
     const BuildInfo build = probe_build_info();
     const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
     // Selects the offload device, so it must precede any compute.
@@ -811,6 +829,9 @@ int main(int argc, const char* argv[])
     // run simulation
     //
     static Variables var; // declared as static to silence valgrind's memory leak detection
+#ifdef USEMPI
+    var.mpi = &mpi;
+#endif
     init_var(param, var);
 
     var.output = new Output(param, build, cpu, dev, manifest, var.func_time.start_time,
@@ -936,6 +957,9 @@ int main(int argc, const char* argv[])
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
+#ifdef USEMPI
+    mpi.attach(var);
+#endif
     var.output->write_exact(var);
     monitor_initialize(param, var);
 
@@ -1113,8 +1137,12 @@ int main(int argc, const char* argv[])
         // builds the grid at its end. So the grid always indexes every marker,
         // and it does not go stale in a run that seldom remeshes. A checkpoint
         // holds the grid the run reads.
-        if (var.steps % param.mesh.quality_check_step_interval == 0)
+        if (var.steps % param.mesh.quality_check_step_interval == 0) {
+#ifdef USEMPI
+            if (var.mpi) var.mpi->collect(var);
+#endif
             build_serpentinization_grid(param, var);
+        }
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
@@ -1291,5 +1319,16 @@ int main(int argc, const char* argv[])
 
     write_manifest_end(param, manifest, var, var.steps - static_cast<int>(starting_step),
                        duration_ns, init_time, computation_time, peak_rss_gib);
+#ifdef USEMPI
+    mpi.report();
+#endif
     return 0;
+#ifdef USEMPI
+    } catch (const std::bad_alloc&) {
+        die(EXIT_RUNTIME_RESOURCE, "allocation failed on MPI rank zero");
+    } catch (const std::exception& error) {
+        std::cerr << "MPI rank zero: " << error.what() << '\n';
+        die(EXIT_INTERNAL_UNREACHABLE, "exception while MPI workers are active");
+    }
+#endif
 }

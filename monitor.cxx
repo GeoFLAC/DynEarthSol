@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "monitor.hpp"
+#include "mpi_simulation.hpp"
 #include "geometry.hpp"
 #include "matprops.hpp"
 
@@ -369,6 +370,21 @@ void monitor_write_point_row(const Param& param,
 
 void monitor_write_all_points(const Param& param, const Variables& var, MonitorManager& manager)
 {
+#ifdef USEMPI
+    if (var.mpi) {
+        int_vec nodes, elements;
+        for (const auto& p : manager.points) {
+            if (p.node_id >= 0) nodes.push_back(p.node_id);
+            if (p.elem_id >= 0) {
+                elements.push_back(p.elem_id);
+                for (int j=0;j<NODES_PER_ELEM;++j) nodes.push_back((*var.connectivity)[p.elem_id][j]);
+            }
+        }
+        std::sort(nodes.begin(), nodes.end()); nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+        std::sort(elements.begin(), elements.end()); elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
+        var.mpi->sample(var, nodes, elements);
+    }
+#endif
     for (std::size_t i = 0; i < manager.points.size(); ++i) {
         monitor_write_point_row(param, var, manager.points[i], manager.points[i].fp);
     }
@@ -437,6 +453,9 @@ void monitor_write_if_due(const Param& param, Variables& var)
 
 void monitor_before_remesh(const Param& param, Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var);
+#endif
     if (!param.monitor.enabled || !g_monitor.initialized) return;
     if (param.monitor.remesh_rebind_mode != monitor_rebind_pre_remesh_coord) return;
     monitor_capture_rebind_coords_before_remesh(var, g_monitor);

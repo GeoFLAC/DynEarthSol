@@ -80,6 +80,9 @@ typedef array_t::ConstIndirectAccessor ConstArrayIndirectAccessor;
 // typedef elem_cache::ConstIndirectAccessor ConstElemCacheIndirectAccessor;
 
 class Output;
+#ifdef USEMPI
+class MpiSimulation;
+#endif
 
 #ifndef ACC
 struct neighbor {
@@ -814,6 +817,9 @@ class MatProps;
 class MarkerSet;
 class VirtualTopology;
 struct Variables {
+#ifdef USEMPI
+    MpiSimulation *mpi = nullptr; // owned by main; null in ordinary serial builds
+#endif
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
@@ -828,7 +834,7 @@ struct Variables {
     int nphasechange;
     int info_display_next_step;
     Time func_time;
-    Output *output;
+    Output *output = nullptr;
 
     int nnode;
     int nelem;
@@ -853,19 +859,19 @@ struct Variables {
 // #endif
 
     // These 5 arrays are allocated by external library
-    array_t *coord;
-    conn_t *connectivity;
-    conn_t *connectivity_surface;
-    segment_t *segment;
-    segflag_t *segflag;
-    regattr_t *regattr;
-    regular_t *cell;
+    array_t *coord = nullptr;
+    conn_t *connectivity = nullptr;
+    conn_t *connectivity_surface = nullptr;
+    segment_t *segment = nullptr;
+    segflag_t *segflag = nullptr;
+    regattr_t *regattr = nullptr;
+    regular_t *cell = nullptr;
 
 
-    uint_vec *bcflag;
-    int_vec *bnodes[nbdrytypes];
-    std::vector< std::pair<int,int> > *bfacets[nbdrytypes];
-    array_t *bnormals;
+    uint_vec *bcflag = nullptr;
+    int_vec *bnodes[nbdrytypes] = {};
+    std::vector< std::pair<int,int> > *bfacets[nbdrytypes] = {};
+    array_t *bnormals = nullptr;
 
     // the recorded column of each restored side wall, SIDEWALL_* order (SideProfile)
     SideProfile side_profile[NSIDEWALL];
@@ -888,61 +894,61 @@ struct Variables {
     double_vec vbc_vertical_ratio_x0;
     double_vec vbc_vertical_ratio_x1;
 
-    int_vec *top_elems;
+    int_vec *top_elems = nullptr;
     int ntop_elems;
-    int_vec2D *markers_in_elem;
-    int_vec2D *hydrous_markers_in_elem;
+    int_vec2D *markers_in_elem = nullptr;
+    int_vec2D *hydrous_markers_in_elem = nullptr;
 
     Support support;  // node-support graph; rebuilt by create_support()
-    conn_t *neighbor; // neighboring elements for each element
-    int_pair_vec *contact; // contact elements for each element
-    double_vec *ctmp; // temporary array for contact elements
+    conn_t *neighbor = nullptr; // neighboring elements for each element
+    int_pair_vec *contact = nullptr; // contact elements for each element
+    double_vec *ctmp = nullptr; // temporary array for contact elements
 
-    double_vec *volume, *volume_old, *volume_n;
-    double_vec *mass, *tmass;
-    double_vec *hmass;
-    double_vec *ymass; // Young's modulus for nodes
-    double_vec *edvoldt;
-    double_vec *temperature, *plstrain, *delta_plstrain;
+    double_vec *volume = nullptr, *volume_old = nullptr, *volume_n = nullptr;
+    double_vec *mass = nullptr, *tmass = nullptr;
+    double_vec *hmass = nullptr;
+    double_vec *ymass = nullptr; // Young's modulus for nodes
+    double_vec *edvoldt = nullptr;
+    double_vec *temperature = nullptr, *plstrain = nullptr, *delta_plstrain = nullptr;
     // R2 baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so a
     // fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
-    double_vec *plstrain_remesh;
-    double_vec *stressyy, *dpressure, *viscosity;
-    double_vec *old_mean_stress;
-    double_vec *ntmp;
-    double_vec *init_elem_size_n;   // frozen initial nodal element size for MMG metric
+    double_vec *plstrain_remesh = nullptr;
+    double_vec *stressyy = nullptr, *dpressure = nullptr, *viscosity = nullptr;
+    double_vec *old_mean_stress = nullptr;
+    double_vec *ntmp = nullptr;
+    double_vec *init_elem_size_n = nullptr;   // frozen initial nodal element size for MMG metric
     // MMG only: each node's plastic-strain size-target record (KEPT REFINEMENT in
     // compute_metric_field). Only its ratio to init_elem_size_n counts: a writer that re-pins
     // init_elem_size_n must rescale it, as restore_side_fields does.
-    double_vec *refined_elem_size_n;
-    double_vec *radiogenic_source;
+    double_vec *refined_elem_size_n = nullptr;
+    double_vec *radiogenic_source = nullptr;
 
     // For hyraulic proceses
-    double_vec *fmass; // pore water mass
-    double_vec *ppressure; // pore pressure
-    double_vec *dppressure; // delta pore pressure
-    double_vec *dppressure_zero; // delta pore pressure
-    double_vec *fluid_source; // injection and pumping of pore water
+    double_vec *fmass = nullptr; // pore water mass
+    double_vec *ppressure = nullptr; // pore pressure
+    double_vec *dppressure = nullptr; // delta pore pressure
+    double_vec *dppressure_zero = nullptr; // delta pore pressure
+    double_vec *fluid_source = nullptr; // injection and pumping of pore water
 
     // For rate-and-state friction
-    double_vec *dyn_fric_coeff;
-    double_vec *state_variable;
+    double_vec *dyn_fric_coeff = nullptr;
+    double_vec *state_variable = nullptr;
     
     // For surface processes
-    SurfaceInfo surfinfo;
+    SurfaceInfo surfinfo{};
     int_vec melt_markers;
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // GoSPL driver for landscape evolution modeling
-    GoSPLDriver* gospl_driver;
+    GoSPLDriver* gospl_driver = nullptr;
 #endif
 
-    array_t *vel, *force, *coord0;
-    array_t *force_residual;
-    tensor_t *strain_rate, *strain, *stress;
-    elem_cache *tmp_result;
-    double_vec *etmp;
-    int_vec *etmp_int;
+    array_t *vel = nullptr, *force = nullptr, *coord0 = nullptr;
+    array_t *force_residual = nullptr;
+    tensor_t *strain_rate = nullptr, *strain = nullptr, *stress = nullptr;
+    elem_cache *tmp_result = nullptr;
+    double_vec *etmp = nullptr;
+    int_vec *etmp_int = nullptr;
 
     // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise.
     // stress_n and spr_blend_weight double as the switch for the SPR recovery:
@@ -953,11 +959,11 @@ struct Variables {
     // - spr_p_ref_old: reference pressure added at pressure-centering, per element
     // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
     //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
-    tensor_t *stress_n;
-    double_vec *stressyy_n;
-    double_vec *spr_blend_weight;
-    double_vec *spr_p_ref_old;
-    int_vec *remesh_is_changed;
+    tensor_t *stress_n = nullptr;
+    double_vec *stressyy_n = nullptr;
+    double_vec *spr_blend_weight = nullptr;
+    double_vec *spr_p_ref_old = nullptr;
+    int_vec *remesh_is_changed = nullptr;
 
     // Per-remesh scratch, per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
     // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
@@ -978,13 +984,13 @@ struct Variables {
 
     // tensor_t *stress_old;
 
-    MatProps *mat;
+    MatProps *mat = nullptr;
 
     std::vector<MarkerSet*> markersets;
     int hydrous_marker_index;
 
-    int_vec2D *elemmarkers; // for marksersets[0] (mattype markers)
-    Array2D<int,1> *hydrous_elemmarkers; // for markersets[hydrous_marker_index] (hydrous markers)
+    int_vec2D *elemmarkers = nullptr; // for marksersets[0] (mattype markers)
+    Array2D<int,1> *hydrous_elemmarkers = nullptr; // for markersets[hydrous_marker_index] (hydrous markers)
 
     // Cached marker-cell index (when uses_serpentinization_grid(), see
     // VirtualTopology in mesh.hpp). Owned; rebuilt eagerly after init(), at
@@ -992,7 +998,7 @@ struct Variables {
     // subduction_phase_changes() when a restart left none it can use (see
     // phasechanges.hpp). Checkpointed (serialize()/deserialize()) so a restart
     // carries the identical lagged state the continuous run had at that step.
-    VirtualTopology *vtopo;
+    VirtualTopology *vtopo = nullptr;
 
     Variables()
     {
@@ -1011,9 +1017,9 @@ struct Variables {
 #endif
     }
 
-    double_vec *log_table; // for log(x) lookup table
-    double_vec *tan_table; // for tan(x) lookup table
-    double_vec *sin_table; // for sin(x) lookup table
+    double_vec *log_table = nullptr; // for log(x) lookup table
+    double_vec *tan_table = nullptr; // for tan(x) lookup table
+    double_vec *sin_table = nullptr; // for sin(x) lookup table
 
 };
 
