@@ -40,18 +40,6 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory '*' || true
 
-      - name: install boost
-        run: |
-          set -eu
-          if ! apt-get -o Acquire::Retries=3 update; then
-            grep -rq snapshot.debian.org /etc/apt/ || { echo "no snapshot pin"; exit 1; }
-            perl -0pi -e 's{^# (http://snapshot\S+)\nURIs: \S+}{URIs: $1}gm;
-                          s{^deb }{#deb }gm; s{^# deb (http://snapshot)}{deb $1}gm' \
-              $(ls /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null)
-            apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=3 update
-          fi
-          apt-get install -y --no-install-recommends libboost-program-options-dev
-
       - name: g++ version
         run: g++ --version
 
@@ -74,10 +62,10 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip numpy h5py
 
-      - name: get boost and hdf5
+      - name: get hdf5
         run: |
           sudo apt-get update
-          sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+          sudo apt-get install -y libhdf5-serial-dev make pkg-config
 
       - name: make 2d openmp hdf5
         run: make -j4 ndims=2 opt=2 openmp=1 hdf5=1

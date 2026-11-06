@@ -59,7 +59,6 @@ RUN apt-get update && \
     g++ \
     gcc \
     git \
-    libboost-program-options-dev \
     libhdf5-serial-dev \
     make \
     pkg-config && \
@@ -78,7 +77,7 @@ RUN set -eux; \
     nvc++ -acc=gpu -cuda -DACC -gpu=mem:managed -fopenmp -DNPROF \
           -I"$NVHPC_DIR/cuda/include" -c /tmp/acc_check.cxx -o /tmp/acc_check.o; \
     nvc++ -acc=gpu -gpu=mem:managed -cuda -fopenmp /tmp/acc_check.o \
-          $(pkg-config --libs hdf5-serial) -lboost_program_options \
+          $(pkg-config --libs hdf5-serial) \
           -o /tmp/acc_check; \
     rm -f /tmp/acc_check.cxx /tmp/nvcc_check.cu /tmp/acc_check.o \
           /tmp/nvcc_check.o /tmp/acc_check

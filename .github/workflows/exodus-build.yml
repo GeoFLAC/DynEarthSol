@@ -38,8 +38,6 @@ jobs:
         mkdir build; cd build
         ../cmake-exodus
         make; make install
-    - name: get boost
-      run: sudo apt-get install -y libboost-program-options-dev
     - name: make 3d
       run: make ndims=3 useexo=1
     
