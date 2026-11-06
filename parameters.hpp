@@ -193,7 +193,6 @@ struct Mesh {
     std::string poly_filename;
     std::string exo_filename;
 
-    bool is_discarding_internal_segments;
     int remeshing_option;
 
     // MMG freeze rules (FREEZE / REQUIRED POLICY, remeshing.cxx)

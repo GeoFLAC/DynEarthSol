@@ -3825,8 +3825,7 @@ void create_new_mesh(const Param& param, Variables& var)
         die(EXIT_CONFIG_VALUE);
     }
 
-    if (param.mesh.is_discarding_internal_segments)
-        discard_internal_segments(var.nseg, *var.segment, *var.segflag);
+    discard_internal_segments(var.nseg, *var.segment, *var.segflag);
 
     renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, var.regattr, var.init_elem_size_n);
 

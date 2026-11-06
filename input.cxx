@@ -347,11 +347,6 @@ static void declare_parameters(opt::Registry &cfg,
          "few between events; widen it to blend more of the domain, narrow it to make "
          "the switch sharper. The window width is otherwise untuned.")
 
-        ("mesh.is_discarding_internal_segments", opt::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
-         "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
-         "'no' is not available on an unstructured mesh (meshing_elem_shape = 0): MMG keeps no "
-         "internal segment.")
-
         // for mesh optimization with MMG2D/3D
         ("mesh.mmg_debug", opt::value<int>(&p.mesh.mmg_debug)->default_value(0),
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
@@ -1601,11 +1596,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available in 3D on an "
             "unstructured mesh (mesh.meshing_elem_shape = 0).");
 #endif
-    // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
-    if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
-        die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available on an "
-            "unstructured mesh (mesh.meshing_elem_shape = 0): MMG keeps no internal segment.");
-    }
 
 
     //

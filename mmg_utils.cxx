@@ -61,8 +61,7 @@ void dedup_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
 // MMG needs neither as a constraint (it drops a ref=0 facet between equal references and derives
 // one between two references from elem_ref), so this never changes what MMG builds. It keeps
 // var.segment boundary-only, which collapse_short_boundary_segments_2d, check_mesh_tangle and
-// mmg_adapt's 2D req_edges append rely on (hence validate_parameters rejects
-// is_discarding_internal_segments = no under MMG).
+// mmg_adapt's 2D req_edges append rely on.
 void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
 {
     int ns = 0;
