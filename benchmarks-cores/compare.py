@@ -194,7 +194,6 @@ except OSError:
     print("Error: Directory of old results doesn't exist:", oldmodelname)
     sys.exit(1)
 old = read_data(des_old, frame)
-fmt_old = des_old.format
 
 try:
     des_new = Dynearthsol(modelname)
@@ -202,12 +201,9 @@ except OSError:
     print("Error: Directory of new results doesn't exist:", modelname)
     sys.exit(1)
 new = read_data(des_new, frame)
-fmt_new = des_new.format
 
 # compare results
 print()
-if fmt_old != fmt_new:
-    print('Comparison between :', fmt_old, 'and', fmt_new, '(new)')
 print('Relative difference (max, stddev) of frame = %d  step = %d' \
             % (frame, int(des_old.steps[frame])))
 print('  ---')
