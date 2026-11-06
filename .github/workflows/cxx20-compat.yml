@@ -45,20 +45,20 @@ jobs:
         run: bash .github/workflows/scripts/install-debian-deps.sh
 
       - name: build as C++20
-        run: bash .github/workflows/scripts/cxx20-check.sh opt=2 openmp=1 hdf5=0
+        run: bash .github/workflows/scripts/cxx20-check.sh opt=2 openmp=1
 
   clang:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: install clang and libomp
+      - name: install clang, libomp and hdf5
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libomp-dev
+          sudo apt-get install -y clang libomp-dev libhdf5-dev pkg-config
 
       - name: clang version
         run: clang++ --version
 
       - name: build as C++20
-        run: bash .github/workflows/scripts/cxx20-check.sh CXX=clang++ opt=2 openmp=1 hdf5=0
+        run: bash .github/workflows/scripts/cxx20-check.sh CXX=clang++ opt=2 openmp=1

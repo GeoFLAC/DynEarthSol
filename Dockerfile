@@ -18,6 +18,8 @@ ARG GOSPL=0
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    libhdf5-dev \
+    pkg-config \
     python3 \
     python3-pip \
     git \

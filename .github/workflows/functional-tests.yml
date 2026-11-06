@@ -46,10 +46,10 @@ jobs:
         echo Install hdf5 ====================
         sudo apt-get update
         sudo apt-get install -y libhdf5-serial-dev make pkg-config
-    - name: make 3d hdf5
+    - name: make 3d
       working-directory: .
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
-      run: make -j ndims=3 opt=2 openmp=1 hdf5=1
+      run: make -j ndims=3 opt=2 openmp=1
 
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
@@ -58,9 +58,9 @@ jobs:
       working-directory: ./benchmarks-cores
       run: make fresh-restart-cmp CASE=../tests/functional/3d-evp-regular.cfg && rm -rf functional-test.*
 
-    - name: make 2d hdf5
+    - name: make 2d
       working-directory: .
-      run: make -j ndims=2 opt=2 openmp=1 hdf5=1
+      run: make -j ndims=2 opt=2 openmp=1
 
     - name: test elastic plane-strain stress update
       run: python3 plane_strain_elastic/run_plane_strain_elastic.py ../../dynearthsol2d
@@ -81,9 +81,9 @@ jobs:
     - name: test that bad config files are rejected
       run: python3 bad_input/check_bad_input.py --exe ../../dynearthsol2d
 
-    - name: make 3d hdf5 opt=-1
+    - name: make 3d opt=-1
       working-directory: .
-      run: make cleanall && make -j ndims=3 opt=-1 openmp=1 hdf5=1
+      run: make cleanall && make -j ndims=3 opt=-1 openmp=1
 
     - name: test memory leak 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*

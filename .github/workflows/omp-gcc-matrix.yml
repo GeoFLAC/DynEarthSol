@@ -48,10 +48,10 @@ jobs:
         run: bash .github/workflows/scripts/install-debian-deps.sh
 
       - name: make 2d openmp
-        run: make -j4 ndims=2 opt=2 openmp=1 hdf5=0
+        run: make -j4 ndims=2 opt=2 openmp=1
 
       - name: make 3d openmp
-        run: make -j4 ndims=3 opt=2 openmp=1 hdf5=0
+        run: make -j4 ndims=3 opt=2 openmp=1
 
   thread-count-check:
     runs-on: ubuntu-latest
@@ -71,8 +71,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libhdf5-serial-dev make pkg-config
 
-      - name: make 2d openmp hdf5
-        run: make -j4 ndims=2 opt=2 openmp=1 hdf5=1
+      - name: make 2d openmp
+        run: make -j4 ndims=2 opt=2 openmp=1
 
       - name: reference run, 1 thread
         working-directory: ./tests/functional

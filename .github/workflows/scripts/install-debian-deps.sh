@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install what a DES build needs beyond the compiler in a Debian-based gcc:N image
-# (run as root): cmake, which configures the mmg submodule.
+# (run as root): cmake, which configures the mmg submodule, and HDF5.
 set -euo pipefail
 
 # gcc:8-11 are Debian buster/bullseye: buster's packages are on archive.debian.org,
@@ -10,4 +10,4 @@ if [ -f /etc/apt/sources.list ]; then
     sed -i '/buster/s|deb.debian.org|archive.debian.org|' /etc/apt/sources.list
 fi
 apt-get -o Acquire::Check-Valid-Until=false update
-apt-get install -y --no-install-recommends cmake
+apt-get install -y --no-install-recommends cmake libhdf5-dev pkg-config
