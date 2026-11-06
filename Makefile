@@ -721,6 +721,7 @@ SRCS =	\
 	mmg_utils.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
+	nonlocal.cxx \
 	output.cxx \
 	phasechanges.cxx \
 	remeshing.cxx \

@@ -204,6 +204,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
 
     bin.write_array(*var.plstrain, "plastic strain", var.plstrain->size());
+    if (var.nonlocal.plstrain_nl)
+        bin.write_array(*var.nonlocal.plstrain_nl, "plastic strain nonlocal",
+                        var.nonlocal.plstrain_nl->size());
 
     // Strain rate and plastic strain rate do not need to be checkpointed,
     // so we don't have to distinguish averged/non-averaged variants.
@@ -493,6 +496,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
     bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
+    if (var.nonlocal.plstrain_nl)
+        bin.write_array(*var.nonlocal.plstrain_nl, "plstrain_nonlocal", var.nonlocal.plstrain_nl->size());
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
     bin.write_array(*var.refined_elem_size_n, "refined_elem_size_n",

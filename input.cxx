@@ -1173,6 +1173,22 @@ static void declare_parameters(po::options_description &cfg,
          "Dilation angle of the materials when weakening starts '[d0, d1, d2, ...]' (in degree)")
         ("mat.dilation_angle1", po::value<std::string>()->default_value("[0]"),
          "Dilation angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
+        ("mat.nonlocal_option", po::value<int>(&p.mat.nonlocal_option)->default_value(0),
+         "Nonlocal regularization of plastic-strain softening (plastic rheologies only).\n"
+         " 0: off, weakening reads each element's own plastic strain k.\n"
+         " 1: each step's plastic-strain increment is averaged over the neighbouring elements, "
+         "weighted by volume and the Gaussian exp(-r^2/l^2) (l: nonlocal_length_in_m, cut off at "
+         "3 l, renormalized at boundaries), and accumulated into the nonlocal plastic strain kbar "
+         "(output \"plastic strain nonlocal\"); weakening reads m*kbar + (1-m)*k (m: nonlocal_m). "
+         "kbar starts from k after the initial weak zone, so the seed is not smeared. The band "
+         "thickness then scales with l, not with the element size, once the band elements are "
+         "smaller than about l/2.")
+        ("mat.nonlocal_length_in_m", po::value<double>(&p.mat.nonlocal_length)->default_value(0),
+         "Length l of the Gaussian weight of nonlocal_option 1 (in meters)")
+        ("mat.nonlocal_m", po::value<double>(&p.mat.nonlocal_m)->default_value(1.0),
+         "Nonlocal weight m of nonlocal_option 1, >= 1: weakening reads m*kbar + (1-m)*k. 1 is the "
+         "plain nonlocal average; slightly above 1 is the over-nonlocal form (Vermeer & Brinkgreve "
+         "1994), which helps a strongly softening band localize fully.")
 
         ("mat.porosity", po::value<std::string>()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
@@ -2089,6 +2105,21 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, nmat_key, true);
+
+        if (p.mat.nonlocal_option < 0 || p.mat.nonlocal_option > 1)
+            die(EXIT_CONFIG_VALUE, "mat.nonlocal_option must be 0 or 1.");
+        if (p.mat.nonlocal_option) {
+            if (!(p.mat.rheol_type & MatProps::rh_plastic))
+                die(EXIT_CONFIG_VALUE, "mat.nonlocal_option needs a plastic rheology.");
+            if (!(p.mat.nonlocal_length > 0))
+                die(EXIT_CONFIG_VALUE, "mat.nonlocal_length_in_m must be > 0 with mat.nonlocal_option 1.");
+            if (!(p.mat.nonlocal_m >= 1))
+                die(EXIT_CONFIG_VALUE, "mat.nonlocal_m must be >= 1.");
+#ifdef ACC
+            // kbar and its neighbour graph live on the host only
+            die(EXIT_CONFIG_VALUE, "mat.nonlocal_option 1 is not supported in OpenACC builds.");
+#endif
+        }
 
         // Hydraulic parameters
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);

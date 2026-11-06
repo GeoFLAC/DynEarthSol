@@ -573,6 +573,13 @@ namespace {
             double_vec *new_delta_pls = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.delta_plstrain, *new_delta_pls, e);
 
+            // the nonlocal plastic strain (mat.nonlocal_option) is remapped exactly like plstrain
+            double_vec *new_pls_nl = nullptr;
+            if (var.nonlocal.plstrain_nl) {
+                new_pls_nl = new double_vec(e);
+                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.nonlocal.plstrain_nl, *new_pls_nl, e);
+            }
+
             tensor_t *new_strain = new tensor_t(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.strain, *new_strain, e);
 
@@ -581,6 +588,8 @@ namespace {
             // spurious non-zero plastic strain on freshly created elements, e.g. the
             // gap elements introduced by remeshing_option=11 (restore_bottom).
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_plstrain, e);
+            if (new_pls_nl)
+                boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_pls_nl, e);
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_delta_pls, e);
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_strain, e);
 
@@ -600,6 +609,11 @@ namespace {
 
             delete var.plstrain;
             var.plstrain = new_plstrain;
+
+            if (new_pls_nl) {
+                delete var.nonlocal.plstrain_nl;
+                var.nonlocal.plstrain_nl = new_pls_nl;
+            }
 
             delete var.delta_plstrain;
             var.delta_plstrain = new_delta_pls;

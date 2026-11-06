@@ -822,6 +822,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
     const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    // mat.nonlocal_option: weakening reads khat = m*kbar + (1-m)*k (nonlocal.hpp). kbar is
+    // lagged by one step, so only the local term moves the yield surface within the step and
+    // the softening modulus is scaled by (1 - m).
+    const double* pls_nl = param.mat.nonlocal_option ? var.nonlocal.plstrain_nl->data() : nullptr;
+    const double nl_m = param.mat.nonlocal_m;
+    const double nl_hfac = 1.0 - nl_m;
     // Only option 0 projects the centroid velocity; option 1 derives its rate
     // from the strain-rate invariant.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
@@ -836,7 +842,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, \
-                     needs_projected_velocity)
+                     needs_projected_velocity, pls_nl, nl_m, nl_hfac)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -936,6 +942,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // mesh by the nearest-neighbour remap at each remesh, growing a spurious nonzero halo
         // that diffuses out of the yielding zones. Resetting to 0 makes it a true per-step rate.
         delta_plstrain[e] = 0.;
+        const double pls_e = pls_nl ? nl_m * pls_nl[e] + (1.0 - nl_m) * plstrain[e]
+                                    : plstrain[e];
 
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
@@ -981,8 +989,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
+                var.mat->plastic_props(e, pls_e,
                                        amc, anphi, anpsi, hardn, ten_max);
+                if (pls_nl) hardn *= nl_hfac;
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1013,8 +1022,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double svII = second_invariant2(sv);
 
                 double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
+                var.mat->plastic_props(e, pls_e,
                                        amc, anphi, anpsi, hardn, ten_max);
+                if (pls_nl) hardn *= nl_hfac;
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1067,10 +1077,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
         
                 double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props_rsf(e, plstrain[e],
+                var.mat->plastic_props_rsf(e, pls_e,
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
                                        var.dt, param.mat.state_var_model);
+                if (pls_nl) hardn *= nl_hfac;
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1114,10 +1125,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #endif
 
                 double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props_rsf(e, plstrain[e],
+                var.mat->plastic_props_rsf(e, pls_e,
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
                                        var.dt, param.mat.state_var_model);
+                if (pls_nl) hardn *= nl_hfac;
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq

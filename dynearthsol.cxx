@@ -22,6 +22,7 @@
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
+#include "nonlocal.hpp"
 #include "runtime_info.hpp"
 #include "utils.hpp"
 #include "gospl_driver/gospl-driver.hpp"
@@ -214,6 +215,7 @@ void init(const Param& param, Variables& var)
 
     initial_weak_zone(param, var, *var.plstrain);
     *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not R2 growth
+    init_nonlocal_plstrain(param, var);     // the seed enters kbar unsmeared
     if (param.mat.rheol_type & MatProps::rh_rsf) {
         initial_friction_coeff(param, var, *var.dyn_fric_coeff);
         initial_state_variable(param, var, *var.state_variable);
@@ -440,6 +442,8 @@ void restart(const Param& param, Variables& var)
         bin_save.read_array(*var.plstrain, "plastic strain");
         // the R2 baseline, so the first remesh after a restart refines as in a continuous run
         bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
+        if (param.mat.nonlocal_option)
+            bin_chkpt.read_array(*var.nonlocal.plstrain_nl, "plstrain_nonlocal");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -550,8 +554,11 @@ void restart(const Param& param, Variables& var)
         const double_vec old_plstrain(*var.plstrain);
         initial_weak_zone(param, var, *var.plstrain);
         // Shift the R2 baseline by the re-seed only; growth since the last remesh still counts.
-        for (int e = 0; e < var.nelem; ++e)
+        for (int e = 0; e < var.nelem; ++e) {
             (*var.plstrain_remesh)[e] += (*var.plstrain)[e] - old_plstrain[e];
+            if (param.mat.nonlocal_option)   // the re-seed enters kbar unsmeared too
+                (*var.nonlocal.plstrain_nl)[e] += (*var.plstrain)[e] - old_plstrain[e];
+        }
     }
 
     // Restore the RSF state variable when available, then rebuild the derived
@@ -682,6 +689,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
             *var.strain_rate,
             *var.ppressure, *var.dppressure, *var.vel,
             *var.dyn_fric_coeff, *var.state_variable);
+        accumulate_nonlocal_plstrain(param, var);
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
@@ -742,6 +750,7 @@ void initial_body_force_adjustment(const Param &param, Variables &var)
                 *var.strain_rate,
                 *var.ppressure, *var.dppressure, *var.vel,
                 *var.dyn_fric_coeff, *var.state_variable);
+            accumulate_nonlocal_plstrain(param, var);
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             // update_velocity_PT(var, *var.vel);
             update_velocity(var, *var.vel);
@@ -993,6 +1002,7 @@ int main(int argc, const char* argv[])
             *var.strain_rate,
             *var.ppressure, *var.dppressure, *var.vel,
             *var.dyn_fric_coeff, *var.state_variable);
+        accumulate_nonlocal_plstrain(param, var);
 
         // Nodal Mixed Discretization For Stress
         if (param.control.is_using_mixed_stress)
@@ -1026,6 +1036,7 @@ int main(int argc, const char* argv[])
                     *var.strain_rate,
                     *var.ppressure, *var.dppressure, *var.vel,
                     *var.dyn_fric_coeff, *var.state_variable);
+                accumulate_nonlocal_plstrain(param, var);
                 update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
                 // update_velocity_PT(var, *var.vel);
                 update_velocity(var, *var.vel);

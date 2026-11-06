@@ -5759,6 +5759,7 @@ void restore_side_fields(const Param &param, Variables &var,
             // pristine incoming material: no accumulated strain
             (*var.plstrain)[e] = 0.;
             (*var.delta_plstrain)[e] = 0.;
+            if (var.nonlocal.plstrain_nl) (*var.nonlocal.plstrain_nl)[e] = 0.;
             for (int d = 0; d < NSTR; ++d)
                 (*var.strain)[e][d] = 0.;
             // radiogenic source of the recorded wall element at this position

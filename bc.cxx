@@ -1690,6 +1690,18 @@ void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
         const int e = (*var.top_elems)[ti];
         plstrain[e] -= plstrain[e] * lambha * var.dt;
     }
+    // the nonlocal plastic strain (mat.nonlocal_option) decays with it
+    if (var.nonlocal.plstrain_nl) {
+        double_vec& kbar = *var.nonlocal.plstrain_nl;
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, kbar, lambha)
+#endif
+        #pragma acc parallel loop gang vector async
+        for (int ti = 0; ti < var.ntop_elems; ++ti) {
+            const int e = (*var.top_elems)[ti];
+            kbar[e] -= kbar[e] * lambha * var.dt;
+        }
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -1701,9 +1713,10 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
+    double* kbar = var.nonlocal.plstrain_nl ? var.nonlocal.plstrain_nl->data() : nullptr;
 #ifndef ACC
     #pragma omp parallel default(none) \
-        shared(var, volume, volume_n, stress, strain, strain_rate, plstrain)
+        shared(var, volume, volume_n, stress, strain, strain_rate, plstrain, kbar)
 #endif
     {
 #ifndef ACC
@@ -1721,6 +1734,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 
             // correct stress and strain
             plstrain[e] /= rdv;
+            if (kbar) kbar[e] /= rdv;   // mat.nonlocal_option: kbar with plstrain
             // correct the plastic strain overestimation of surface element caused by sedimentation.
             for (int j=0;j<NSTR;j++) {
                 stress[e][j] /= rdv;

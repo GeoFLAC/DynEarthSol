@@ -500,6 +500,11 @@ struct Mat {
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
 
+    // nonlocal averaging of the plastic-strain increment (nonlocal.hpp)
+    int nonlocal_option;
+    double nonlocal_length;
+    double nonlocal_m;
+
     // hydraulic parameters
     double_vec porosity;
     double_vec hydraulic_perm;
@@ -813,6 +818,21 @@ struct SurfaceInfo {
 class MatProps;
 class MarkerSet;
 class VirtualTopology;
+
+// Nonlocal plastic-strain state (nonlocal.cxx).
+struct NonlocalState {
+    // CSR element graph: element e's neighbours (itself included) are
+    // arr[idx[e] .. idx[e+1]), with normalized Gaussian weights w (sum 1 per element).
+    // Derived from the mesh; rebuilt after each remesh.
+    int_vec idx, arr;
+    double_vec w;
+    int built_nelem = -1;
+    int built_nremesh = -1;
+    // kbar: the accumulated nonlocal plastic strain, a state variable like plstrain
+    // (remapped, checkpointed). nullptr unless mat.nonlocal_option is on.
+    double_vec *plstrain_nl = nullptr;
+};
+
 struct Variables {
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
@@ -907,6 +927,7 @@ struct Variables {
     // R2 baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so a
     // fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
     double_vec *plstrain_remesh;
+    NonlocalState nonlocal;
     double_vec *stressyy, *dpressure, *viscosity;
     double_vec *old_mean_stress;
     double_vec *ntmp;
