@@ -1,0 +1,60 @@
+name: C++20 compatibility
+
+permissions:
+  contents: read
+
+# The code is C++17 but must also compile as C++20 (CONTRIBUTING.md). Each job
+# builds 2D and 3D with the Makefile's standard switched to C++20 and fails on
+# an error or on a C++20 deprecation warning in DES's own sources. g++ and
+# clang report different deprecations, so both run.
+
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - '**.cxx'
+      - '**.hpp'
+      - '**.cpp'
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - '.github/workflows/cxx20-compat.yml'
+      - '.github/workflows/scripts/cxx20-check.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gcc:
+    runs-on: ubuntu-latest
+    container: gcc:15
+    steps:
+      - uses: actions/checkout@v4
+
+      # As in omp-gcc-matrix; `|| true` tolerates act runs from a git worktree.
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory '*' || true
+
+      - name: g++ version
+        run: g++ --version
+
+      - name: build as C++20
+        run: bash .github/workflows/scripts/cxx20-check.sh opt=2 openmp=1 hdf5=0
+
+  clang:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang and libomp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libomp-dev
+
+      - name: clang version
+        run: clang++ --version
+
+      - name: build as C++20
+        run: bash .github/workflows/scripts/cxx20-check.sh CXX=clang++ opt=2 openmp=1 hdf5=0

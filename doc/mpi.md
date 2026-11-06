@@ -2,22 +2,23 @@
 
 `usempi=1` builds separate `dynearthsol2d.mpi` / `dynearthsol3d.mpi` executables.
 Regular timestep kernels advance compact spatial partitions and exchange neighbor
-halos. This is a CPU backend. Temperature, force and mass assembly can overlap
+halos. The project defaults to C++17 and also supports C++20, matching upstream.
+This is a CPU backend. Temperature, force and mass assembly can overlap
 element halo transfers with computation on interior nodes. GPU timesteps are not
 yet integrated.
 
 ## Build and run
 
 ```sh
-make -j6 ndims=2 usempi=1 usemmg=1 hdf5=1 BOOST_ROOT_DIR=/usr
-make -j6 ndims=3 usempi=1 usemmg=1 hdf5=1 BOOST_ROOT_DIR=/usr
+make -j6 ndims=2 usempi=1 usemmg=1 hdf5=1
+make -j6 ndims=3 usempi=1 usemmg=1 hdf5=1
 cd benchmarks-cores
 OMP_NUM_THREADS=1 mpiexec -n 4 ../dynearthsol2d.mpi test-tiny.cfg
 ```
 
-`MPI_CXX=/path/to/mpicxx` selects the wrapper. `/usr` avoids mixing Conda Boost
-with system HDF5 on the development laptop; select your own library prefix as
-needed. Existing cfg files apply without new simulation parameters. One rank uses
+`MPI_CXX=/path/to/mpicxx` selects the wrapper. Configuration parsing uses the
+vendored CLI11 header; Boost is no longer required. Existing cfg files apply
+without new simulation parameters. One rank uses
 the ordinary full-range kernels. OpenACC, NVHPC profiling and GoSPL cannot currently
 be combined with `usempi=1`. Serial/OpenMP and OpenACC executables remain separate.
 
@@ -29,7 +30,7 @@ RCB is still the default. Build METIS support explicitly, then select it through
 the MPI environment (no new simulation cfg parameter):
 
 ```sh
-make ndims=2 usempi=1 usemetis=1 usemmg=1 hdf5=1 BOOST_ROOT_DIR=/usr
+make ndims=2 usempi=1 usemetis=1 usemmg=1 hdf5=1
 DES_MPI_PARTITIONER=metis OMP_NUM_THREADS=1 \
   mpiexec -n 4 ./dynearthsol2d.mpi model.cfg
 ```
@@ -260,6 +261,9 @@ identical physical cores or stable laptop clocks.
 
 ### Laptop measurement (2026-11-05)
 
+These timings are historical measurements on the pre-CLI11/C++17 source base
+`cce59ab`; they are not a new timing study of the current upstream integration.
+
 Intel Core Ultra 7 356H under WSL, GCC 13.3, Open MPI 4.1.6, MMG 5.8,
 system Boost/HDF5, parent `cce59ab`. Median simulation seconds from three
 interleaved runs; launcher startup excluded. Both modes use the same first N
@@ -352,7 +356,7 @@ pointers. The CPU solver uses host buffers. The standalone transport test exerci
 unequal and asymmetric zero-length messages with the same helper:
 
 ```sh
-mpicxx -std=c++11 -O2 -DOMPI_SKIP_MPICXX=1 -I. -Inanoflann/include \
+mpicxx -std=c++17 -O2 -DOMPI_SKIP_MPICXX=1 -I. -Inanoflann/include \
   tests/functional/mpi/transport_smoke.cxx -o /tmp/des-transport
 mpiexec -n 4 /tmp/des-transport
 ```

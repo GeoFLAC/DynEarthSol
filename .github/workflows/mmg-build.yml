@@ -28,10 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: get boost
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libboost-program-options-dev
     - name: make 2d with mmg
       run: make clean ndims=2; make ndims=2 usemmg=1
     - name: make 3d with mmg

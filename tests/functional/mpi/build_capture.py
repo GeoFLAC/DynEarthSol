@@ -16,7 +16,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--build-dir', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--make-options', nargs='*', default=['BOOST_ROOT_DIR=/usr'])
+    p.add_argument('--make-options', nargs='*', default=[])
     p.add_argument('--dimensions', nargs='+', type=int, choices=[2, 3], default=[2, 3])
     a = p.parse_args()
     if not sys.platform.startswith('linux'): p.error('The capture relinker currently requires Linux/GNU ld')
@@ -32,7 +32,7 @@ def main():
         variables = [f'ndims={dim}', 'usemmg=1', 'hdf5=1', 'usempi=0']+a.make_options
         # Read the real build's resolved objects and libraries; do not duplicate
         # compiler/dependency selection in this test utility.
-        rule = 'des_capture_link:; @echo $(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) -L$(C3X3_DIR) -l$(C3X3_LIBNAME)'
+        rule = 'des_capture_link:; @echo $(CXX) $(M_OBJS) $(OBJS) $(LDFLAGS) -L$(C3X3_DIR) -l$(C3X3_LIBNAME)'
         link = subprocess.check_output(['make', '-s', '--eval', rule, 'des_capture_link']+variables, cwd=build, text=True)
         args = shlex.split(link.strip()); args[1:1] = [str(obj), f'-Wl,--wrap=MMG{dim}D_mmg{dim}dlib']
         # MMG's generic save dispatcher can pull optional VTK dependencies from

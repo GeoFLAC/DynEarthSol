@@ -201,7 +201,8 @@ python tests/functional/mpi/run_accelerator_checks.py --mode host \
   --workdir /tmp/des-accelerator-host
 ```
 
-This builds both dimensions and checks 1/2/3/4/6/8 ranks with GCC's `-fopenacc`.
+This builds both dimensions as C++17 and checks 1/2/3/4/6/8 ranks with GCC's
+`-fopenacc`. Use `--std c++20` for the C++20 compatibility run.
 It records `gpu_verified: false`. On a separate NVIDIA system with NVHPC and
 CUDA-aware Open MPI, expose all local GPUs and use one rank per GPU:
 

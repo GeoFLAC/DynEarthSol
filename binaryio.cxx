@@ -10,13 +10,6 @@
 #include "markerset.hpp"
 #include "runtime_info.hpp"
 
-#ifdef WIN32
-#ifdef _MSC_VER
-#define snprintf _snprintf
-#endif // _MSC_VER
-namespace std { using ::snprintf; }
-#endif // WIN32
-
 /*****************************************************************************
  * The format of the binary file:
  * 1  The first 'headerlen' bytes are ASCII text.

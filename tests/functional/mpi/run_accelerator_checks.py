@@ -20,6 +20,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--mode',choices=['host','gpu'],default='host')
     p.add_argument('--compiler',default='mpicxx')
+    p.add_argument('--std',choices=['c++17','c++20'],default='c++17')
     p.add_argument('--acc-flags',default='-fopenacc')
     p.add_argument('--launcher',default='mpiexec --bind-to none')
     p.add_argument('--ranks',nargs='+',type=int,default=[1,2,3,4,6,8])
@@ -29,7 +30,7 @@ def main():
     a.workdir.mkdir(parents=True,exist_ok=True)
     output=Path(tempfile.mkdtemp(prefix='accelerator-',dir=a.workdir));print('Artifacts:',output,flush=True)
     commands={name:shutil.which(name) for name in ['nvc++','nvcc','nvidia-smi','sycl-ls','icpx','mpicxx','ompi_info']}
-    report=dict(completed=False,gpu_verified=False,mode=a.mode,tools=commands,
+    report=dict(completed=False,gpu_verified=False,mode=a.mode,cpp_standard=a.std,tools=commands,
                 device_paths={path:Path(path).exists() for path in ['/dev/dri','/dev/dxg','/dev/nvidia0']},checks=[])
     if commands['nvidia-smi']:
         r=subprocess.run([commands['nvidia-smi'],'topo','-m'],capture_output=True,text=True,timeout=20)
@@ -40,7 +41,7 @@ def main():
     (output/'results.json').write_text(json.dumps(report,indent=2)+'\n')
     for dim in (2,3):
         exe=output/f'halo-{dim}d'
-        command=shlex.split(a.compiler)+['-std=c++11','-O2','-DOMPI_SKIP_MPICXX=1','-I'+str(ROOT)]
+        command=shlex.split(a.compiler)+['-std='+a.std,'-O2','-DOMPI_SKIP_MPICXX=1','-I'+str(ROOT)]
         command+=shlex.split(a.acc_flags)+(['-DTHREED'] if dim==3 else [])
         command+=[str(ROOT/'tests/functional/mpi/accelerator_halo.cxx'),'-o',str(exe)]
         with (output/f'build-{dim}d.log').open('w') as log:subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)

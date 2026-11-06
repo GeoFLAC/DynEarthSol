@@ -81,6 +81,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- Boost is no longer a dependency. The config file is read with CLI11 2.7.2,
+  vendored as a single header in `third_party/CLI11/`, and the build needs a
+  C++17 compiler. `make BOOST_ROOT_DIR=...` is now ignored with a warning.
+  Valid config files read as before. The `-h` listing is reformatted, parse
+  error messages are worded differently, and three malformed inputs that Boost
+  took are now errors: an empty bool, and a string value that opens with three
+  quotes or with `[` ([#75]).
 - A GoSPL-coupled run prints its coupling as one summary line after each DES
   progress line, after the first event, instead of four lines per event,
   GoSPL's `--- step done` among them ([#105]).
@@ -102,6 +109,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** The make option `use_gospl` is now `usegospl`, matching
   `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
   error.
+- **Breaking.** The Intel classic `icpc` and PGI `pgc++` branches of the
+  Makefile are removed; build with g++ 8 or newer, nvc++ 25.7 or newer, or
+  clang++ 5 or newer. A build that overrides the standard with one older than
+  C++17 now stops at compile time ([#125]).
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
@@ -355,6 +366,7 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#71]: https://github.com/GeoFLAC/DynEarthSol/pull/71
 [#72]: https://github.com/GeoFLAC/DynEarthSol/pull/72
 [#74]: https://github.com/GeoFLAC/DynEarthSol/pull/74
+[#75]: https://github.com/GeoFLAC/DynEarthSol/issues/75
 [#76]: https://github.com/GeoFLAC/DynEarthSol/pull/76
 [#78]: https://github.com/GeoFLAC/DynEarthSol/pull/78
 [#81]: https://github.com/GeoFLAC/DynEarthSol/pull/81
@@ -371,3 +383,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
