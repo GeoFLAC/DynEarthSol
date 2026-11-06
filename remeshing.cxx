@@ -449,12 +449,12 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     int nx_new, nz_new, nnode_new, nelem_new, nseg_new;
 
     // find sides    
-    int side_top[var.nx], side_bottom[var.nx+1-var.nz%2], side_left[var.nz], side_right[var.nz];
+    int_vec side_top(var.nx), side_bottom(var.nx+1-var.nz%2), side_left(var.nz), side_right(var.nz);
 
-    get_side_nodes(var, old_segflag, old_segment, BOUNDZ1, side_top);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDZ0, side_bottom);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDX0, side_left);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDX1, side_right);
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ1, side_top.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ0, side_bottom.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX0, side_left.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX1, side_right.data());
 
     double xlength = old_coord[side_top[var.nx-1]][0] - old_coord[side_top[0]][0];
 

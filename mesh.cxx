@@ -2747,7 +2747,7 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     }
 
     // - Read and append element connectivity
-    int* connect[num_elem_blk];
+    std::vector<int*> connect(num_elem_blk);
     for (int i=0; i<num_elem_blk; i++) {
         connect[i] = (int *) calloc((num_nodes_per_elem[i] * num_elem_in_block[i]), sizeof(int));
         error = ex_get_conn (exoid, EX_ELEM_BLOCK, ids[i], connect[i], 0, 0);
@@ -2807,15 +2807,15 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
     std::cerr <<" Numbers of segments are " << var.nseg <<"."<<std::endl;
 
     // list of elements in the side set
-    int *elem_list[num_side_sets];
+    std::vector<int*> elem_list(num_side_sets);
     // list of facets (sides) of a corresponding element in the side set
-    int *side_list[num_side_sets];
+    std::vector<int*> side_list(num_side_sets);
     // list of the number of nodes of a facet. Uniformly 3 in DES.
-    int *node_cnt_list[num_side_sets];
+    std::vector<int*> node_cnt_list(num_side_sets);
     // list of node IDs of the facet-composing nodes
-    int *node_list[num_side_sets];
+    std::vector<int*> node_list(num_side_sets);
     // list of distribution factors
-    float *dist_fact[num_side_sets];
+    std::vector<float*> dist_fact(num_side_sets);
 
     for(int i=0; i<num_side_sets; i++) {
         elem_list[i]     = (int *) calloc(num_sides_in_set[i], sizeof(int));

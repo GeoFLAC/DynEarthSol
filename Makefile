@@ -345,10 +345,11 @@ endif
 ## ask for warnings -- is where they see the least: -O2 -Wall finds real defects that
 ## -O0 -Wall cannot. The two suppressions cover what this codebase does deliberately,
 ## namely file-static helpers in headers that not every translation unit calls.
+## -Werror=vla stops on a variable-length array, a compiler extension in every C++ standard.
 ## Two flags are added per compiler below instead of here: -Wno-unknown-pragmas, because
 ## the clang debug build wants to hear about acc pragmas while every other build would
 ## drown in them, and -Wno-unused-private-field, which only clang has.
-WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
+WARNFLAGS = -Wall -Werror=vla -Wno-unused-variable -Wno-unused-function
 
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes

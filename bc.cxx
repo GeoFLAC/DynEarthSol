@@ -1545,7 +1545,7 @@ namespace {
         basin[0] = -1;
         basin[1] = -1;
 
-        double boundary[ntop-1];
+        double_vec boundary(ntop-1);
         for (int i=0;i<(ntop-1);i++)
             boundary[i] = depth_tmp[i] * depth_tmp[i+1];
 
