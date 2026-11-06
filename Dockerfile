@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       apt-get install -y clang libomp-dev; \
     fi
 
-# Plain image: HDF5 for hdf5=1, and numpy/scipy for the Python utilities.
+# Plain image: HDF5, and numpy/scipy for the Python utilities.
 FROM base AS env-0
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \

@@ -48,9 +48,10 @@ jobs:
         make ndims=2 config | grep -q 'libomp from *'"$(brew --prefix libomp)" \
           || { echo "::error::libomp was not auto-detected from $(brew --prefix libomp)"; exit 1; }
 
-    # No OPENMP_ROOT_DIR on any line below: these are the
+    # No OPENMP_ROOT_DIR or HDF5_*_DIR on any line below: these are the
     # exact commands the README gives a new user, so CI fails if the zero-config
-    # path regresses.
+    # path regresses. HDF5 comes from the Homebrew prefix matching the build
+    # architecture, not whichever brew happens to be first on PATH.
     - name: make debug 2d
       run: make clean ndims=2; make ndims=2 opt=0 openmp=0
     - name: make debug 3d
@@ -90,8 +91,3 @@ jobs:
         otool -L dynearthsol2d | grep -q libomp \
           || { echo "::error::dynearthsol2d is not linked against libomp"; exit 1; }
         rm -rf external
-    - name: make 3d hdf5
-      # No HDF5_*_DIR: the Makefile finds every path
-      # itself, and on macOS it picks the Homebrew prefix matching the build
-      # architecture rather than whichever brew happens to be first on PATH.
-      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1
