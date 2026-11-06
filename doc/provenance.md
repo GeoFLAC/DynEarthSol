@@ -6,7 +6,7 @@ DES records where each build, run and frame came from:
 |---|---|
 | The build | in the executable, as a `build.snapshot` block |
 | The run | in `<modelname>.manifest`, beside the model's output |
-| Each frame | in the frame: a `/provenance` group (HDF5), a `provenance` record (des-binary) |
+| Each frame | in the frame: a `/provenance` group |
 
 Times are local, with their UTC offset and zone: `2026-09-26T18:53:59-05:00 CDT`. Unknown values
 read `"unknown"`, `-1` or `0`.
@@ -111,8 +111,7 @@ plain `cp` or `touch` moves the mtime, so `exe_mtime` dates the file, not the bu
 Every frame and checkpoint names its own origin:
 
 ```bash
-h5dump -A -g /provenance <model>.save.000000.vtkhdf    # HDF5 build
-strings <model>.save.000000                            # des-binary build
+h5dump -A -g /provenance <model>.save.000000.vtkhdf
 ```
 
 ### Where it came from
