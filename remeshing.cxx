@@ -4112,7 +4112,7 @@ struct SideProfileAt {
 // clamped to the grid.
 int side_profile_cell(double x, double x0, double dx, int n)
 {
-    return static_cast<int>(std::min(std::max((x - x0) / dx, 0.), n - 1.));
+    return static_cast<int>(std::clamp((x - x0) / dx, 0., n - 1.));
 }
 
 // Twice the signed area of wall facet f in the (along-strike, depth) plane.
@@ -4148,8 +4148,8 @@ double side_profile_facet_closest(const SideProfile &p, int f, double qs, double
     for (int i = 0; i < NODES_PER_FACET; ++i) {
         const int j = (i + 1) % NODES_PER_FACET, o = (i + 2) % NODES_PER_FACET;
         const double es = s[j] - s[i], er = r[j] - r[i];
-        const double t = std::min(std::max(((qs - s[i]) * es + (qr - r[i]) * er) /
-                                           (es * es + er * er), 0.), 1.);
+        const double t = std::clamp(((qs - s[i]) * es + (qr - r[i]) * er) / (es * es + er * er),
+                                    0., 1.);
         const double ds = s[i] + t * es - qs, dr = r[i] + t * er - qr;
         const double d2 = ds * ds + dr * dr;
         if (best < 0. || d2 < best) {
@@ -4196,8 +4196,8 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     // beyond them, at least ring * hmin from the clamped query; the clamp is the projection onto
     // the box, which holds every facet, so that facet's squared distance to the query is at least
     // off2 + (ring * hmin)^2. A query on a facet finds every facet containing it in its own cell.
-    const double cs = std::min(std::max(s, p.grid_s0), p.grid_s1);
-    const double cr = std::min(std::max(rel, p.grid_r0), p.grid_r1);
+    const double cs = std::clamp(s, p.grid_s0, p.grid_s1);
+    const double cr = std::clamp(rel, p.grid_r0, p.grid_r1);
     const double off2 = (s - cs) * (s - cs) + (rel - cr) * (rel - cr);
     const int ci = side_profile_cell(cs, p.grid_s0, p.grid_ds, p.grid_ns);
     const int cj = side_profile_cell(cr, p.grid_r0, p.grid_dr, p.grid_nr);
@@ -4254,7 +4254,7 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     }
     at.w[0] = 1. - at.w[1];
     // element: consecutive wall nodes are joined by a wall edge, so they share exactly its element
-    const double r = std::min(std::max(rel, d.front()), d.back());
+    const double r = std::clamp(rel, d.front(), d.back());
     std::size_t i = std::upper_bound(d.begin(), d.end(), r) - d.begin();   // >= 1: r >= d.front()
     if (i == d.size()) --i;                 // r == d.back()
     int nshared = 0;

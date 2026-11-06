@@ -3990,7 +3990,7 @@ int VirtualTopology::column_index(const double* p) const
     int col = 0;
     for (int d=0; d<NDIMS-1; d++) {
         int i = static_cast<int>((p[d] - lo_[d]) / dx_);
-        i = std::min(std::max(i, 0), dims_[d] - 1);
+        i = std::clamp(i, 0, dims_[d] - 1);
         col = col * dims_[d] + i;
     }
     return col;
@@ -4000,7 +4000,7 @@ int VirtualTopology::column_index(const double* p) const
 int VirtualTopology::vertical_index(const double* p) const
 {
     int k = static_cast<int>((p[NDIMS-1] - lo_[NDIMS-1]) / dx_);
-    return std::min(std::max(k, 0), nz_ - 1);
+    return std::clamp(k, 0, nz_ - 1);
 }
 
 

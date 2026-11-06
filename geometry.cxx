@@ -1289,7 +1289,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var, RemeshSc
             // spans decades and neither bound is a physical threshold -- only the
             // decade between them is meaningful.
             double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
-            t = std::min(std::max(t, 0.0), 1.0);
+            t = std::clamp(t, 0.0, 1.0);
             // smoothstep: the cubic 3t^2 - 2t^3, i.e. the Hermite interpolant of
             // (0,0) and (1,1) with w'(0) = w'(1) = 0, so an element
             // drifting across either bound between remeshes sees the weight change
