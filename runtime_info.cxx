@@ -463,15 +463,18 @@ std::string read_os_release()
     std::ifstream f("/etc/os-release");
     if (!f) return std::string();
 
+    // getline writes only to line, never to a string assigned here; see
+    // Registry::scan_lines in options.hpp for why.
     std::string id, version, line;
     while (std::getline(f, line)) {
         // Values may be quoted; both fields are single-word by spec.
         std::string* out = NULL;
-        if (line.compare(0, 3, "ID=") == 0) { out = &id; line = line.substr(3); }
-        else if (line.compare(0, 11, "VERSION_ID=") == 0) { out = &version; line = line.substr(11); }
+        std::string value;
+        if (line.compare(0, 3, "ID=") == 0) { out = &id; value = line.substr(3); }
+        else if (line.compare(0, 11, "VERSION_ID=") == 0) { out = &version; value = line.substr(11); }
         if (!out) continue;
-        line.erase(std::remove(line.begin(), line.end(), '"'), line.end());
-        *out = trim(line);
+        value.erase(std::remove(value.begin(), value.end(), '"'), value.end());
+        *out = trim(value);
     }
     if (id.empty()) return std::string();
     return version.empty() ? id : id + "-" + version;
