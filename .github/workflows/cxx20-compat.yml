@@ -18,6 +18,7 @@ on:
       - '**.c'
       - '**.h'
       - 'Makefile'
+      - 'tests/functional/mpi/**'
       - '.github/workflows/cxx20-compat.yml'
       - '.github/workflows/scripts/cxx20-check.sh'
   workflow_dispatch:
@@ -58,3 +59,45 @@ jobs:
 
       - name: build as C++20
         run: bash .github/workflows/scripts/cxx20-check.sh CXX=clang++ opt=2 openmp=1 hdf5=0
+
+  mpi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install MPI, METIS and HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev libmetis-dev libhdf5-serial-dev
+
+      - name: build MPI as C++17
+        run: |
+          for nd in 2 3; do
+            make -j4 ndims=$nd usempi=1 usemetis=1 openmp=1 hdf5=1
+          done
+
+      - name: build MPI as C++20 without first-party deprecations
+        run: |
+          bash .github/workflows/scripts/cxx20-check.sh usempi=1 usemetis=1 openmp=1 hdf5=1
+
+      # Explicit host mode validates transport/indexing, not GPU execution.
+      - name: check host halo kernels in both standards
+        run: |
+          for cpp_std in c++17 c++20; do
+            python3 tests/functional/mpi/run_accelerator_checks.py --mode host \
+              --std "$cpp_std" --ranks 1 2 3 4 \
+              --launcher 'mpiexec --oversubscribe --bind-to none' \
+              --workdir "/tmp/des-halo-$cpp_std"
+          done
+
+      - name: retain compatibility logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-cxx-compatibility
+          retention-days: 7
+          path: |
+            build-cxx20-*.log
+            cxx20-*.txt
+            /tmp/des-halo-*/accelerator-*/results.json
+            /tmp/des-halo-*/accelerator-*/*.log
