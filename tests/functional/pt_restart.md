@@ -1,7 +1,7 @@
 # PT checkpoint and remeshing regression
 
-From the repository root, use a CPU executable built with either `hdf5=0` or
-`hdf5=1` (HDF5 comparisons require Python h5py and NumPy):
+From the repository root, use a CPU executable (the comparisons require Python
+h5py and NumPy):
 
 ```sh
 OMP_NUM_THREADS=4 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol2d tests/functional/pt_remesh_restart.cfg /tmp/des-pt-restart-2d --restart-frame 1 --require-remesh
@@ -46,8 +46,8 @@ requires stress and pore pressure to remain within 1e-8 of their initial maximum
 absolute magnitude (scale floor 1 Pa), with exactly fixed coordinates. Initial
 PT equilibration retains physical sidewall support and body forces; it suppresses
 transport and pressure-increment consumption, not the hydraulic load definition.
-It does not establish general poroelastic analytical accuracy. Binary and HDF5
-executables use the same checker; the stationarity check requires NumPy.
+It does not establish general poroelastic analytical accuracy. The stationarity
+check requires NumPy.
 
 ## Dynamic time interval and oblique boundaries
 
@@ -76,7 +76,7 @@ directories, and the 3D executable. Use `--schedule step-default` to omit the
 time interval and check a finite checkpoint clock. Select `--method pt`,
 `explicit`, or `gvs` to exercise each integration/output path; the driver
 uses elastic material unless `--rsf` retains the RSF fixture (PT/GVS only).
-Repeat with both PT options. The same checks support binary and HDF5 output.
+Repeat with both PT options.
 Use `--schedule step --step-after-restart 6` or
 `--schedule time --time-after-restart 3.5` to change cadence at restart and
 compare physical fields against an independent output-every-step run.
