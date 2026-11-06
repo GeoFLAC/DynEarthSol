@@ -233,13 +233,11 @@ void init(const Param& param, Variables& var)
     // update_mesh() ungated before the loop.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-#ifdef USEMMG
     // After compute_mass: it fills var.volume_n, which this divides by.
     initialize_elem_size_n(var, *var.init_elem_size_n);
     // No refinement reached yet; the wait covers initialize_elem_size_n's async node kernel.
     #pragma acc wait
     *var.refined_elem_size_n = *var.init_elem_size_n;
-#endif
 
     report_mesh_info(var, "initial");
 
@@ -355,10 +353,8 @@ void restart(const Param& param, Variables& var)
     }
 
     allocate_variables(param, var);
-#ifdef USEMMG
     var.init_elem_size_n->resize(var.nnode);
     var.refined_elem_size_n->resize(var.nnode);
-#endif
 
     create_top_elems(var);
     create_surface_info(param,var,var.surfinfo);
@@ -502,7 +498,6 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
         // for surface marker correction after surface processes
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
-#ifdef USEMMG
         bin_chkpt.read_array(*var.init_elem_size_n, "init_elem_size_n");
         bin_chkpt.read_array(*var.refined_elem_size_n, "refined_elem_size_n");
         {   // the last surface-process dh, stored per node (Output::write_checkpoint)
@@ -511,7 +506,6 @@ void restart(const Param& param, Variables& var)
             for (int i = 0; i < var.surfinfo.ntop; ++i)
                 (*var.surfinfo.dh)[i] = dh_n[(*var.surfinfo.top_nodes)[i]];
         }
-#endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
     }
@@ -543,11 +537,7 @@ void restart(const Param& param, Variables& var)
             rd(prof.node_reldepth, "node_reldepth", nn);
             rd(prof.node_coord0_z, "node_coord0_z", nn);
             rd(prof.node_temperature, "node_temperature", nn);
-#ifdef USEMMG
-            // written only under USEMMG; without MMG it must stay empty, which restore_side_fields
-            // tests before it indexes var.init_elem_size_n
             rd(prof.node_init_elem_size, "node_init_elem_size", nn);
-#endif
 #ifdef THREED
             rd(prof.node_strike, "node_strike", nn);
             prof.facet_node.resize(ns * NODES_PER_FACET);

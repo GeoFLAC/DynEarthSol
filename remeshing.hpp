@@ -30,7 +30,6 @@ void side_profile_mattypes_within(const SideProfile&, double s, double lo, doubl
 // Builds the derived lookup index; call after a profile is recorded or read back.
 void side_profile_index_elems(SideProfile&);
 
-#ifdef USEMMG
 struct MMGInput;
 struct MMGOutput;
 // The floor of the size targets in the metric handed to MMG.
@@ -54,7 +53,6 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
                                   std::vector<char> &reqe, std::vector<int> &iface,
                                   int &nn, int &ne, std::vector<int> *elem_ref, bool pull_down,
                                   bool verbose);
-#endif
 #endif
 
 #endif

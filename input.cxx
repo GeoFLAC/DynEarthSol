@@ -1334,14 +1334,12 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
     if ( ! vm.count("sim.max_time_in_yr") )
         p.sim.max_time_in_yr = std::numeric_limits<double>::max();
 
-#ifdef USEMMG
     // An aspect ratio: in (0,1) it would refine the wall-normal axis; a negative one means nothing.
     if ( p.mesh.mmg_aniso_wall_ratio != 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
         std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
                      "a smaller ratio would refine the wall or mean nothing.\n";
         die(EXIT_CONFIG_VALUE);
     }
-#endif
 
     if ( ! (vm.count("sim.output_step_interval") || vm.count("sim.output_time_interval_in_yr")) ) {
         die(EXIT_CONFIG, "Must provide either sim.output_step_interval or sim.output_time_interval_in_yr");
@@ -1455,8 +1453,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         die(EXIT_CONFIG_VALUE, "mesh.smallest_size is greater than mesh.largest_size.");
     }
 
-#ifdef USEMMG
-    // Only MMG reads the mmg_* keys checked in this block.
     if (p.mesh.mmg_metric_refine_coeff < 0) {
         // 1 + coeff*plstrain divides the target volume: it must stay positive.
         std::cerr << "Error: mesh.mmg_metric_refine_coeff must be non-negative "
@@ -1506,7 +1502,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         std::cerr << "Error: mesh.mmg_remesh_size_recovery_ratio must be 0 (off) or > 1.\n";
         die(EXIT_CONFIG_VALUE);
     }
-#endif
 
     if (p.mesh.remesh_deborah_min <= 0 ||
         p.mesh.remesh_deborah_min >= p.mesh.remesh_deborah_max) {
@@ -1602,61 +1597,22 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
     }
 #endif
-#if defined(USEMMG) && defined(THREED)
+#ifdef THREED
     // optimize_mesh (3D MMG) has no flatten_x0_corner case.
     if (p.mesh.remeshing_option == 12 && p.mesh.meshing_elem_shape == 0)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available in 3D on an "
             "unstructured mesh (mesh.meshing_elem_shape = 0).");
 #endif
-#ifdef USEMMG
     // Only new_mesh (Triangle) consumes option 2's new_bottom segment rewrite and deletion list.
     if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
         die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available on an unstructured mesh "
             "(mesh.meshing_elem_shape = 0); use 1 or 11.");
-#endif
     // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
     if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
-#ifdef USEMMG
         die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available on an "
             "unstructured mesh (mesh.meshing_elem_shape = 0): MMG keeps no internal segment.");
-#else
-        std::cerr << "Warning: mesh.is_discarding_internal_segments = no: a remesh that deletes a "
-                     "node of an internal segment (tiny-element repair, node cleanup near a "
-                     "restored boundary) misroutes it, which can make the mesher fail or hang; "
-                     "in 3D with remeshing_option 1 or 10-12, the first remesh that deletes a "
-                     "boundary node drops them all.\n";
-#endif
     }
 
-#ifndef USEMMG
-    if (p.mesh.use_mmg_init) {
-        p.mesh.use_mmg_init = false;
-        std::cerr << "Warning: MMG not compiled in (no USEMMG), mesh.use_mmg_init turned off.\n";
-    }
-    // Without USEMMG nothing reads the mmg_* keys: name the ones the cfg set, not the defaulted ones.
-    {
-        const char *mmg_only[] = {
-            "mesh.mmg_remesh_active_plstrain", "mesh.mmg_remesh_defensive_quality_ratio",
-            "mesh.mmg_remesh_size_recovery_ratio", "mesh.mmg_debug", "mesh.mmg_verbose",
-            "mesh.mmg_hausd_factor", "mesh.mmg_init_coarsening_factor",
-            "mesh.mmg_metric_refine_coeff", "mesh.mmg_metric_refine_recover",
-            "mesh.mmg_aniso_wall_ratio",
-            "mesh.mmg_remesh_defensive_tiny_ratio",
-        };
-        for (const char *name : mmg_only)
-            if (vm.count(name) && ! vm.defaulted(name))
-                std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
-                          << " has no effect.\n";
-    }
-    // Option 13 re-flattens the side walls at every remesh, which breeds sub-hmin wall elements. Only
-    // MMG collapses them: decimate_below_hmin keeps boundary nodes, and the tiny-element repair
-    // skips corners.
-    if (p.mesh.remeshing_option == 13 && p.mesh.meshing_elem_shape == 0)
-        die(EXIT_UNSUPPORTED_LIB, "mesh.remeshing_option = 13 requires MMG (build with usemmg=1). "
-            "Without it the restored side wall accumulates sub-hmin elements that the "
-            "Triangle/TetGen path cannot collapse. Uniform meshes (mesh.meshing_elem_shape > 0) "
-            "are unaffected.");
-#endif
 
     //
     // bc

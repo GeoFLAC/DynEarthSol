@@ -27,12 +27,10 @@
 #include "markerset.hpp"
 #include "remeshing.hpp"
 
-#ifdef USEMMG
 #ifdef THREED
 #include "mmg/mmg3d/libmmg3d.h"
 #else
 #include "mmg/mmg2d/libmmg2d.h"
-#endif
 #endif
 
 #ifdef ACC
@@ -2304,8 +2302,7 @@ double packed_elem_quality(const double *coord, const int *elem)
 }
 
 
-// Shared by check_mesh_tangle() and, with MMG, by the bottom-fold repair in optimize_mesh_2d():
-// outside the MMG block, so a build without MMG has them too.
+// Shared by check_mesh_tangle() and the bottom-fold repair in optimize_mesh_2d().
 namespace {
 
 // The tolerance of the fold test: an element's signed measure counts only beyond
@@ -2336,7 +2333,6 @@ int first_folded_element(int nelem, const Measure &measure)
 
 } // anonymous namespace
 
-#ifdef USEMMG
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
 // 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
 // compute_metric_field's aggregation and refine_initial_weak_zone (mesh.cxx, on the raw initial
@@ -2966,7 +2962,6 @@ void rule_size_recovery(const Param &param, const Variables &var,
 {
     const double ratio = param.mesh.mmg_remesh_size_recovery_ratio;
     if (ratio <= 0.0) return;                                    // disabled
-    if ((int)var.init_elem_size_n->size() != nnode) return;      // defensive: init() always fills it
 
     // Band of a side that does not receive: carried verbatim (static wall) or re-sized by R4
     // alone (outward drift).
@@ -4831,7 +4826,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     var.segflag->steal_ref( new_segflag );
 }
 #endif  // end of if THREED
-#endif // end of if USEMMG
 
 } // anonymous namespace
 
@@ -5259,8 +5253,7 @@ void detect_side_profile(const Param& param, Variables& var, uint side_bits)
             prof.node_reldepth.push_back(top_z - (*var.coord)[n][NDIMS-1]);
             prof.node_coord0_z.push_back((*var.coord0)[n][NDIMS-1]);
             prof.node_temperature.push_back((*var.temperature)[n]);
-            if ((int)var.init_elem_size_n->size() == var.nnode)   // empty without USEMMG
-                prof.node_init_elem_size.push_back((*var.init_elem_size_n)[n]);
+            prof.node_init_elem_size.push_back((*var.init_elem_size_n)[n]);
 #ifdef THREED
             prof.node_strike.push_back(side_wall_strike((*var.coord)[n], si));
 #else
@@ -5715,10 +5708,8 @@ void restore_side_fields(const Param &param, Variables &var,
             (*var.temperature)[n] = side_profile_value(at, prof.node_temperature);
             (*var.coord0)[n][axis] = entry;
             (*var.coord0)[n][NDIMS-1] = side_profile_value(at, prof.node_coord0_z);
-            if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
-                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
-                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n];   // pristine: unrefined
-            }
+            (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n];   // pristine: unrefined
             if (!node_done[n]) ++count_n;
             node_done[n] |= 1 << axis;   // bit = the horizontal component this band set
         }
@@ -5726,17 +5717,15 @@ void restore_side_fields(const Param &param, Variables &var,
         // Re-pin init_elem_size_n on the whole wall: a wall node inside the old mesh (the wall did
         // not move inward there, e.g. a depth-varying velocity zero at its depth) still holds the
         // remapped value. A band node gets the same value again.
-        if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
-            for (int n = 0; n < var.nnode; ++n) {
-                if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
-                const double rel = ref_z - (*var.coord)[n][NDIMS-1];
-                side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
-                const double old_init = (*var.init_elem_size_n)[n];
-                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
-                // the same refined fraction of the re-pinned base: 1 for the band set above
-                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n]
-                                                * ((*var.refined_elem_size_n)[n] / old_init);
-            }
+        for (int n = 0; n < var.nnode; ++n) {
+            if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
+            const double rel = ref_z - (*var.coord)[n][NDIMS-1];
+            side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
+            const double old_init = (*var.init_elem_size_n)[n];
+            (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            // the same refined fraction of the re-pinned base: 1 for the band set above
+            (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n]
+                                            * ((*var.refined_elem_size_n)[n] / old_init);
         }
 
         for (int e = 0; e < var.nelem; ++e) {
@@ -6127,15 +6116,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
-#if defined USEMMG
             remesh_engine = "MMG";
             optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
                     old_segment, old_segflag);
-#else
-            remesh_engine = "TetGen";
-            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                    old_segment, old_segflag);
-#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
@@ -6146,15 +6129,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 #else  // if 2d
         if (param.mesh.meshing_elem_shape == 0) {
-#if defined USEMMG
             remesh_engine = "MMG";
             optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
                 old_segment, old_segflag);
-#else
-            remesh_engine = "Triangle";
-            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                old_segment, old_segflag);
-#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,

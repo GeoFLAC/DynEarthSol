@@ -375,13 +375,11 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     double_vec *new_dppressure = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.dppressure, *new_dppressure, n);
 
-#ifdef USEMMG
     double_vec *new_init_elem_size_n = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.init_elem_size_n, *new_init_elem_size_n, n);
     double_vec *new_refined_elem_size_n = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.refined_elem_size_n,
                       *new_refined_elem_size_n, n);
-#endif
 
     #pragma acc wait
 
@@ -413,12 +411,10 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     delete var.dppressure;
     var.dppressure = new_dppressure;
 
-#ifdef USEMMG
     delete var.init_elem_size_n;
     var.init_elem_size_n = new_init_elem_size_n;
     delete var.refined_elem_size_n;
     var.refined_elem_size_n = new_refined_elem_size_n;
-#endif
 
     #pragma acc wait
 

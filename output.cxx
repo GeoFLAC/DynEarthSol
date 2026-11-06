@@ -500,7 +500,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 
     bin.write_array(*var.volume_old, "volume_old", var.volume_old->size());
     bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
-#ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
     bin.write_array(*var.refined_elem_size_n, "refined_elem_size_n",
                     var.refined_elem_size_n->size());
@@ -513,7 +512,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
             dh_n[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i];
         bin.write_array(dh_n, "surface dh", dh_n.size());
     }
-#endif
 
     // Restored side-wall columns (remeshing_option 13, SideProfile): side_prof_sizes = {nnode,
     // nelem, 2D node-support size / 3D facet count}, NSIDEWALL each, then the per-wall arrays.
@@ -558,11 +556,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
                 wrd(prof.node_reldepth, "node_reldepth");
                 wrd(prof.node_coord0_z, "node_coord0_z");
                 wrd(prof.node_temperature, "node_temperature");
-#ifdef USEMMG
-                // USEMMG only (init_elem_size_n is MMG-only): an empty record cannot be chunked by
-                // HDF5, and the des-binary restart would read nn values from the NEXT record.
                 wrd(prof.node_init_elem_size, "node_init_elem_size");
-#endif
 #ifdef THREED
                 wrd(prof.node_strike, "node_strike");
                 wri(prof.facet_node, "facet_node");

@@ -258,7 +258,7 @@ MMG_INCLUDE = ./mmg/build/include
 # path of MMG3D library files, if not in standard system location
 MMG_LIB_DIR = ./mmg/build/lib
 
-MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
+MMG_CXXFLAGS = -I$(MMG_INCLUDE)
 ifeq ($(ndims), 3)
 	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg3d
 else
