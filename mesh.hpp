@@ -8,13 +8,6 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
                         int &nnode, int &nelem, int &nseg,
                         double *&pcoord, int *&pconnectivity,
                         int *&psegment, int *&psegflag, double *&pregattr);
-void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
-                           int n_init_segments, const int *init_segments, const int *init_segflags,
-                           int n_regions, const double *regattr,
-                           double max_elem_size, int vertex_per_polygon,
-                           int &nnode, int &nelem, int &nseg,
-                           double *&pcoord, int *&pconnectivity,
-                           int *&psegment, int *&psegflag, double *&pregattr);
 void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
                       segment_t &segment, regattr_t *regattr, double_vec *init_elem_size_hint = nullptr);
 void create_boundary_flags2(uint_vec &bcflag, int nseg,
