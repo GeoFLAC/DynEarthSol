@@ -252,15 +252,9 @@ void restart(const Param& param, Variables& var)
     std::cout << "Initializing mesh and field data from checkpoints...\n";
 
     char filename_save[256];
-#ifdef HDF5
     std::snprintf(filename_save, 255, "%s.save.%06d.vtkhdf",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     HDF5Input bin_save(filename_save);
-#else
-    std::snprintf(filename_save, 255, "%s.save.%06d",
-                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
-    BinaryInput bin_save(filename_save);
-#endif
     std::cout << "  Reading " << filename_save << "...\n";
 
     char filename[256];
@@ -307,15 +301,9 @@ void restart(const Param& param, Variables& var)
     }
 
     char filename_chkpt[256];
-#ifdef HDF5
     std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d.vtkhdf",
                   param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
     HDF5Input bin_chkpt(filename_chkpt);
-#else
-    std::snprintf(filename_chkpt, 255, "%s.chkpt.%06d",
-                  param.sim.restarting_from_modelname.c_str(), param.sim.restarting_from_frame);
-    BinaryInput bin_chkpt(filename_chkpt);
-#endif
     std::cout << "  Reading " << filename_chkpt << "...\n";
 
     //

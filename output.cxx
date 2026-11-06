@@ -150,7 +150,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
     }
 
     char filename[256];
-#ifdef HDF5
     std::snprintf(filename, 255, "%s.save.%06d.vtkhdf", modelname.c_str(), frame);
     HDF5Output bin(filename, hdf5_compression_level, false,
                    may_overwrite_ && (frame == start_frame_));
@@ -159,21 +158,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_fieldData(var.time/YEAR2SEC, "time_yr");
     bin.write_fieldData(var.steps, "steps");
     bin.write_fieldData(double(run_time_ns) * 1e-9, "walltime_sec");
-#else
-    std::snprintf(filename, 255, "%s.save.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
-
-    bin.write_array(*var.coord, "coordinate", var.coord->size());
-    bin.write_array(*var.connectivity, "connectivity", var.connectivity->size());
-
-    // Scalars completing the .info row (frame, steps, time, dt, walltime,
-    // nnode, nelem, nseg) so utils/recreate_info.py can rebuild a lost
-    // .info from the frame files alone.
-    bin.write_scalar(var.steps, "steps");
-    bin.write_scalar(double(run_time_ns) * 1e-9, "walltime_sec");
-    bin.write_scalar(var.nnode, "nnode");
-    bin.write_scalar(var.nelem, "nelem");
-#endif
 
     bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
@@ -281,9 +265,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 
     if (has_marker_output) {
         for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
-#ifdef HDF5
             bin.write_block_metadata(var, (*ms)->get_name(), *ms);
-#endif
             (*ms)->write_save_file(var, bin);
         }
     }
@@ -454,16 +436,11 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     nvtxRangePush(__FUNCTION__);
 #endif
     char filename[256];
-#ifdef HDF5
     std::snprintf(filename, 255, "%s.chkpt.%06d.vtkhdf", modelname.c_str(), frame);
     HDF5Output bin(filename, hdf5_compression_level, true,
                    may_overwrite_ && (frame == start_frame_));
 
     bin.write_block_metadata(var, "grid");
-#else
-    std::snprintf(filename, 255, "%s.chkpt.%06d", modelname.c_str(), frame);
-    BinaryOutput bin(filename, may_overwrite_ && (frame == start_frame_));
-#endif
 
     bin.write_run_provenance(build, cpu, dev, restart_from, peak_rss_gib);
 
@@ -600,9 +577,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     }
 
     for (auto ms=var.markersets.begin(); ms!=var.markersets.end(); ++ms) {
-#ifdef HDF5
         bin.write_block_metadata(var, (*ms)->get_name(), *ms);
-#endif
         (*ms)->write_chkpt_file(bin);
     }
 #ifdef NPROF

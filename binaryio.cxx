@@ -10,28 +10,9 @@
 #include "markerset.hpp"
 #include "runtime_info.hpp"
 
-/*****************************************************************************
- * The format of the binary file:
- * 1  The first 'headerlen' bytes are ASCII text.
- *   1.1  The 1st line in the header is the revision string. Starting with
- *        "# DynEarthSol ndims=%1 revision=%2", with %1 equal to 2 or 3
- *        (indicating 2D or 3D simulation) and %2 an integer.
- *   1.2  The following lines are 'name', 'position' pairs, separated by a
- *        TAB character. This line tells the name of the data and the
- *        starting position (in bytes) of the data in this file.
- * 2  The rests are binary data.
- ****************************************************************************/
-
-
-namespace {
-    const std::size_t headerlen = 4096;
-    const std::string revision_str = "# DynEarthSol ndims=" + std::to_string(NDIMS)
-                                   + " revision=" + std::to_string(BINARY_FILE_REVISION) + "\n";
-}
-
 namespace {
 
-// A frame's provenance, one field list for both formats: sink(name, value) takes a
+// A frame's provenance as one field list: sink(name, value) takes a
 // std::string, an int or a double. The set is fixed, so an unknown value is a sentinel
 // ("unknown", -1, 0) that a reader must reject. peak_rss_gib is the caller's running peak.
 template <class Sink>
@@ -85,8 +66,6 @@ void provenance_fields(Sink& sink, const BuildInfo& build, const CpuInfo& cpu,
 } // anonymous namespace
 
 
-/* Not using C++ stream IO for bulk file io since it can be much slower than C stdio. */
-
 void rename_to_old_backup(const char *filename) {
     // Find the highest-numbered existing backup (.old, .old2, .old3, ...) and
     // rename filename to max+1, so new backups always append after the largest
@@ -107,362 +86,6 @@ void rename_to_old_backup(const char *filename) {
                   << "' (preserving previous output)\n";
 }
 
-#ifndef HDF5
-
-BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
-{
-    if (rename_if_exists) rename_to_old_backup(filename);
-    f = std::fopen(filename, "wb");
-    if (f == NULL) {
-        std::cerr << "Error: cannot open file: " << filename << '\n';
-        die(EXIT_IO_OPEN);
-    }
-
-    header = new char[headerlen]();
-    hd_pos = std::strcat(header, revision_str.c_str());
-    eof_pos = headerlen;
-
-    std::fseek(f, eof_pos, SEEK_SET);
-}
-
-
-BinaryOutput::~BinaryOutput()
-{
-#ifdef NPROF
-    nvtxRangePush(__FUNCTION__);
-#endif
-    if (f) {
-        /* write header buffer to the beginning of file */
-        std::fseek(f, 0, SEEK_SET);
-        std::fwrite(header, sizeof(char), headerlen, f);
-        std::fclose(f);
-        f = NULL;
-    }
-
-    delete [] header;
-    header = NULL;
-#ifdef NPROF
-    nvtxRangePop();
-#endif
-}
-
-
-void BinaryOutput::write_header(const char *name)
-{
-    /* write to header buffer */
-    const std::size_t bsize = 256;
-    char buffer[bsize];
-    std::size_t len = std::snprintf(buffer, bsize, "%s\t%ld\n", name, eof_pos);
-    if (len >= bsize) {
-        std::cerr << "Error: exceeding buffer length at Output::write_array, name=" << name
-                  << " eof_position=" << eof_pos << '\n';
-        die(EXIT_INTERNAL_ASSERT);
-    }
-    if (len >= headerlen - (hd_pos - header)*sizeof(char)) {
-        std::cerr << "Error: exceeding header length at Output::write_array, name=" << name
-                  << " eof_position=" << eof_pos << '\n';
-        die(EXIT_INTERNAL_ASSERT);
-    }
-    hd_pos = std::strncat(hd_pos, buffer, len);
-}
-
-template <typename T>
-void BinaryOutput::write_scalar(const T& A, const std::string& name)
-{
-    write_header(name.c_str());
-    std::size_t n = std::fwrite(&A, sizeof(T), 1, f);
-    eof_pos += n * sizeof(T);
-}
-
-
-// explicit instantiation
-template
-void BinaryOutput::write_scalar<int>(const int& A, const std::string& name);
-template
-void BinaryOutput::write_scalar<double>(const double& A, const std::string& name);
-
-// XXX: when A is *var.bcflag, i.e. T is uint, g++ cannot instantiate the template
-template <typename T>
-void BinaryOutput::write_array(const std::vector<T>& A, const char *name, std::size_t size)
-{
-    write_header(name);
-    std::size_t n = std::fwrite(A.data(), sizeof(T), size, f);
-    eof_pos += n * sizeof(T);
-}
-
-
-// specialize for uint
-void BinaryOutput::write_array(const std::vector<uint>& A, const char *name, std::size_t size)
-{
-    write_header(name);
-    std::size_t n = std::fwrite(A.data(), sizeof(uint), size, f);
-    eof_pos += n * sizeof(uint);
-}
-
-
-template <typename T, int N>
-void BinaryOutput::write_array(const Array2D<T,N>& A, const char *name, std::size_t size)
-{
-    write_header(name);
-
-    std::size_t written_elements = 0;
-    static std::vector<T> buffer; 
-    A.pack_to(buffer, size);
-
-    written_elements = std::fwrite(buffer.data(), sizeof(T), size * N, f);
-
-    if (written_elements != size * N) {
-        std::cerr << "Error: cannot write array: " << name << '\n';
-    }
-
-    eof_pos += written_elements * sizeof(T);
-}
-
-
-// explicit instantiation
-template
-void BinaryOutput::write_array<int>(const int_vec& A, const char *name, std::size_t);
-template
-void BinaryOutput::write_array<double>(const double_vec& A, const char *name, std::size_t);
-
-template
-void BinaryOutput::write_array<double,NDIMS>(const Array2D<double,NDIMS>& A, const char *name, std::size_t);
-template
-void BinaryOutput::write_array<double,NSTR>(const Array2D<double,NSTR>& A, const char *name, std::size_t);
-#ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
-template
-void BinaryOutput::write_array<double,NODES_PER_ELEM>(const Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t);
-#endif
-template
-void BinaryOutput::write_array<double,1>(const Array2D<double,1>& A, const char *name, std::size_t);
-template
-void BinaryOutput::write_array<int,NODES_PER_ELEM>(const Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t);
-template
-void BinaryOutput::write_array<int,NDIMS>(const Array2D<int,NDIMS>& A, const char *name, std::size_t);
-template
-void BinaryOutput::write_array<int,1>(const Array2D<int,1>& A, const char *name, std::size_t);
-
-namespace {
-
-void kv(std::string& p, const char* name, const std::string& value)
-{
-    p += name; p += '='; p += value; p += '\n';
-}
-
-void kv(std::string& p, const char* name, int value)
-{
-    char b[32];
-    std::snprintf(b, sizeof(b), "%d", value);
-    kv(p, name, std::string(b));
-}
-
-// %.9g: %g's 6 digits step a 10 GiB rss by ~105 KiB, coarser than a page.
-void kv(std::string& p, const char* name, double value)
-{
-    char b[32];
-    std::snprintf(b, sizeof(b), "%.9g", value);
-    kv(p, name, std::string(b));
-}
-
-struct TextSink {
-    std::string& p;
-    template <class T> void operator()(const char* name, const T& v) { kv(p, name, v); }
-};
-
-} // anonymous namespace
-
-// The provenance as one text record, readable with strings(1). No revision bump: records
-// are looked up by name, so a reader that does not know this one skips it.
-void BinaryOutput::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
-                                        const DeviceInfo& dev, const std::string& restart_from,
-                                        double& peak_rss_gib)
-{
-    std::string p;
-    TextSink sink = {p};
-    provenance_fields(sink, build, cpu, dev, restart_from, peak_rss_gib);
-    write_header("provenance");
-    eof_pos += std::fwrite(p.data(), sizeof(char), p.size(), f) * sizeof(char);
-}
-
-
-void BinaryOutput::write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len)
-{
-    write_array(A, name, len);
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-BinaryInput::BinaryInput(const char *filename)
-{
-    f = std::fopen(filename, "r");
-    if (f == NULL) {
-        std::cerr << "Error: cannot open file: " << filename << '\n';
-        die(EXIT_IO_OPEN);
-    }
-    read_header();
-}
-
-
-BinaryInput::~BinaryInput()
-{
-    std::fclose(f);
-}
-
-
-bool BinaryInput::has_array(const char *name) const
-{
-    return offset.find(name) != offset.end();
-}
-
-
-void BinaryInput::read_header()
-{
-    /* Read into header buffer */
-    std::fseek(f, 0, SEEK_SET);
-    char *header = new char[headerlen]();
-    std::size_t n = std::fread(header, sizeof(char), headerlen, f);
-    if (n != headerlen) {
-        die(EXIT_IO_RW, "error reading file header");
-    }
-
-    /* Parse the content of header buffer */
-    char *line = header;
-
-    // Compare revision string (excluding the trailing new line)
-    line = std::strtok(header, "\n");
-    if (strncmp(line, revision_str.c_str(), revision_str.size()-1) != 0) {
-        std::cerr << "Error: mismatching revision string in header\n"
-                  << "  Expect: " << revision_str
-                  << "  Got: "<< line << '\n';
-        die(EXIT_IO_RESTART);
-    }
-
-    line = std::strtok(NULL, "\n");
-    while (line != NULL) {
-        /* Each line is a string (might contain space), a tab, and an integer */
-        char *tab = std::strchr(line, '\t');
-        if (tab == NULL) {
-            std::cerr << "Error: error parsing file header\n"
-                      << " Line is:" << line << '\n';
-            die(EXIT_IO_RW);
-        }
-        std::string name(line, tab-line);
-        std::size_t loc;
-        std::sscanf(tab, "%zu", &loc);
-
-        offset[name] = loc;
-        line = std::strtok(NULL, "\n");
-    }
-
-    delete [] header;
-}
-
-
-void BinaryInput::seek_to_array(const char *name)
-{
-    std::string name2(name);
-    auto it = offset.find(name);
-    if (it == offset.end()) {
-        std::cerr << "Error: no array with a name: " << name << '\n';
-        die(EXIT_IO_RESTART);
-    }
-    std::size_t loc = it->second;
-    //std::cout << name << ' ' << loc << '\n';
-    std::fseek(f, loc, SEEK_SET);
-}
-
-
-template <typename T>
-void BinaryInput::read_scalar(T& A, const std::string& name)
-{
-    seek_to_array(name.c_str());
-    std::size_t n = std::fread(&A, sizeof(T), 1, f);
-    if (n != 1) {
-        std::cerr << "Error: cannot read scalar: " << name << '\n';
-        die(EXIT_IO_RW);
-    }
-}
-
-
-// explicit instantiation
-template
-void BinaryInput::read_scalar<int>(int& A, const std::string& name);
-template
-void BinaryInput::read_scalar<double>(double& A, const std::string& name);
-
-
-template <typename T>
-void BinaryInput::read_array(std::vector<T>& A, const char *name, std::size_t size)
-{
-    /* The caller must ensure A is of right size to hold the array */
-
-    size = size > 0 ? size : A.size();
-    if (A.size() == 0) {
-        std::cerr << "Error: array size is 0: " << name << '\n';
-        die(EXIT_IO_RW);
-    }
-
-    seek_to_array(name);
-    const std::size_t n = std::fread(A.data(), sizeof(T), size, f);
-
-    if (n != size) {
-        std::cerr << "Error: cannot read array: " << name << '\n';
-        die(EXIT_IO_RW);
-    }
-}
-
-
-template <typename T, int N>
-void BinaryInput::read_array(Array2D<T,N>& A, const char *name, std::size_t size)
-{
-    /* The caller must ensure A is of right size to hold the array */
-
-    size = size > 0 ? size : A.size();
-    if (A.size() == 0) {
-        std::cerr << "Error: array size is 0: " << name << '\n';
-        die(EXIT_IO_RW);
-    }
-
-    seek_to_array(name);
-
-    static std::vector<T> buffer;
-    std::size_t total_elements = size * N;
-    if (buffer.size() < total_elements)
-        buffer.resize(total_elements);
-
-    const std::size_t n = std::fread(buffer.data(), sizeof(T), size * N, f);
-    if (n != N * size) {
-        std::cerr << "Error: cannot read array (buffered path): " << name << '\n';
-        die(EXIT_IO_RW);
-    }
-
-    A.load_from_buffer(buffer.data(), size, false);
-}
-
-
-// explicit instantiation
-template
-void BinaryInput::read_array<double>(double_vec& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<int>(int_vec& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<double,NDIMS>(Array2D<double,NDIMS>& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<double,NSTR>(Array2D<double,NSTR>& A, const char *name, std::size_t size);
-#ifdef THREED // when 2d, NSTR == NODES_PER_ELEM == 3
-template
-void BinaryInput::read_array<double,NODES_PER_ELEM>(Array2D<double,NODES_PER_ELEM>& A, const char *name, std::size_t size);
-#endif
-template
-void BinaryInput::read_array<double,1>(Array2D<double,1>& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<int,NDIMS>(Array2D<int,NDIMS>& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t size);
-template
-void BinaryInput::read_array<int,1>(Array2D<int,1>& A, const char *name, std::size_t size);
-
-#else
 
 HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
                        const bool is_chkpt, const bool rename_if_exists)
@@ -534,7 +157,7 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
 void HDF5Output::write_header()
 {
     write_attribute(NDIMS, "ndims", file_id);
-    write_attribute(BINARY_FILE_REVISION, "revision", file_id);
+    write_attribute(FILE_REVISION, "revision", file_id);
 
     hid_t gid = create_group_with_order("/VTKHDF");
 
@@ -1113,9 +736,9 @@ void HDF5Input::read_header()
     H5Tclose(atype);
     H5Aclose(attr);
 
-    if (revision != BINARY_FILE_REVISION) {
+    if (revision != FILE_REVISION) {
         std::cerr << "Error: mismatching revision in HDF5 file\n"
-                  << "  Expect: " << BINARY_FILE_REVISION << "  Got: " << revision << '\n';
+                  << "  Expect: " << FILE_REVISION << "  Got: " << revision << '\n';
         die(EXIT_IO_RESTART);
     }
 }
@@ -1316,5 +939,3 @@ template
 void HDF5Input::read_array<int,NODES_PER_ELEM>(Array2D<int,NODES_PER_ELEM>& A, const char *name, std::size_t size);
 template
 void HDF5Input::read_array<int,1>(Array2D<int,1>& A, const char *name, std::size_t size);
-
-#endif

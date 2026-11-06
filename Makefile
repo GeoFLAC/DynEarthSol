@@ -324,8 +324,8 @@ ifneq (, $(findstring clang++, $(CXX)))
 	CXX_SUPPORTED = yes
 	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
-	## THREED-only axis, the ACC-only knn state, the hdf5-only compression level -- which
-	## is the same deliberate pattern, not a finding.
+	## THREED-only axis, the ACC-only knn state -- which is the same deliberate pattern,
+	## not a finding.
 	CXXFLAGS = -g -std=c++17 -DGPP1X $(WARNFLAGS) -Wno-unused-private-field
 	## Everything but opt=0 and opt=-1; those two are the builds that report acc pragmas.
 	ifeq (,$(filter 0 -1,$(opt)))
@@ -540,7 +540,7 @@ else
 ## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
-CXXFLAGS += -DHDF5 -I$(HDF5_INCLUDE_DIR)
+CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
 LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
 ifneq ($(OSNAME), Darwin)
 	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
