@@ -1,8 +1,6 @@
 #ifndef DYNEARTHSOL3D_BINARYIO_HPP
 #define DYNEARTHSOL3D_BINARYIO_HPP
 
-#include <map>
-#ifdef HDF5
 #include "H5Lpublic.h"
 #include "H5Gpublic.h"
 #include "H5Ppublic.h"
@@ -10,15 +8,11 @@
 #include "H5Fpublic.h"
 #include "H5Apublic.h"
 #include "H5Spublic.h"
-#endif
 #include "array2d.hpp"
 
-// Revision number of the binary file format. Bump it whenever the layout
-// of the header or of the data written after it changes.
-#define BINARY_FILE_REVISION 4
-/* Revision notes:
- * 4: Add write/read scalar for binary io
- */
+// Layout revision of the frame and checkpoint files: each file's "revision" attribute, which
+// a restart checks. Bump it whenever the layout changes.
+#define FILE_REVISION 4
 
 struct BuildInfo;
 struct CpuInfo;
@@ -26,72 +20,6 @@ struct DeviceInfo;
 
 void rename_to_old_backup(const char *filename);
 
-#ifndef HDF5
-
-class BinaryOutput
-{
-private:
-    long eof_pos;
-    char *header;
-    char *hd_pos;
-    std::FILE* f;
-
-    void write_header(const char *name);
-
-public:
-    BinaryOutput(const char *filename, const bool rename_if_exists=false);
-    ~BinaryOutput();
-
-    template <typename T>
-    void write_scalar(const T& A, const std::string& name);
-
-    template <typename T>
-    void write_array(const std::vector<T>& A, const char *name, std::size_t size);
-
-    void write_array(const std::vector<uint>& A, const char *name, std::size_t size);
-
-    template <typename T, int N>
-    void write_array(const Array2D<T,N>& A, const char *name, std::size_t size);
-
-    template <typename T>
-    void write_aux_array(const std::vector<T>& A, const char *name, std::size_t size)
-    { write_array(A, name, size); }
-
-    // peak_rss_gib: the caller's running peak, which this write's rss sample may raise.
-    void write_run_provenance(const BuildInfo& build, const CpuInfo& cpu,
-                              const DeviceInfo& dev, const std::string& restart_from,
-                              double& peak_rss_gib);
-
-    void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, std::size_t len);
-};
-
-
-class BinaryInput
-{
-private:
-    std::FILE* f;
-    std::map<std::string, std::size_t> offset;
-
-    void read_header();
-    void seek_to_array(const char *name);
-
-public:
-    BinaryInput(const char *filename);
-    ~BinaryInput();
-
-    bool has_array(const char *name) const;
-
-    template <typename T>
-    void read_scalar(T& A, const std::string& name);
-
-    template <typename T>
-    void read_array(std::vector<T>& A, const char *name, std::size_t size = 0);
-
-    template <typename T, int N>
-    void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
-};
-
-#else
 
 class HDF5Output
 {
@@ -172,6 +100,5 @@ public:
     void read_array(Array2D<T,N>& A, const char *name, std::size_t size = 0);
 };
 
-#endif // HDF5
 
 #endif
