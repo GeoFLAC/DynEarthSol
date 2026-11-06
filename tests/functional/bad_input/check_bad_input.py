@@ -170,6 +170,10 @@ REJECTED = [
      replace("[bc]", "[bc"), EXIT_CONFIG, "invalid line"),
     ("key with no name",
      replace("[bc]\n", "[bc]\n= 1\n"), EXIT_CONFIG_VALUE, "unrecognised option"),
+    ("remeshing_option 2",
+     replace("remeshing_option = 0", "remeshing_option = 2"), EXIT_CONFIG_VALUE, "0, 1, 12 or 13"),
+    ("remeshing_option 11",
+     replace("remeshing_option = 0", "remeshing_option = 11"), EXIT_CONFIG_VALUE, "0, 1, 12 or 13"),
 ]
 
 # (name, edit, check on the files the run leaves in its directory)
