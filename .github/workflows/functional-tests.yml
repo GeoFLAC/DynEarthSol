@@ -41,11 +41,11 @@ jobs:
     - name: Install Python dependencies
       run: python -m pip install --upgrade pip numpy h5py
 
-    - name: get boost and hdf5
+    - name: get hdf5
       run: |
-        echo Install boost-program-options and hdf5 ====================
+        echo Install hdf5 ====================
         sudo apt-get update
-        sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+        sudo apt-get install -y libhdf5-serial-dev make pkg-config
     - name: make 3d hdf5
       working-directory: .
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
@@ -77,6 +77,9 @@ jobs:
 
     - name: test 2d homogeneous initial stress
       run: python3 initial_stress/check_initial_stress.py --exe ../../dynearthsol2d
+
+    - name: test that bad config files are rejected
+      run: python3 bad_input/check_bad_input.py --exe ../../dynearthsol2d
 
     - name: make 3d hdf5 opt=-1
       working-directory: .

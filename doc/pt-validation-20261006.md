@@ -561,3 +561,32 @@ container lacked Boost headers; its build tooling also reported missing Python.
 The workflow now installs `libboost-program-options-dev` and `python3` before
 either dimension's build. Workflow YAML/shell validation and both CPU builds
 pass; this dependency-only correction changes no solver sources or algorithms.
+
+## CLI11 master merge, 2026-11-06
+
+Merge the master change "Merge pull request #122 from GeoFLAC/feat/cli11"
+into the existing PT branch without rewriting its history. Keep every PT
+registration and default, including removal of `PT_jump`, using `opt::value`
+and `Registry::defaulted`. Keep both Unreleased changelog entries. The NVHPC
+dependency step retains Python and drops the now-unused Boost package.
+
+Validation with GCC 13.3, OpenMP, one thread for integration comparisons:
+
+- `make -j4 ndims=2` and `make -j4 ndims=3` pass (`hdf5=0`).
+- Pre-merge binaries run `make set`; merged binaries run `make cmp` in
+  `benchmarks-cores/`. Both `CASE=test-tiny.cfg NDIMS=2` and
+  `CASE=test-3d-equ-tiny.cfg NDIMS=3` report BIT-EXACT for all compared fields.
+  The pre-merge binaries use HDF5; the new binaries use binary output.
+- `tests/functional/bad_input/check_bad_input.py --exe ./dynearthsol2d`
+  passes all 62 cases. Four additional PT cases check warning behavior for
+  omitted versus explicit tolerances with running scale enabled or disabled.
+  Eight invalid/retired PT option cases return config-value exit code 11.
+- `make -C tests/residual-assembly-test check ndims=2 backend=omp` and the
+  3D equivalent pass 6,832 / 10,143 assertions with four OpenMP threads.
+- `pt_residual_output.py` passes held equilibrium, independent force/RMS,
+  restart and changed-load checks in both dimensions with both PT options.
+  `pt_maxwell_creep.py` passes 100 steps for all four combinations; maximum
+  normalized reference error is 2.171e-6. Both use `examples/pt-elastic-load.cfg`.
+
+Inputs, output and build/comparison logs are under `/tmp/des-pr106-20261106/`.
+NVHPC/GPU, MMG, Exodus and GoSPL runtime checks were not repeated for this merge.
