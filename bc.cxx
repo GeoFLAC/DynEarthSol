@@ -1555,7 +1555,7 @@ namespace {
             for (int i=0;i<(ntop-1);i++) {
                 if (boundary[i] <= 0. && depth_tmp[i] < 0.) {
                     basin[0] = i+1;
-                    for (int j=i+1;j<ntop;j++) {
+                    for (int j=i+1;j<ntop-1;j++) {
                         if (boundary[j] <= 0. && depth_tmp[j+1] < 0.) {
                             basin[1] = j;
                             flag = true;
