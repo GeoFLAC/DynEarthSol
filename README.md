@@ -315,6 +315,9 @@ make useexo=1
 # enable HDF5-based vtkhdf output support (requires HDF5)
 make hdf5=1
 
+# experimental CPU MPI timestep kernels (requires mpicxx; separate .mpi executable)
+make ndims=2 usempi=1 usemmg=1 hdf5=1
+
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
 
@@ -332,6 +335,17 @@ make openacc=1 GPU_CC=90
 ```
 
 # Running DES
+
+The experimental [CPU MPI backend](doc/mpi.md) uses spatial partitions, compact
+local meshes and neighbor halo exchanges. It rebuilds ownership after every MMG
+remesh. Rank zero retains a global mesh for MMG, marker management and output.
+RCB remains the default; `usemetis=1` adds an optional METIS partitioner. The guide
+covers correctness checks, OpenMP/MPI timings and isolated parallel-remeshing
+compatibility prototypes. The existing MMG policy and field transfer remain in use.
+Thermal, force and mass assembly support interior-node/halo overlap; per-rank
+profiles and controlled timing tools expose its overhead. Accelerator halo tests
+are available, while the full GPU MPI solver remains unintegrated.
+
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.
 * The input format is documented in `examples/defaults.cfg`, and working cases

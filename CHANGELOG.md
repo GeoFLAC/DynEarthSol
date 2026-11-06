@@ -17,6 +17,32 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
+  `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
+  geometry, mass and timestep bounds use compact spatial partitions with neighbor
+  halo exchanges. Ownership is rebalanced after every MMG remesh; partition traces
+  and figures expose element, node, marker and ghost loads. Rank zero retains the
+  global mesh for MMG, phase changes, marker/surface management and output.
+  CPU transport checks and pinned OpenMP/MPI scaling drivers accompany the backend;
+  see `doc/mpi.md`. GPU execution is not yet integrated.
+- MPI interior-node/halo overlap for thermal, force and mass assembly, selectable
+  with `DES_MPI_OVERLAP=0/1`. Mesh checks collect geometry only, and inactive
+  serpentinization/monitor paths avoid unused collections. Per-rank operation and
+  communication profiles accompany controlled before/after timing figures.
+  Shared SoA halo packers have explicit OpenACC host/device test modes; host
+  checks do not verify the unintegrated GPU solver or NVLink transport.
+- Optional METIS partitioning (`usempi=1 usemetis=1`, runtime
+  `DES_MPI_PARTITIONER=metis`), using shared-node connectivity and a communication
+  volume objective. RCB remains the default. Resized inactive hydraulic scratch
+  state after remeshing to prevent out-of-bounds MPI packing/collection.
+  Paired CPU benchmarks compare RCB/METIS total runtime, partitioning cost and
+  halo traffic in 2D/3D, with exact parent-output checks and timing figures.
+- Isolated ParMmg2D/ParMmg compatibility tools and a test-only capture/replay of
+  the existing DES MMG inputs. Tested parallel remeshers do not reliably preserve
+  DES required entities; these tools do not replace the production remeshing path.
+- A scientific-example reproduction driver checks complete serial/MPI fields,
+  checkpoints and monitors. A separate current-format Maxwell case checks the
+  analytical constitutive response in 2D and 3D without the historical source patch.
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
@@ -120,6 +146,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   RTX A5000) ([#114]).
 
 ### Fixed
+
+- The benchmark comparator resolves the requested frame through the frame list
+  when printing its step, allowing sparse restart outputs beginning above frame 0.
 
 - A GoSPL-coupled run sent GoSPL velocities of hundreds of m/yr after a remesh
   that kept the surface node count, differencing unrelated nodes; the coupling
