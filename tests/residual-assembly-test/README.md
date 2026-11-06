@@ -37,7 +37,7 @@ repeated shear and yielded plastic trials; and frozen initial RSF properties.
 It does not qualify full-solve convergence, remeshing or physical RSF aging.
 
 `../functional/pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY`
-uses a supplied short binary-output PT case to check that frame-zero initialization
+uses a supplied short PT case to check that frame-zero initialization
 is complete, then compares all physical save/checkpoint fields after a frame-zero
 restart. Only wall-clock metadata is excluded from byte comparisons.
 

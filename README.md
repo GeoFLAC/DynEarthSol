@@ -44,13 +44,13 @@ own, with no paths to edit and none to pass on the command line.
 
 ```bash
 # macOS (Homebrew) -- libomp because Apple clang ships no OpenMP runtime
-brew install libomp cmake
+brew install libomp cmake hdf5
 
 # Debian / Ubuntu
-sudo apt install g++ make cmake
+sudo apt install g++ make cmake libhdf5-dev
 
 # Fedora / RHEL
-sudo dnf install gcc-c++ make cmake
+sudo dnf install gcc-c++ make cmake hdf5-devel
 ```
 
 The requirements in detail:
@@ -59,6 +59,19 @@ The requirements in detail:
   25.7, clang 18 and the Apple clang of the current macOS runner.
 * cmake 3.5 or newer, which configures the `mmg` submodule (see
   [Submodules](#submodules)).
+* [HDF5](https://www.hdfgroup.org/solutions/hdf5/): DES writes its results in
+  the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
+  format, which is compressed (up to 50 % smaller) and opens directly in ParaView.
+  * The build locates it via `pkg-config` and then the usual install layouts,
+    picking the prefix that matches the host architecture: on a Mac that has
+    used both Homebrew prefixes, `h5cc` and `pkg-config` on `PATH` are often the
+    x86_64 ones. With `useexo=1` it takes the HDF5 that seacas built, and with
+    `usegospl=1` the GoSPL conda env's HDF5, each when it has one, so that one
+    process loads one HDF5 library.
+  * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
+    a conda env or a hand-built copy:
+    `make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
+    Either one alone is enough; the other is still detected.
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.
@@ -86,7 +99,7 @@ defaults are not what you want.
 
 ### Build options
 
-* Options go on the command line (`make ndims=2 hdf5=1`) or into the
+* Options go on the command line (`make ndims=2 openmp=0`) or into the
   corresponding variable at the top of the `Makefile`; the command line wins.
   Changing a flag rebuilds what it reaches, so no `make clean` is needed.
 * `make check-deps` verifies the external libraries, including their
@@ -134,18 +147,6 @@ defaults are not what you want.
     make; make install
     ```
   * `EXO_INCLUDE` and `EXO_LIB_DIR` override those defaults.
-* [HDF5](https://www.hdfgroup.org/solutions/hdf5/), `hdf5=1`, for writing
-  results in the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
-  format, which is compressed (up to 50 % smaller) and opens directly in ParaView.
-  * Install it with `brew install hdf5` (macOS), `apt install libhdf5-dev`
-    (Debian/Ubuntu) or `dnf install hdf5-devel` (Fedora/RHEL). The build locates
-    it via `pkg-config` and then the usual install layouts, picking the prefix
-    that matches the host architecture: on a Mac that has used both Homebrew
-    prefixes, `h5cc` and `pkg-config` on `PATH` are often the x86_64 ones.
-  * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
-    a conda env or a hand-built copy:
-    `make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
-    Either one alone is enough; the other is still detected.
 * [GoSPL](https://gospl.readthedocs.io/) (Global Scalable Paleo Landscape
   Evolution), `usegospl=1`, for two-way coupling with a surface process model.
   GoSPL handles erosion, deposition and hillslope diffusion; DES handles
@@ -297,9 +298,6 @@ make ndims=2
 # enable Exodus mesh import, 3D only (requires seacas/exodus libs)
 make useexo=1
 
-# enable HDF5-based vtkhdf output support (requires HDF5)
-make hdf5=1
-
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
 
@@ -344,13 +342,13 @@ make openacc=1 GPU_CC=90
   and `gospl_driver/README.md` for the details.
 
 # Visualizing DES outputs
-* Run `2vtk.py modelname` to convert the binary output to VTK files; `2vtk.py -h`
+* Run `2vtk.py modelname` to convert the output to VTK files; `2vtk.py -h`
   lists the options, among them markers (`-m`), principal stresses (`-p`) and
   full tensors (`-t`).
 * What a frame contains is set in the input file (`has_marker_output`,
   `is_outputting_averaged_fields`, ... in the `[sim]` section of
   `examples/defaults.cfg`), not by editing sources.
-* With `hdf5=1` the output is already `.vtkhdf`, which
+* The output is already `.vtkhdf`, which
   [ParaView](https://www.paraview.org/download/) opens directly; `2vtk.py -u` adds
   the derived fields to it in place. Plain VTK files open in ParaView or
   [VisIt](https://visit-dav.github.io/visit-website/).
