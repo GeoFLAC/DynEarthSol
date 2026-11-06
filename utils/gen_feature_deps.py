@@ -9,7 +9,7 @@ therefore transitive over local #include edges, and a macro reaching everything
 is reported as universal so the Makefile can leave it in the global stamp.
 
     gen_feature_deps.py --obj-suffix .2d.o --stamp-prefix .build-flags- \
-        --sources a.cxx b.cxx --headers x.hpp y.hpp -- HDF5 USEEXODUS
+        --sources a.cxx b.cxx --headers x.hpp y.hpp -- USEEXODUS
 
 Writes makefile syntax to stdout.
 """
