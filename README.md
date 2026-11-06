@@ -9,7 +9,6 @@
 [![Functional tests](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/functional-tests.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/functional-tests.yml)
 <br> <!-- External Modules & Integrations -->
 [![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
-[![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
 [![GoSPL build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml)
 
 # Overview

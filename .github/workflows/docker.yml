@@ -137,11 +137,11 @@ jobs:
           ~/DynEarthSol/dynearthsol2d t.cfg
           python3 -c "import numpy, scipy"
           cd ~/DynEarthSol
-          make -j$(nproc) ndims=3 hdf5=1 usemmg=1 $CXX_ARG
+          make -j$(nproc) ndims=3 hdf5=1 $CXX_ARG
         '
 
     # The coupled example from ./runs, run with the image's executable and
-    # with an hdf5=1 usemmg=1 rebuild.
+    # with an hdf5=1 rebuild.
     - name: test the GoSPL image
       if: matrix.variant.gospl == 1
       run: |
@@ -157,8 +157,7 @@ jobs:
           cd runs
           ../dynearthsol-gospl t.cfg > run-default.log 2>&1
           grep -q "GoSPL: 2 couplings" run-default.log
-          ! grep -q "MMG not compiled in" run-default.log
-          cd .. && make -j$(nproc) usegospl=1 ndims=3 hdf5=1 usemmg=1 $CXX_ARG
+          cd .. && make -j$(nproc) usegospl=1 ndims=3 hdf5=1 $CXX_ARG
           cd runs && ../dynearthsol-gospl t.cfg > run-hdf5mmg.log
           grep -q "GoSPL: 2 couplings" run-hdf5mmg.log
         '
