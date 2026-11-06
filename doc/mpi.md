@@ -22,6 +22,31 @@ without new simulation parameters. One rank uses
 the ordinary full-range kernels. OpenACC, NVHPC profiling and GoSPL cannot currently
 be combined with `usempi=1`. Serial/OpenMP and OpenACC executables remain separate.
 
+## Physical-step PT mechanics
+
+Both upstream PT methods run on the compact compute meshes: localized relaxation
+(`PT_option=0`) and adaptive dynamic relaxation (`PT_option=1`). Initial body-force
+equilibration uses the same distributed path. Each rank snapshots and restores its
+owned material history; no mechanical baseline crosses a remesh. Trial velocities
+and element assembly/factor data use neighbor halos. Physical mesh motion, transport
+and remeshing still happen only after convergence.
+
+Residual norms count owned free degrees of freedom once, using a global force
+scale before squaring. The squared sum and free-rank count share one reduction;
+ADR's three secant sums share another. Candidate selection, nonfinite rejection
+and convergence therefore make the same decision on every rank, including empty
+partitions. The accepted diagnostic, running-scale history and post-remesh exclusion
+are retained for output/restart. Iterations do not gather the global mesh.
+
+ADR changes floating-point summation order across partitions. Parent comparisons
+must measure field error with an explicit tolerance; byte-exact agreement is
+reported only when observed. One thread per rank avoids an additional source of
+reduction-order changes. This does not guarantee that every nonlinear PT problem
+converges; the physical and numerical limits in [pt-solver.md](pt-solver.md) apply.
+
+The MPI PT regression reuses upstream's independent force, Maxwell creep, initial
+equilibrium and restart checks. See [the test guide](../tests/functional/mpi/README.md#pt-mechanics).
+
 ## Ownership, halos and remeshing
 
 ### Optional METIS partitioning

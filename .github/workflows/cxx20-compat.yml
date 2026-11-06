@@ -68,7 +68,7 @@ jobs:
       - name: install MPI, METIS and HDF5
         run: |
           sudo apt-get update
-          sudo apt-get install -y openmpi-bin libopenmpi-dev libmetis-dev libhdf5-serial-dev
+          sudo apt-get install -y openmpi-bin libopenmpi-dev libmetis-dev libhdf5-serial-dev python3-numpy python3-h5py
 
       - name: build MPI as C++17
         run: |
@@ -90,6 +90,18 @@ jobs:
               --workdir "/tmp/des-halo-$cpp_std"
           done
 
+      - name: compare PT mechanics with the serial solver
+        run: |
+          for nd in 2 3; do
+            make -j4 ndims=$nd hdf5=1
+          done
+          /usr/bin/python3 tests/functional/mpi/run_pt_mpi.py \
+            --serial ./dynearthsol2d --mpi ./dynearthsol2d.mpi \
+            --serial3d ./dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
+            --ranks 3 4 --cases elastic maxwell hydrostatic dynamic failure \
+            --launcher 'mpiexec --oversubscribe --bind-to none' \
+            --workdir /tmp/des-pt-mpi
+
       - name: retain compatibility logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -101,3 +113,6 @@ jobs:
             cxx20-*.txt
             /tmp/des-halo-*/accelerator-*/results.json
             /tmp/des-halo-*/accelerator-*/*.log
+            /tmp/des-pt-mpi/pt-mpi-*/results.json
+            /tmp/des-pt-mpi/pt-mpi-*/*.log
+            /tmp/des-pt-mpi/pt-mpi-*/*/*.log

@@ -7,6 +7,44 @@ serial executable, compares complete monitor CSV records, and optionally plots
 results. Both drivers require NumPy and h5py; plotting also needs Matplotlib.
 Use CPU HDF5/MMG executables built from the parent and changed sources.
 
+## PT mechanics
+
+```sh
+python tests/functional/mpi/run_pt_mpi.py \
+  --serial /path/to/current-master/dynearthsol2d --mpi ./dynearthsol2d.mpi \
+  --serial3d /path/to/current-master/dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
+  --ranks 1 3 4 8 --plot --workdir benchmarks-cores/mpi-pt.local
+```
+
+Build all executables with HDF5 and MMG. The driver runs both upstream PT methods
+in both dimensions. It reuses the upstream force/RMS and held-load/reload oracle,
+100-step analytical Maxwell creep, hydrostatic initialization, running-scale
+history across MMG remeshing, pending-remesh
+restart, dynamic timestep and 2D oblique-boundary checks. Forced iteration-cap
+failures must terminate the MPI job with status 54. Run with
+`DES_MPI_PARTITIONER=metis` to repeat with METIS-enabled executables.
+
+Every saved/checkpoint dataset is compared with the current-master serial run.
+Integer topology/state and layouts require exact equality; floating fields require
+`abs(error) <= 1e-12 + 1e-8 * max(abs(reference field))`. The projected PT residual
+uses the loaded nodal-force scale because it measures cancellation; independent
+upstream checks also require its actual RMS to satisfy the configured convergence
+target. Pending pore-pressure increments use the pore-pressure level as their
+scale: subtracting pressure levels near hydrostatic equilibrium can lose relative
+accuracy in an almost zero increment. Byte equality is recorded separately. Each run's own fresh/restart
+continuation must pass the upstream byte-exact checker; this is stricter than
+the comparison between serial and MPI partitions.
+
+The forced-remesh fixtures explicitly increase `PT_max_iter` from 5,000 to 50,000
+for MMG meshes, preserving their stopping tolerances. Configurations, process
+commands and logs are retained. The two remesh cases exercise boundary options
+0 and 11; with MMG enabled both use MMG. Mesh-quality loop-limit warnings in this
+fixture do not establish acceptable production mesh quality. `pt-creep.png`
+overlays the checked serial/MPI strain histories; it is a correctness figure,
+not a speedup measurement. `--threads 2` checks the hybrid execution path;
+ADR restart can lose byte equality with multiple OpenMP threads, as documented
+by upstream, so that failure must not be hidden by relaxing the restart checker.
+
 ## Scientific reproductions
 
 ```sh
