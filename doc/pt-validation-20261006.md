@@ -590,3 +590,19 @@ Validation with GCC 13.3, OpenMP, one thread for integration comparisons:
 
 Inputs, output and build/comparison logs are under `/tmp/des-pr106-20261106/`.
 NVHPC/GPU, MMG, Exodus and GoSPL runtime checks were not repeated for this merge.
+
+## C++17 cleanup master merge, 2026-11-06
+
+Merge "Merge pull request #125 from GeoFLAC/update/cpp17" into the PT branch.
+The merge is automatic and retains the PT source/build entries. GCC 13.3
+`make -j4 ndims=2` and `make -j4 ndims=3` pass with OpenMP and binary output.
+Parent `make set` and merged `make cmp` report BIT-EXACT for 2D
+`test-tiny.cfg` and 3D `test-3d-equ-tiny.cfg`. All 62 parser cases pass.
+Four-thread OpenMP residual suites pass 6,832 / 10,143 assertions. Both PT
+options in both dimensions pass held-load/reload, force/RMS, restart and
+100-step Maxwell checks; maximum normalized Maxwell error is 2.171e-6.
+All 26 production sources also pass GCC C++20 syntax checks in both dimensions
+with no first-party deprecation warnings; the incoming workflow runs full
+C++20 builds with GCC and Clang. Logs and functional outputs are retained
+under `/tmp/des-pr106-master-update/`. Accelerator and optional-library runtime
+checks were not repeated for this merge.

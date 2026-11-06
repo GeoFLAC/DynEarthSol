@@ -1,5 +1,6 @@
 #include <iostream>
 #include <limits>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 
@@ -26,13 +27,6 @@
 #include "runtime_info.hpp"
 #include "utils.hpp"
 #include "gospl_driver/gospl-driver.hpp"
-
-#ifdef WIN32
-#ifdef _MSC_VER
-#define snprintf _snprintf
-#endif // _MSC_VER
-namespace std { using ::snprintf; }
-#endif // WIN32
 
 void init_var(const Param& param, Variables& var)
 {

@@ -55,8 +55,9 @@ sudo dnf install gcc-c++ make
 ```
 
 The requirements in detail:
-* You will need a C++17 compiler. CI builds with g++ 8 through 15, Apple clang
-  and nvc++.
+* You will need a C++17 compiler: g++ 8 or newer, nvc++ 25.7 or newer (NVIDIA
+  HPC SDK), or clang++ 5 or newer. CI builds with g++ 8 through 15, nvc++
+  25.7, clang 18 and the Apple clang of the current macOS runner.
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.
