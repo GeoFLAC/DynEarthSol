@@ -579,7 +579,7 @@ namespace {
             // Zero out plastic strain and accumulated strain for elements that lie
             // fully or partially outside the old mesh (empty_vec > 0).  This prevents
             // spurious non-zero plastic strain on freshly created elements, e.g. the
-            // gap elements introduced by remeshing_option=11 (restore_bottom).
+            // gap elements introduced by remeshing_option=1 (restore_bottom).
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_plstrain, e);
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_delta_pls, e);
             boundary_field(is_changed, idx_changed, empty_vec, 0.0, *new_strain, e);

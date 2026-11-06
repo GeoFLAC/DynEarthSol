@@ -181,8 +181,8 @@ static void declare_parameters(opt::Registry &cfg,
          "lengths, hmin = smallest_size^(1/NDIMS) * resolution and min_dist = (smallest_size * "
          "sizefactor)^(1/NDIMS) * resolution. hmin is, with MMG in 2D, the boundary-segment length "
          "below which a remesh merges the segment's two nodes (never a domain corner), and the "
-         "necking-stop distance of remeshing_option 1, 11 and 13 (see remeshing_option). With "
-         "options 1, 11 and 13 a remesh removes the nodes off a restored boundary that lie past it "
+         "necking-stop distance of remeshing_option 1 and 13 (see remeshing_option). With "
+         "options 1 and 13 a remesh removes the nodes off a restored boundary that lie past it "
          "or within min_dist of it; at a receiving wall, option 13 gives the side profile to new "
          "material up to min_dist inland of the old wall. It also sets MMG's size floors "
          "(see mmg_remesh_defensive_tiny_ratio).")
@@ -246,9 +246,6 @@ static void declare_parameters(opt::Registry &cfg,
          " 0: no modification on any boundary.\n"
          " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
          "above or below it; other boundaries are intact.\n"
-         " 2: 2D only, and not on an unstructured mesh (meshing_elem_shape = 0).\n"
-         "10: same as 0.\n"
-         "11: same as 1.\n"
          "12: move all x0 (left) wall nodes to the x of the wall's top corner and delete the "
          "nodes left outside, other boundaries are intact. For a wall pushed over a fixed bottom "
          "with its push tapered toward it (vbc_x0 = 3 with bottom_shear_zone_thickness), whose "
@@ -275,7 +272,7 @@ static void declare_parameters(opt::Registry &cfg,
          "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
          "every remesh caps the size target at every restored-wall node at resolution (see "
          "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
-         "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
+         "On an unstructured mesh (meshing_elem_shape = 0), options 1 and 13 stop the run at a "
          "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
          "of the restored bottom, or below it: the domain has necked through.\n")
 
@@ -1592,20 +1589,18 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
     }
 
-#ifdef THREED
-    if (p.mesh.remeshing_option == 2) {
-        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=2 is not available in 3D.");
+    switch (p.mesh.remeshing_option) {
+    case 0: case 1: case 12: case 13:
+        break;
+    default:
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option must be 0, 1, 12 or 13 (see --help).");
     }
-#endif
 #ifdef THREED
     // optimize_mesh (3D MMG) has no flatten_x0_corner case.
     if (p.mesh.remeshing_option == 12 && p.mesh.meshing_elem_shape == 0)
         die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option = 12 is not available in 3D on an "
             "unstructured mesh (mesh.meshing_elem_shape = 0).");
 #endif
-    if (p.mesh.remeshing_option == 2 && p.mesh.meshing_elem_shape == 0)
-        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option = 2 is not available on an unstructured mesh "
-            "(mesh.meshing_elem_shape = 0); use 1 or 11.");
     // MMG remeshing needs boundary-only segments (see drop_unflagged_facets).
     if (!p.mesh.is_discarding_internal_segments && p.mesh.meshing_elem_shape == 0) {
         die(EXIT_CONFIG_VALUE, "mesh.is_discarding_internal_segments = no is not available on an "

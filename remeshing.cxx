@@ -326,9 +326,6 @@ void interpolate_curve(const Param &param,const array_t &input_points,
         case 1:
             min_val = -param.mesh.zlength;
             break;
-        case 11:
-            min_val = -param.mesh.zlength;
-            break;
         default:
             break;
         }
@@ -375,7 +372,6 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
     switch (param.mesh.remeshing_option)
     {
     case 1:
-    case 11:
         if (primary_index == (NDIMS - 1))
             min_val = -param.mesh.zlength;
         break;
@@ -591,9 +587,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         case 1:
             inx_bot[i][1] = -param.mesh.zlength;
             break;
-        case 11:
-            inx_bot[i][1] = -param.mesh.zlength;
-            break;
         default:
             inx_bot[i][1] = p[1];
         }
@@ -762,7 +755,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                     switch (param.mesh.remeshing_option)
                     {
                     case 1:
-                    case 11:
                         if (idx[2] == 0 && n2 != 2)
                             for (int kk=0; kk<nxyz[n2]; ++kk)
                                 in[kk][2] = -param.mesh.zlength;
@@ -855,7 +847,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         switch (param.mesh.remeshing_option)
                         {
                         case 1:
-                        case 11:
                             if (n2==2 && kk==0) {
                                 (*var.coord)[ind][2] = -param.mesh.zlength;
                                 continue;
@@ -1051,7 +1042,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         inx[i][0] = p[0];
         switch (param.mesh.remeshing_option) {
         case 1:
-        case 11:
         case 13:
             inx[i][1] = -param.mesh.zlength;
             break;
@@ -1546,7 +1536,7 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
 // more than 1% of resolution. Only surface_process_option 1 and 102 fill dh, so the whole lid is
 // pinned in 3D, with surface_process_option 0, 11 or 101, on a repeat remesh within one step
 // (tau = 0: no time to extrapolate over) and on a PT-loop remesh in the step after an end-of-step
-// remesh (dh still zero). The pinned lid is validated only in 2D with remeshing_option 11.
+// remesh (dh still zero). The pinned lid is validated only in 2D with remeshing_option 1.
 void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
                          uint clamp_side_bits, FreezeMask &m)
 {
@@ -1579,7 +1569,7 @@ void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
         if ((f & clamp_side_bits) && !(f & ~clamp_side_bits)) continue;
 
         // Bottom nodes (corners included) stay pinned: the boundary outline already places the
-        // row (options 1, 11 and 13 snap it, 12 slides its x0 end).
+        // row (options 1 and 13 snap it, 12 slides its x0 end).
         if (f & BOUNDZ0) continue;
         free_node(m, n, 3);                 // active lid, unrestored-wall and slant nodes: movable
     }
@@ -3170,29 +3160,17 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     int_vec points_to_delete;
     double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
     switch (param.mesh.remeshing_option) {
     case 0:
         // DO NOT change the boundary
-        excl_func = &is_boundary;
         break;
     case 1:
-        excl_func = &is_boundary;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, floors);
-        break;
-    case 10:
-        excl_func = &is_corner;
-        break;
-    case 11:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         break;
     case 13:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
@@ -3420,34 +3398,21 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     int_vec points_to_delete;
     double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
     switch (param.mesh.remeshing_option) {
     case 0:
         // DO NOT change the boundary
-        excl_func = &is_boundary;
         break;
     case 1:
-        excl_func = &is_boundary;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, floors);
-        break;
-    case 10:
-        excl_func = &is_corner;
-        break;
-    case 11:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         break;
     case 12:
-        excl_func = &is_corner;
         x0plane = flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     case 13:
         // restore the bottom AND both side walls to their initial planes
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
@@ -3786,8 +3751,6 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
 
     // check if any bottom node is too far away from the bottom depth
     if (param.mesh.remeshing_option == 1 ||
-        param.mesh.remeshing_option == 2 ||
-        param.mesh.remeshing_option == 11 ||
         param.mesh.remeshing_option == 13) {
         double bottom = - param.mesh.zlength;
         double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
@@ -5181,8 +5144,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
 
     if (param.mesh.remeshing_option==1 ||
-        param.mesh.remeshing_option==2 ||
-        param.mesh.remeshing_option==11 ||
         param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
         int nbot = static_cast<int>(var.bnodes[iboundz0]->size());
