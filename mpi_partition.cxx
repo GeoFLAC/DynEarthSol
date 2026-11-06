@@ -10,6 +10,9 @@
 #include <string>
 #include "mpi_partition.hpp"
 #include "utils.hpp"
+#ifdef USEMETIS
+#include <metis.h>
+#endif
 
 void MpiPartition::index() {
     node_local.clear(); element_local.clear();
@@ -29,6 +32,43 @@ void MpiPartition::archive(MpiState& a) {
 }
 
 namespace {
+#ifdef USEMETIS
+void metis_partition(const Variables& v,int ranks,int_vec& owner) {
+    // A face-only dual graph omits dependencies in DES node-star gathers.
+    // Connect elements sharing any vertex. The volume objective is a proxy;
+    // actual node/element halo bytes still depend on the node-owner assignment.
+    std::vector<idx_t> offsets(v.nelem+1,0),adjacency,part(v.nelem);
+    int_vec neighbors;
+    for(int e=0;e<v.nelem;++e) {
+        neighbors.clear();
+        for(int j=0;j<NODES_PER_ELEM;++j) {
+            const int n=(*v.connectivity)[e][j];
+            const int* patch=v.support.patch(n);
+            neighbors.insert(neighbors.end(),patch,patch+v.support.size(n));
+        }
+        std::sort(neighbors.begin(),neighbors.end());
+        neighbors.erase(std::unique(neighbors.begin(),neighbors.end()),neighbors.end());
+        for(int other:neighbors) if(other!=e) adjacency.push_back(other);
+        if(adjacency.size()>std::size_t(IDX_MAX))
+            die(EXIT_RUNTIME_RESOURCE,"METIS adjacency exceeds idx_t; use a 64-bit METIS build");
+        offsets[e+1]=adjacency.size();
+    }
+    idx_t vertices=v.nelem,constraints=1,parts=ranks,objective=0,options[METIS_NOPTIONS];
+    METIS_SetDefaultOptions(options);
+    options[METIS_OPTION_NUMBERING]=0;
+    options[METIS_OPTION_SEED]=0;
+    options[METIS_OPTION_OBJTYPE]=METIS_OBJTYPE_VOL;
+    options[METIS_OPTION_UFACTOR]=30; // allow 3% element-count imbalance
+    const int status=METIS_PartGraphKway(&vertices,&constraints,offsets.data(),adjacency.data(),
+        nullptr,nullptr,nullptr,&parts,nullptr,nullptr,options,&objective,part.data());
+    if(status!=METIS_OK) die(EXIT_MESH_QUALITY,"METIS_PartGraphKway failed");
+    for(int e=0;e<v.nelem;++e) {
+        if(part[e]<0 || part[e]>=ranks) die(EXIT_INTERNAL_ASSERT,"invalid METIS owner");
+        owner[e]=part[e];
+    }
+    std::cout<<"[mpi][metis] objective=volume value="<<objective<<" imbalance_tolerance=0.03\n";
+}
+#endif
 
 void bisect(int_vec& ids, int b,int e,int rb,int re,
             const std::vector<std::array<double,NDIMS>>& centers,int_vec& owner) {
@@ -51,8 +91,17 @@ void bisect(int_vec& ids, int b,int e,int rb,int re,
 
 std::vector<MpiPartition> mpi_partition_mesh(const Variables& v,int nr) {
     const auto started=std::chrono::steady_clock::now();
+    const char* requested=std::getenv("DES_MPI_PARTITIONER");
+    const std::string method=requested?requested:"rcb";
+    if(method!="rcb" && method!="metis")
+        die(EXIT_CONFIG_VALUE,"DES_MPI_PARTITIONER must be rcb or metis");
+#ifndef USEMETIS
+    if(method=="metis") die(EXIT_UNSUPPORTED_LIB,"METIS requested; rebuild with usempi=1 usemetis=1");
+#endif
     int_vec elem_owner(v.nelem),node_owner(v.nnode,nr);
-    {
+    // METIS coarsening is inappropriate for tiny meshes with empty partitions.
+    const bool geometric=method=="rcb" || v.nelem<=nr;
+    if(geometric) {
         int_vec ids(v.nelem);std::iota(ids.begin(),ids.end(),0);
         std::vector<std::array<double,NDIMS>> centers(v.nelem);
         for(int e=0;e<v.nelem;++e) for(int d=0;d<NDIMS;++d) {
@@ -61,6 +110,9 @@ std::vector<MpiPartition> mpi_partition_mesh(const Variables& v,int nr) {
         }
         bisect(ids,0,v.nelem,0,nr,centers,elem_owner);
     }
+#ifdef USEMETIS
+    else metis_partition(v,nr,elem_owner);
+#endif
     int_vec node_count(nr,0);
     std::vector<std::pair<int,int_vec>> shared;
     for(int n=0;n<v.nnode;++n) {
@@ -127,7 +179,8 @@ std::vector<MpiPartition> mpi_partition_mesh(const Variables& v,int nr) {
     }
     for(int r=0;r<nr;++r) for(auto& h:links[r]) parts[r].halos.push_back(std::move(h.second));
     const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
-    std::cout<<"[mpi][partitioner] requested=rcb actual=rcb seconds="<<elapsed<<'\n';
+    std::cout<<"[mpi][partitioner] requested="<<method<<" actual="<<(geometric?"rcb":"metis")
+             <<" seconds="<<elapsed<<'\n';
     return parts;
 }
 #endif

@@ -23,6 +23,7 @@
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - usempi = 1 : experimental CPU MPI timestep kernels; builds dynearthsol[23]d.mpi.
+##  - usemetis = 1 : optional METIS partitioner for usempi=1 (requires METIS 5).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
@@ -38,6 +39,7 @@ nprof = 0
 gprof = 0
 usemmg = 0
 usempi = 0
+usemetis = 0
 useexo = 0
 usegospl = 0
 hdf5 = 0
@@ -45,7 +47,7 @@ snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg usempi useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg usempi usemetis useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -53,7 +55,7 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX MPI_CXX \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX MPI_CXX METIS_INCLUDE_DIR METIS_LIB_DIR \
              BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
@@ -834,6 +836,21 @@ ifeq ($(usempi), 1)
 	CXXFLAGS += -DUSEMPI -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
 endif
 
+ifeq ($(usemetis), 1)
+ifneq ($(usempi), 1)
+$(error usemetis=1 requires usempi=1)
+endif
+	# Blank overrides use the compiler/linker's normal search paths.
+	METIS_INCLUDE_DIR ?=
+	METIS_LIB_DIR ?=
+	METIS_CXXFLAGS = -DUSEMETIS $(if $(strip $(METIS_INCLUDE_DIR)),-I$(METIS_INCLUDE_DIR))
+	CXXFLAGS += $(METIS_CXXFLAGS)
+	LDFLAGS += $(if $(strip $(METIS_LIB_DIR)),-L$(METIS_LIB_DIR)) -lmetis
+ifneq ($(strip $(METIS_LIB_DIR)),)
+	LDFLAGS += -Wl,-rpath,$(METIS_LIB_DIR)
+endif
+endif
+
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
@@ -903,10 +920,11 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS
+FEATURES = HDF5 USEMMG USEEXODUS USEMETIS
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
 FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+FEATURE_USEMETIS_FLAGS  = $(METIS_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
 FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
@@ -1039,6 +1057,11 @@ config:
 	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
 	@echo "openmp             $(strip $(openmp))"
 	@echo "usempi             $(strip $(usempi))"
+	@echo "usemetis           $(strip $(usemetis))"
+ifeq ($(usemetis), 1)
+	@echo "  metis include    $(if $(strip $(METIS_INCLUDE_DIR)),$(METIS_INCLUDE_DIR),compiler default)"
+	@echo "  metis lib dir    $(if $(strip $(METIS_LIB_DIR)),$(METIS_LIB_DIR),linker default)"
+endif
 ifeq ($(OSNAME), Darwin)
 	@echo "brew prefix        $(BREW_PREFIX)"
 ifeq ($(openmp), 1)
