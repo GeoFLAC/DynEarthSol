@@ -21,9 +21,9 @@ Earth's lithosphere and problems alike.
 # Building DES
 
 ## Getting the Source Code
-This repository uses Git submodules for three libraries: `nanoflann` (always),
-`mmg` (with `usemmg=1`) and `knn-bvh` (with `openacc=1`). `make` initializes the
-ones a build needs, fetching them over the internet before compiling.
+This repository uses Git submodules for three libraries: `nanoflann` and `mmg`
+(always) and `knn-bvh` (with `openacc=1`). `make` initializes the ones a build
+needs, fetching them over the internet before compiling.
 
 For environments without internet access (such as certain HPC compute nodes), pre-downloading all dependencies is highly recommended. To ensure all necessary source files are downloaded upfront, clone the repository with its submodules using the `--recurse-submodules` flag:
 
@@ -44,19 +44,21 @@ own, with no paths to edit and none to pass on the command line.
 
 ```bash
 # macOS (Homebrew) -- libomp because Apple clang ships no OpenMP runtime
-brew install libomp
+brew install libomp cmake
 
 # Debian / Ubuntu
-sudo apt install g++ make
+sudo apt install g++ make cmake
 
 # Fedora / RHEL
-sudo dnf install gcc-c++ make
+sudo dnf install gcc-c++ make cmake
 ```
 
 The requirements in detail:
 * You will need a C++17 compiler: g++ 8 or newer, nvc++ 25.7 or newer (NVIDIA
   HPC SDK), or clang++ 5 or newer. CI builds with g++ 8 through 15, nvc++
   25.7, clang 18 and the Apple clang of the current macOS runner.
+* cmake 3.5 or newer, which configures the `mmg` submodule (see
+  [Submodules](#submodules)).
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.
@@ -107,8 +109,12 @@ defaults are not what you want.
 ### Submodules
 * [nanoflann](https://github.com/jlblancoc/nanoflann): header-only KD-tree for
   nearest-neighbour searches on the CPU. Always required.
-* [mmg](https://github.com/MmgTools/mmg): mesh optimization during remeshing.
-  Required with `usemmg=1`; `make` configures and builds it under `mmg/build`.
+* [mmg](https://github.com/MmgTools/mmg): the remesher, in 2D and 3D. Always
+  required; `make` configures it with cmake and builds `libmmg2d`
+  and `libmmg3d` under `mmg/build`, with the C and C++ compilers of `CXX`'s
+  toolchain. The configure step ignores an exported `CFLAGS`; a tree configured
+  earlier keeps its cached flags and compilers until `mmg/build` is removed.
+  `MMG_INCLUDE` and `MMG_LIB_DIR` point at a different build.
 * [knn-bvh](https://github.com/GeoFLAC/knn-bvh): K-nearest-neighbour searches
   on Bounding Volume Hierarchies, the GPU counterpart of nanoflann. Required with
   `openacc=1`.
@@ -128,12 +134,6 @@ defaults are not what you want.
     make; make install
     ```
   * `EXO_INCLUDE` and `EXO_LIB_DIR` override those defaults.
-* [MMG](https://www.mmgtools.org/), `usemmg=1`, for mesh optimization during
-  remeshing, in 2D and 3D. It is the `mmg` submodule: `make usemmg=1` initializes
-  it and builds `libmmg2d` or `libmmg3d` under `mmg/build`, so nothing is
-  installed by hand. The configure step ignores an exported `CFLAGS`; a tree
-  configured earlier keeps its cached flags until `mmg/build` is removed.
-  `MMG_INCLUDE` and `MMG_LIB_DIR` point at a different build.
 * [HDF5](https://www.hdfgroup.org/solutions/hdf5/), `hdf5=1`, for writing
   results in the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
   format, which is compressed (up to 50 % smaller) and opens directly in ParaView.
@@ -293,9 +293,6 @@ make opt=0 openmp=0
 
 # build 2D version
 make ndims=2
-
-# enable MMG mesh optimization (builds the mmg submodule)
-make usemmg=1
 
 # enable Exodus mesh import, 3D only (requires seacas/exodus libs)
 make useexo=1

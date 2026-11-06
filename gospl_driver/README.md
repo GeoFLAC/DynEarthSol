@@ -51,11 +51,10 @@ an active environment with its own compilers changes it, and
 
 ```bash
 make clean
-make ndims=3 usegospl=1 usemmg=1 -j4
+make ndims=3 usegospl=1 -j4
 ```
 
-- `ndims=3` is required; `usemmg=1` (MMG mesh optimization during remeshing) is
-  recommended but optional.
+- `ndims=3` is required.
 - `GOSPL_EXT_DIR` (default `~/opt/gospl_extensions`) and `CONDA_ENV_PATH`
   (default `~/miniforge3/envs/gospl`) locate the two prerequisites; set them on
   the command line, in the Makefile or as exported variables if yours are
