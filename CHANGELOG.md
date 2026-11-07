@@ -227,6 +227,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   `quality_check_step_interval` is rounded up as the message says; the run
   used to stop ([#114]).
 
+- On macOS, a `usegospl=1` build runs: the executable records where
+  `libgospl_extensions.so` and the env's `libpython` are, links the system
+  `libc++`, and takes the gospl env's `libomp`, so GoSPL no longer aborts it
+  with `OMP: Error #15`; `usemmg=1` configures MMG with the gospl env active.
+  The docs give the macOS gospl_extensions build and the mamba commands
+  ([#118]).
+
 ## [2.0.2] - 2026-09-17
 
 DOI: [10.5281/zenodo.20330979](https://doi.org/10.5281/zenodo.20330979).
@@ -397,4 +404,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
