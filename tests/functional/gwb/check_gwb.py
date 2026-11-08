@@ -47,7 +47,8 @@ ap.add_argument('--gwb-dat')
 ap.add_argument('--unsupported', action='store_true')
 a = ap.parse_args()
 exe = os.path.abspath(a.exe)
-cfg_text = open(a.cfg).read()
+with open(a.cfg) as f:
+    cfg_text = f.read()
 
 
 def key(name):
@@ -97,6 +98,16 @@ def gwb_query(points, ncomp):
     return v[:, 4], v[:, 8:8 + ncomp], v[:, 8 + ncomp].astype(int)
 
 
+def read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def write_json(obj, path):
+    with open(path, 'w') as f:
+        json.dump(obj, f)
+
+
 def fault_tags(world_json):
     """GWB tag indices of the fault features, as gwb.cxx derives them."""
     tags, faults = [], set()
@@ -115,7 +126,7 @@ try:
         code = run(tmp, world)
         expect('a build without usegwb=1 refuses option 936 (exit 31)', code == 31, 'exit %d' % code)
     else:
-        wj = json.load(open(world))
+        wj = read_json(world)
         if ndims == 2:
             expect('2D world cross section is [[0,0],[L,0]]',
                    wj['cross section'][0] == [0, 0] and wj['cross section'][1][1] == 0)
@@ -169,17 +180,17 @@ try:
 
         # error cases, each a world written next to the run
         nofault = dict(wj, features=[f for f in wj['features'] if f['model'] != 'fault'])
-        json.dump(nofault, open(os.path.join(tmp, 'nofault.wb'), 'w'))
+        write_json(nofault, os.path.join(tmp, 'nofault.wb'))
         code = run(tmp, os.path.join(tmp, 'nofault.wb'))
         expect('a world without a fault stops with weakzone_option 936 (exit 12)', code == 12, 'exit %d' % code)
 
         nomat = dict(nofault, features=[dict(f, **{'composition models': []}) for f in nofault['features']])
-        json.dump(nomat, open(os.path.join(tmp, 'nomat.wb'), 'w'))
+        write_json(nomat, os.path.join(tmp, 'nomat.wb'))
         code = run(tmp, os.path.join(tmp, 'nomat.wb'), weakzone_option=0)
         expect('a world leaving markers without a material stops (exit 12)', code == 12, 'exit %d' % code)
 
         twice = dict(wj, features=wj['features'] + [fault])
-        json.dump(twice, open(os.path.join(tmp, 'twice.wb'), 'w'))
+        write_json(twice, os.path.join(tmp, 'twice.wb'))
         code = run(tmp, os.path.join(tmp, 'twice.wb'), extra=gauss)
         expect('two faults of one name stop a Gaussian weak zone (exit 12)', code == 12, 'exit %d' % code)
 
