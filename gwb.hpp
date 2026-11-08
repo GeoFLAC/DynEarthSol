@@ -22,9 +22,9 @@
 void gwb_build(const Param &param);
 double gwb_temperature(const Param &param, const double *x);
 int gwb_mattype(const Param &param, const double *x);
-// 0 outside the world's faults; inside one, 1, or with ic.gwb_fault_gaussian, exp(-d^2 / (2 sigma^2))
-// for the distance d from the fault's plane (the largest over the faults), sigma being
-// ic.weakzone_standard_deviation.
+// 0 outside the world's faults; inside one, 1, or with ic.gwb_fault_is_gaussian,
+// exp(-d^2 / (2 sigma^2)) for the distance d from the fault's plane (the largest over the
+// faults), sigma being ic.weakzone_standard_deviation.
 double gwb_fault_weight(const Param &param, const double *x);
 void gwb_release();
 

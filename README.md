@@ -192,7 +192,7 @@ defaults are not what you want.
   each on its own, the initial temperature, the initial marker materials (GWB
   composition *i* is mattype *i*; the world must give every point one) and the
   weak zone (`weakzone_plstrain` inside the world's `fault` features) from it.
-  With `ic.gwb_fault_gaussian = yes` the weak zone's plastic strain falls off
+  With `ic.gwb_fault_is_gaussian = yes` the weak zone's plastic strain falls off
   as a Gaussian of the distance from each fault's plane, with standard
   deviation `ic.weakzone_standard_deviation` (in metres).
   Examples: `examples/gwb-subduction.cfg` (2D, all three),

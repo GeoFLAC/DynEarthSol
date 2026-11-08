@@ -121,10 +121,10 @@ void gwb_build(const Param &param)
         die(EXIT_CONFIG_DATA);
     }
     // GWB finds a fault's plane by its name, the first feature of that name.
-    if (param.ic.gwb_fault_gaussian)
+    if (param.ic.gwb_fault_is_gaussian)
         for (std::size_t i = 0; i < fault_names.size(); ++i)
             if (std::count(fault_names.begin(), fault_names.end(), fault_names[i]) > 1) {
-                std::cerr << "Error: ic.gwb_fault_gaussian needs the faults of the Geodynamic "
+                std::cerr << "Error: ic.gwb_fault_is_gaussian needs the faults of the Geodynamic "
                              "World Builder world '" << param.ic.gwb_filename << "' to have distinct "
                              "names; '" << fault_names[i] << "' is used more than once.\n";
                 die(EXIT_CONFIG_DATA);
@@ -177,7 +177,7 @@ double gwb_fault_weight(const Param &param, const double *x)
     query(param, x, props, 1, &tag);
     if (std::find(fault_tags.begin(), fault_tags.end(), static_cast<int>(tag)) == fault_tags.end())
         return 0;
-    if (!param.ic.gwb_fault_gaussian) return 1;
+    if (!param.ic.gwb_fault_is_gaussian) return 1;
     const double sigma = param.ic.weakzone_standard_deviation;
 
     // The point in the world's 3D Cartesian frame, as properties_2d/3d place it.

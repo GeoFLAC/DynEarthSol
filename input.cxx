@@ -867,7 +867,7 @@ static void declare_parameters(po::options_description &cfg,
         ("ic.weakzone_standard_deviation", po::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
          "Standard deviation of Gaussian weak zone (in meters).\n"
          "Used as point-Gaussian std dev (option 3), as along-strike sigma (option 4), and across "
-         "a fault for option 936 with ic.gwb_fault_gaussian.\n")
+         "a fault for option 936 with ic.gwb_fault_is_gaussian.\n")
         ("ic.weakzone_gaussian_amplitude", po::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
          "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
          "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
@@ -958,7 +958,7 @@ static void declare_parameters(po::options_description &cfg,
          "and/or ic.weakzone_option 936. It is queried at each node, marker and element "
          "centroid of the initial mesh at depth -z; a 2D DES model needs a world with a cross "
          "section, x running along it.")
-        ("ic.gwb_fault_gaussian", po::value<bool>(&p.ic.gwb_fault_gaussian)->default_value(false),
+        ("ic.gwb_fault_is_gaussian", po::value<bool>(&p.ic.gwb_fault_is_gaussian)->default_value(false),
          "For ic.weakzone_option 936. no: every element in a GWB fault gets weakzone_plstrain. "
          "yes: an element in a fault gets weakzone_plstrain * exp(-d^2 / (2 sigma^2)), d being "
          "its centroid's distance from the fault's plane and sigma ic.weakzone_standard_deviation; "
@@ -2056,8 +2056,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
                 die(EXIT_IO_OPEN);
             }
         }
-        if (p.ic.weakzone_option == 936 && p.ic.gwb_fault_gaussian && p.ic.weakzone_standard_deviation <= 0)
-            die(EXIT_CONFIG_VALUE, "ic.gwb_fault_gaussian needs ic.weakzone_standard_deviation > 0.");
+        if (p.ic.weakzone_option == 936 && p.ic.gwb_fault_is_gaussian && p.ic.weakzone_standard_deviation <= 0)
+            die(EXIT_CONFIG_VALUE, "ic.gwb_fault_is_gaussian needs ic.weakzone_standard_deviation > 0.");
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {
             p.control.ref_pressure_option = 0;

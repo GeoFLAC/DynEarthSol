@@ -12,13 +12,13 @@ application, at the same points:
     is mattype i; each marker must have one of at least 0.5);
   - plastic strain: weakzone_plstrain exactly in the elements whose centroid
     gwb-dat tags as a "fault" feature, 0 elsewhere.
-It runs again with ic.gwb_fault_gaussian and weakzone_standard_deviation a
+It runs again with ic.gwb_fault_is_gaussian and weakzone_standard_deviation a
 quarter of the first fault's thickness: the same elements are weak, with values in (0,
 weakzone_plstrain] that vary across the fault.
 It then checks that a world without a fault (exit 12), a world leaving a marker
 without a material (exit 12), a missing world (exit 20) and a restart with
 is_restarting_weakzone (exit 11) stop the run, as do two faults of one name with
-ic.gwb_fault_gaussian (exit 12).
+ic.gwb_fault_is_gaussian (exit 12).
 --unsupported checks that a build without usegwb=1 refuses option 936 (exit 31).
 
 gwb-dat is queried in 3D, at (x, 0, z) for a 2D model, whose world must then
@@ -150,9 +150,9 @@ try:
 
         fault = [f for f in wj['features'] if f['model'] == 'fault'][0]
         sigma = fault['segments'][0]['thickness'][0] / 4
-        gauss = '\n[ic]\ngwb_fault_gaussian = yes\nweakzone_standard_deviation = %g\n' % sigma
+        gauss = '\n[ic]\ngwb_fault_is_gaussian = yes\nweakzone_standard_deviation = %g\n' % sigma
         code = run(tmp, world, extra=gauss)
-        expect('DES runs with gwb_fault_gaussian, weakzone_standard_deviation = %g' % sigma, code == 0, 'exit %d' % code)
+        expect('DES runs with gwb_fault_is_gaussian, weakzone_standard_deviation = %g' % sigma, code == 0, 'exit %d' % code)
         if code == 0:
             d = Dynearthsol(os.path.join(tmp, key('modelname')))
             xyz = d.read_field(0, 'coordinate')
