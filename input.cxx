@@ -1184,7 +1184,9 @@ static void declare_parameters(po::options_description &cfg,
          "elements are smaller than about l/2, the width of the weakened zone scales with l, not "
          "with the element size. It acts only while softening lasts (k below pls1): flow in "
          "fully weakened material is not regularized, so the active band can still narrow with "
-         "the mesh.")
+         "the mesh. It does not by itself make the active fault mesh-independent: on "
+         "core-complex.cfg the strain-rate band narrows with the mesh as in the original code, "
+         "also when softening never saturates and with associated flow (see GitHub issue #123).")
         ("mat.nonlocal_length_in_m", po::value<double>(&p.mat.nonlocal_length)->default_value(0),
          "Length l of the Gaussian weight of nonlocal_option 1 (in meters)")
         ("mat.nonlocal_m", po::value<double>(&p.mat.nonlocal_m)->default_value(1.0),
