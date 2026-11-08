@@ -56,8 +56,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   world (`ic.gwb_filename`, build with `usegwb=1`): option 936 of
   `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes
   the temperature, each marker's material (GWB composition *i* is mattype *i*)
-  and a weak zone in the world's faults from it; `examples/gwb-*.cfg` show
-  all three ([#117]).
+  and a weak zone in the world's faults from it, uniform or, with
+  `ic.gwb_fault_gaussian`, a Gaussian across each fault; `examples/gwb-*.cfg`
+  show all three ([#117]).
 
 ### Changed
 

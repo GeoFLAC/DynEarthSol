@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -13,13 +15,17 @@
 
 #ifdef USEGWB
 
+#include "world_builder/world.h"
 #include "world_builder/wrapper_c.h"
 #include "rapidjson/document.h"
 
 namespace {
 
 void *world = nullptr;
-std::vector<int> fault_tags;   // GWB tag indices of the world's fault features
+std::vector<int> fault_tags;            // GWB tag indices of the world's fault features
+std::vector<std::string> fault_names;   // their names, for the distance to each fault's plane
+// A 2D model's cross section: DES x maps to the world's map point cs_origin + x * cs_dir.
+double cs_origin[2] = {0, 0}, cs_dir[2] = {1, 0};
 
 // GWB reports a bad world file or query by throwing; turn that into a config error.
 [[noreturn]] void gwb_failed(const Param &param, const char *what)
@@ -31,8 +37,9 @@ std::vector<int> fault_tags;   // GWB tag indices of the world's fault features
 
 // GWB's tag property is the index of a feature's tag in the list of distinct tags, in feature
 // order; a feature's tag is its "tag" entry or, if empty, its model name. Rebuild that list from
-// the world file, as GWB does, and keep the indices that a "fault" feature's tag has.
-void find_fault_tags(const Param &param)
+// the world file, as GWB does, and keep the indices that a "fault" feature's tag has, the fault
+// names, and the cross section.
+void read_world_file(const Param &param)
 {
     std::ifstream f(param.ic.gwb_filename);
     std::stringstream ss;
@@ -42,8 +49,19 @@ void find_fault_tags(const Param &param)
     doc.Parse<rapidjson::kParseCommentsFlag | rapidjson::kParseNanAndInfFlag>(ss.str().c_str());
     std::vector<std::string> tags;
     fault_tags.clear();
+    fault_names.clear();
     if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("features") || !doc["features"].IsArray())
         return;   // GWB read the file, so this cannot happen; without a features array there is no fault
+    if (doc.HasMember("cross section")) {   // GWB checked it: two points of two numbers
+        const auto &cs = doc["cross section"];
+        const double dx = cs[1][0].GetDouble() - cs[0][0].GetDouble();
+        const double dy = cs[1][1].GetDouble() - cs[0][1].GetDouble();
+        const double len = std::sqrt(dx*dx + dy*dy);
+        cs_origin[0] = cs[0][0].GetDouble();
+        cs_origin[1] = cs[0][1].GetDouble();
+        cs_dir[0] = dx / len;
+        cs_dir[1] = dy / len;
+    }
     for (const auto &feat : doc["features"].GetArray()) {
         if (!feat.IsObject() || !feat.HasMember("model") || !feat["model"].IsString()) continue;
         const std::string model = feat["model"].GetString();
@@ -52,8 +70,10 @@ void find_fault_tags(const Param &param)
         auto it = std::find(tags.begin(), tags.end(), tag);
         const int index = static_cast<int>(it - tags.begin());
         if (it == tags.end()) tags.push_back(tag);
-        if (model == "fault" && std::find(fault_tags.begin(), fault_tags.end(), index) == fault_tags.end())
+        if (model != "fault") continue;
+        if (std::find(fault_tags.begin(), fault_tags.end(), index) == fault_tags.end())
             fault_tags.push_back(index);
+        fault_names.push_back((feat.HasMember("name") && feat["name"].IsString()) ? feat["name"].GetString() : "");
     }
 }
 
@@ -93,12 +113,22 @@ void gwb_build(const Param &param)
     }
     catch (const std::exception &e) { gwb_failed(param, e.what()); }
     catch (...) { gwb_failed(param, "unknown error while reading the world"); }
-    find_fault_tags(param);
-    if (param.ic.weakzone_option == 936 && fault_tags.empty()) {
+    read_world_file(param);
+    if (param.ic.weakzone_option != 936) return;
+    if (fault_tags.empty()) {
         std::cerr << "Error: ic.weakzone_option 936 needs a fault feature in the Geodynamic World "
                      "Builder world '" << param.ic.gwb_filename << "'; it has none.\n";
         die(EXIT_CONFIG_DATA);
     }
+    // GWB finds a fault's plane by its name, the first feature of that name.
+    if (param.ic.gwb_fault_gaussian)
+        for (std::size_t i = 0; i < fault_names.size(); ++i)
+            if (std::count(fault_names.begin(), fault_names.end(), fault_names[i]) > 1) {
+                std::cerr << "Error: ic.gwb_fault_gaussian needs the faults of the Geodynamic "
+                             "World Builder world '" << param.ic.gwb_filename << "' to have distinct "
+                             "names; '" << fault_names[i] << "' is used more than once.\n";
+                die(EXIT_CONFIG_DATA);
+            }
 }
 
 
@@ -140,12 +170,39 @@ int gwb_mattype(const Param &param, const double *x)
 }
 
 
-bool gwb_in_fault(const Param &param, const double *x)
+double gwb_fault_weight(const Param &param, const double *x)
 {
     const unsigned int props[1][3] = {{4, 0, 0}};   // tag; -1 outside every feature
     double tag;
     query(param, x, props, 1, &tag);
-    return std::find(fault_tags.begin(), fault_tags.end(), static_cast<int>(tag)) != fault_tags.end();
+    if (std::find(fault_tags.begin(), fault_tags.end(), static_cast<int>(tag)) == fault_tags.end())
+        return 0;
+    if (!param.ic.gwb_fault_gaussian) return 1;
+    const double sigma = param.ic.weakzone_standard_deviation;
+
+    // The point in the world's 3D Cartesian frame, as properties_2d/3d place it.
+    const double depth = -x[NDIMS-1];
+#ifdef THREED
+    const std::array<double,3> p = {{x[0], x[1], param.mesh.zlength + x[NDIMS-1]}};
+#else
+    const std::array<double,3> p = {{cs_origin[0] + x[0] * cs_dir[0], cs_origin[1] + x[0] * cs_dir[1],
+                                     param.mesh.zlength + x[NDIMS-1]}};
+#endif
+    // The distance from each fault's plane; inf for a fault the point is not beside. The tag
+    // above, not this distance, decides whether the point is in a fault: the distance ignores
+    // the fault's max depth.
+    const auto *w = static_cast<const WorldBuilder::World *>(world);
+    double weight = 0;
+    try {
+        for (const auto &name : fault_names) {
+            const double d = w->distance_to_plane(p, depth, name).get_distance_from_surface();
+            if (std::isfinite(d))
+                weight = std::max(weight, std::exp(-d * d / (2 * sigma * sigma)));
+        }
+    }
+    catch (const std::exception &e) { gwb_failed(param, e.what()); }
+    catch (...) { gwb_failed(param, "unknown error in a fault distance"); }
+    return weight;
 }
 
 
@@ -170,7 +227,7 @@ int gwb_mattype(const Param &, const double *)
     die(EXIT_UNSUPPORTED_LIB, "Geodynamic World Builder is not compiled in (build with usegwb=1).");
 }
 
-bool gwb_in_fault(const Param &, const double *)
+double gwb_fault_weight(const Param &, const double *)
 {
     die(EXIT_UNSUPPORTED_LIB, "Geodynamic World Builder is not compiled in (build with usegwb=1).");
 }

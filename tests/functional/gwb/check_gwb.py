@@ -12,9 +12,13 @@ application, at the same points:
     is mattype i; each marker must have one of at least 0.5);
   - plastic strain: weakzone_plstrain exactly in the elements whose centroid
     gwb-dat tags as a "fault" feature, 0 elsewhere.
+It runs again with ic.gwb_fault_gaussian and weakzone_standard_deviation a
+quarter of the first fault's thickness: the same elements are weak, with values in (0,
+weakzone_plstrain] that vary across the fault.
 It then checks that a world without a fault (exit 12), a world leaving a marker
 without a material (exit 12), a missing world (exit 20) and a restart with
-is_restarting_weakzone (exit 11) stop the run.
+is_restarting_weakzone (exit 11) stop the run, as do two faults of one name with
+ic.gwb_fault_gaussian (exit 12).
 --unsupported checks that a build without usegwb=1 refuses option 936 (exit 31).
 
 gwb-dat is queried in 3D, at (x, 0, z) for a 2D model, whose world must then
@@ -144,6 +148,25 @@ try:
             expect('weak zone = elements in GWB faults (%d of %d)' % (nweak, len(pls)),
                    nweak > 0 and bad == 0, '%d elements differ' % bad)
 
+        fault = [f for f in wj['features'] if f['model'] == 'fault'][0]
+        sigma = fault['segments'][0]['thickness'][0] / 4
+        gauss = '\n[ic]\ngwb_fault_gaussian = yes\nweakzone_standard_deviation = %g\n' % sigma
+        code = run(tmp, world, extra=gauss)
+        expect('DES runs with gwb_fault_gaussian, weakzone_standard_deviation = %g' % sigma, code == 0, 'exit %d' % code)
+        if code == 0:
+            d = Dynearthsol(os.path.join(tmp, key('modelname')))
+            xyz = d.read_field(0, 'coordinate')
+            conn = d.read_field(0, 'connectivity')
+            pls = d.read_field(0, 'plastic strain')
+            _, _, tag = gwb_query(xyz[conn].mean(axis=1), nmat)
+            infault = np.isin(tag, list(fault_tags(wj)))
+            w = pls[infault]
+            expect('Gaussian weak zone: the elements in GWB faults, values in (0, %g] (%d elements)'
+                   % (plstrain, infault.sum()),
+                   infault.any() and (pls[~infault] == 0).all() and (w > 0).all() and (w <= plstrain).all()
+                   and w.min() < 0.5 * w.max(),
+                   'values %.3g..%.3g' % (w.min(), w.max()) if infault.any() else 'none')
+
         # error cases, each a world written next to the run
         nofault = dict(wj, features=[f for f in wj['features'] if f['model'] != 'fault'])
         json.dump(nofault, open(os.path.join(tmp, 'nofault.wb'), 'w'))
@@ -154,6 +177,11 @@ try:
         json.dump(nomat, open(os.path.join(tmp, 'nomat.wb'), 'w'))
         code = run(tmp, os.path.join(tmp, 'nomat.wb'), weakzone_option=0)
         expect('a world leaving markers without a material stops (exit 12)', code == 12, 'exit %d' % code)
+
+        twice = dict(wj, features=wj['features'] + [fault])
+        json.dump(twice, open(os.path.join(tmp, 'twice.wb'), 'w'))
+        code = run(tmp, os.path.join(tmp, 'twice.wb'), extra=gauss)
+        expect('two faults of one name stop a Gaussian weak zone (exit 12)', code == 12, 'exit %d' % code)
 
         code = run(tmp, os.path.join(tmp, 'missing.wb'))
         expect('a missing world stops (exit 20)', code == 20, 'exit %d' % code)

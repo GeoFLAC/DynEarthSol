@@ -412,7 +412,8 @@ struct IC {
     double_vec weakzone_segments_y_min;
     double_vec weakzone_segments_y_max;
 
-    std::string gwb_filename;   // Geodynamic World Builder world (temperature/mattype_option 936)
+    std::string gwb_filename;   // Geodynamic World Builder world (temperature/mattype/weakzone_option 936)
+    bool gwb_fault_gaussian;   // weakzone_option 936: Gaussian across a fault, sigma weakzone_standard_deviation
 
     int temperature_option;
     std::string Temp_filename;
