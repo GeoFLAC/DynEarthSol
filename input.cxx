@@ -6,16 +6,14 @@
 #include <limits>
 #include <sstream>
 
-#include <boost/program_options.hpp>
-namespace po = boost::program_options;
-
+#include "options.hpp"
 #include "parameters.hpp"
 #include "matprops.hpp"
 #include "phasechanges.hpp"
 #include "utils.hpp"
 
 
-static void declare_parameters(po::options_description &cfg,
+static void declare_parameters(opt::Registry &cfg,
                                Param &p)
 {
     /* To have a new input parameter declared as such in parameters.hpp,
@@ -29,125 +27,125 @@ static void declare_parameters(po::options_description &cfg,
      *
      * add this line in this function:
      *
-     *     ("section.name", po::value<type>(&p.section.name), "help string")
+     *     ("section.name", opt::value<type>(&p.section.name), "help string")
      *
      */
 
     cfg.add_options()
-        ("sim.modelname", po::value<std::string>(&p.sim.modelname),
+        ("sim.modelname", opt::value<std::string>(&p.sim.modelname),
          "Prefix for the output files")
 
-        ("sim.max_steps", po::value<int>(&p.sim.max_steps),
+        ("sim.max_steps", opt::value<int>(&p.sim.max_steps),
          "Max. number of time steps")
-        ("sim.max_time_in_yr", po::value<double>(&p.sim.max_time_in_yr),
+        ("sim.max_time_in_yr", opt::value<double>(&p.sim.max_time_in_yr),
          "Max. time (in years)")
-        ("sim.output_step_interval", po::value<int>(&p.sim.output_step_interval),
+        ("sim.output_step_interval", opt::value<int>(&p.sim.output_step_interval),
          "Output step interval")
-        ("sim.output_time_interval_in_yr", po::value<double>(&p.sim.output_time_interval_in_yr),
+        ("sim.output_time_interval_in_yr", opt::value<double>(&p.sim.output_time_interval_in_yr),
          "Output time interval (in years)")
-        ("sim.info_display_step_interval", po::value<int>(&p.sim.info_display_step_interval)->default_value(0),
+        ("sim.info_display_step_interval", opt::value<int>(&p.sim.info_display_step_interval)->default_value(0),
          "Step interval for showing model status on screen.\n"
          " 0: use default (= 100 * mesh.quality_check_step_interval).\n"
          ">0: rounded up to a multiple of mesh.quality_check_step_interval.")
-        ("sim.has_runtime_info_display", po::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
+        ("sim.has_runtime_info_display", opt::value<bool>(&p.sim.has_runtime_info_display)->default_value(true),
          "Print the .manifest's sections on screen at run start, one line each,\n"
          "[build] then [runtime]. On by default: it is the start-of-run report every\n"
          "run printed before this option. The .manifest is written regardless.")
 
-        ("sim.checkpoint_frame_interval", po::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
+        ("sim.checkpoint_frame_interval", opt::value<int>(&p.sim.checkpoint_frame_interval)->default_value(10),
          "How frequent to write checkpoint file (used for restarting simulation)?")
-        ("sim.restarting_from_modelname", po::value<std::string>(&p.sim.restarting_from_modelname),
+        ("sim.restarting_from_modelname", opt::value<std::string>(&p.sim.restarting_from_modelname),
          "Prefix for the checkpoint and save files for restarting.")
-        ("sim.restarting_from_frame", po::value<int>(&p.sim.restarting_from_frame),
+        ("sim.restarting_from_frame", opt::value<int>(&p.sim.restarting_from_frame),
          "Which output frame to read for restarting?")
-        ("sim.is_restarting", po::value<bool>(&p.sim.is_restarting)->default_value(false),
+        ("sim.is_restarting", opt::value<bool>(&p.sim.is_restarting)->default_value(false),
          "Restarting from previous checkpoint file?")
 
-        ("sim.has_initial_checkpoint", po::value<bool>(&p.sim.has_initial_checkpoint)->default_value(true),
+        ("sim.has_initial_checkpoint", opt::value<bool>(&p.sim.has_initial_checkpoint)->default_value(true),
          "Output checkpoint file at 0th step?")
-        ("sim.has_marker_output", po::value<bool>(&p.sim.has_marker_output)->default_value(true),
+        ("sim.has_marker_output", opt::value<bool>(&p.sim.has_marker_output)->default_value(true),
          "Output marker coordinate and material?")
-        ("sim.has_output_during_remeshing", po::value<bool>(&p.sim.has_output_during_remeshing)->default_value(false),
+        ("sim.has_output_during_remeshing", opt::value<bool>(&p.sim.has_output_during_remeshing)->default_value(false),
          "Output immediately before and after remeshing?")
-        ("sim.is_outputting_averaged_fields", po::value<bool>(&p.sim.is_outputting_averaged_fields)->default_value(true),
+        ("sim.is_outputting_averaged_fields", opt::value<bool>(&p.sim.is_outputting_averaged_fields)->default_value(true),
          "Output time-averaged (smoothed) field variables or not. These fields are: velocity, strain rate, and stress.\n"
          "no: output instantaneous fields. The velocity and strain-rate might oscillate temporally.\n"
          "yes: output field variables averaged over mesh.quality_check_step_interval time steps.\n")
         // For rate-and-state + earthquake output control
-        ("sim.earthquake_output_step_interval", po::value<int>(&p.sim.earthquake_output_step_interval)->default_value(50),
+        ("sim.earthquake_output_step_interval", opt::value<int>(&p.sim.earthquake_output_step_interval)->default_value(50),
          "Output step interval while earthquake mode is active.")
-        ("sim.earthquake_start_factor", po::value<double>(&p.sim.earthquake_start_factor)->default_value(5.0),
+        ("sim.earthquake_start_factor", opt::value<double>(&p.sim.earthquake_start_factor)->default_value(5.0),
          "Earthquake start threshold factor: vmax > factor * max_vbc_val.")
-        ("sim.earthquake_end_factor", po::value<double>(&p.sim.earthquake_end_factor)->default_value(2.0),
+        ("sim.earthquake_end_factor", opt::value<double>(&p.sim.earthquake_end_factor)->default_value(2.0),
          "Earthquake end threshold factor: vmax < factor * max_vbc_val.")
-        ("sim.seismic_moment_calculate_output", po::value<bool>(&p.sim.seismic_moment_calculate_output)->default_value(false),
+        ("sim.seismic_moment_calculate_output", opt::value<bool>(&p.sim.seismic_moment_calculate_output)->default_value(false),
          "If true, seismic moment and magnitude are accumulated during earthquake mode.")
-        ("sim.hdf5_compression_level", po::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
+        ("sim.hdf5_compression_level", opt::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
             "HDF5 compression level (0-9). 0: no compression; 9: max. compression. \n"
             "A higher compression level could slow down the output speed.")
         ;
 
     cfg.add_options()
-        ("monitor.enabled", po::value<bool>(&p.monitor.enabled)->default_value(false),
+        ("monitor.enabled", opt::value<bool>(&p.monitor.enabled)->default_value(false),
          "Enable point-based generic monitoring output?")
-        ("monitor.step_interval", po::value<int>(&p.monitor.step_interval)->default_value(10),
+        ("monitor.step_interval", opt::value<int>(&p.monitor.step_interval)->default_value(10),
          "Monitoring output step interval.")
-        ("monitor.num_points", po::value<int>(&p.monitor.num_points)->default_value(0),
+        ("monitor.num_points", opt::value<int>(&p.monitor.num_points)->default_value(0),
          "Number of monitoring query points.")
-        ("monitor.points_x", po::value<std::string>()->default_value("[]"),
+        ("monitor.points_x", opt::list()->default_value("[]"),
          "Monitoring x coordinates array '[x0, x1, ...]'.")
-        ("monitor.points_y", po::value<std::string>()->default_value("[]"),
+        ("monitor.points_y", opt::list()->default_value("[]"),
          "Monitoring y coordinates array '[y0, y1, ...]' (3D only; 2D legacy alias for monitor.points_z).")
-        ("monitor.points_z", po::value<std::string>()->default_value("[]"),
+        ("monitor.points_z", opt::list()->default_value("[]"),
          "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
-        ("monitor.points_unit", po::value<std::string>(&p.monitor.points_unit)->default_value("m"),
+        ("monitor.points_unit", opt::value<std::string>(&p.monitor.points_unit)->default_value("m"),
          "Unit of monitor.points_x/z in 2D, or monitor.points_x/y/z in 3D: mm, cm, m, km.")
-        ("monitor.remesh_rebind_mode", po::value<std::string>()->default_value("pre_remesh_coord"),
+        ("monitor.remesh_rebind_mode", opt::value<std::string>()->default_value("pre_remesh_coord"),
          "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
-        ("monitor.output_prefix", po::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
+        ("monitor.output_prefix", opt::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
          "Prefix of monitoring output files.")
-        ("monitor.write_header", po::value<bool>(&p.monitor.write_header)->default_value(true),
+        ("monitor.write_header", opt::value<bool>(&p.monitor.write_header)->default_value(true),
          "Write CSV header row for monitoring outputs?")
-        ("monitor.output_coord", po::value<bool>(&p.monitor.output_coord)->default_value(true),
+        ("monitor.output_coord", opt::value<bool>(&p.monitor.output_coord)->default_value(true),
          "Output node coordinate columns.")
-        ("monitor.output_velocity", po::value<bool>(&p.monitor.output_velocity)->default_value(true),
+        ("monitor.output_velocity", opt::value<bool>(&p.monitor.output_velocity)->default_value(true),
          "Output node velocity columns.")
-        ("monitor.output_force", po::value<bool>(&p.monitor.output_force)->default_value(false),
+        ("monitor.output_force", opt::value<bool>(&p.monitor.output_force)->default_value(false),
          "Output node force columns.")
-        ("monitor.output_temperature", po::value<bool>(&p.monitor.output_temperature)->default_value(false),
+        ("monitor.output_temperature", opt::value<bool>(&p.monitor.output_temperature)->default_value(false),
          "Output node temperature.")
-        ("monitor.output_pore_pressure", po::value<bool>(&p.monitor.output_pore_pressure)->default_value(false),
+        ("monitor.output_pore_pressure", opt::value<bool>(&p.monitor.output_pore_pressure)->default_value(false),
          "Output node pore pressure.")
-        ("monitor.output_bcflag", po::value<bool>(&p.monitor.output_bcflag)->default_value(false),
+        ("monitor.output_bcflag", opt::value<bool>(&p.monitor.output_bcflag)->default_value(false),
          "Output node boundary-flag value.")
-        ("monitor.output_stress", po::value<bool>(&p.monitor.output_stress)->default_value(false),
+        ("monitor.output_stress", opt::value<bool>(&p.monitor.output_stress)->default_value(false),
          "Output element stress components.")
-        ("monitor.output_strain", po::value<bool>(&p.monitor.output_strain)->default_value(false),
+        ("monitor.output_strain", opt::value<bool>(&p.monitor.output_strain)->default_value(false),
          "Output element strain components.")
-        ("monitor.output_strain_rate", po::value<bool>(&p.monitor.output_strain_rate)->default_value(false),
+        ("monitor.output_strain_rate", opt::value<bool>(&p.monitor.output_strain_rate)->default_value(false),
          "Output element strain-rate components.")
-        ("monitor.output_plastic_strain", po::value<bool>(&p.monitor.output_plastic_strain)->default_value(false),
+        ("monitor.output_plastic_strain", opt::value<bool>(&p.monitor.output_plastic_strain)->default_value(false),
          "Output element plastic strain.")
-        ("monitor.output_plastic_strain_rate", po::value<bool>(&p.monitor.output_plastic_strain_rate)->default_value(false),
+        ("monitor.output_plastic_strain_rate", opt::value<bool>(&p.monitor.output_plastic_strain_rate)->default_value(false),
          "Output element plastic strain-rate.")
-        ("monitor.output_radiogenic_source", po::value<bool>(&p.monitor.output_radiogenic_source)->default_value(false),
+        ("monitor.output_radiogenic_source", opt::value<bool>(&p.monitor.output_radiogenic_source)->default_value(false),
          "Output element radiogenic source.")
-        ("monitor.output_density", po::value<bool>(&p.monitor.output_density)->default_value(false),
+        ("monitor.output_density", opt::value<bool>(&p.monitor.output_density)->default_value(false),
          "Output element density.")
-        ("monitor.output_mesh_quality", po::value<bool>(&p.monitor.output_mesh_quality)->default_value(false),
+        ("monitor.output_mesh_quality", opt::value<bool>(&p.monitor.output_mesh_quality)->default_value(false),
          "Output element mesh quality.")
-        ("monitor.output_viscosity", po::value<bool>(&p.monitor.output_viscosity)->default_value(false),
+        ("monitor.output_viscosity", opt::value<bool>(&p.monitor.output_viscosity)->default_value(false),
          "Output element viscosity.")
-        ("monitor.output_material", po::value<bool>(&p.monitor.output_material)->default_value(false),
+        ("monitor.output_material", opt::value<bool>(&p.monitor.output_material)->default_value(false),
          "Output element material index.")
-        ("monitor.output_dynamic_friction", po::value<bool>(&p.monitor.output_dynamic_friction)->default_value(false),
+        ("monitor.output_dynamic_friction", opt::value<bool>(&p.monitor.output_dynamic_friction)->default_value(false),
          "Output dynamic friction value.")
-        ("monitor.output_state_variable", po::value<bool>(&p.monitor.output_state_variable)->default_value(false),
+        ("monitor.output_state_variable", opt::value<bool>(&p.monitor.output_state_variable)->default_value(false),
          "Output state variable value.")
         ;
 
     cfg.add_options()
-        ("mesh.meshing_option", po::value<int>(&p.mesh.meshing_option)->default_value(1),
+        ("mesh.meshing_option", opt::value<int>(&p.mesh.meshing_option)->default_value(1),
          "How to create the new mesh?\n"
          "1: rectangular box with roughly uniform resolution\n"
          "2: rectangular box with rectangular zone of refined resolution\n"
@@ -155,29 +153,29 @@ static void declare_parameters(po::options_description &cfg,
          "91: same as 90, but the max. element size is normalized with resolution.\n"
          "95: read the mesh from from a .exo file\n"
          )
-        ("mesh.meshing_elem_shape", po::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
+        ("mesh.meshing_elem_shape", opt::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
          "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
-        ("mesh.meshing_verbosity", po::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
+        ("mesh.meshing_verbosity", opt::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
          "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
          "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
          "[restore], [GPU mem] lines: what a remesh re-sized, collapsed, froze, freed and restored) "
          "and the mesher's standard report. 1-3: Triangle/TetGen -V levels on top. Warnings print "
          "at every level.")
-        ("mesh.meshing_sediment", po::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
+        ("mesh.meshing_sediment", opt::value<bool>(&p.mesh.meshing_sediment)->default_value(false),
          "Refine the elements with sediment marker during remeshing.")
-        ("mesh.tetgen_optlevel", po::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
+        ("mesh.tetgen_optlevel", opt::value<int>(&p.mesh.tetgen_optlevel)->default_value(3),
          "Optimization level for tetgen. 0: no optimization; 1: multiple edge filps; 2: 1 & free vertex deletion; 3: 2 & new vertex insertion. High optimization level could slow down the speed of mesh generation. For 3D only.")
 
-        ("mesh.xlength", po::value<double>(&p.mesh.xlength)->required(),
+        ("mesh.xlength", opt::value<double>(&p.mesh.xlength)->required(),
          "Length of x (in meters)")
-        ("mesh.ylength", po::value<double>(&p.mesh.ylength)->required(),
+        ("mesh.ylength", opt::value<double>(&p.mesh.ylength)->required(),
          "Length of y (in meters), for 3D only")
-        ("mesh.zlength", po::value<double>(&p.mesh.zlength)->required(),
+        ("mesh.zlength", opt::value<double>(&p.mesh.zlength)->required(),
          "Length of z (in meters)")
 
-        ("mesh.resolution", po::value<double>(&p.mesh.resolution)->required(),
+        ("mesh.resolution", opt::value<double>(&p.mesh.resolution)->required(),
          "Spatial resolution (in meters)")
-        ("mesh.smallest_size", po::value<double>(&p.mesh.smallest_size)->default_value(0.01),
+        ("mesh.smallest_size", opt::value<double>(&p.mesh.smallest_size)->default_value(0.01),
          "The size of smallest element relative to an element with typical resolution. It sets the "
          "tiny-element remesh trigger smallest_vol = smallest_size * sizefactor * resolution^NDIMS "
          "(sizefactor 0.433 in 2D, 0.118 in 3D: a unit-edge equilateral element's measure) and two "
@@ -193,16 +191,16 @@ static void declare_parameters(po::options_description &cfg,
          "boundary by at most min_dist; at a receiving wall, option 13 gives the side profile to new "
          "material up to min_dist inland of the old wall. With MMG it also sets MMG's size floors "
          "(see mmg_remesh_defensive_tiny_ratio).")
-        ("mesh.largest_size", po::value<double>(&p.mesh.largest_size)->default_value(30),
+        ("mesh.largest_size", opt::value<double>(&p.mesh.largest_size)->default_value(30),
          "The size of largest element relative to an element with typical resolution, which also "
          "caps the coarse zone of a meshing_option = 2 mesh. With MMG it also sets the maximum edge "
          "length, hmax = largest_size^(1/NDIMS) * resolution")
-        ("mesh.sediment_size", po::value<double>(&p.mesh.sediment_size)->default_value(1.),
+        ("mesh.sediment_size", opt::value<double>(&p.mesh.sediment_size)->default_value(1.),
          "The size threshold of the refined sediment elements")
         // for 2D only
-        ("mesh.min_angle", po::value<double>(&p.mesh.min_angle)->default_value(32.),
+        ("mesh.min_angle", opt::value<double>(&p.mesh.min_angle)->default_value(32.),
          "Min. angle of all triangles (in degrees), for 2D only")
-        ("mesh.max_steiner_factor", po::value<double>(&p.mesh.max_steiner_factor)->default_value(30.),
+        ("mesh.max_steiner_factor", opt::value<double>(&p.mesh.max_steiner_factor)->default_value(30.),
          "Cap on the number of Steiner points Triangle may insert while (re)meshing, "
          "expressed as a multiple of the number of input nodes (2D only). This bounds the "
          "pathological, non-terminating segment splitting that Triangle can enter when two "
@@ -211,22 +209,22 @@ static void declare_parameters(po::options_description &cfg,
          "far above any healthy remesh, so normal meshing is unaffected. Set <= 0 to disable "
          "the cap (Triangle default: unlimited).")
         // for 3D only
-        ("mesh.min_tet_angle", po::value<double>(&p.mesh.min_tet_angle)->default_value(22.),
+        ("mesh.min_tet_angle", opt::value<double>(&p.mesh.min_tet_angle)->default_value(22.),
          "Min. dihedral angle of all tetrahedra (in degrees), for 3D only")
-        ("mesh.max_ratio", po::value<double>(&p.mesh.max_ratio)->default_value(2.),
+        ("mesh.max_ratio", opt::value<double>(&p.mesh.max_ratio)->default_value(2.),
          "Max. radius / length ratio of all tetrahedra, for 3D only")
 
         // for meshing_option = 2 only
         /* read the value as string, then parse as two numbers later */
-        ("mesh.refined_zonex", po::value<std::string>()->default_value("[0.4, 0.6]"),
+        ("mesh.refined_zonex", opt::list()->default_value("[0.4, 0.6]"),
          "Refining portion of xlength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only")
-        ("mesh.refined_zoney", po::value<std::string>()->default_value("[0.4, 0.6]"),
+        ("mesh.refined_zoney", opt::list()->default_value("[0.4, 0.6]"),
          "Refining portion of ylength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only, for 3D only")
-        ("mesh.refined_zonez", po::value<std::string>()->default_value("[0.8, 1]"),
+        ("mesh.refined_zonez", opt::list()->default_value("[0.8, 1]"),
          "Refining portion of zlength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only")
 
         // for meshing_option = 90 only
-        ("mesh.poly_filename", po::value<std::string>(&p.mesh.poly_filename)->default_value("mesh.poly"),
+        ("mesh.poly_filename", opt::value<std::string>(&p.mesh.poly_filename)->default_value("mesh.poly"),
          "Filename of the input polygon, for meshing_option=90 or 91 only.\n"
          "The file format is described in\n"
          "http://www.cs.cmu.edu/~quake/triangle.poly.html (2D) and\n"
@@ -236,20 +234,20 @@ static void declare_parameters(po::options_description &cfg,
          "Users still need to provide these parameters: mesh.xlength, mesh.ylength, and mesh.zlength.")
 
         // for meshing_option = 95 only
-        ("mesh.exo_filename", po::value<std::string>(&p.mesh.exo_filename)->default_value("mesh.exo"),
+        ("mesh.exo_filename", opt::value<std::string>(&p.mesh.exo_filename)->default_value("mesh.exo"),
          "Filename of the input polygon, for meshing_option=95 only.\n"
          "Meshing software like Trelis is supposed to be used for creating a mesh in the ExodusII format.\n"
          "Limitation: Only box-like domains with six sides are supported.\n"
          "Users still need to provide these parameters: mesh.xlength, mesh.ylength, and mesh.zlength.")
 
-        ("mesh.quality_check_step_interval", po::value<int>(&p.mesh.quality_check_step_interval)->default_value(100),
+        ("mesh.quality_check_step_interval", opt::value<int>(&p.mesh.quality_check_step_interval)->default_value(100),
          "How often to check mesh quality?")
-        ("mesh.min_quality", po::value<double>(&p.mesh.min_quality)->default_value(0.4),
+        ("mesh.min_quality", opt::value<double>(&p.mesh.min_quality)->default_value(0.4),
          "Min. mesh quality before remeshing (between 0 and 1)")
-        ("mesh.max_boundary_distortion", po::value<double>(&p.mesh.max_boundary_distortion)->default_value(0.25),
+        ("mesh.max_boundary_distortion", opt::value<double>(&p.mesh.max_boundary_distortion)->default_value(0.25),
          "Max. distance of boundary distortion before remeshing (in unit of mesh.resolution).")
 
-        ("mesh.remeshing_option", po::value<int>(&p.mesh.remeshing_option)->default_value(0),
+        ("mesh.remeshing_option", opt::value<int>(&p.mesh.remeshing_option)->default_value(0),
          "How to deal with the boundaries during remeshing?\n"
          " 0: no modification on any boundary.\n"
          " 1: move all bottom nodes to initial depth and delete the side-wall nodes left just "
@@ -291,7 +289,7 @@ static void declare_parameters(po::options_description &cfg,
          "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
          "of the restored bottom, or below it: the domain has necked through.\n")
 
-        ("mesh.mmg_remesh_active_plstrain", po::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
+        ("mesh.mmg_remesh_active_plstrain", opt::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
          "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
          "(frozen) and rebuilds the rest. This key is the plastic-strain increment since the last "
          "remesh above which an element is refined: MMG may split it (not along an edge it shares "
@@ -310,7 +308,7 @@ static void declare_parameters(po::options_description &cfg,
          "0: at 0, incidental yielding makes quiet far-field elements splittable at every remesh. "
          "Default 0.01, heuristic: above the increment of incidental yielding, below a localizing "
          "band's increment over a remesh interval.")
-        ("mesh.mmg_remesh_defensive_tiny_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
+        ("mesh.mmg_remesh_defensive_tiny_ratio", opt::value<double>(&p.mesh.mmg_remesh_defensive_tiny_ratio)->default_value(1.5),
          "Gap, in element measure, between the tiny-element remesh trigger smallest_vol (see "
          "smallest_size) and the smallest elements MMG builds (usemmg=1, meshing_elem_shape = 0; "
          "remeshing and MMG-built initial meshes). MMG's minimum edge length is hmin * "
@@ -322,14 +320,14 @@ static void declare_parameters(po::options_description &cfg,
          "sqrt(ratio). Must be >= 1 (at 1 a just-remeshed element re-triggers under any "
          "compression); a ratio at or above largest_size / smallest_size is capped just below it, "
          "with a warning. Default 1.5 (a 2/3 measure gap), heuristic.")
-        ("mesh.mmg_remesh_defensive_quality_ratio", po::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
+        ("mesh.mmg_remesh_defensive_quality_ratio", opt::value<double>(&p.mesh.mmg_remesh_defensive_quality_ratio)->default_value(1.5),
          "MMG remeshing repairs (unfreezes, with its nodes movable except where disjoint material "
          "bodies meet) every element of quality below "
          "min_quality * this ratio, so a marginal element is rebuilt before it crosses the "
          "min_quality remesh trigger instead of triggering another remesh a few steps later. The "
          "trigger itself stays at min_quality. Must be >= 1 (1: repair only below the trigger). "
          "Default 1.5, heuristic.")
-        ("mesh.mmg_remesh_size_recovery_ratio", po::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
+        ("mesh.mmg_remesh_size_recovery_ratio", opt::value<double>(&p.mesh.mmg_remesh_size_recovery_ratio)->default_value(1.4),
          "Size recovery in MMG remeshing. A quiet element (e.g. one that entered at ~resolution "
          "through a restored inflow wall and advected inland) is freed to coarsen when it is finer "
          "by more than this factor than the gradation envelope, the smallest size MMG's gradation "
@@ -345,7 +343,7 @@ static void declare_parameters(po::options_description &cfg,
          "0 disables all three; otherwise must be > 1 (a margin against re-freeing the legal size "
          "transition). Default 1.4 ~ sqrt(2) in edge length (one 2D bisection level), heuristic.")
 
-        ("mesh.remesh_deborah_min", po::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
+        ("mesh.remesh_deborah_min", opt::value<double>(&p.mesh.remesh_deborah_min)->default_value(1e0),
          "During remeshing the element stress is a Deborah-number-weighted blend of "
          "the NN-remapped stress and the SPR recovery, De = Maxwell time / time since "
          "the last remesh. The weight is a smoothstep -- the cubic 3t^2 - 2t^3, flat "
@@ -355,14 +353,14 @@ static void declare_parameters(po::options_description &cfg,
          "element-scale noise. This sets the De at or below which the remeshed "
          "stress is purely the SPR recovery.")
 
-        ("mesh.remesh_deborah_max", po::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
+        ("mesh.remesh_deborah_max", opt::value<double>(&p.mesh.remesh_deborah_max)->default_value(1e2),
          "De at or above which the remeshed stress is purely the NN-remapped stress. "
          "The default puts the two limits two decades apart, which keeps them clear of "
          "the De = 1 crossover while remesh intervals themselves vary by a factor of a "
          "few between events; widen it to blend more of the domain, narrow it to make "
          "the switch sharper. The window width is otherwise untuned.")
 
-        ("mesh.is_discarding_internal_segments", po::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
+        ("mesh.is_discarding_internal_segments", opt::value<bool>(&p.mesh.is_discarding_internal_segments)->default_value(true),
          "Discard the initial mesh's internal segments (refined-zone box, .poly internal facets)? "
          "'no' keeps them as Triangle/TetGen constraints across remeshes, but a remesh that deletes "
          "one of their nodes (tiny-element repair, node cleanup near a restored boundary) misroutes "
@@ -371,22 +369,22 @@ static void declare_parameters(po::options_description &cfg,
          "meshing_elem_shape = 0) requires 'yes': MMG keeps no internal segment.")
 
         // for mesh optimization with MMG2D/3D
-        ("mesh.mmg_debug", po::value<int>(&p.mesh.mmg_debug)->default_value(0),
+        ("mesh.mmg_debug", opt::value<int>(&p.mesh.mmg_debug)->default_value(0),
          "Run MMG remesher in debug mode? No:0; Yes:1\n")
-        ("mesh.mmg_verbose", po::value<int>(&p.mesh.mmg_verbose)->default_value(0),
+        ("mesh.mmg_verbose", opt::value<int>(&p.mesh.mmg_verbose)->default_value(0),
          "Verbosity level of MMG remesher. For debugging, set a value greater than 4.\n")
-        ("mesh.mmg_hausd_factor", po::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
+        ("mesh.mmg_hausd_factor", opt::value<double>(&p.mesh.mmg_hausd_factor)->default_value(0.01),
          "Factor multiplied to param.mesh.resolution to set the Hausdorff distance between original and remeshed surfaces. "
          "At 0.01 MMG refines a sharply bent free surface down to its size floor and builds elements "
          "below the tiny-element trigger there, so the trigger fires at nearly every quality check: "
          "use 0.02-0.05 along a 3D fault scarp and 0.1 on the top/wall ridges next to restored side "
          "walls. MMG3D does not bound its top-surface edge swaps between pinned nodes by this "
          "distance.\n")
-        ("mesh.mmg_init_coarsening_factor", po::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
+        ("mesh.mmg_init_coarsening_factor", opt::value<double>(&p.mesh.mmg_init_coarsening_factor)->default_value(10.0),
          "Coarsening factor for the two-stage TetGen+MMG init mesh. TetGen creates a mesh "
          "with element volumes scaled by factor^NDIMS; MMG then refines to target resolution. "
          "Higher values = smaller coarse mesh = faster TetGen but more MMG work. Default: 10.")
-        ("mesh.use_mmg_init", po::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
+        ("mesh.use_mmg_init", opt::value<bool>(&p.mesh.use_mmg_init)->default_value(false),
          "Use two-stage TetGen+MMG initialization? Requires compilation with USEMMG. "
          "Set to yes for metric-aware refinement; no (default) uses plain triangle/tetgen init "
          "(MMG still refines its restored walls under remeshing_option 13 and, on a moving mesh, "
@@ -394,7 +392,7 @@ static void declare_parameters(po::options_description &cfg,
          "mattype_option 0, which reads the regional attributes as mattypes, a boundary between "
          "them stays on the .poly line in 2D and can move by up to about half a coarse element in "
          "3D (see mmg_init_coarsening_factor).")
-        ("mesh.mmg_metric_refine_coeff", po::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
+        ("mesh.mmg_metric_refine_coeff", opt::value<double>(&p.mesh.mmg_metric_refine_coeff)->default_value(5.0),
          "Plastic-strain sensitivity of the MMG remeshing metric: the target element volume is "
          "scaled by 1/(1 + coeff*plastic_strain), so the target edge length by that ratio^(1/NDIMS) "
          "(whether a node keeps its finest target: see mmg_metric_refine_recover). 0 disables "
@@ -409,7 +407,7 @@ static void declare_parameters(po::options_description &cfg,
          "narrower, at more elements and, where an elastic, advection or diffusion limit sets dt, a "
          "shorter time step. Default 5.")
         ("mesh.mmg_metric_refine_recover",
-         po::value<bool>(&p.mesh.mmg_metric_refine_recover)->default_value(false),
+         opt::value<bool>(&p.mesh.mmg_metric_refine_recover)->default_value(false),
          "no (default): each node keeps the finest plastic-strain size target (see "
          "mmg_metric_refine_coeff) it has had at a remesh, so a refined zone stays refined where the "
          "target coarsens, chiefly where plastic strain drops (the remap of rebuilt elements, the 2D "
@@ -419,7 +417,7 @@ static void declare_parameters(po::options_description &cfg,
          "the current plastic strain. The record is checkpointed: with no, a restart that lowers "
          "mmg_metric_refine_coeff (even to 0) keeps the sizes recorded before it, and a restart that "
          "switches from yes to no holds from the last remesh's targets.")
-        ("mesh.mmg_aniso_wall_ratio", po::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
+        ("mesh.mmg_aniso_wall_ratio", opt::value<double>(&p.mesh.mmg_aniso_wall_ratio)->default_value(0.0),
          "Anisotropic MMG metric at inflow restored side walls (remeshing_option 13). 0 (default): "
          "off, isotropic. >= 1: aspect ratio; the inflow-wall elements are coarsened by this factor "
          "normal to the wall and kept fine along it, so the incoming column is carried by thin, wide "
@@ -428,7 +426,7 @@ static void declare_parameters(po::options_description &cfg,
          "USEMMG.")
 
         // for virtual topology
-        ("mesh.vt_size", po::value<double>(&p.mesh.vt_size)->default_value(0.5),
+        ("mesh.vt_size", opt::value<double>(&p.mesh.vt_size)->default_value(0.5),
          "Cell size of the virtual-topology marker grid (in unit of mesh.resolution), used by the "
          "serpentinization grid (mat.phase_change_option 3 with mat.has_serpentinization). 0.5 = half an "
          "element edge: the one-element-thick slab crust "
@@ -440,19 +438,19 @@ static void declare_parameters(po::options_description &cfg,
         ;
 
     cfg.add_options()
-        ("markers.init_marker_option", po::value<int>(&p.markers.init_marker_option)->default_value(1),
+        ("markers.init_marker_option", opt::value<int>(&p.markers.init_marker_option)->default_value(1),
          "How to generate markers?\n"
          "1: randomly distributed markers.\n"
          "2: regularly spaced markers.\n")
-        ("markers.markers_per_element", po::value<int>(&p.markers.markers_per_element)->default_value(4),
+        ("markers.markers_per_element", opt::value<int>(&p.markers.markers_per_element)->default_value(4),
          "Number of markers per element. Used when init_marker_option=1.")
-        ("markers.init_marker_spacing", po::value<double>(&p.markers.init_marker_spacing)->default_value(0.3),
+        ("markers.init_marker_spacing", opt::value<double>(&p.markers.init_marker_spacing)->default_value(0.3),
          "Spacing of markers (in unit of mesh.resolution). Used when init_marker_option=2. An "
          "element the grid misses gets min_num_markers_in_element (at least 1) markers of its "
          "initial material, with a warning.")
-        ("markers.min_num_markers_in_element", po::value<int>(&p.markers.min_num_markers_in_element)->default_value(3),
+        ("markers.min_num_markers_in_element", opt::value<int>(&p.markers.min_num_markers_in_element)->default_value(3),
          "When the number of markers in an element is less than this number, a new marker will be replenished in the element.")
-        ("markers.replenishment_option", po::value<int>(&p.markers.replenishment_option)->default_value(2),
+        ("markers.replenishment_option", opt::value<int>(&p.markers.replenishment_option)->default_value(2),
          "How to determine the mattype of replenished markers?\n"
          "0: always set to 0 (fastest option).\n"
          "1: by the probability of marker mattype of the element or surrounding elements.\n"
@@ -464,140 +462,153 @@ static void declare_parameters(po::options_description &cfg,
          "in one old element whose markers were all one mattype gets that mattype, and with "
          "remeshing_option 13 an element at a receiving wall gets the wall's recorded layering (see "
          "remeshing_option).")
-        ("markers.random_seed", po::value<uint>(&p.markers.random_seed)->default_value(1),
+        ("markers.random_seed", opt::value<uint>(&p.markers.random_seed)->default_value(1),
          "Random seed of marker position. If 0, the current time is used as the seed.")
         ;
 
     cfg.add_options()
-        ("control.gravity", po::value<double>(&p.control.gravity)->default_value(10),
+        ("control.gravity", opt::value<double>(&p.control.gravity)->default_value(10),
          "Magnitude of the gravity (in m/s^2)")
 
         ("control.characteristic_speed",
-         po::value<double>(&p.control.characteristic_speed)->default_value(0),
+         opt::value<double>(&p.control.characteristic_speed)->default_value(0),
          "Characteristic tectonic speed (in m/s). "
          "It is used to estimate the size of stable time step. "
          "If it is 0, its value is inferred from the imposed boundary velocity. "
          "Set it to other value if the imposed boundary velocity is 0 everywhere.")
 
-        ("control.is_quasi_static", po::value<bool>(&p.control.is_quasi_static)->default_value(true),
+        ("control.is_quasi_static", opt::value<bool>(&p.control.is_quasi_static)->default_value(true),
          "Is the simulation quasi-static or dynamic? If quasi-static, inertial scaling and strong damping is applied.\n")
-        ("control.dt_fraction", po::value<double>(&p.control.dt_fraction)->default_value(1.0),
+        ("control.dt_fraction", opt::value<double>(&p.control.dt_fraction)->default_value(1.0),
          "Take dt as a fraction of max. stable time step size (0-1).\n")
-        ("control.fixed_dt", po::value<double>(&p.control.fixed_dt)->default_value(0),
+        ("control.fixed_dt", opt::value<double>(&p.control.fixed_dt)->default_value(0),
          "Fixed dt size (in seconds). If 0, dt sized will be determined dynamically.\n")
-        ("control.inertial_scaling", po::value<double>(&p.control.inertial_scaling)->default_value(1e5),
+        ("control.inertial_scaling", opt::value<double>(&p.control.inertial_scaling)->default_value(1e5),
          "Scaling factor for inertial (a large number)")
 
-        ("control.damping_option", po::value<int>(&p.control.damping_option)->default_value(1),
+        ("control.damping_option", opt::value<int>(&p.control.damping_option)->default_value(1),
          "How to damp the elastic wave?\n"
          "0: no damping.\n"
          "1: damping/acceleration depends on force and direction of velocity.\n"
          "2: damping depends on force.\n"
          "3: damping/(weaker) acceleration depends on force and direction of velocity.\n"
          "4: Rayleigh damping.\n")
-        ("control.damping_factor", po::value<double>(&p.control.damping_factor)->default_value(0.8),
+        ("control.damping_factor", opt::value<double>(&p.control.damping_factor)->default_value(0.8),
          "A factor for force damping (0-1)")
 
-        ("control.ref_pressure_option", po::value<int>(&p.control.ref_pressure_option)->default_value(0),
+        ("control.ref_pressure_option", opt::value<int>(&p.control.ref_pressure_option)->default_value(0),
          "How to define reference pressure?\n"
          "0: using density of the mat.mattype_ref-th material to compute lithostatic pressure.\n"
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
          "Any other value is rejected at startup.\n")
-        ("control.is_using_mixed_stress", po::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
+        ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
 
-        ("control.surface_process_option", po::value<int>(&p.control.surface_process_option)->default_value(0),
+        ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
          "2: using simple deposition. "
          "11: using GoSPL landscape evolution model. "
          "101: custom function. "
          "102: using simple deposition and diffusion.")
-        ("control.surface_diffusivity", po::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
+        ("control.surface_diffusivity", opt::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
          "Standard diffusition coefficient of surface topography (m^2/s)")
-        ("control.surf_diff_ratio_terrig", po::value<double>(&p.control.surf_diff_ratio_terrig)->default_value(1.),
+        ("control.surf_diff_ratio_terrig", opt::value<double>(&p.control.surf_diff_ratio_terrig)->default_value(1.),
          "Ratio between terrigenous and standard Diffusition coefficients.")
-        ("control.surf_diff_ratio_marine", po::value<double>(&p.control.surf_diff_ratio_marine)->default_value(1.),
+        ("control.surf_diff_ratio_marine", opt::value<double>(&p.control.surf_diff_ratio_marine)->default_value(1.),
          "Ratio between marine and standard Diffusition coefficients.")
-        ("control.surf_depo_universal", po::value<double>(&p.control.surf_depo_universal)->default_value(0.),
+        ("control.surf_depo_universal", opt::value<double>(&p.control.surf_depo_universal)->default_value(0.),
          "Sedimentation rate of universal suspended deposite (in m/s).")
-        ("control.surf_base_level",po::value<double>(&p.control.surf_base_level)->default_value(0.e0),
+        ("control.surf_base_level",opt::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
-        ("control.surface_process_gospl_config_file", po::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
+        ("control.surface_process_gospl_config_file", opt::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
-        ("control.gospl_coupling_frequency", po::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
+        ("control.gospl_coupling_frequency", opt::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
          "Run GoSPL coupling every N DES steps (used when gospl_coupling_mode = steps).")
-        ("control.gospl_coupling_interval_in_yr", po::value<double>(&p.control.gospl_coupling_interval_in_yr)->default_value(1000.0),
+        ("control.gospl_coupling_interval_in_yr", opt::value<double>(&p.control.gospl_coupling_interval_in_yr)->default_value(1000.0),
          "Run GoSPL coupling every T years (used when gospl_coupling_mode = time). E.g. 1000 = couple once per 1000 yr.")
-        ("control.gospl_coupling_mode", po::value<std::string>(&p.control.gospl_coupling_mode)->default_value("steps"),
+        ("control.gospl_coupling_mode", opt::value<std::string>(&p.control.gospl_coupling_mode)->default_value("steps"),
          "Coupling frequency mode: 'steps' (use gospl_coupling_frequency) or 'time' (use gospl_coupling_interval_in_yr).")
-        ("control.gospl_velocity_coupling", po::value<bool>(&p.control.gospl_velocity_coupling)->default_value(true),
+        ("control.gospl_velocity_coupling", opt::value<bool>(&p.control.gospl_velocity_coupling)->default_value(true),
          "Send all three DES surface velocity components (vx, vy, vz) to GoSPL each coupling step. "
          "vz drives uplift/subsidence; vx/vy drive semi-Lagrangian horizontal advection of GoSPL topography.")
-        ("control.gospl_mesh_resolution", po::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
+        ("control.gospl_mesh_resolution", opt::value<double>(&p.control.gospl_mesh_resolution)->default_value(-1.0),
          "GoSPL mesh node spacing in meters (default: -1 = auto-size based on DES surface nodes). Set to desired resolution for control over GoSPL grid density.")
-        ("control.gospl_mesh_perturbation", po::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
+        ("control.gospl_mesh_perturbation", opt::value<double>(&p.control.gospl_mesh_perturbation)->default_value(0.3),
          "Fraction of grid spacing to randomly perturb node positions (0-1). 0 = regular grid, 0.3 = moderate perturbation to avoid grid artifacts.")
-        ("control.gospl_mesh_padding", po::value<double>(&p.control.gospl_mesh_padding)->default_value(0.1),
+        ("control.gospl_mesh_padding", opt::value<double>(&p.control.gospl_mesh_padding)->default_value(0.1),
          "Fractional extension of the GoSPL mesh beyond the DES domain on each side (default: 0.1 = 10%). Keeps DES nodes in the interior of GoSPL's mesh, away from boundary artifacts.")
-        ("control.terrig_sediment_diffusivity",po::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
+        ("control.terrig_sediment_diffusivity",opt::value<double>(&p.control.terrig_sediment_diffusivity)->default_value(3.17e-6),
          "Submarine diffusion coefficient (=100 m^2/yr, Kaufman et al., 1991) (in m^2/s).")
-        ("control.terrig_depth_coefficient",po::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),
+        ("control.terrig_depth_coefficient",opt::value<double>(&p.control.terrig_depth_coefficient)->default_value(5e-4),
          "Submarine diffusion coefficient decay (Kaufman et al., 1991) (in m^-1).")
-        ("control.is_reporting_terrigenous_info",po::value<bool>(&p.control.is_reporting_terrigenous_info)->default_value(false),
+        ("control.is_reporting_terrigenous_info",opt::value<bool>(&p.control.is_reporting_terrigenous_info)->default_value(false),
          "If report surface terrigenous information.")
-        ("control.hemipelagic_sedimentation_rate",po::value<double>(&p.control.hemipelagic_sedimentation_rate)->default_value(3.17e-11),
+        ("control.hemipelagic_sedimentation_rate",opt::value<double>(&p.control.hemipelagic_sedimentation_rate)->default_value(3.17e-11),
          "Hemipelagic sedimentation (Emmerich et al., 2009) (1 km/Myr ~= 3.17e-11 m/s)")
-        ("control.hemipelagic_width",po::value<double>(&p.control.hemipelagic_width)->default_value(90.),
+        ("control.hemipelagic_width",opt::value<double>(&p.control.hemipelagic_width)->default_value(90.),
          "Width of the productivity function (m)")
-        ("control.hemipelagic_max_depth",po::value<double>(&p.control.hemipelagic_max_depth)->default_value(40.),
+        ("control.hemipelagic_max_depth",opt::value<double>(&p.control.hemipelagic_max_depth)->default_value(40.),
          "Maximum accumulation bathymetry (m)")
-        ("control.pelagic_sedimentation_rate",po::value<double>(&p.control.pelagic_sedimentation_rate)->default_value(1.585e-12),
+        ("control.pelagic_sedimentation_rate",opt::value<double>(&p.control.pelagic_sedimentation_rate)->default_value(1.585e-12),
          "Pelagic sedimentation rate (Emmerich et al., 2009) (0.05 km/Myr ~= 1.585e-12 m/s)")
-        ("control.pelagic_increasing_width",po::value<double>(&p.control.pelagic_increasing_width)->default_value(30.),
+        ("control.pelagic_increasing_width",opt::value<double>(&p.control.pelagic_increasing_width)->default_value(30.),
          "Width of the suface increasing zone (m)")
 
-        ("control.terrig_sediment_volume",po::value<double>(&p.control.terrig_sediment_volume)->default_value(1.),
+        ("control.terrig_sediment_volume",opt::value<double>(&p.control.terrig_sediment_volume)->default_value(1.),
          "The volume of the sediment bring from continent source (in m^3/s). "
          "5e7 ton/yr ~= 1 m^3/s")
-        ("control.terrig_sediment_area",po::value<double>(&p.control.terrig_sediment_area)->default_value(3.17e-7),
+        ("control.terrig_sediment_area",opt::value<double>(&p.control.terrig_sediment_area)->default_value(3.17e-7),
          "The are of the sediment bring from continent source (=10 m^2/yr) (in m^2/s). "
          "Assuming the width of the channel is 50 km, 5e7 ton/yr ~= 2.e-5 m^2/s")
 
-        ("control.has_thermal_diffusion", po::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
+        ("control.has_thermal_diffusion", opt::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
-        ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
+        ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
 
-        ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
+        ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
-        ("control.hydration_migration_speed", po::value<double>(&p.control.hydration_migration_speed)->default_value(3e-9),
+        ("control.hydration_migration_speed", opt::value<double>(&p.control.hydration_migration_speed)->default_value(3e-9),
          "The upward migration speed of hydrous fluid (in m/s).\n")
 
-        ("control.has_PT", po::value<bool>(&p.control.has_PT)->default_value(false),
+        ("control.has_PT", opt::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
-        ("control.PT_jump", po::value<bool>(&p.control.PT_jump)->default_value(false),
-         "Skip certain processes in PT loop to avoid accumulative effects. For example, surface diffusion.\n")
-        ("control.PT_max_iter", po::value<int>(&p.control.PT_max_iter)->default_value(5000),
+        ("control.PT_use_running_scale", opt::value<bool>(&p.control.PT_use_running_scale)->default_value(false),
+         "Use running physical initial-residual scale with a roundoff floor (epsilon=1e-6, C=1000)")
+        ("control.PT_max_iter", opt::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
-        ("control.PT_relative_tolerance",po::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
-         "tolerance for relative change for breaking PT loop")
+        ("control.PT_relative_tolerance",opt::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
+         "Relative tolerance on projected physical-force RMS, scaled by the first warm trial")
+        ("control.PT_absolute_tolerance", opt::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
+         "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
+        ("control.PT_option", opt::value<int>(&p.control.PT_option)->default_value(0),
+         "PT iteration scheme. Both accept the same physical residual.\n"
+         "0: accelerated pseudo-transient relaxation (Rass et al. 2022), uses PT_CFL and PT_Re.\n"
+         "1: adaptive dynamic relaxation: Gershgorin fictitious mass and damping from a\n"
+         "   Rayleigh-quotient estimate of the lowest mode (Underwood 1983; Papadrakakis 1981).\n")
+        ("control.PT_CFL", opt::value<double>(&p.control.PT_CFL)->default_value(0.25),
+         "Pseudo-wave CFL factor for local dual-time relaxation (0 < CFL <= 0.5)")
+        ("control.PT_Re", opt::value<double>(&p.control.PT_Re)->default_value(14.90188239869415),
+         "Positive pseudo Reynolds number for dual-time relaxation")
+        ("control.PT_stagnation_window", opt::value<int>(&p.control.PT_stagnation_window)->default_value(500),
+         "Warn once per solve after this many iterations without best-residual improvement; 0 disables warning")
 
-         ("control.has_moving_mesh", po::value<bool>(&p.control.has_moving_mesh)->default_value(true),
+         ("control.has_moving_mesh", opt::value<bool>(&p.control.has_moving_mesh)->default_value(true),
          "Does the model update mesh coordinates (Lagrangian)?\n")
          ("control.use_global_velocity_scaling",
-          po::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
+          opt::value<bool>(&p.control.use_global_velocity_scaling)->default_value(false),
           "Use the global maximum model velocity to scale both dt and pseudo-density/mass scaling.\n")
         ("control.mass_scaling_reference_speed",
-         po::value<std::string>()->default_value("shear"),
+         opt::value<std::string>()->default_value("shear"),
          "Elastic-speed ceiling used by global velocity scaling. It sets the floor of\n"
          "the fictitious density rho_fict = K / v_elastic^2.\n"
          "shear: sqrt(G/rho), giving rho_fict >= rho K/G (historical default).\n"
          "bulk : sqrt(K/rho), giving rho_fict >= rho and restoring physical density\n"
          "       when the pseudo-wave speed reaches the bulk-wave ceiling.\n")
         ("control.rsf_slip_rate_projection_option",
-         po::value<int>(&p.control.rsf_slip_rate_projection_option)
+         opt::value<int>(&p.control.rsf_slip_rate_projection_option)
              ->default_value(rsf_slip_rate_projection_maximum_shear),
          "Velocity-dimensional rate supplied to the RSF update.\n"
          "0: project the element velocity onto the maximum-shear direction inferred from stress\n"
@@ -605,7 +616,7 @@ static void declare_parameters(po::options_description &cfg,
          "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
          "   element's minimum altitude.\n")
         ("control.rsf_dtheta_max",
-         po::value<double>(&p.control.rsf_dtheta_max)->default_value(0.0),
+         opt::value<double>(&p.control.rsf_dtheta_max)->default_value(0.0),
          "For adaptive stepping with the aging law and total-strain rate option 1, apply\n"
          "dt <= f D_c / V and dt <= f theta over all elements. The two bounds limit\n"
          "slip within one characteristic distance and fractional healing per step.\n"
@@ -613,75 +624,75 @@ static void declare_parameters(po::options_description &cfg,
         ;
 
     cfg.add_options()
-        ("bc.surface_temperature", po::value<double>(&p.bc.surface_temperature)->default_value(273),
+        ("bc.surface_temperature", opt::value<double>(&p.bc.surface_temperature)->default_value(273),
          "Surface temperature (in Kelvin)")
-        ("bc.mantle_temperature", po::value<double>(&p.bc.mantle_temperature)->default_value(1600),
+        ("bc.mantle_temperature", opt::value<double>(&p.bc.mantle_temperature)->default_value(1600),
          "Mantle temperature (in Kelvin)")
-        ("bc.has_winkler_foundation", po::value<bool>(&p.bc.has_winkler_foundation)->default_value(true),
+        ("bc.has_winkler_foundation", opt::value<bool>(&p.bc.has_winkler_foundation)->default_value(true),
          "Using Winkler foundation for the bottom boundary?")
-        ("bc.winkler_delta_rho", po::value<double>(&p.bc.winkler_delta_rho)->default_value(0),
+        ("bc.winkler_delta_rho", opt::value<double>(&p.bc.winkler_delta_rho)->default_value(0),
          "Excess density of the bottom Winkler foundation (in kg/m^3)")
 
-        ("bc.has_elastic_foundation", po::value<bool>(&p.bc.has_elastic_foundation)->default_value(false),
+        ("bc.has_elastic_foundation", opt::value<bool>(&p.bc.has_elastic_foundation)->default_value(false),
          "Using elastic foundation for the bottom boundary?")
-        ("bc.elastic_foundation_constant", po::value<double>(&p.bc.elastic_foundation_constant)->default_value(1e11),
+        ("bc.elastic_foundation_constant", opt::value<double>(&p.bc.elastic_foundation_constant)->default_value(1e11),
          "Elastic constant for elastic foundation.")
 
-        ("bc.has_water_loading", po::value<bool>(&p.bc.has_water_loading)->default_value(true),
+        ("bc.has_water_loading", opt::value<bool>(&p.bc.has_water_loading)->default_value(true),
          "Applying water loading for top boundary that is below sea level?")
 
-        ("bc.sea_water_density", po::value<double>(&p.bc.sea_water_density)->default_value(1030),
+        ("bc.sea_water_density", opt::value<double>(&p.bc.sea_water_density)->default_value(1030),
          "Density of the loading water (in kg/m^3). Used for the top-boundary "
          "water load and for the free-surface stress pin that must match it.")
 
          // pore pressure boundary condition
-        ("bc.hbc_x0", po::value<int>(&p.bc.hbc_x0)->default_value(0),
+        ("bc.hbc_x0", opt::value<int>(&p.bc.hbc_x0)->default_value(0),
          "Type of boundary condition for the left/western side"
          "0 indicates no flow boundary condition."
          "1 indicates initial pore pressure is fixed.")
-        ("bc.hbc_x1", po::value<int>(&p.bc.hbc_x1)->default_value(0),
+        ("bc.hbc_x1", opt::value<int>(&p.bc.hbc_x1)->default_value(0),
          "Type of boundary condition for the right/eastern side")
-        ("bc.hbc_y0", po::value<int>(&p.bc.hbc_y0)->default_value(0),
+        ("bc.hbc_y0", opt::value<int>(&p.bc.hbc_y0)->default_value(0),
          "Type of boundary condition for the front/southern side")
-        ("bc.hbc_y1", po::value<int>(&p.bc.hbc_y1)->default_value(0),
+        ("bc.hbc_y1", opt::value<int>(&p.bc.hbc_y1)->default_value(0),
          "Type of boundary condition for the back/northern side")
-        ("bc.hbc_z0", po::value<int>(&p.bc.hbc_z0)->default_value(0),
+        ("bc.hbc_z0", opt::value<int>(&p.bc.hbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
-        ("bc.hbc_z1", po::value<int>(&p.bc.hbc_z1)->default_value(0),
+        ("bc.hbc_z1", opt::value<int>(&p.bc.hbc_z1)->default_value(0),
          "Type of boundary condition for the top side")
 
          // General stress (Neumann) boundary conditions 
-        ("bc.stress_bc_x0", po::value<int>(&p.bc.stress_bc_x0)->default_value(0),
+        ("bc.stress_bc_x0", opt::value<int>(&p.bc.stress_bc_x0)->default_value(0),
          "Type of boundary condition for the left/western side. "
          "0: no traction boundary condition, "
          "1: traction in the x direction, "
          "2: traction in the y direction, "
          "3: traction in the z direction.")
-        ("bc.stress_bc_x1", po::value<int>(&p.bc.stress_bc_x1)->default_value(0),
+        ("bc.stress_bc_x1", opt::value<int>(&p.bc.stress_bc_x1)->default_value(0),
          "Type of boundary condition for the right/eastern side")
-        ("bc.stress_bc_y0", po::value<int>(&p.bc.stress_bc_y0)->default_value(0),
+        ("bc.stress_bc_y0", opt::value<int>(&p.bc.stress_bc_y0)->default_value(0),
          "Type of boundary condition for the front/southern side")
-        ("bc.stress_bc_y1", po::value<int>(&p.bc.stress_bc_y1)->default_value(0),
+        ("bc.stress_bc_y1", opt::value<int>(&p.bc.stress_bc_y1)->default_value(0),
          "Type of boundary condition for the back/northern side")
-        ("bc.stress_bc_z0", po::value<int>(&p.bc.stress_bc_z0)->default_value(0),
+        ("bc.stress_bc_z0", opt::value<int>(&p.bc.stress_bc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
-        ("bc.stress_bc_z1", po::value<int>(&p.bc.stress_bc_z1)->default_value(0),
+        ("bc.stress_bc_z1", opt::value<int>(&p.bc.stress_bc_z1)->default_value(0),
          "Type of boundary condition for the top side")
 
-        ("bc.stress_val_x0", po::value<double>(&p.bc.stress_val_x0)->default_value(0.0),
+        ("bc.stress_val_x0", opt::value<double>(&p.bc.stress_val_x0)->default_value(0.0),
          "Magnitude of stress at the left/western side (in Pa).")
-        ("bc.stress_val_x1", po::value<double>(&p.bc.stress_val_x1)->default_value(0.0),
+        ("bc.stress_val_x1", opt::value<double>(&p.bc.stress_val_x1)->default_value(0.0),
          "Magnitude of stress at the right/eastern side (in Pa).")
-        ("bc.stress_val_y0", po::value<double>(&p.bc.stress_val_y0)->default_value(0.0),
+        ("bc.stress_val_y0", opt::value<double>(&p.bc.stress_val_y0)->default_value(0.0),
          "Magnitude of stress at the front/southern side (in Pa).")
-        ("bc.stress_val_y1", po::value<double>(&p.bc.stress_val_y1)->default_value(0.0),
+        ("bc.stress_val_y1", opt::value<double>(&p.bc.stress_val_y1)->default_value(0.0),
          "Magnitude of stress at the back/northern side (in Pa).")
-        ("bc.stress_val_z0", po::value<double>(&p.bc.stress_val_z0)->default_value(0.0),
+        ("bc.stress_val_z0", opt::value<double>(&p.bc.stress_val_z0)->default_value(0.0),
          "Magnitude of stress at the bottom side (in Pa).")
-        ("bc.stress_val_z1", po::value<double>(&p.bc.stress_val_z1)->default_value(0.0),
+        ("bc.stress_val_z1", opt::value<double>(&p.bc.stress_val_z1)->default_value(0.0),
          "Magnitude of stress at the top side (in Pa).")
 
-        ("bc.vbc_x0", po::value<int>(&p.bc.vbc_x0)->default_value(1),
+        ("bc.vbc_x0", opt::value<int>(&p.bc.vbc_x0)->default_value(1),
          "Type of velocity boundary condition for the left/western side. "
          "Odd number indicates the normal component of the velocity is fixed. "
          "Possible type is \n"
@@ -695,122 +706,122 @@ static void declare_parameters(po::options_description &cfg,
          "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
          "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
          "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n")
-        ("bc.vbc_x1", po::value<int>(&p.bc.vbc_x1)->default_value(1),
+        ("bc.vbc_x1", opt::value<int>(&p.bc.vbc_x1)->default_value(1),
          "Type of boundary condition for the right/eastern side")
-        ("bc.vbc_val_x0", po::value<double>(&p.bc.vbc_val_x0)->default_value(-1e-9),
+        ("bc.vbc_val_x0", opt::value<double>(&p.bc.vbc_val_x0)->default_value(-1e-9),
          "Value of boundary condition for left/western side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_x0_l", po::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
+        ("bc.vbc_val_x0_l", opt::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
          "Lateral shear velocity for left/western side (used with bc type 6, unit is m/s)")
-        ("bc.vbc_val_division_x0_min", po::value<double>(&p.bc.vbc_val_division_x0_min)->default_value(1.),
+        ("bc.vbc_val_division_x0_min", opt::value<double>(&p.bc.vbc_val_division_x0_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
-        ("bc.vbc_val_division_x0_max", po::value<double>(&p.bc.vbc_val_division_x0_max)->default_value(1.),
+        ("bc.vbc_val_division_x0_max", opt::value<double>(&p.bc.vbc_val_division_x0_max)->default_value(1.),
          "Ratio of second rate change division from the top to the right boundary width (for option = 8)")
-        ("bc.vbc_val_x0_ratio0", po::value<double>(&p.bc.vbc_val_x0_ratio0)->default_value(1.),
+        ("bc.vbc_val_x0_ratio0", opt::value<double>(&p.bc.vbc_val_x0_ratio0)->default_value(1.),
          "Ratio of the velocity at the surface of the left boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x0_ratio1", po::value<double>(&p.bc.vbc_val_x0_ratio1)->default_value(1.),
+        ("bc.vbc_val_x0_ratio1", opt::value<double>(&p.bc.vbc_val_x0_ratio1)->default_value(1.),
          "Ratio of the velocity at the vbc_val_division_x0_min of the left boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x0_ratio2", po::value<double>(&p.bc.vbc_val_x0_ratio2)->default_value(1.),
+        ("bc.vbc_val_x0_ratio2", opt::value<double>(&p.bc.vbc_val_x0_ratio2)->default_value(1.),
          "Ratio of the velocity at the vbc_val_division_x1_max of the left boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x0_ratio3", po::value<double>(&p.bc.vbc_val_x0_ratio3)->default_value(1.),
+        ("bc.vbc_val_x0_ratio3", opt::value<double>(&p.bc.vbc_val_x0_ratio3)->default_value(1.),
          "Ratio of the velocity at the bottom of the left boundary width (for option = 1 and 3)")
 
-        ("bc.num_vbc_period_x0", po::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
+        ("bc.num_vbc_period_x0", opt::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
          "Number of points in the x0 velocity period table")
-        ("bc.num_vbc_period_x1", po::value<int>(&p.bc.num_vbc_period_x1)->default_value(1),
+        ("bc.num_vbc_period_x1", opt::value<int>(&p.bc.num_vbc_period_x1)->default_value(1),
          "Number of points in the x1 velocity period table")
-        ("bc.vbc_period_x0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+        ("bc.vbc_period_x0_time_in_yr", opt::list()->default_value("[1.e6]"),
          "Times of the x0 velocity period table '[t0, t1, ...]' (num_vbc_period_x0 of them, in yr, "
          "non-decreasing): the ratio is linear between them and constant outside; repeat a time "
          "for a step")
-        ("bc.vbc_period_x1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+        ("bc.vbc_period_x1_time_in_yr", opt::list()->default_value("[1.e6]"),
          "Times of the x1 velocity period table (in yr), as for x0")
-        ("bc.vbc_period_x0_ratio", po::value<std::string>()->default_value("[1.]"),
+        ("bc.vbc_period_x0_ratio", opt::list()->default_value("[1.]"),
          "Ratio of vbc_val_x0 at each time of the x0 period table '[r0, r1, r2, ...]'. It scales "
          "the normal velocity only: tangential values (types 4 and 5, vbc_val_x0_l) stay constant")
-        ("bc.vbc_period_x1_ratio", po::value<std::string>()->default_value("[1.]"),
+        ("bc.vbc_period_x1_ratio", opt::list()->default_value("[1.]"),
          "Ratio of vbc_val_x1 at each time of the x1 period table, as for x0")
 
-        ("bc.vbc_val_x1", po::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
+        ("bc.vbc_val_x1", opt::value<double>(&p.bc.vbc_val_x1)->default_value(1e-9),
          "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_x1_l", po::value<double>(&p.bc.vbc_val_x1_l)->default_value(0),
+        ("bc.vbc_val_x1_l", opt::value<double>(&p.bc.vbc_val_x1_l)->default_value(0),
          "Lateral shear velocity for right/eastern side (used with bc type 6, unit is m/s)")
-        ("bc.vbc_val_division_x1_min", po::value<double>(&p.bc.vbc_val_division_x1_min)->default_value(1.),
+        ("bc.vbc_val_division_x1_min", opt::value<double>(&p.bc.vbc_val_division_x1_min)->default_value(1.),
          "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
-        ("bc.vbc_val_division_x1_max", po::value<double>(&p.bc.vbc_val_division_x1_max)->default_value(1.),
+        ("bc.vbc_val_division_x1_max", opt::value<double>(&p.bc.vbc_val_division_x1_max)->default_value(1.),
          "Ratio of second rate change division from the top to the right boundary width (for option = 8)")
-        ("bc.vbc_val_x1_ratio0", po::value<double>(&p.bc.vbc_val_x1_ratio0)->default_value(1.),
+        ("bc.vbc_val_x1_ratio0", opt::value<double>(&p.bc.vbc_val_x1_ratio0)->default_value(1.),
          "Ratio of the velocity at the surface of the right boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x1_ratio1", po::value<double>(&p.bc.vbc_val_x1_ratio1)->default_value(1.),
+        ("bc.vbc_val_x1_ratio1", opt::value<double>(&p.bc.vbc_val_x1_ratio1)->default_value(1.),
          "Ratio of the velocity at the vbc_val_division_x0_min of the right boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x1_ratio2", po::value<double>(&p.bc.vbc_val_x1_ratio2)->default_value(1.),
+        ("bc.vbc_val_x1_ratio2", opt::value<double>(&p.bc.vbc_val_x1_ratio2)->default_value(1.),
          "Ratio of the velocity at the vbc_val_division_x1_max of the right boundary width (for option = 1 and 3)")
-        ("bc.vbc_val_x1_ratio3", po::value<double>(&p.bc.vbc_val_x1_ratio3)->default_value(1.),
+        ("bc.vbc_val_x1_ratio3", opt::value<double>(&p.bc.vbc_val_x1_ratio3)->default_value(1.),
          "Ratio of the velocity at the bottom of the right boundary width (for option = 1 and 3)")
 
-        ("bc.vbc_y0", po::value<int>(&p.bc.vbc_y0)->default_value(0),
+        ("bc.vbc_y0", opt::value<int>(&p.bc.vbc_y0)->default_value(0),
          "Type of boundary condition for the southern side")
-        ("bc.vbc_y1", po::value<int>(&p.bc.vbc_y1)->default_value(0),
+        ("bc.vbc_y1", opt::value<int>(&p.bc.vbc_y1)->default_value(0),
          "Type of boundary condition for the northern side")
-        ("bc.vbc_val_y0", po::value<double>(&p.bc.vbc_val_y0)->default_value(0),
+        ("bc.vbc_val_y0", opt::value<double>(&p.bc.vbc_val_y0)->default_value(0),
          "Value of boundary condition for the southern side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_y0_l", po::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
+        ("bc.vbc_val_y0_l", opt::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
          "Lateral shear velocity for southern side (used with bc type 6, unit is m/s)")
-        ("bc.vbc_val_y1", po::value<double>(&p.bc.vbc_val_y1)->default_value(0),
+        ("bc.vbc_val_y1", opt::value<double>(&p.bc.vbc_val_y1)->default_value(0),
          "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_y1_l", po::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
+        ("bc.vbc_val_y1_l", opt::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
          "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
-        ("bc.num_vbc_period_y0", po::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
+        ("bc.num_vbc_period_y0", opt::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
          "Number of points in the y0 velocity period table (3D only)")
-        ("bc.num_vbc_period_y1", po::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
+        ("bc.num_vbc_period_y1", opt::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
          "Number of points in the y1 velocity period table (3D only)")
-        ("bc.vbc_period_y0_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+        ("bc.vbc_period_y0_time_in_yr", opt::list()->default_value("[1.e6]"),
          "Times of the y0 velocity period table (in yr, 3D only), as for x0")
-        ("bc.vbc_period_y1_time_in_yr", po::value<std::string>()->default_value("[1.e6]"),
+        ("bc.vbc_period_y1_time_in_yr", opt::list()->default_value("[1.e6]"),
          "Times of the y1 velocity period table (in yr, 3D only), as for x0")
-        ("bc.vbc_period_y0_ratio", po::value<std::string>()->default_value("[1.]"),
+        ("bc.vbc_period_y0_ratio", opt::list()->default_value("[1.]"),
          "Ratio of vbc_val_y0 at each time of the y0 period table (3D only), as for x0")
-        ("bc.vbc_period_y1_ratio", po::value<std::string>()->default_value("[1.]"),
+        ("bc.vbc_period_y1_ratio", opt::list()->default_value("[1.]"),
          "Ratio of vbc_val_y1 at each time of the y1 period table (3D only), as for x0")
 
-        ("bc.vbc_z0", po::value<int>(&p.bc.vbc_z0)->default_value(0),
+        ("bc.vbc_z0", opt::value<int>(&p.bc.vbc_z0)->default_value(0),
          "Type of boundary condition for the bottom side")
-        ("bc.vbc_z1", po::value<int>(&p.bc.vbc_z1)->default_value(0),
+        ("bc.vbc_z1", opt::value<int>(&p.bc.vbc_z1)->default_value(0),
          "Type of boundary condition for the top side")
-        ("bc.vbc_val_z0", po::value<double>(&p.bc.vbc_val_z0)->default_value(0),
+        ("bc.vbc_val_z0", opt::value<double>(&p.bc.vbc_val_z0)->default_value(0),
          "Value of boundary condition for the bottom side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_z1", po::value<double>(&p.bc.vbc_val_z1)->default_value(0),
+        ("bc.vbc_val_z1", opt::value<double>(&p.bc.vbc_val_z1)->default_value(0),
          "Value of boundary condition for the top side (if velocity, unit is m/s; if stress, unit is Pa)")
-        ("bc.vbc_val_z1_loading_period", po::value<double>(&p.bc.vbc_val_z1_loading_period)->default_value(std::numeric_limits<double>::max()),
+        ("bc.vbc_val_z1_loading_period", opt::value<double>(&p.bc.vbc_val_z1_loading_period)->default_value(std::numeric_limits<double>::max()),
          "Loading period for the velocity on the top side")
 
-        ("bc.vbc_n0", po::value<int>(&p.bc.vbc_n0)->default_value(1),
+        ("bc.vbc_n0", opt::value<int>(&p.bc.vbc_n0)->default_value(1),
          "Type of boundary condition for slant boundary #0 (only type 1, 3, 11, 13 are supported).")
-        ("bc.vbc_val_n0", po::value<double>(&p.bc.vbc_val_n0)->default_value(0),
+        ("bc.vbc_val_n0", opt::value<double>(&p.bc.vbc_val_n0)->default_value(0),
          "Value of boundary condition for slant boundary #0 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
-        ("bc.vbc_n1", po::value<int>(&p.bc.vbc_n1)->default_value(1),
+        ("bc.vbc_n1", opt::value<int>(&p.bc.vbc_n1)->default_value(1),
          "Type of boundary condition for slant boundary #1 (only type 1, 3, 11, 13 are supported).")
-        ("bc.vbc_val_n1", po::value<double>(&p.bc.vbc_val_n1)->default_value(0),
+        ("bc.vbc_val_n1", opt::value<double>(&p.bc.vbc_val_n1)->default_value(0),
          "Value of boundary condition for slant boundary #1 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
-        ("bc.vbc_n2", po::value<int>(&p.bc.vbc_n2)->default_value(1),
+        ("bc.vbc_n2", opt::value<int>(&p.bc.vbc_n2)->default_value(1),
          "Type of boundary condition for slant boundary #2 (only type 1, 3, 11, 13 are supported).")
-        ("bc.vbc_val_n2", po::value<double>(&p.bc.vbc_val_n2)->default_value(0),
+        ("bc.vbc_val_n2", opt::value<double>(&p.bc.vbc_val_n2)->default_value(0),
          "Value of boundary condition for slant boundary #2 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
-        ("bc.vbc_n3", po::value<int>(&p.bc.vbc_n3)->default_value(1),
+        ("bc.vbc_n3", opt::value<int>(&p.bc.vbc_n3)->default_value(1),
          "Type of boundary condition for slant boundary #3 (only type 1, 3, 11, 13 are supported).")
-        ("bc.vbc_val_n3", po::value<double>(&p.bc.vbc_val_n3)->default_value(0),
+        ("bc.vbc_val_n3", opt::value<double>(&p.bc.vbc_val_n3)->default_value(0),
          "Value of boundary condition for slant boundary #3 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
         
-        ("bc.bottom_shear_zone_thickness", po::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
+        ("bc.bottom_shear_zone_thickness", opt::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
          "Thickness of the bottom shear zone for bc_x0 = 3 and ndims = 2, in m: the x0 wall velocity "
          "tapers linearly to 0 from this height above the bottom down to the bottom. 0 disables it.")
         ;
 
     cfg.add_options()
-        ("ic.mattype_option", po::value<int>(&p.ic.mattype_option)->default_value(0),
+        ("ic.mattype_option", opt::value<int>(&p.ic.mattype_option)->default_value(0),
          "How to set the initial material type of markers?\n"
          "0: marker's mattype is determined by regional attribute (currently can be modified only in the code or in a poly file).\n"
          "1: marker's mattype is layered.\n"
@@ -818,14 +829,14 @@ static void declare_parameters(po::options_description &cfg,
          "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1): "
          "a marker takes mattype i where GWB composition i is at least 0.5, i < mat.num_materials. "
          "The world must define a material at every marker; a marker without one is an error.")
-        ("ic.num_mattype_layers", po::value<int>(&p.ic.num_mattype_layers)->default_value(2),
+        ("ic.num_mattype_layers", opt::value<int>(&p.ic.num_mattype_layers)->default_value(2),
          "Number of material layers")
-        ("ic.layer_mattypes", po::value<std::string>()->default_value("[0,1]"),
+        ("ic.layer_mattypes", opt::list()->default_value("[0,1]"),
          "Material type of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2...")
-        ("ic.mattype_layer_depths", po::value<std::string>()->default_value("[0.5]"),
+        ("ic.mattype_layer_depths", opt::list()->default_value("[0.5]"),
          "Depths of the interfaces of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2..., (in unit of zlength)")
 
-        ("ic.weakzone_option", po::value<int>(&p.ic.weakzone_option)->default_value(1),
+        ("ic.weakzone_option", opt::value<int>(&p.ic.weakzone_option)->default_value(1),
          "How to set the initial weak zone?\n"
          "0: no weak zone.\n"
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
@@ -834,74 +845,74 @@ static void declare_parameters(po::options_description &cfg,
          "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n"
          "936: the fault features of the Geodynamic World Builder world ic.gwb_filename (needs a build with "
          "usegwb=1): weakzone_plstrain in the elements whose centroid lies in one.\n")
-        ("ic.is_restarting_weakzone", po::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
+        ("ic.is_restarting_weakzone", opt::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
-        ("ic.weakzone_plstrain", po::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
+        ("ic.weakzone_plstrain", opt::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
          "Initial plastic strain in the weak zone")
-        ("ic.weakzone_azimuth", po::value<double>(&p.ic.weakzone_azimuth)->default_value(0),
+        ("ic.weakzone_azimuth", opt::value<double>(&p.ic.weakzone_azimuth)->default_value(0),
          "Azimuth angle (relative to +y axis) (in degree)")
-        ("ic.weakzone_inclination", po::value<double>(&p.ic.weakzone_inclination)->default_value(90),
+        ("ic.weakzone_inclination", opt::value<double>(&p.ic.weakzone_inclination)->default_value(90),
          "Inclination angle (relative to horizontal plane) (in degree)")
-        ("ic.weakzone_halfwidth", po::value<double>(&p.ic.weakzone_halfwidth)->default_value(1.5),
+        ("ic.weakzone_halfwidth", opt::value<double>(&p.ic.weakzone_halfwidth)->default_value(1.5),
          "Half-width of the weak zone (in unit of mesh.resolution)")
-        ("ic.weakzone_y_min", po::value<double>(&p.ic.weakzone_y_min)->default_value(0),
+        ("ic.weakzone_y_min", opt::value<double>(&p.ic.weakzone_y_min)->default_value(0),
          "Y-direction range (between 0 and 1, in unit of mesh.ylength)")
-        ("ic.weakzone_y_max", po::value<double>(&p.ic.weakzone_y_max)->default_value(1),
+        ("ic.weakzone_y_max", opt::value<double>(&p.ic.weakzone_y_max)->default_value(1),
          "Y-direction range (between 0 and 1, in unit of mesh.ylength)")
-        ("ic.weakzone_depth_min", po::value<double>(&p.ic.weakzone_depth_min)->default_value(0),
+        ("ic.weakzone_depth_min", opt::value<double>(&p.ic.weakzone_depth_min)->default_value(0),
          "Depth upper (shallower) range (between 0 and 1, in unit of mesh.zlength)")
-        ("ic.weakzone_depth_max", po::value<double>(&p.ic.weakzone_depth_max)->default_value(1),
+        ("ic.weakzone_depth_max", opt::value<double>(&p.ic.weakzone_depth_max)->default_value(1),
          "Depth lower (deeper) range (between 0 and 1, in unit of mesh.zlength)")
-        ("ic.weakzone_xcenter", po::value<double>(&p.ic.weakzone_xcenter)->default_value(0.5),
+        ("ic.weakzone_xcenter", opt::value<double>(&p.ic.weakzone_xcenter)->default_value(0.5),
          "Location of weak zone center in x direction (between 0 and 1, in unit of mesh.xlength)")
-        ("ic.weakzone_ycenter", po::value<double>(&p.ic.weakzone_ycenter)->default_value(0.5),
+        ("ic.weakzone_ycenter", opt::value<double>(&p.ic.weakzone_ycenter)->default_value(0.5),
          "Location of weak zone center in y direction (between 0 and 1, in unit of mesh.ylength)")
-        ("ic.weakzone_zcenter", po::value<double>(&p.ic.weakzone_zcenter)->default_value(0.5),
+        ("ic.weakzone_zcenter", opt::value<double>(&p.ic.weakzone_zcenter)->default_value(0.5),
          "Location of weak zone center in z direction (between 0 and 1, in unit of mesh.zlength)")
-        ("ic.weakzone_xsemi_axis", po::value<double>(&p.ic.weakzone_xsemi_axis)->default_value(1e3),
+        ("ic.weakzone_xsemi_axis", opt::value<double>(&p.ic.weakzone_xsemi_axis)->default_value(1e3),
          "Length of weak zone semi-axis in x direction (in meters)")
-        ("ic.weakzone_ysemi_axis", po::value<double>(&p.ic.weakzone_ysemi_axis)->default_value(1e3),
+        ("ic.weakzone_ysemi_axis", opt::value<double>(&p.ic.weakzone_ysemi_axis)->default_value(1e3),
          "Length of weak zone semi-axis in y direction (in meters)")
-        ("ic.weakzone_zsemi_axis", po::value<double>(&p.ic.weakzone_zsemi_axis)->default_value(1e3),
+        ("ic.weakzone_zsemi_axis", opt::value<double>(&p.ic.weakzone_zsemi_axis)->default_value(1e3),
          "Length of weak zone semi-axis in z direction (in meters)\n")
-        ("ic.weakzone_standard_deviation", po::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
+        ("ic.weakzone_standard_deviation", opt::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
          "Standard deviation of Gaussian weak zone (in meters).\n"
          "Used as point-Gaussian std dev (option 3), as along-strike sigma (option 4), and across "
          "a fault for option 936 with ic.gwb_fault_is_gaussian.\n")
-        ("ic.weakzone_gaussian_amplitude", po::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
+        ("ic.weakzone_gaussian_amplitude", opt::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
          "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
          "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
          "A = weakzone_gaussian_amplitude and sigma = weakzone_standard_deviation.\n")
 
         // multi-segment planar weak zone (weakzone_option == 5)
-        ("ic.weakzone_num_segments", po::value<int>(&p.ic.weakzone_num_segments)->default_value(1),
+        ("ic.weakzone_num_segments", opt::value<int>(&p.ic.weakzone_num_segments)->default_value(1),
          "Number of planar segments for multi-segment weak zone (weakzone_option=5)")
-        ("ic.weakzone_segments_xcenter", po::value<std::string>()->default_value("[0.5]"),
+        ("ic.weakzone_segments_xcenter", opt::list()->default_value("[0.5]"),
          "X centers of each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_ycenter", po::value<std::string>()->default_value("[0.5]"),
+        ("ic.weakzone_segments_ycenter", opt::list()->default_value("[0.5]"),
          "Y centers of each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
-        ("ic.weakzone_segments_zcenter", po::value<std::string>()->default_value("[0.5]"),
+        ("ic.weakzone_segments_zcenter", opt::list()->default_value("[0.5]"),
          "Z centers of each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_azimuth", po::value<std::string>()->default_value("[0]"),
+        ("ic.weakzone_segments_azimuth", opt::list()->default_value("[0]"),
          "Azimuth angles for each segment (in degrees), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_inclination", po::value<std::string>()->default_value("[90]"),
+        ("ic.weakzone_segments_inclination", opt::list()->default_value("[90]"),
          "Inclination angles for each segment (in degrees), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_halfwidth", po::value<std::string>()->default_value("[1.5]"),
+        ("ic.weakzone_segments_halfwidth", opt::list()->default_value("[1.5]"),
          "Half-widths for each segment (true perpendicular distance, in unit of mesh.resolution), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_x_min", po::value<std::string>()->default_value("[0]"),
+        ("ic.weakzone_segments_x_min", opt::list()->default_value("[0]"),
          "X lower bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_x_max", po::value<std::string>()->default_value("[1]"),
+        ("ic.weakzone_segments_x_max", opt::list()->default_value("[1]"),
          "X upper bound for each segment (between 0 and 1, in unit of mesh.xlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_depth_min", po::value<std::string>()->default_value("[0]"),
+        ("ic.weakzone_segments_depth_min", opt::list()->default_value("[0]"),
          "Depth upper (shallower) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_depth_max", po::value<std::string>()->default_value("[1]"),
+        ("ic.weakzone_segments_depth_max", opt::list()->default_value("[1]"),
          "Depth lower (deeper) bound for each segment (between 0 and 1, in unit of mesh.zlength), '[v0, v1, ...]'")
-        ("ic.weakzone_segments_y_min", po::value<std::string>()->default_value("[0]"),
+        ("ic.weakzone_segments_y_min", opt::list()->default_value("[0]"),
          "Y lower bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)")
-        ("ic.weakzone_segments_y_max", po::value<std::string>()->default_value("[1]"),
+        ("ic.weakzone_segments_y_max", opt::list()->default_value("[1]"),
          "Y upper bound for each segment (between 0 and 1, in unit of mesh.ylength), '[v0, v1, ...]' (3D only)\n")
 
-        ("ic.temperature_option", po::value<int>(&p.ic.temperature_option)->default_value(0),
+        ("ic.temperature_option", opt::value<int>(&p.ic.temperature_option)->default_value(0),
          "How to set the initial temperature?\n"
          "0: uniform half-space cooling.\n"
          "1: continental thermal gradient.\n"
@@ -911,54 +922,54 @@ static void declare_parameters(po::options_description &cfg,
          "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1).\n")
 
         // for temperature_option = 0
-	    ("ic.oceanic_plate_age_in_yr", po::value<double>(&p.ic.oceanic_plate_age_in_yr)->default_value(60e6),
+	    ("ic.oceanic_plate_age_in_yr", opt::value<double>(&p.ic.oceanic_plate_age_in_yr)->default_value(60e6),
          "Age of the oceanic plate (in years), used for the temperature profile on the plate.\n")
         // for temperature_option = 2
-        ("ic.num_radiogenic_heat_layer", po::value<int>(&p.ic.nhlayer)->default_value(1),
+        ("ic.num_radiogenic_heat_layer", opt::value<int>(&p.ic.nhlayer)->default_value(1),
          "Number of radiogenic heat layers")
-        ("ic.radiogenic_heat_boundry", po::value<std::string>()->default_value("[-1,-1]"),
+        ("ic.radiogenic_heat_boundry", opt::list()->default_value("[-1,-1]"),
         "The layer boundry of radiogenic heating from the top to the bottom (depth -> positive, in meters).\n"
         "Using -1 to indicate the top and bottom of the model.\n")
-        ("ic.radiogenic_heat_mat_in_layer",  po::value<std::string>()->default_value("[0]"),
+        ("ic.radiogenic_heat_mat_in_layer",  opt::list()->default_value("[0]"),
         "The material type of radiogenic heating in each layer (one value: the same in every layer).\n")
         // for temperature_option = 1 and 2
-        ("ic.radiogenic_folding_depth", po::value<double>(&p.ic.radiogenic_folding_depth)->default_value(10.e3),
+        ("ic.radiogenic_folding_depth", opt::value<double>(&p.ic.radiogenic_folding_depth)->default_value(10.e3),
          "Radiogenic folding depth (in meters), used for the temperature profile on the plate.\n")
         // for temperature_option = 1
-        ("ic.radiogenic_heating_of_crust", po::value<double>(&p.ic.radiogenic_heating_of_crust)->default_value(1.e-9),
+        ("ic.radiogenic_heating_of_crust", opt::value<double>(&p.ic.radiogenic_heating_of_crust)->default_value(1.e-9),
          "Radiogenic heating of crust (in W/kg), used for the temperature profile on the plate.\n")
-        ("ic.continental_plate_age_in_yr", po::value<double>(&p.ic.continental_plate_age_in_yr)->default_value(100.e6),
+        ("ic.continental_plate_age_in_yr", opt::value<double>(&p.ic.continental_plate_age_in_yr)->default_value(100.e6),
          "Age of the continental plate (in years), used for the temperature profile on the plate.\n")
-        ("ic.radiogenic_crustal_thickness", po::value<double>(&p.ic.radiogenic_crustal_thickness)->default_value(30.e3),
+        ("ic.radiogenic_crustal_thickness", opt::value<double>(&p.ic.radiogenic_crustal_thickness)->default_value(30.e3),
          "Radiogenic crustal thickness (in meters), used for the temperature profile on the plate.\n")
-        ("ic.lithospheric_thickness", po::value<double>(&p.ic.lithospheric_thickness)->default_value(100.e3),
+        ("ic.lithospheric_thickness", opt::value<double>(&p.ic.lithospheric_thickness)->default_value(100.e3),
          "Lithospheric thickness (in meters), used for the temperature profile on the plate.\n")
          // for temperature_option = 3
-        ("ic.radiogenic_heat_dome_center_x", po::value<double>(&p.ic.radiogenic_heat_dome_center_x)->default_value(0.5),
+        ("ic.radiogenic_heat_dome_center_x", opt::value<double>(&p.ic.radiogenic_heat_dome_center_x)->default_value(0.5),
          "x of center of geothermal dome, used for the temperature profile on the plate.\n")
-        ("ic.radiogenic_heat_dome_center_y", po::value<double>(&p.ic.radiogenic_heat_dome_center_y)->default_value(0.5),
+        ("ic.radiogenic_heat_dome_center_y", opt::value<double>(&p.ic.radiogenic_heat_dome_center_y)->default_value(0.5),
          "y of center of geothermal dome, used for the temperature profile on the plate.\n")
-        ("ic.surface_heat_flux", po::value<double>(&p.ic.surface_heat_flux)->default_value(70e-3),
+        ("ic.surface_heat_flux", opt::value<double>(&p.ic.surface_heat_flux)->default_value(70e-3),
          "surface heat flux, used for the temperature profile on the plate.\n")
-        ("ic.radiogenic_heat_dome_amplitude", po::value<double>(&p.ic.radiogenic_heat_dome_amplitude)->default_value(0),
+        ("ic.radiogenic_heat_dome_amplitude", opt::value<double>(&p.ic.radiogenic_heat_dome_amplitude)->default_value(0),
          "Dome amplitude, used for the temperature profile on the plate.\n")
-        ("ic.radiogenic_heat_dome_width", po::value<double>(&p.ic.radiogenic_heat_dome_width)->default_value(0),
+        ("ic.radiogenic_heat_dome_width", opt::value<double>(&p.ic.radiogenic_heat_dome_width)->default_value(0),
          "Dome half width, used for the temperature profile on the plate.\n")
-        ("ic.radiogenic_heat_dome_width_y", po::value<double>(&p.ic.radiogenic_heat_dome_width_y)->default_value(0),
+        ("ic.radiogenic_heat_dome_width_y", opt::value<double>(&p.ic.radiogenic_heat_dome_width_y)->default_value(0),
          "Dome half width in y-axis, used for the temperature profile on the plate (3D).\n"
          " 0: Isotropic (uses radiogenic_heat_dome_width for both axes).\n"
          ">0: Specific width for y-axis (elliptical dome).\n"
          "<0: Infinite width; thermal profile is uniform along y-axis (ridge/hinge).\n")
-        ("ic.radiogenic_heat_dome_azimuth", po::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
+        ("ic.radiogenic_heat_dome_azimuth", opt::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
          "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
 
         // for temperature_option, mattype_option and/or weakzone_option = 936
-        ("ic.gwb_filename", po::value<std::string>(&p.ic.gwb_filename)->default_value(""),
+        ("ic.gwb_filename", opt::value<std::string>(&p.ic.gwb_filename)->default_value(""),
          "Geodynamic World Builder world (.wb) for ic.temperature_option, ic.mattype_option "
          "and/or ic.weakzone_option 936. It is queried at each node, marker and element "
          "centroid of the initial mesh at depth -z; a 2D DES model needs a world with a cross "
          "section, x running along it.")
-        ("ic.gwb_fault_is_gaussian", po::value<bool>(&p.ic.gwb_fault_is_gaussian)->default_value(false),
+        ("ic.gwb_fault_is_gaussian", opt::value<bool>(&p.ic.gwb_fault_is_gaussian)->default_value(false),
          "For ic.weakzone_option 936. no: every element in a GWB fault gets weakzone_plstrain. "
          "yes: an element in a fault gets weakzone_plstrain * exp(-d^2 / (2 sigma^2)), d being "
          "its centroid's distance from the fault's plane and sigma ic.weakzone_standard_deviation; "
@@ -966,37 +977,37 @@ static void declare_parameters(po::options_description &cfg,
          "world's faults then need distinct names.\n")
 
         // for temperature_option = 90
-        ("ic.Temp_filename", po::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
+        ("ic.Temp_filename", opt::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
          "Filename of the input thermal field, for temperature_option=90.\n"
          "The file format is: <x-coord y-coord (if 3D) z-coord temperature>.\n"
 	    "Can be generated by COMSOL.")
-	    ("ic.Nodes_filename", po::value<std::string>(&p.ic.Nodes_filename)->default_value("Coord.dat"),
+	    ("ic.Nodes_filename", opt::value<std::string>(&p.ic.Nodes_filename)->default_value("Coord.dat"),
          "Filename of the mesh coordinates, for temperature_option=90.\n"
          "The nodes may be ordered differently with the thermal file. The file format is: "
          "<x-coord y-coord (if 3D) z-coord>.\n"
          "Can be generated by COMSOL.")
-	    ("ic.Connectivity_filename", po::value<std::string>(&p.ic.Connectivity_filename)->default_value("Connectivity.dat"),
+	    ("ic.Connectivity_filename", opt::value<std::string>(&p.ic.Connectivity_filename)->default_value("Connectivity.dat"),
          "Filename of the mesh connectivity, for temperature_option = 90 only.\n"
          "The file format is: <#ofnode0 #ofnode1 #ofnode2 #ofnode3 (if 3D)>.\n"
          "Can be generated by COMSOL.\n")
 
-        ("ic.isostasy_adjustment_time_in_yr", po::value<double>(&p.ic.isostasy_adjustment_time_in_yr)->default_value(0),
+        ("ic.isostasy_adjustment_time_in_yr", opt::value<double>(&p.ic.isostasy_adjustment_time_in_yr)->default_value(0),
          "Time for spinning up isostasy adjustment.\n")
         
-        ("ic.excess_pore_pressure", po::value<double>(&p.ic.excess_pore_pressure)->default_value(0.0),
+        ("ic.excess_pore_pressure", opt::value<double>(&p.ic.excess_pore_pressure)->default_value(0.0),
          "Initial excess_pore_pressure except for boundary.\n")
-         ("ic.has_body_force_adjustment", po::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
+         ("ic.has_body_force_adjustment", opt::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
-        ("ic.initial_stress_option", po::value<int>(&p.ic.initial_stress_option)->default_value(0),
+        ("ic.initial_stress_option", opt::value<int>(&p.ic.initial_stress_option)->default_value(0),
          "How to initialize stress?\n"
          "0: use the legacy gravity-dependent initialization.\n"
          "1: prescribe a homogeneous absolute Cauchy stress tensor; requires gravity=0.\n")
 #ifdef THREED
-        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0,0,0,0]"),
+        ("ic.initial_stress", opt::list()->default_value("[0,0,0,0,0,0]"),
          "Homogeneous absolute Cauchy stress [sxx,syy,szz,sxy,sxz,syz] in Pa; "
          "compression is negative.")
 #else
-        ("ic.initial_stress", po::value<std::string>()->default_value("[0,0,0]"),
+        ("ic.initial_stress", opt::list()->default_value("[0,0,0]"),
          "Homogeneous absolute Cauchy stress [sxx,szz,sxz] in Pa; compression is "
          "negative. Plane strain initializes syy=(sxx+szz)/2.")
 #endif
@@ -1004,15 +1015,15 @@ static void declare_parameters(po::options_description &cfg,
         ;
 
     cfg.add_options()
-        ("mat.rheology_type", po::value<std::string>()->required(),
+        ("mat.rheology_type", opt::value<std::string>()->required(),
          "Type of rheology, either 'elastic', 'viscous' (experimental), 'maxwell', "
          "'elasto-plastic', 'elasto-visco-plastic', "
          "'elasto-plastic-rate-state-friction', or 'elasto-visco-plastic-rate-state-friction' "
          "(short '-rsf' aliases are also accepted)")
-        ("mat.is_plane_strain", po::value<bool>(&p.mat.is_plane_strain)->default_value(false),
+        ("mat.is_plane_strain", opt::value<bool>(&p.mat.is_plane_strain)->default_value(false),
          "Use plane-strain constitutive updates in 2D (elastic and elasto-plastic paths).\n")
 
-        ("mat.phase_change_option", po::value<int>(&p.mat.phase_change_option)->default_value(0),
+        ("mat.phase_change_option", opt::value<int>(&p.mat.phase_change_option)->default_value(0),
          "What kind of phase changes?\n"
          "0: no phase changes.\n"
          "1: simple rules of subduction-related phase changes. See simple_subduction() in phasechanges.cxx for more details.\n"
@@ -1030,75 +1041,75 @@ static void declare_parameters(po::options_description &cfg,
          "sediment->sedimentary rock->metasediment->schist (compaction uses geoflac's unsourced thresholds, "
          "the next step Montanez & Crossey 2017, the last Wei 2004).\n"
          "101: custom phase changes (custom_phase_change() in phasechanges.cxx).")
-        ("mat.phase_change_pressure_option", po::value<int>(&p.mat.phase_change_pressure_option)->default_value(0),
+        ("mat.phase_change_pressure_option", opt::value<int>(&p.mat.phase_change_pressure_option)->default_value(0),
          "The pressure the mat.phase_change_option 3 rules read (options 1 and 101 always use ref_pressure()).\n"
          "0: the mean stress of the marker's element, compression positive, in 2D the in-plane mean. Tectonic "
          "over- and underpressure move the reaction boundaries.\n"
          "1: the reference pressure, ref_pressure() (control.ref_pressure_option), at the marker's depth below "
          "the local surface. The phase diagrams are drawn for a lithostat, and geoflac reads one.")
-        ("mat.num_materials", po::value<int>(&p.mat.nmat)->default_value(1),
+        ("mat.num_materials", opt::value<int>(&p.mat.nmat)->default_value(1),
          "Number of material types")
-        ("mat.mattype_ref", po::value<int>(&p.mat.mattype_ref)->default_value(0),
+        ("mat.mattype_ref", opt::value<int>(&p.mat.mattype_ref)->default_value(0),
          "Index of reference material. For compute_dt(), compute_mass() and ref_pressure()")
-        ("mat.mattype_mantle", po::value<int>(&p.mat.mattype_mantle)->default_value(0),
+        ("mat.mattype_mantle", opt::value<int>(&p.mat.mattype_mantle)->default_value(0),
          "Index of mantle material. For continental thermal gradient. With mat.phase_change_option 3: what "
          "serpentinizes above the slab and what serpentinite and hydrous mantle dehydrate to; no rule may "
          "start from it, and it must be set in the cfg when option 3 reads it.")
-        ("mat.mattype_depleted_mantle", po::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
+        ("mat.mattype_depleted_mantle", opt::value<int>(&p.mat.mattype_depleted_mantle)->default_value(0),
          "Index of depleted mantle material. Unused: no phase change reads it.")
-        ("mat.mattype_partial_melting_mantle", po::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
+        ("mat.mattype_partial_melting_mantle", opt::value<int>(&p.mat.mattype_partial_melting_mantle)->default_value(0),
          "Index of partial melting mantle material. Unused: no phase change reads it.")
-        ("mat.mattype_continental_crust", po::value<int>(&p.mat.mattype_continental_crust)->default_value(-1),
+        ("mat.mattype_continental_crust", opt::value<int>(&p.mat.mattype_continental_crust)->default_value(-1),
          "Index of continental crust. Read only by the continental geotherm (ic.temperature_option 1), "
          "which needs it in [0, mat.num_materials). Default -1 (unset).")
-        ("mat.mattype_oceanic_crust", po::value<int>(&p.mat.mattype_oceanic_crust)->default_value(-1),
+        ("mat.mattype_oceanic_crust", opt::value<int>(&p.mat.mattype_oceanic_crust)->default_value(-1),
          "Index of oceanic crust. Read only by mat.phase_change_option 3: the source of the eclogite "
          "rule (with mat.has_eclogitization) and wet crust for the serpentinization grid (with "
          "mat.has_serpentinization); either needs it in [0, mat.num_materials). Default -1 (unset).")
-        ("mat.mattype_serpentinite", po::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
+        ("mat.mattype_serpentinite", opt::value<int>(&p.mat.mattype_serpentinite)->default_value(-1),
          "Index of serpentinite material, for mat.phase_change_option 3 with mat.has_serpentinization: what "
          "mantle above the slab turns into, and the source of serpentinite->mantle dehydration. Default -1 "
          "(unset); with serpentinization on it must be in [0, mat.num_materials) and distinct from "
          "mattype_mantle and the wet-crust materials (mattype_oceanic_crust, mattype_sediment, and "
          "mattype_sediment_rock when set).")
-        ("mat.mattype_eclogite", po::value<int>(&p.mat.mattype_eclogite)->default_value(-1),
+        ("mat.mattype_eclogite", opt::value<int>(&p.mat.mattype_eclogite)->default_value(-1),
          "Index of eclogite material. For the mat.phase_change_option 3 rule engine: oceanic-crust markers past the "
          "basalt->eclogite P-T boundary (Hacker 2003) convert to this. Default -1 (unset); must be set while "
          "mat.has_eclogitization is on.")
-        ("mat.mattype_hydrous_mantle", po::value<int>(&p.mat.mattype_hydrous_mantle)->default_value(-1),
+        ("mat.mattype_hydrous_mantle", opt::value<int>(&p.mat.mattype_hydrous_mantle)->default_value(-1),
          "Index of hydrous (chlorite-bearing) mantle material. For mat.phase_change_option 3: dehydrates to "
          "mattype_mantle above the chlorite-out boundary (Grove et al. 2009). Default -1 (unset); must be set while "
          "mat.has_hydrous_mantle_dehydration is on.")
-        ("mat.mattype_sediment_rock", po::value<int>(&p.mat.mattype_sediment_rock)->default_value(-1),
+        ("mat.mattype_sediment_rock", opt::value<int>(&p.mat.mattype_sediment_rock)->default_value(-1),
          "Index of consolidated sedimentary-rock material. For mat.phase_change_option 3: mattype_sediment compacts to "
          "this, which then metamorphoses to mattype_metasediment; when set, it is also wet crust for the "
          "serpentinization grid. Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
-        ("mat.mattype_metasediment", po::value<int>(&p.mat.mattype_metasediment)->default_value(-1),
+        ("mat.mattype_metasediment", opt::value<int>(&p.mat.mattype_metasediment)->default_value(-1),
          "Index of metamorphic-sediment material. For mat.phase_change_option 3: mattype_sediment_rock -> this -> "
          "mattype_schist. Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
-        ("mat.mattype_schist", po::value<int>(&p.mat.mattype_schist)->default_value(-1),
+        ("mat.mattype_schist", opt::value<int>(&p.mat.mattype_schist)->default_value(-1),
          "Index of schist material. For mat.phase_change_option 3: mattype_metasediment dehydrates to this "
          "(Wei et al. 2004). Default -1 (unset); must be set while mat.has_sediment_metamorphism is on.")
-        ("mat.mattype_sediment", po::value<int>(&p.mat.mattype_sediment)->default_value(0),
+        ("mat.mattype_sediment", opt::value<int>(&p.mat.mattype_sediment)->default_value(0),
          "Index of sediment material. Should be the same as mattype['sediment'] in 2vtk.py for sediment time convertion. "
          "With mat.phase_change_option 3: wet crust for the serpentinization grid (with mat.has_serpentinization) "
          "and the source of the sediment chain (with mat.has_sediment_metamorphism); with either it must be "
          "set in the cfg.")
-        ("mat.mattype_mor_extrusion", po::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
+        ("mat.mattype_mor_extrusion", opt::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
          "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
-        ("mat.mattype_asthenosphere", po::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
+        ("mat.mattype_asthenosphere", opt::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
          "Index of asthenosphere.")
-        ("mat.max_viscosity", po::value<double>(&p.mat.visc_max)->default_value(1e24),
+        ("mat.max_viscosity", opt::value<double>(&p.mat.visc_max)->default_value(1e24),
          "Max. value of viscosity (in Pa.s)")
-        ("mat.min_viscosity", po::value<double>(&p.mat.visc_min)->default_value(1e18),
+        ("mat.min_viscosity", opt::value<double>(&p.mat.visc_min)->default_value(1e18),
          "Min. value of viscosity (in Pa.s)")
-        ("mat.max_tension", po::value<double>(&p.mat.tension_max)->default_value(1e9),
+        ("mat.max_tension", opt::value<double>(&p.mat.tension_max)->default_value(1e9),
          "Max. value of tensile stress (in Pa)")
-        ("mat.max_thermal_diffusivity", po::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
+        ("mat.max_thermal_diffusivity", opt::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
          "Max. value of thermal diffusivity (in m^2/s)")
-        ("mat.convert_rate_oceanic_crust", po::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
+        ("mat.convert_rate_oceanic_crust", opt::value<double>(&p.mat.convert_rate_oceanic_crust)->default_value(1.e-13),
          "Converting rate from melting to oceanic crust. Unused: no phase change reads it.")
-        ("mat.serpentinization_thickness", po::value<double>(&p.mat.serpentinization_thickness)->default_value(10e3),
+        ("mat.serpentinization_thickness", opt::value<double>(&p.mat.serpentinization_thickness)->default_value(10e3),
          "Thickness (in m) of the mantle layer above wet crust (oceanic crust, sediment or sedimentary rock) that turns into serpentinite "
          "(mat.phase_change_option is 3 with mat.has_serpentinization). Counted in whole background-grid "
          "cells below the marker's own "
@@ -1106,26 +1117,26 @@ static void declare_parameters(po::options_description &cfg,
          "(mat.wet_crust_fraction_threshold), so the effective "
          "reach differs from it by up to two cells, and the thickness must be positive and at least one cell. "
          "Default 10e3: heuristic, untuned.")
-        ("mat.serpentinization_wet_crust_margin", po::value<double>(&p.mat.serpentinization_wet_crust_margin)->default_value(-1.0),
+        ("mat.serpentinization_wet_crust_margin", opt::value<double>(&p.mat.serpentinization_wet_crust_margin)->default_value(-1.0),
          "Horizontal margin (in m) for the serpentinization wet-crust-below test. When >= 0, a wet-crust-dominant "
          "grid cell triggers conversion only if the marker's horizontal position lies within the cell's "
          "wet-crust extent (recorded per cell at grid build) widened by this margin -- suppressing the "
          "column-quantization false positive at a slab bend, where a cell is wet-crust-dominant from wet crust "
          "up to a whole cell size away horizontally. < 0 (default) disables: whole-column behavior.")
-        ("mat.serpentinization_max_depth", po::value<double>(&p.mat.serpentinization_max_depth)->default_value(150e3),
+        ("mat.serpentinization_max_depth", opt::value<double>(&p.mat.serpentinization_max_depth)->default_value(150e3),
          "mat.phase_change_option 3 with mat.has_serpentinization: no mantle deeper than this (in m below the "
          "local free surface) serpentinizes. It also ends the serpentinization grid, at this depth plus "
          "mat.serpentinization_thickness and one cell. Must be positive. Default 150e3, heuristic, untuned: slab "
          "dehydration, the water source, is essentially complete by ~150 km, shallower than the antigorite "
          "stability field's cold-slab extrapolation (> 200 km at 500 C).")
-        ("mat.wet_crust_fraction_threshold", po::value<double>(&p.mat.wet_crust_fraction_threshold)->default_value(0.5),
+        ("mat.wet_crust_fraction_threshold", opt::value<double>(&p.mat.wet_crust_fraction_threshold)->default_value(0.5),
          "mat.phase_change_option 3 with mat.has_serpentinization: a serpentinization grid cell is wet-crust-dominant, "
          "so it can serpentinize the mantle above it, when more than this fraction of its markers is wet crust. "
          "In [0, 1). A cell holds markers.markers_per_element times (cell / element measure) markers, nominally "
          "~2.3 in 2D and ~4.2 in 3D at mesh.vt_size 0.5, so at 0.5 a two-marker cell needs both. Default 0.5, "
          "untuned: geoflac's 0.8 (of an element, with no source) leaves out the cell that straddles the slab top "
          "and cuts the serpentinite band of examples/subduction.cfg by more than half.")
-        ("mat.has_serpentinization", po::value<bool>(&p.mat.has_serpentinization)->default_value(true),
+        ("mat.has_serpentinization", opt::value<bool>(&p.mat.has_serpentinization)->default_value(true),
          "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
          "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
          "Needs mattype_serpentinite and mattype_oceanic_crust, and mattype_sediment set in the cfg. "
@@ -1136,91 +1147,91 @@ static void declare_parameters(po::options_description &cfg,
          "indices, and the rule "
          "checks still run (see the other has_* switches); every key an active rule reads must be set in "
          "the cfg.")
-        ("mat.has_eclogitization", po::value<bool>(&p.mat.has_eclogitization)->default_value(true),
+        ("mat.has_eclogitization", opt::value<bool>(&p.mat.has_eclogitization)->default_value(true),
          "mat.phase_change_option 3: enable oceanic crust->eclogite (Hacker 2003). Default on. Needs "
          "mattype_oceanic_crust and mattype_eclogite set, distinct, and not mattype_mantle, and "
          "mattype_sediment different from mattype_oceanic_crust (deposits would turn into eclogite). "
          "Like every has_* switch, no two active rules may start from one material.")
-        ("mat.has_hydrous_mantle_dehydration", po::value<bool>(&p.mat.has_hydrous_mantle_dehydration)->default_value(false),
+        ("mat.has_hydrous_mantle_dehydration", opt::value<bool>(&p.mat.has_hydrous_mantle_dehydration)->default_value(false),
          "mat.phase_change_option 3: enable hydrous (chlorite) mantle->mantle dehydration (Grove 2009). "
          "Default off. Needs mattype_hydrous_mantle.")
-        ("mat.has_sediment_metamorphism", po::value<bool>(&p.mat.has_sediment_metamorphism)->default_value(false),
+        ("mat.has_sediment_metamorphism", opt::value<bool>(&p.mat.has_sediment_metamorphism)->default_value(false),
          "mat.phase_change_option 3: enable the sediment chain sediment->sedimentary rock->metasediment->schist "
          "(compaction uses geoflac's unsourced thresholds, the next step Montanez & Crossey 2017, the last "
          "Wei 2004). Default off. "
          "Needs mattype_sediment_rock / mattype_metasediment / mattype_schist.")
 
         // these parameters need to parsed later
-        ("mat.rho0", po::value<std::string>()->default_value("[3210]"),
+        ("mat.rho0", opt::list()->default_value("[3210]"),
          "Density of the materials at 0 Pa and 273 K '[d0, d1, d2, ...]' (in kg/m^3)")
-        ("mat.alpha", po::value<std::string>()->default_value("[3e-5]"),
+        ("mat.alpha", opt::list()->default_value("[3e-5]"),
          "Volumetic thermal expansion of the materials '[d0, d1, d2, ...]' (in 1/Kelvin)")
 
-        ("mat.bulk_modulus", po::value<std::string>()->default_value("[128.2e9]"),
+        ("mat.bulk_modulus", opt::list()->default_value("[128.2e9]"),
          "Bulk modulus of the materials '[d0, d1, d2, ...]' (in Pa)")
-        ("mat.shear_modulus", po::value<std::string>()->default_value("[80.5e9]"),
+        ("mat.shear_modulus", opt::list()->default_value("[80.5e9]"),
          "Shear modulus of the materials '[d0, d1, d2, ...]' (in Pa)")
 
-        ("mat.visc_exponent", po::value<std::string>()->default_value("[3.05]"),
+        ("mat.visc_exponent", opt::list()->default_value("[3.05]"),
          "Exponents of non-linear viscosity of the materials'[d0, d1, d2, ...]'")
-        ("mat.visc_coefficient", po::value<std::string>()->default_value("[1.25e-1]"),
+        ("mat.visc_coefficient", opt::list()->default_value("[1.25e-1]"),
          "Pre-exponent coefficient of non-linear viscosity of the materials '[d0, d1, d2, ...]'")
-        ("mat.visc_activation_energy", po::value<std::string>()->default_value("[3.76e5]"),
+        ("mat.visc_activation_energy", opt::list()->default_value("[3.76e5]"),
          "Activation energy of non-linear viscosity of the materials '[d0, d1, d2, ...]' (in J/mol)")
-        ("mat.visc_activation_volume", po::value<std::string>()->default_value("[0.e-6]"),
+        ("mat.visc_activation_volume", opt::list()->default_value("[0.e-6]"),
          "Activation volume of non-linear viscosity of the materials '[d0, d1, d2, ...]' (in m^3/mol)")
 
-        ("mat.heat_capacity", po::value<std::string>()->default_value("[1e3]"),
+        ("mat.heat_capacity", opt::list()->default_value("[1e3]"),
          "Heat capacity (isobaric) of the materials '[d0, d1, d2, ...]' (in J/kg/Kelvin)")
-        ("mat.therm_cond", po::value<std::string>()->default_value("[3]"),
+        ("mat.therm_cond", opt::list()->default_value("[3]"),
          "Thermal conductivity of the materials '[d0, d1, d2, ...]' (in W/m/Kelvin)")
-        ("mat.radiogenic_heat_prod", po::value<std::string>()->default_value("[0]"),
+        ("mat.radiogenic_heat_prod", opt::list()->default_value("[0]"),
          "Radiogenic heat production rate of the materials '[d0, d1, d2, ...]' (in W/kg)"
          "Only for initial temperature condition")
 
-        ("mat.pls0", po::value<std::string>()->default_value("[0]"),
+        ("mat.pls0", opt::list()->default_value("[0]"),
          "Plastic strain of the materials where weakening starts '[d0, d1, d2, ...]' (no unit)")
-        ("mat.pls1", po::value<std::string>()->default_value("[0.1]"),
+        ("mat.pls1", opt::list()->default_value("[0.1]"),
          "Plastic strain of the materials where weakening saturates '[d0, d1, d2, ...]' (no unit)")
-        ("mat.cohesion0", po::value<std::string>()->default_value("[4e7]"),
+        ("mat.cohesion0", opt::list()->default_value("[4e7]"),
          "Cohesion of the materials when weakening starts '[d0, d1, d2, ...]' (in Pa)")
-        ("mat.cohesion1", po::value<std::string>()->default_value("[4e6]"),
+        ("mat.cohesion1", opt::list()->default_value("[4e6]"),
          "Cohesion of the materials when weakening saturates '[d0, d1, d2, ...]' (in Pa)")
-        ("mat.friction_angle0", po::value<std::string>()->default_value("[30]"),
+        ("mat.friction_angle0", opt::list()->default_value("[30]"),
          "Friction angle of the materials when weakening starts '[d0, d1, d2, ...]' (in degree)")
-        ("mat.friction_angle1", po::value<std::string>()->default_value("[5]"),
+        ("mat.friction_angle1", opt::list()->default_value("[5]"),
          "Friction angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
-        ("mat.dilation_angle0", po::value<std::string>()->default_value("[0]"),
+        ("mat.dilation_angle0", opt::list()->default_value("[0]"),
          "Dilation angle of the materials when weakening starts '[d0, d1, d2, ...]' (in degree)")
-        ("mat.dilation_angle1", po::value<std::string>()->default_value("[0]"),
+        ("mat.dilation_angle1", opt::list()->default_value("[0]"),
          "Dilation angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
 
-        ("mat.porosity", po::value<std::string>()->default_value("[0.0]"),
+        ("mat.porosity", opt::list()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
-        ("mat.hydraulic_perm", po::value<std::string>()->default_value("[1e-14]"),
+        ("mat.hydraulic_perm", opt::list()->default_value("[1e-14]"),
          "Intrinsic permeability of the materials '[d0, d1, d2, ...]' (m^2)")
-        ("mat.fluid_rho0", po::value<std::string>()->default_value("[1000]"),
+        ("mat.fluid_rho0", opt::list()->default_value("[1000]"),
          "Density of the fluids at 0 Pa and 273 K '[d0, d1, d2, ...]' (in kg/m^3)")
-        ("mat.fluid_alpha", po::value<std::string>()->default_value("[2.07e-4]"),
+        ("mat.fluid_alpha", opt::list()->default_value("[2.07e-4]"),
          "Thermal expansivity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in K^-1)")
-        ("mat.fluid_bulk_modulus", po::value<std::string>()->default_value("[2.17e9]"),
+        ("mat.fluid_bulk_modulus", opt::list()->default_value("[2.17e9]"),
          "Bulk modulus of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
-        ("mat.fluid_visc", po::value<std::string>()->default_value("[1.002e-3]"),
+        ("mat.fluid_visc", opt::list()->default_value("[1.002e-3]"),
          "Dynamic viscosity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
-        ("mat.biot_coeff", po::value<std::string>()->default_value("[1.0]"),
+        ("mat.biot_coeff", opt::list()->default_value("[1.0]"),
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
-        ("mat.bulk_modulus_s", po::value<std::string>()->default_value("[37e9]"),
+        ("mat.bulk_modulus_s", opt::list()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
         // for rate-and-state friction
-        ("mat.direct_a", po::value<std::string>()->default_value("[0.020]"),
+        ("mat.direct_a", opt::list()->default_value("[0.020]"),
          "rate-and-state friction parameter a '[d0, d1, d2, ...]' (-)")
-        ("mat.evolution_b", po::value<std::string>()->default_value("[0.025]"),
+        ("mat.evolution_b", opt::list()->default_value("[0.025]"),
          "rate-and-state friction parameter b '[d0, d1, d2, ...]' (-)")
-        ("mat.characteristic_velocity", po::value<std::string>()->default_value("[1e-6]"),
+        ("mat.characteristic_velocity", opt::list()->default_value("[1e-6]"),
          "rate-and-state friction parameter V0 '[d0, d1, d2, ...]' (-)")
-        ("mat.characteristic_distance", po::value<std::string>()->default_value("[4e-3]"),
+        ("mat.characteristic_distance", opt::list()->default_value("[4e-3]"),
          "rate-and-state friction parameter Dc '[d0, d1, d2, ...]' (-)")
-        ("mat.state_var_model", po::value<int>(&p.mat.state_var_model)->default_value(0),
+        ("mat.state_var_model", opt::value<int>(&p.mat.state_var_model)->default_value(0),
          "State variable evolution model for rate-and-state friction.\n"
          "0: steady-state friction (no state evolution),\n"
          "1: aging law,\n"
@@ -1241,36 +1252,25 @@ static void declare_parameters(po::options_description &cfg,
     /* These parameters will enable additional debugging output. DO NOT document these parameters
        in defaults.cfg. */
     cfg.add_options()
-        ("debug.dt", po::value<bool>(&p.debug.dt)->default_value(false),
+        ("debug.dt", opt::value<bool>(&p.debug.dt)->default_value(false),
          "Print all dt criteria")
         ;
 }
 
 
-static void read_parameters_from_file
-(const char* filename,
- const po::options_description cfg,
- po::variables_map &vm)
+static void read_parameters_from_file(const char* filename, opt::Registry &cfg)
 {
     try {
-        po::store(po::parse_config_file<char>(filename, cfg), vm);
-        po::notify(vm);
+        cfg.read_file(filename);
     }
-    catch (const boost::program_options::multiple_occurrences& e) {
-        std::cerr << e.what() << " from option: " << e.get_option_name() << '\n';
-        die(EXIT_CONFIG_VALUE);
-    }
-    catch (const boost::program_options::unknown_option& e) {
-        std::cerr << "Error reading config_file '" << filename << "'\n";
-        std::cerr << e.what() << " (a misspelled or retired key)\n";
-        die(EXIT_CONFIG_VALUE);
-    }
-    catch (const boost::program_options::validation_error& e) {
+    catch (const opt::ConfigError& e) {
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
-        die(EXIT_CONFIG_VALUE);
+        die(e.bad_value ? EXIT_CONFIG_VALUE : EXIT_CONFIG);
     }
-    catch (std::exception& e) {
+    catch (const std::exception& e) {
+        // Anything the parser did not foresee is still a problem with the file, not
+        // a crash of the run.
         std::cerr << "Error reading config_file '" << filename << "'\n";
         std::cerr << e.what() << "\n";
         die(EXIT_CONFIG);
@@ -1319,7 +1319,7 @@ static int read_numbers(const std::string &input, std::vector<T> &vec, int len)
 // Read exactly len numbers from key name; len_name says what sets len.
 // With one_for_all, a single number is also accepted and repeated len times.
 template<class T>
-static void get_numbers(const po::variables_map &vm, const char *name,
+static void get_numbers(const opt::Registry &vm, const char *name,
                         std::vector<T> &values, int len, const char *len_name,
                         bool one_for_all=false)
 {
@@ -1333,7 +1333,7 @@ static void get_numbers(const po::variables_map &vm, const char *name,
         die(EXIT_CONFIG_VALUE);
     }
 
-    std::string str = vm[name].as<std::string>();
+    std::string str = vm.str(name);
     int err = read_numbers(str, values, len);
     if (err && one_for_all) {
         err = read_numbers(str, values, 1);
@@ -1353,7 +1353,7 @@ static void get_numbers(const po::variables_map &vm, const char *name,
 }
 
 
-static void validate_parameters(const po::variables_map &vm, Param &p)
+static void validate_parameters(const opt::Registry &vm, Param &p)
 {
     std::cout << "Checking consistency of input parameters...\n";
 
@@ -1454,7 +1454,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         double_vec tmp;
         int err;
         std::string str;
-        str = vm["mesh.refined_zonex"].as<std::string>();
+        str = vm.str("mesh.refined_zonex");
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refined_zonex,\n"
@@ -1464,7 +1464,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.refined_zonex.first = tmp[0];
         p.mesh.refined_zonex.second = tmp[1];
 #ifdef THREED
-        str = vm["mesh.refined_zoney"].as<std::string>();
+        str = vm.str("mesh.refined_zoney");
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refined_zoney,\n"
@@ -1474,7 +1474,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         p.mesh.refined_zoney.first = tmp[0];
         p.mesh.refined_zoney.second = tmp[1];
 #endif
-        str = vm["mesh.refined_zonez"].as<std::string>();
+        str = vm.str("mesh.refined_zonez");
         err = read_numbers(str, tmp, 2);
         if (err || tmp[0] < 0 || tmp[1] > 1 || tmp[0] > tmp[1]) {
             std::cerr << "Error: incorrect value for mesh.refined_zonez,\n"
@@ -1565,8 +1565,8 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
         // 2D legacy alias: points_y means z when points_z is not given
-        const bool z_from_y = vm["monitor.points_z"].as<std::string>() == "[]" &&
-                              vm["monitor.points_y"].as<std::string>() != "[]";
+        const bool z_from_y = vm.str("monitor.points_z") == "[]" &&
+                              vm.str("monitor.points_y") != "[]";
         get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
                     p.monitor.num_points, npts);
 #endif
@@ -1597,7 +1597,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 #endif
         }
 
-        const std::string rebind_mode = vm["monitor.remesh_rebind_mode"].as<std::string>();
+        const std::string rebind_mode = vm.str("monitor.remesh_rebind_mode");
         if (rebind_mode == "initial_coord")
             p.monitor.remesh_rebind_mode = monitor_rebind_initial_coord;
         else if (rebind_mode == "pre_remesh_coord")
@@ -1679,7 +1679,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
             "mesh.mmg_remesh_defensive_tiny_ratio",
         };
         for (const char *name : mmg_only)
-            if (vm.count(name) && ! vm[name].defaulted())
+            if (vm.count(name) && ! vm.defaulted(name))
                 std::cerr << "Warning: MMG not compiled in (no USEMMG), " << name
                           << " has no effect.\n";
     }
@@ -1852,7 +1852,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     //
     {
         const std::string str =
-            vm["control.mass_scaling_reference_speed"].as<std::string>();
+            vm.str("control.mass_scaling_reference_speed");
         if (str == std::string("shear"))
             p.control.mass_scaling_reference_speed =
                 mass_scaling_speed_shear;
@@ -1868,7 +1868,7 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
     }
 
     {
-        std::string str = vm["mat.rheology_type"].as<std::string>();
+        std::string str = vm.str("mat.rheology_type");
         if (str == std::string("elastic"))
             p.mat.rheol_type = MatProps::rh_elastic;
         else if (str == std::string("viscous"))
@@ -1933,11 +1933,12 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         // range checks and check_phase_transition_rules(), which name it.
         if (p.mat.phase_change_option == 3)
             for (const char* key : phase_change_keys(p)) {
-                const po::variable_value& v = vm[std::string("mat.") + key];
-                if (v.defaulted() && v.as<int>() >= 0) {
+                const std::string full = std::string("mat.") + key;
+                const int v = vm.as<int>(full);
+                if (vm.defaulted(full) && v >= 0) {
                     const std::string msg = std::string("mat.phase_change_option 3 reads mat.") + key
-                        + ", but the cfg does not set it, and its default " + std::to_string(v.as<int>())
-                        + " would name material " + std::to_string(v.as<int>()) + ".";
+                        + ", but the cfg does not set it, and its default " + std::to_string(v)
+                        + " would name material " + std::to_string(v) + ".";
                     die(EXIT_CONFIG_VALUE, msg.c_str());
                 }
             }
@@ -2148,6 +2149,23 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         if (p.mat.state_var_model < 0 || p.mat.state_var_model > 2) {
             die(EXIT_CONFIG_VALUE, "mat.state_var_model must be 0, 1, or 2.");
         }
+        if (p.control.has_PT) {
+            if (p.control.PT_use_running_scale &&
+                (!vm.defaulted("control.PT_relative_tolerance") ||
+                 !vm.defaulted("control.PT_absolute_tolerance")))
+                std::cerr << "Warning: PT_use_running_scale ignores explicitly configured "
+                          << "PT_relative_tolerance/PT_absolute_tolerance for physical steps; "
+                          << "they still apply to initial equilibrium. Physical steps use "
+                          << "epsilon=1e-6 and C=1000.\n";
+            if (p.control.PT_max_iter < 1 || p.control.PT_stagnation_window < 0 ||
+                p.control.PT_option < 0 || p.control.PT_option > 1 ||
+                !(p.control.PT_CFL > 0 && p.control.PT_CFL <= 0.5) ||
+                !(p.control.PT_Re > 0 && std::isfinite(p.control.PT_Re)) ||
+                !(p.control.PT_relative_tolerance >= 0 && std::isfinite(p.control.PT_relative_tolerance)) ||
+                !(p.control.PT_absolute_tolerance >= 0 && std::isfinite(p.control.PT_absolute_tolerance)) ||
+                (p.control.PT_relative_tolerance == 0 && p.control.PT_absolute_tolerance == 0))
+                die(EXIT_CONFIG_VALUE, "Invalid PT iteration, tolerance or relaxation parameters.");
+        }
         if (p.control.rsf_dtheta_max > 0) {
             if (p.control.fixed_dt != 0.0) {
                 die(EXIT_CONFIG_VALUE,
@@ -2207,14 +2225,13 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
 
 void get_input_parameters(const char* filename, Param& p)
 {
-    po::options_description cfg("Config file options");
-    po::variables_map vm;
+    opt::Registry cfg;
 
     declare_parameters(cfg, p);
     // print help message
     if (std::strncmp(filename, "-h", 3) == 0 ||
         std::strncmp(filename, "--help", 7) == 0) {
-        std::cout << cfg;
+        std::cout << "Config file options:\n" << cfg.help();
         const char* exe =
 #ifdef THREED
             "dynearthsol3d"
@@ -2242,6 +2259,6 @@ void get_input_parameters(const char* filename, Param& p)
         // failures, and --help is a successful run with nothing to diagnose.
         std::exit(EXIT_OK);
     }
-    read_parameters_from_file(filename, cfg, vm);
-    validate_parameters(vm, p);
+    read_parameters_from_file(filename, cfg);
+    validate_parameters(cfg, p);
 }

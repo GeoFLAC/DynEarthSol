@@ -147,6 +147,12 @@ jobs:
     - name: Fix git safe directory
       run: git config --global --add safe.directory '*'
 
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          python3
+
     - name: set path for nvc (${{ matrix.ndims }}D)
       # No HDF5_*_DIR: the Makefile finds the paths itself.
       run: |

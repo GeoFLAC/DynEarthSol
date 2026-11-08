@@ -20,9 +20,19 @@ This file is the reference kept with the code.
 
 To skip the setup below, use the Docker image ([Run with Docker](#run-with-docker)).
 
-1. **GoSPL 2026.6.30 or later in a conda environment with Python 3.11**, by
-   default at `~/miniforge3/envs/gospl`. Earlier releases do not read the
-   letter boundary codes the example uses (see [GoSPL YAML](#gospl-yaml)). Follow
+1. **GoSPL 2026.6.30 or later in a conda environment with Python 3.11.**
+   Earlier releases do not read the letter boundary codes the example uses (see
+   [GoSPL YAML](#gospl-yaml)). conda and mamba take the same arguments:
+   ```bash
+   conda create -n gospl -c geodels -c conda-forge "gospl>=2026.6.30" python=3.11
+   conda activate gospl
+   ```
+   With mamba, write `mamba` for `conda`; mamba 2 needs
+   `mamba shell init --shell bash` (or `zsh`) once, then a new shell, before
+   `mamba activate` works. If conda prints "retrying with next repodata
+   source" and then stalls, it is using the slow classic solver: add
+   `--solver=libmamba` (conda 23.10 or later), or set it once with
+   `conda config --set solver libmamba`. See also
    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html).
 
 2. **gospl_extensions**, the bridge between GoSPL (Python) and DES (C++). It
@@ -30,13 +40,17 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
    `EnhancedModel` GoSPL subclass that can be stepped externally, take imposed
    velocities and return an elevation change, and the interpolation between the
    DES and GoSPL meshes, which are built independently and at different
-   resolutions. Build it inside the gospl environment:
+   resolutions. Build it with the gospl environment active:
    ```bash
    git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
    cd ~/opt/gospl_extensions/cpp_interface
-   conda activate gospl
-   make install-local
+   command -v python3        # must be $CONDA_PREFIX/bin/python3
+   make install-local                                                     # Linux
+   make install-local PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib" # macOS
    ```
+   The build takes its Python headers from the first `python3` on `PATH`. If
+   that is another Python (Homebrew's, say), it builds against the wrong
+   headers without a warning: put `$CONDA_PREFIX/bin` first on `PATH`.
    On success it reports
    `✅ Installed locally to gospl_extensions/lib and gospl_extensions/include`,
    having created `lib/libgospl_extensions.so` and `include/gospl_extensions.h`,
@@ -44,15 +58,26 @@ To skip the setup below, use the Docker image ([Run with Docker](#run-with-docke
 
 ## Build
 
-GoSPL coupling is 3D only. Which conda environment is active does not matter
-for this build: the Makefile finds GoSPL's Python through `CONDA_ENV_PATH`. Only
-an active environment with its own Boost or compilers changes it, and
-`make config` shows what was picked.
+GoSPL coupling is 3D only. The Makefile finds the gospl environment through
+`CONDA_ENV_PATH`, by default `~/miniforge3/envs/gospl`. With the environment
+active, `CONDA_ENV_PATH=$CONDA_PREFIX` works wherever it is (Miniconda, or a
+Homebrew mamba, keep it elsewhere):
 
 ```bash
+conda activate gospl          # or: mamba activate gospl
 make clean
-make ndims=3 usegospl=1 usemmg=1 -j4
+make ndims=3 usegospl=1 usemmg=1 -j4 CONDA_ENV_PATH=$CONDA_PREFIX
 ```
+
+`make config` shows what was picked. On macOS:
+
+- OpenMP comes from the gospl environment's `libomp`, not Homebrew's. GoSPL's
+  Python loads the environment's copy into the DES process, and two copies
+  stop the run with `OMP: Error #15`.
+- The paths to `libgospl_extensions.so` and `libpython` are written into the
+  executable, so no `DYLD_LIBRARY_PATH` is needed. The `dynearthsol-gospl`
+  wrapper could not pass one on anyway: macOS removes `DYLD_*` variables when
+  it starts `/bin/bash`.
 
 - `ndims=3` is required; `usemmg=1` (MMG mesh optimization during remeshing) is
   recommended but optional.
@@ -71,7 +96,7 @@ make ndims=3 usegospl=1 usemmg=1 -j4
 ```bash
 ./dynearthsol3d --help | grep gospl                # options registered?
 conda activate gospl && python -c "import gospl"   # GoSPL importable?
-ldd dynearthsol3d | grep python                    # linked to Python?
+ldd dynearthsol3d | grep python                    # linked to Python? (macOS: otool -L)
 cat dynearthsol-gospl                              # wrapper script written?
 ```
 
@@ -170,7 +195,7 @@ Run from the directory that holds the GoSPL YAML, since the path in
 directory, not to the cfg. Or give an absolute path.
 
 ```bash
-conda activate gospl
+conda activate gospl          # or: mamba activate gospl
 cd DynEarthSol/gospl_driver/examples
 ../../dynearthsol-gospl ./gaussian-weakzone-3d-with-gospl.cfg
 ```
@@ -255,7 +280,8 @@ Makefile or by changing directory before running.
 
 | Message | Cause and fix |
 |---------|---------------|
-| `cannot find -lpython3.11` | The gospl environment is not at `~/miniforge3/envs/gospl` with Python 3.11. Set `CONDA_ENV_PATH` |
+| `cannot find -lpython3.11`, or (macOS) `no such file` for `libpython3.11.dylib` | The gospl environment is not at `~/miniforge3/envs/gospl` with Python 3.11. Set `CONDA_ENV_PATH` |
+| `ld: library 'python3.11' not found`, building gospl_extensions on macOS | Pass `PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib"` to `make install-local` |
 | `cannot find -lgospl_extensions` | gospl_extensions is not built at `~/opt/gospl_extensions`. Set `GOSPL_EXT_DIR` |
 | `gospl-driver.hpp: No such file` | The `gospl_driver` directory is missing from the source tree |
 
@@ -264,6 +290,8 @@ Makefile or by changing directory before running.
 | Message | Cause and fix |
 |---------|---------------|
 | `GoSPL not initialized`, or an `ImportError` for `gospl` | The gospl environment is not active: `conda activate gospl` |
+| macOS: `Library not loaded: libgospl_extensions.so` | DES was built from an older checkout, or gospl_extensions moved. Rebuild DES: `make clean`, then the build above (set `GOSPL_EXT_DIR` if it moved) |
+| macOS: `OMP: Error #15: ... libomp.dylib already initialized` | DES was built with another `libomp` than the gospl environment's. Rebuild with `CONDA_ENV_PATH` pointing at that environment |
 | `No module named 'gospl_python_interface'` | `PYTHONPATH` lacks `gospl_extensions/cpp_interface`. Use the `dynearthsol-gospl` wrapper, or export it as in [Run](#run) |
 | `The input file is not found`, `Unable to open file` | The YAML path is resolved from the working directory. Run from the YAML's directory or use an absolute path |
 | `Error in run_and_get_erosion: error code 77` ... `bad hmax in TSAdaptChoose()` | Intermittent PETSc error in marine deposition; the run recovers. See `examples/README.md` |

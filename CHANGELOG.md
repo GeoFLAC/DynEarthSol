@@ -17,6 +17,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- PT save files expose the accepted projected undamped `PT residual force`
+  separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
+  demonstrates both PT options in 2D and 3D.
+
+- Physical-step PT trial/commit mechanics with projected undamped-force
+  convergence, rollback on failure, and optional adaptive dynamic relaxation
+  (`control.PT_option=1`; the default remains 0). See `doc/pt-solver.md`.
+- Optional `control.PT_use_running_scale` convergence history, including
+  restart persistence and exclusion of the first post-remesh scale update.
 - A Docker image with GoSPL coupling: `GOSPL=1 ./build.sh` ships the conda
   environment, gospl_extensions and a 3D executable ready to run ([#96]).
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
@@ -62,6 +71,20 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
+  existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
+- PT stagnation warns once and continues to the iteration cap; failed or
+  nonfinite solves restore mechanical history and stop before physical updates.
+- Failed PT solves report the requested stopping threshold alongside the
+  residual, without changing convergence criteria. Mechanical nonconvergence
+  uses exit code 54; code 53 remains reserved for GoSPL failures.
+- Boost is no longer a dependency. The config file is read with CLI11 2.7.2,
+  vendored as a single header in `third_party/CLI11/`, and the build needs a
+  C++17 compiler. `make BOOST_ROOT_DIR=...` is now ignored with a warning.
+  Valid config files read as before. The `-h` listing is reformatted, parse
+  error messages are worded differently, and three malformed inputs that Boost
+  took are now errors: an empty bool, and a string value that opens with three
+  quotes or with `[` ([#75]).
 - A GoSPL-coupled run prints its coupling as one summary line after each DES
   progress line, after the first event, instead of four lines per event,
   GoSPL's `--- step done` among them ([#105]).
@@ -83,6 +106,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** The make option `use_gospl` is now `usegospl`, matching
   `usemmg` and `useexo`; `make use_gospl=1` stops with an unknown-variable
   error.
+- **Breaking.** The Intel classic `icpc` and PGI `pgc++` branches of the
+  Makefile are removed; build with g++ 8 or newer, nvc++ 25.7 or newer, or
+  clang++ 5 or newer. A build that overrides the standard with one older than
+  C++17 now stops at compile time ([#125]).
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
@@ -128,6 +155,33 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- NVHPC CI installs Boost development headers and Python before compiling,
+  including when the published build container lacks those dependencies.
+
+- PT step-based output keeps a finite checkpoint clock when the time-output
+  interval is omitted, including fresh and resumed runs with either scheduler.
+
+- PT logs distinguish the selected starting residual (`initial`) from the
+  first warm trial (`warm_initial`) used for convergence scaling, and report
+  actual trial evaluations and the residual's physical-update stage.
+
+- `2vtk.py` reports a missing optional PT residual once per conversion, including
+  parallel conversion and selected frame ranges.
+
+- Physical-step PT can retain equilibrium under a held load without replaying
+  the preceding deformation rate. The elastic example uses the existing
+  running force scale to preserve its load-relative accuracy across steps.
+
+- Darcy flux uses pressure-form mobility, avoiding division by fluid specific
+  weight when gravity is zero while retaining the existing density convention.
+- PT initial equilibrium preserves hydraulic sidewall support when physical
+  stepping begins, avoiding a spurious pore-pressure transient without an
+  applied top load.
+
+- PT checkpoints preserve regular output timing across restart, including RSF
+  step/time schedules. Older checkpoints retain legacy scheduling with a warning.
+- PT restarts at a mesh-quality check now complete the pending remeshing stage
+  before advancing to the next physical step.
 - A GoSPL-coupled run sent GoSPL velocities of hundreds of m/yr after a remesh
   that kept the surface node count, differencing unrelated nodes; the coupling
   after any remesh now uses the instantaneous velocity.
@@ -179,6 +233,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 - An `info_display_step_interval` that is not a multiple of
   `quality_check_step_interval` is rounded up as the message says; the run
   used to stop ([#114]).
+
+- On macOS, a `usegospl=1` build runs: the executable records where
+  `libgospl_extensions.so` and the env's `libpython` are, links the system
+  `libc++`, and takes the gospl env's `libomp`, so GoSPL no longer aborts it
+  with `OMP: Error #15`; `usemmg=1` configures MMG with the gospl env active.
+  The docs give the macOS gospl_extensions build and the mamba commands
+  ([#118]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -333,6 +394,7 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#71]: https://github.com/GeoFLAC/DynEarthSol/pull/71
 [#72]: https://github.com/GeoFLAC/DynEarthSol/pull/72
 [#74]: https://github.com/GeoFLAC/DynEarthSol/pull/74
+[#75]: https://github.com/GeoFLAC/DynEarthSol/issues/75
 [#76]: https://github.com/GeoFLAC/DynEarthSol/pull/76
 [#78]: https://github.com/GeoFLAC/DynEarthSol/pull/78
 [#81]: https://github.com/GeoFLAC/DynEarthSol/pull/81
@@ -350,3 +412,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
 [#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117
+[#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
+[#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125

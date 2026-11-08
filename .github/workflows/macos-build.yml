@@ -36,7 +36,7 @@ jobs:
     # -j4 make, several minutes every run, with the target architecture
     # hardcoded to arm64). The Makefile finds a Homebrew libomp on its own.
     - name: install dependencies
-      run: brew install boost libomp hdf5
+      run: brew install libomp hdf5
 
     # Print the resolved compiler and dependency paths before building, so a
     # mis-detection is visible in the log instead of showing up as a compile
@@ -47,10 +47,8 @@ jobs:
         make ndims=2 config
         make ndims=2 config | grep -q 'libomp from *'"$(brew --prefix libomp)" \
           || { echo "::error::libomp was not auto-detected from $(brew --prefix libomp)"; exit 1; }
-        make ndims=2 config | grep -q 'boost prefix *'"$(brew --prefix boost)" \
-          || { echo "::error::boost was not auto-detected from $(brew --prefix boost)"; exit 1; }
 
-    # No BOOST_ROOT_DIR and no OPENMP_ROOT_DIR on any line below: these are the
+    # No OPENMP_ROOT_DIR on any line below: these are the
     # exact commands the README gives a new user, so CI fails if the zero-config
     # path regresses.
     - name: make debug 2d
@@ -93,7 +91,7 @@ jobs:
           || { echo "::error::dynearthsol2d is not linked against libomp"; exit 1; }
         rm -rf external
     - name: make 3d hdf5
-      # No HDF5_*_DIR and no BOOST_ROOT_DIR: the Makefile finds every path
+      # No HDF5_*_DIR: the Makefile finds every path
       # itself, and on macOS it picks the Homebrew prefix matching the build
       # architecture rather than whichever brew happens to be first on PATH.
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1

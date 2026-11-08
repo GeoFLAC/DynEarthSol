@@ -7,9 +7,10 @@
  * own copies of the libstdc++ templates they use -- _M_realloc_insert,
  * _Rb_tree, basic_string, the stream machinery. Those copies are weak, they
  * reach .dynsym, and an executable outranks every shared library for the whole
- * process: 33 of them here, all called through libboost's and libstdc++'s PLT.
+ * process: 33 of them here, all called through the shared libraries' PLT.
  *
- * Boost then allocates from the managed pool through our copy and releases
+ * A shared library (it was seen with Boost.program_options, since removed)
+ * then allocates from the managed pool through our copy and releases
  * through a path it inlined locally -- glibc free() on a pool pointer, which
  * aborts with "free(): invalid size" or similar. The reverse direction is
  * harmless; NVHPC's managed delete forwards a foreign pointer to free().

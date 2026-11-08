@@ -30,11 +30,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: get boost and hdf5
+    - name: get hdf5
       run: |
-        echo Install boost-program-options and hdf5 ====================
+        echo Install hdf5 ====================
         sudo apt-get update
-        sudo apt-get install -y libboost-program-options-dev libhdf5-serial-dev make pkg-config
+        sudo apt-get install -y libhdf5-serial-dev make pkg-config
     - name: make debug 2d
       run: make clean ndims=2; make ndims=2 opt=0 openmp=0 hdf5=0
     - name: make debug 3d

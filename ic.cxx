@@ -16,7 +16,9 @@ namespace {
     class Zone
     {
     public:
-        virtual ~Zone() {};
+        Zone() = default;
+        Zone(const Zone&) = default;
+        virtual ~Zone() = default;
         virtual bool contains(const double x[NDIMS]) const = 0;
     };
 

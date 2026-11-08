@@ -1,6 +1,8 @@
 #ifndef DYNEARTHSOL3D_CONSTANTS_HPP
 #define DYNEARTHSOL3D_CONSTANTS_HPP
 
+static_assert(__cplusplus >= 201703L, "DynEarthSol needs C++17 or newer (-std=c++17)");
+
 # include <cmath>
 # include <map>
 
