@@ -74,12 +74,14 @@
 
     // The plate interface, DES's weak zone (weakzone_option = 936): the slab's
     // top surface, same trace and first two segments, to 80 km depth. It is
-    // 6 km thick, centred on the slab top. Without temperature or composition
-    // models it keeps those of the features above, and only marks the
-    // elements that get weakzone_plstrain.
+    // 12 km thick, centred on the slab top: about 5 times the cfg's
+    // weakzone_standard_deviation, so the Gaussian plastic strain
+    // (gwb_fault_is_gaussian) falls to 6% of its peak at the edges. Without
+    // temperature or composition models it keeps those of the features above,
+    // and only marks the elements that get plastic strain.
     {"model":"fault", "name":"plate interface", "max depth":80e3,
      "coordinates":[[250e3,-100e3],[250e3,100e3]], "dip point":[0,0],
-     "segments":[{"length":100e3, "thickness":[6e3], "angle":[0,25]},
-                 {"length":150e3, "thickness":[6e3], "angle":[25,45]}]}
+     "segments":[{"length":100e3, "thickness":[12e3], "angle":[0,25]},
+                 {"length":150e3, "thickness":[12e3], "angle":[25,45]}]}
   ]
 }
