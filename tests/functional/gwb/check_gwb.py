@@ -15,6 +15,12 @@ application, at the same points:
 It runs again with ic.gwb_fault_is_gaussian and weakzone_standard_deviation a
 quarter of the first fault's thickness: the same elements are weak, with values in (0,
 weakzone_plstrain] that vary across the fault.
+GWB's tag numbering: gwb.cxx finds the faults by copying GWB's rule (a
+feature's tag is its "tag" or, if empty, its model name; the distinct tags are
+numbered in order of first appearance), and so does fault_tags() here, so the
+checks above cannot see a change to that rule. A small world of boxes and
+vertical faults checks the numbers gwb-dat gives against values written below,
+and that DES makes weak the elements of every feature whose tag is a fault's.
 It then checks that a world without a fault (exit 12), a world leaving a marker
 without a material (exit 12), a missing world (exit 20) and a restart with
 is_restarting_weakzone (exit 11) stop the run, as do two faults of one name with
@@ -83,15 +89,17 @@ def expect(what, ok, detail=''):
         failures.append(what)
 
 
-def gwb_query(points, ncomp):
-    """gwb-dat temperature, compositions 0..ncomp-1 and tag at DES points (n x ndims)."""
+def gwb_query(points, ncomp, world_path=None):
+    """gwb-dat temperature, compositions 0..ncomp-1 and tag at DES points (n x ndims), in the
+    test's world or world_path."""
     with tempfile.NamedTemporaryFile('w', suffix='.dat', delete=False) as f:
         f.write('# dim = 3\n# compositions = %d\n' % ncomp)
         y = points[:, 1] if ndims == 3 else np.zeros(len(points))
         z = points[:, ndims - 1]
         np.savetxt(f, np.column_stack([points[:, 0], y, zlength + z, -z]), fmt='%.17g')
         name = f.name
-    out = subprocess.run([a.gwb_dat, world, name], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run([a.gwb_dat, world_path or world, name], capture_output=True, text=True,
+                         check=True).stdout
     os.unlink(name)
     v = np.array([l.split() for l in out.splitlines() if l and not l.startswith('#')], float)
     # columns: x y z d T vx vy vz c0 .. c(ncomp-1) tag
@@ -118,6 +126,39 @@ def fault_tags(world_json):
         if feat['model'] == 'fault':
             faults.add(tags.index(tag))
     return faults
+
+
+def tag_canary_world():
+    """Features at fixed places in the test's domain, with the tag index GWB must give each, the
+    canary of GWB's tag numbering: (feature, a DES point inside it, its tag index)."""
+    L, H = float(key('xlength')), zlength
+    Y = 1e7   # far past the domain along y
+    box = lambda x0, x1: [[x0, -Y], [x0, Y], [x1, Y], [x1, -Y]]
+    filled = {'temperature models': [{'model': 'uniform', 'temperature': 1573}],
+              'composition models': [{'model': 'uniform', 'compositions': [nmat - 1]}]}
+    vertical_fault = lambda name, x: {
+        'model': 'fault', 'name': name, 'min depth': 0, 'max depth': H / 2,
+        'coordinates': [[x, -Y], [x, Y]], 'dip point': [0, 0],
+        'segments': [{'length': H / 2, 'thickness': [20e3], 'angle': [90]}]}
+    features = [
+        (dict(model='mantle layer', name='mantle', **{'max depth': 2 * H}, coordinates=box(-L, 2 * L),
+              **filled), (L / 2, 0.9 * H), 0),          # no tag: its model name, first
+        (dict(model='continental plate', name='plate', tag='crust', **{'max depth': H / 2},
+              coordinates=box(-L, L / 4), **filled), (L / 8, H / 4), 1),
+        (vertical_fault('fault', L / 2), (L / 2, H / 4), 2),
+        (dict(model='oceanic plate', name='ocean', **{'max depth': H / 2}, coordinates=box(3 * L / 4, 2 * L),
+              **filled), (7 * L / 8, H / 4), 3),
+        (dict(vertical_fault('fault 2', 3 * L / 8), tag='crust'), (3 * L / 8, H / 4), 1),   # shares 'crust'
+    ]
+    world = {'version': '1.2', 'coordinate system': {'model': 'cartesian'},
+             'surface temperature': 273, 'potential mantle temperature': 1573,
+             'features': [f for f, _, _ in features]}
+    if ndims == 2:
+        world['cross section'] = [[0, 0], [L, 0]]
+    points = []
+    for _, (x, depth), _ in features:
+        points.append([x, float(key('ylength')) / 2, -depth] if ndims == 3 else [x, -depth])
+    return world, np.array(points), [f['name'] for f, _, _ in features], [t for _, _, t in features]
 
 
 tmp = tempfile.mkdtemp(prefix='gwb-check-')
@@ -177,6 +218,29 @@ try:
                    infault.any() and (pls[~infault] == 0).all() and (w > 0).all() and (w <= plstrain).all()
                    and w.min() < 0.5 * w.max(),
                    'values %.3g..%.3g' % (w.min(), w.max()) if infault.any() else 'none')
+
+        # GWB's tag numbering, against values written in tag_canary_world()
+        canary, points, names, want_tags = tag_canary_world()
+        write_json(canary, os.path.join(tmp, 'canary.wb'))
+        _, _, got = gwb_query(points, nmat, os.path.join(tmp, 'canary.wb'))
+        expect("GWB numbers the tags as gwb.cxx assumes (a tag is its model name if empty; distinct "
+               "tags in order of first appearance)", list(got) == want_tags,
+               ', '.join("%s: %d (want %d)" % (n, g, w) for n, g, w in zip(names, got, want_tags) if g != w))
+        code = run(tmp, os.path.join(tmp, 'canary.wb'))
+        expect('DES runs on the tag canary world', code == 0, 'exit %d' % code)
+        if code == 0:
+            d = Dynearthsol(os.path.join(tmp, key('modelname')))
+            xyz = d.read_field(0, 'coordinate')
+            conn = d.read_field(0, 'connectivity')
+            pls = d.read_field(0, 'plastic strain')
+            _, _, tag = gwb_query(xyz[conn].mean(axis=1), nmat, os.path.join(tmp, 'canary.wb'))
+            # the fault tags, written out: 2 ('fault') and 1 ('crust', shared by 'fault 2' and 'plate')
+            want = np.where(np.isin(tag, [1, 2]), plstrain, 0.0)
+            count = [int((tag == t).sum()) for t in range(4)]
+            bad = int((pls != want).sum())
+            expect('weak zone of the canary: the elements of tags 1 (plate, fault 2) and 2 (fault); '
+                   'elements by tag %s' % count,
+                   bad == 0 and count[1] > 0 and count[2] > 0, '%d elements differ' % bad)
 
         # error cases, each a world written next to the run
         nofault = dict(wj, features=[f for f in wj['features'] if f['model'] != 'fault'])
