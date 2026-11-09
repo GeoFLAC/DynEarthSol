@@ -20,7 +20,10 @@ feature's tag is its "tag" or, if empty, its model name; the distinct tags are
 numbered in order of first appearance), and so does fault_tags() here, so the
 checks above cannot see a change to that rule. A small world of boxes and
 vertical faults checks the numbers gwb-dat gives against values written below,
-and that DES makes weak the elements of every feature whose tag is a fault's.
+and that DES makes weak the elements of every feature whose tag is a fault's;
+with ic.gwb_fault_is_gaussian, each such element must hold weakzone_plstrain *
+exp(-d^2 / (2 sigma^2)), d the Euclidean distance from its centroid to the
+nearest fault surface, computed here from the faults' geometry.
 It then checks that a world without a fault (exit 12), a world leaving a marker
 without a material (exit 12), a missing world (exit 20) and a restart with
 is_restarting_weakzone (exit 11) stop the run, as do two faults of one name with
@@ -130,7 +133,9 @@ def fault_tags(world_json):
 
 def tag_canary_world():
     """Features at fixed places in the test's domain, with the tag index GWB must give each, the
-    canary of GWB's tag numbering: (feature, a DES point inside it, its tag index)."""
+    canary of GWB's tag numbering. Returns the world, a DES point inside each feature, the
+    features' names and tag indices, and the faults' surfaces as (x, depth of the bottom edge):
+    vertical planes x = const. from the surface down, along all y."""
     L, H = float(key('xlength')), zlength
     Y = 1e7   # far past the domain along y
     box = lambda x0, x1: [[x0, -Y], [x0, Y], [x1, Y], [x1, -Y]]
@@ -158,7 +163,9 @@ def tag_canary_world():
     points = []
     for _, (x, depth), _ in features:
         points.append([x, float(key('ylength')) / 2, -depth] if ndims == 3 else [x, -depth])
-    return world, np.array(points), [f['name'] for f, _, _ in features], [t for _, _, t in features]
+    faults = [(f['coordinates'][0][0], f['max depth']) for f, _, _ in features if f['model'] == 'fault']
+    return (world, np.array(points), [f['name'] for f, _, _ in features], [t for _, _, t in features],
+            faults)
 
 
 tmp = tempfile.mkdtemp(prefix='gwb-check-')
@@ -220,7 +227,7 @@ try:
                    'values %.3g..%.3g' % (w.min(), w.max()) if infault.any() else 'none')
 
         # GWB's tag numbering, against values written in tag_canary_world()
-        canary, points, names, want_tags = tag_canary_world()
+        canary, points, names, want_tags, canary_faults = tag_canary_world()
         write_json(canary, os.path.join(tmp, 'canary.wb'))
         _, _, got = gwb_query(points, nmat, os.path.join(tmp, 'canary.wb'))
         expect("GWB numbers the tags as gwb.cxx assumes (a tag is its model name if empty; distinct "
@@ -241,6 +248,31 @@ try:
             expect('weak zone of the canary: the elements of tags 1 (plate, fault 2) and 2 (fault); '
                    'elements by tag %s' % count,
                    bad == 0 and count[1] > 0 and count[2] > 0, '%d elements differ' % bad)
+
+        sigma = 5e3   # a quarter of the canary faults' 20 km thickness
+        code = run(tmp, os.path.join(tmp, 'canary.wb'),
+                   extra='\n[ic]\ngwb_fault_is_gaussian = yes\nweakzone_standard_deviation = %g\n' % sigma)
+        expect('DES runs on the canary with gwb_fault_is_gaussian', code == 0, 'exit %d' % code)
+        if code == 0:
+            d = Dynearthsol(os.path.join(tmp, key('modelname')))
+            xyz = d.read_field(0, 'coordinate')
+            cen = xyz[d.read_field(0, 'connectivity')].mean(axis=1)
+            pls = d.read_field(0, 'plastic strain')
+            _, _, tag = gwb_query(cen, nmat, os.path.join(tmp, 'canary.wb'))
+            depth = -cen[:, ndims - 1]
+            # Euclidean distance from each centroid to the nearest point of each fault surface
+            weight = np.zeros(len(cen))
+            for xf, bottom in canary_faults:
+                dist = np.hypot(cen[:, 0] - xf, np.maximum(depth - bottom, 0))
+                weight = np.maximum(weight, np.exp(-dist**2 / (2 * sigma**2)))
+            want = np.where(np.isin(tag, [1, 2]), plstrain * weight, 0.0)
+            err = np.abs(pls - want)
+            infault = np.isin(tag, [2])
+            expect('Gaussian weak zone of the canary: weakzone_plstrain * exp(-d^2 / 2 sigma^2), d the '
+                   'distance to the nearest fault surface (fault elements: %.3g..%.3g)'
+                   % (pls[infault].min(), pls[infault].max()),
+                   err.max() < 1e-6 * plstrain and pls[infault].min() < 0.5 * pls[infault].max(),
+                   'max difference %.3g' % err.max())
 
         # error cases, each a world written next to the run
         nofault = dict(wj, features=[f for f in wj['features'] if f['model'] != 'fault'])
