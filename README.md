@@ -358,8 +358,8 @@ The experimental [MPI backends](doc/mpi.md) use spatial partitions, compact
 local meshes and neighbor halo exchanges. They rebuild ownership after every MMG
 remesh. Rank zero retains a global mesh for MMG, marker management and output.
 RCB remains the default; `usemetis=1` adds an optional METIS partitioner. The guide
-covers correctness checks, OpenMP/MPI timings and isolated parallel-remeshing
-compatibility prototypes. The existing MMG policy and field transfer remain in use.
+covers correctness checks and OpenMP/MPI timing tools. The existing MMG policy
+and field transfer remain in use.
 Thermal, force and mass assembly support interior-node/halo overlap; per-rank
 profiles and controlled timing tools expose its overhead. `usempi=1 openacc=1`
 adds NVIDIA GPU timestep executables with one GPU per rank, pinned host staging

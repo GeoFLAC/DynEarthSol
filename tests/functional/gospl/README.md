@@ -96,5 +96,5 @@ output, full launcher wall time and worker-call timings are separate; overlappin
 timers must not be added. `--summarize-existing PATH` parses retained timing logs
 without rerunning models.
 
-Measured results and limitations are in the
-[completion report](../../../doc/validation-2026-11-10.md).
+Verification scope and limitations are in the
+[coupling guide](../../../doc/gospl-mpi-coupling.md#verification-scope).

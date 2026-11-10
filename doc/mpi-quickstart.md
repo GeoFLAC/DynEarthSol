@@ -1,7 +1,7 @@
 # Try CPU MPI, multiple GPUs and DES–GoSPL coupling
 
-These are small functional checks for reviewers. Run parallel commands inside
-your scheduler allocation, with enough slots for the requested ranks/threads.
+These are small functional checks for reviewers. On managed clusters, run parallel
+commands inside an allocation with enough slots for the requested ranks/threads.
 Use mounted storage for `REVIEW_WORK`. On offline clusters, populate dependencies
 and submodules on a connected machine before staging the checkout.
 
@@ -15,7 +15,7 @@ Homebrew can provide the dependencies with
 `brew install cmake libomp open-mpi hdf5`; install NumPy and h5py in your Python
 environment. The Makefile detects Homebrew's OpenMP and HDF5 paths. The CPU
 commands below were checked on Apple Silicon; see the
-[macOS results](validation-2026-11-10.md#native-macos-cpu-verification).
+[verification scope](mpi.md#verification-scope).
 
 Reserve at least six CPU slots for this driver: its empty-partition test uses
 six ranks and its hybrid check uses two ranks with two threads each.
@@ -151,4 +151,4 @@ must match the checkpoint; DES rank count may change.
 
 For audited velocity/elevation transfers, time triggering, injected errors and
 the broader GPU matrix, see the [functional test guide](../tests/functional/gospl/README.md).
-Measured scope and results are in the [completion report](validation-2026-11-10.md).
+Verification scope and limits are in the [coupling guide](gospl-mpi-coupling.md#verification-scope).

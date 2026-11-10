@@ -52,9 +52,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   state after remeshing to prevent out-of-bounds MPI packing/collection.
   Paired CPU benchmarks compare RCB/METIS total runtime, partitioning cost and
   halo traffic in 2D/3D, with exact parent-output checks and timing figures.
-- Isolated ParMmg2D/ParMmg compatibility tools and a test-only capture/replay of
-  the existing DES MMG inputs. Tested parallel remeshers do not reliably preserve
-  DES required entities; these tools do not replace the production remeshing path.
 - A scientific-example reproduction driver checks complete serial/MPI fields,
   checkpoints and monitors. A separate current-format Maxwell case checks the
   analytical constitutive response in 2D and 3D without the historical source patch.

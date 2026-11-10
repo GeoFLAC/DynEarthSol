@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check complete GPU MPI timesteps against CPU outputs and one-GPU outputs.
 
-Run through qsub on godo-s. Other GPU hosts may supply their own launcher. Full
+Use the site's scheduler allocation and compatible MPI launcher. Full
 physical HDF5 arrays are checked, including vectors/tensors and checkpoints;
 integer data and topology must be exact, floating data finite within the normal
 DES 1e-8 relative-field criterion. Timings here are not scaling measurements.

@@ -53,10 +53,9 @@ For DES/GoSPL MPI coupling with independent rank counts, see the
 Use an NVHPC-backed MPI wrapper and the architecture of the target device.
 Initialization, MMG and field/marker remapping remain root CPU operations;
 compact timestep kernels and halo pack/unpack run on GPUs with pinned host MPI
-staging. Local ranks must select distinct physical GPU UUIDs. Host intranet-only
-dependencies must be staged offline, and multi-CPU builds/runs on
-godo/godo-s/earthsim-01 must be submitted through `qsub`. Model workspaces on
-earthsim-01/nemex-gpu/kersti belong under mounted `/data/slee91/` storage.
+staging. Local ranks must select distinct physical GPU UUIDs. Stage dependencies
+before using offline hosts, and use an allocation on scheduler-managed hosts.
+Keep model workspaces on the site's designated storage.
 
 Inside a single-host Grid Engine allocation, with both A100s visible:
 
@@ -318,23 +317,14 @@ uses existing `halo-2d`/`halo-3d` binaries on a host without a compiler; retain 
 producer's build report and verify that executable hashes match. Compatible MPI,
 CUDA and NVHPC runtime libraries must already be available on the target.
 
-On 2026-11-09, the 2D/3D checks passed on godo-s's two A100s (1/2 ranks),
-nemex-gpu's H100 PCIe and H100 NVL (1/2 ranks), and kersti's three A6000s
-(1/2/3 ranks). UUID checks confirmed distinct physical devices. The tested H100
-CUDA IPC configuration returned incorrect values for larger messages; NVIDIA's
-HPC-X runtime passed with `UCX_TLS=tcp,sm,self,cuda_copy`, which stages transfers
-through host memory. Kersti used the same executable hashes, compiled with
-`-gpu=cc86,cc90,nordc`. The A100 checks used NVHPC 21.3 and its Open MPI 3.1.5;
-H100/A6000 checks used NVHPC 25.7 and HPC-X Open MPI 4.1.7rc1.
-
-These verify GPU halo infrastructure. Full GPU MPI timesteps and CPU MMG/device
-state transitions still require integration. GPU IPC, GPUDirect and NVLink routing
-are not established by the passing staged transfers. No GPU speedup is claimed.
+These checks verify halo infrastructure. Use the full GPU MPI driver above for
+timestep and CPU MMG/device-state transitions. Staged transfers do not establish
+GPU IPC, GPUDirect or NVLink routing, and passing checks do not imply speedup.
 
 ## CPU correctness through Grid Engine
 
-On godo, godo-s and earthsim-01, submit multi-CPU work through `qsub`. This includes
-MPI and multi-threaded OpenMP on one node. `launch_sge.py` requires `JOB_ID`,
+On Grid Engine clusters, submit multi-CPU work through `qsub`, including MPI
+and multi-threaded OpenMP on one node. `launch_sge.py` requires `JOB_ID`,
 `NSLOTS` and `PE_HOSTFILE`, verifies the slot total, and lets Open MPI's Grid Engine
 support select hosts and start tasks. It refuses rank/thread counts exceeding the
 allocation and audits each worker's actual host, local rank count, job ID and
@@ -355,7 +345,7 @@ python3 /path/to/DynEarthSol/tests/functional/mpi/run_mpi.py \
   --workdir /shared-path/validation
 ```
 
-On godo-s, submit that script with eight slots, for example
+Submit that script with eight slots using the site's queue and PE, for example
 `qsub -S /bin/bash -q all.q -pe smp 8 -l h_rt=00:20:00 job.sh`.
 The eight-slot allocation accommodates the driver's six-rank empty-partition
 case and two-rank/two-thread cases. Do not reduce slots without accounting for
@@ -370,60 +360,32 @@ python3 /path/to/DynEarthSol/tests/functional/mpi/run_sge_matrix.py \
   --ranks 2 4 --workdir /shared-path/multi-node-validation
 ```
 
-On godo, `qsub -S /bin/bash -q all.q -pe ompi_pf 4 -l h_rt=00:15:00 job.sh`
-uses the site's round-robin PE to request slots across compute nodes. The driver
-requires at least two actual allocated nodes. Its 24 comparisons cover 2D/3D
+A multi-node PE, for example
+`qsub -S /bin/bash -q all.q -pe ompi_pf 4 -l h_rt=00:15:00 job.sh`,
+requests slots across compute nodes. Replace queue and PE names for the site.
+The driver requires at least two actual allocated nodes. Its 24 comparisons cover 2D/3D
 fixed meshes, forced MMG remeshing and restart, with halo overlap off/on. Fresh
 frames/checkpoints 0–4 must match the parent exactly. Restart frames 3/4 must
 reproduce uninterrupted physics, and every checkpoint field must match an
 equivalent parent serial restart. The parent also reinitializes output scheduling
 on restart, so comparing restart checkpoints to an uninterrupted checkpoint is
 not a valid equality criterion; no checkpoint field is omitted to hide this.
-In the tested parent, the only difference was one ULP in `reference_frame_time`
-at continuation frame 3; frame 4 checkpoints were identical again. Saved physical
-frames were exact throughout the checked continuation.
 
 Retain the job ID, `PE_HOSTFILE`, job log, `qacct -j JOB_ID` and comparison JSON.
 The host/slot budget checks can be exercised locally without MPI or a scheduler:
 `python3 tests/functional/mpi/test_launch_sge.py`.
 
-The compute nodes are offline. Stage interpreters and binary-compatible wheels
-from the workstation when system Python is missing. Stage a serial HDF5 build
-for an Open MPI solver when the site's installed HDF5 links Intel MPI. Compile
-dependencies and solver variants inside a scheduler allocation as well.
-Earthsim-01's scheduler was unavailable on 2026-11-09: qmaster port 6444 refused
-connections after a logged controlled shutdown. Its parallel verification stays
-pending until the scheduler is restored.
-
-### Scheduler verification, 2026-11-09
-
-Godo-s job 834 built serial HDF5 1.12.2 and parent/changed serial and MPI solvers
-in both dimensions using eight allocated slots, with no compute-host downloads.
-Job 835 passed all 78 CPU comparisons at 1/2/3/4/6/8 ranks, including hybrid
-OpenMP, and its 79 retained launch audits all matched the eight-slot allocation.
-Job 833 passed the four A100 halo checks at 1/2 ranks in 2D/3D using two slots.
-
-Godo job 8614 passed all 24 multi-node comparisons and both standard parent
-`make set` / MPI `make cmp` checks. Its four slots were allocated on
-`godo_node20`, `godo_node21`, `godo_node34` and `godo_node44`; the two-/four-rank
-tests used two/four actual nodes, verified by the worker audits. All successful
-validation jobs have retained `qacct` records with zero failure and exit status.
-Compute nodes without Python used a staged Python 3.6 interpreter, NumPy 1.19.5,
-h5py 3.1.0 and `cached_property` 1.5.2 wheels prepared offline.
-
-Reports, batch scripts, dependency hashes, accounting records and the parent
-restart control are retained in `benchmarks-cores/mpi-sge.local/`. Full inputs and
-snapshots remain under `/home/slee91/des-mpi-sge-20261109/` on the shared cluster
-filesystem. These are correctness checks; no scaling or GPU speedup is inferred.
+On offline compute nodes, stage interpreters and compatible dependencies before
+submission. Match dependency MPI libraries to the solver's MPI implementation.
+Compile and run inside the scheduler allocation when required by the site.
 
 ## CPU correctness across SSH hosts
 
 `launch_cluster.py` plugs into the existing correctness driver when nodes have
 separate working directories and do not require scheduler submission:
 
-Use `launch_sge.py` above on godo, godo-s and earthsim-01. A static SSH host list
-is not a resource allocation. If the scheduler is unavailable, retain prepared
-jobs for later submission instead of running them directly.
+Use `launch_sge.py` above on Grid Engine clusters. A static SSH host list is not
+a resource allocation; follow the site's scheduler requirements.
 
 ```sh
 python tests/functional/mpi/run_mpi.py \
@@ -437,11 +399,9 @@ python tests/functional/mpi/run_mpi.py \
 Install the solver, this launcher, input assets and a compatible MPI/runtime at
 identical absolute paths on every node first; this does not require a shared
 filesystem. SSH must authenticate noninteractively and verify pinned host keys.
-Godo, godo-s, nemex-gpu, earthsim-01 and kersti are intranet machines without
-internet access. Download sources, submodules and any missing dependency wheels
-on the connected workstation, then transfer the complete bundle. Builds and
-checks on these machines must use installed or staged dependencies without
-network downloads or package-index access.
+For offline hosts, prepare sources, submodules and binary-compatible dependencies
+on a connected workstation, then transfer the complete bundle before building
+or running checks.
 `--known-hosts FILE` selects an existing task-specific key file without changing
 the user's SSH configuration. A forwarded temporary agent can supply SSH
 authentication without copying private keys to workers.
@@ -454,119 +414,3 @@ status. Missing/duplicate ranks or fewer than two actual nodes fail the check.
 `--min-nodes` changes that requirement. `--map-by seq` assigns contiguous groups
 in the supplied host order; the default maps ranks by node. CPU masks are recorded
 without pinning, so these runs are correctness checks, not scaling benchmarks.
-
-The 2026-11-09 nemex-gpu/earthsim-01 matrix passed all 54 physical comparisons
-at 2/3/6 ranks, including two-thread hybrid runs, 2D/3D remeshing, restart,
-hydraulics, averaged fields and empty partitions. All checked physical datasets
-were bit-exact to parent `cce59ab`. Error termination and solver help also passed.
-Parent `make set` / changed six-rank `make cmp` passed in both dimensions.
-The working configuration launched from earthsim-01, used sequential placement
-with nemex-gpu first, selected `ens6f0`, and used Open MPI's `ob1`/TCP transport.
-Other launch directions and the kersti cross-subnet pair had TCP connectivity
-failures; SSH connectivity alone does not establish MPI connectivity. Raw reports
-and logs are retained in `benchmarks-cores/mpi-cluster.local/` and the isolated
-remote `/tmp/des-mpi-20261109/` directories.
-
-Those historical checks were launched directly before the user specified the
-`qsub` requirement. They establish the recorded numerical agreement but are not
-scheduler-submitted validation; future parallel runs must follow the requirement
-above.
-
-Godo/godo-s also passed four-rank 2D/3D parent `make set` / MPI `make cmp`
-comparisons using Open MPI 1.8.7 with `ob1`/TCP over `ib0` (IP over InfiniBand).
-Those builds used native DES binary output (`hdf5=0`): the installed HDF5 was
-linked to Intel MPI, so it was not mixed with the Open MPI solver. Ordinary
-Ethernet/default-interface attempts stalled; selecting `ib0` completed the run.
-
-## Parallel-remeshing compatibility prototypes
-
-These tools run outside the DES timestep backend. Production MMG, Chase's metric
-and freezing rules, quality gates, interpolation and marker remapping remain in
-place. METIS partitioning is independently usable with `make usempi=1 usemetis=1`
-and `DES_MPI_PARTITIONER=metis`; see [the guide](../../../doc/mpi.md).
-
-`build_remeshers.py` builds pinned ParMmg2D/ParMmg sources and their selected MMG
-revisions under a supplied work directory. It never installs globally. Requirements:
-C/C++ compilers, Git, CMake, MPI and METIS 5. Example with a local METIS install:
-
-```sh
-python tests/functional/mpi/build_remeshers.py \
-  --workdir /tmp/des-remeshers --metis-prefix /path/to/metis
-```
-
-The pinned revisions are in the script and `build-manifest.json` records revisions,
-commands, executable hashes and source-patch hashes. Build logs are retained.
-The tested 2D revision uses MMG 5.7 and the 3D revision uses MMG 5.8. A separate
-`--patch-2d-merge` option applies `parmmg2d-merge.patch`: a prototype fix for
-one-based merge indexing and copying scalar/tensor metrics into centralized output.
-It does not repair boundary labels or required-entity semantics. Use a separate
-workdir when comparing unmodified and patched libraries. No library is bundled,
-and no upstream issue/PR is created by these tools.
-
-For a first external compatibility matrix using existing DES HDF5 snapshots:
-
-```sh
-python tests/functional/mpi/remesh_prototype.py \
-  --input2d /path/to/2d/result.save.000000.vtkhdf \
-  --parmmg2d /tmp/des-remeshers/build-2d/bin/parmmg2d_O3 \
-  --mmg2d /path/to/mmg2d_O3 \
-  --input3d /path/to/3d/result.save.000000.vtkhdf \
-  --parmmg3d /tmp/des-remeshers/build-3d/bin/parmmg_O3 \
-  --mmg3d /path/to/mmg3d_O3 --ranks 2 3 4 --cycles 2 \
-  --workdir /tmp/des-remeshing-checks
-```
-
-This matrix constructs diagnostic scalar/tensor metrics and an optional frozen
-cell. It checks signed element validity, area/volume, boundary references, exported
-metric finiteness/positive definiteness, and required vertices/cells. Diagnostic
-transfer verifies affine nodal interpolation and relocates markers while retaining
-identity/material/history. Cell fields are sampled at centroids: this is **not
-conservative DES field remapping**. Integral drift is reported, not treated as
-proof of conservation. `--restore-boundaries2d` explicitly enables a prototype
-geometric label adapter within a recorded distance tolerance; it must not be
-confused with native label preservation. Results identify patched executable hashes.
-
-For the stronger test, capture the **actual** prepared MMG inputs. Build serial
-2D/3D DES objects with MMG/HDF5 in an existing build checkout, then relink them with
-the test-only capture shim (Linux/GNU linker):
-
-```sh
-python tests/functional/mpi/build_capture.py \
-  --build-dir /path/to/built/DynEarthSol --output /tmp/des-capture
-mkdir -p /tmp/des-captured-inputs
-DES_MMG_CAPTURE=/tmp/des-captured-inputs OMP_NUM_THREADS=1 \
-  /tmp/des-capture/dynearthsol2d.capture model.cfg
-```
-
-`capture_mmg.c` wraps the MMG entry point and calls the original function. It
-writes each prepared input mesh/metric, equivalent CLI controls and original MMG
-output to a fresh `call-XXXXXX` directory. `--wrap` also works with static MMG;
-LD_PRELOAD only works with dynamically linked MMG. Capture relinking reads the
-real Makefile object/library settings and optional MMG VTK dependencies. Compiler
-and dependency settings must match the prebuilt objects. Capture runs were checked
-against the parent: all physical frames were exact in 2D/3D. The helper reproduced
-all captured mesh/metric files exactly.
-
-Replay selected calls without constructing another metric or freezing policy:
-
-```sh
-python tests/functional/mpi/replay_mmg.py \
-  --captures /tmp/des-captured-inputs/call-XXXXXX \
-  --mmg2d /path/to/mmg2d_O3 \
-  --parmmg2d /tmp/des-remeshers/build-2d/bin/parmmg2d_O3 \
-  --workdir /tmp/des-mmg-replay
-```
-
-Supply the 3D pair too when replaying 3D captures. The replay retains commands,
-logs, output meshes, missing required-entity counts and `results.json`. A failed
-compatibility check exits nonzero, even when the remesher returned success.
-`completed: true` means the matrix finished; `all_passed` reports its outcome.
-The captured inputs include the existing SDK state; different remeshers can apply
-different internal policies and are not expected to produce identical meshes.
-
-The tested parallel CLIs changed required entities on actual DES inputs. ParMmg2D
-also changed boundary labels and had invalid native metric exports; serial MMG
-controls preserved the tested constraints. Therefore these prototypes do not enable
-parallel remeshing in production. `plot_prototypes.py --help` generates compatibility,
-boundary-label, ownership and halo figures from retained results; these are not
-large-machine or GPU performance benchmarks.
