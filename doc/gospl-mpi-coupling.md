@@ -145,11 +145,10 @@ nine complete comparisons bit-exact. Retain the GoSPL rank count and partition
 at restart. Mesh-independent sampling supports one retained CPU/GPU remeshing
 case; it is not a universal remeshing tolerance.
 
-In one fixed 204,800-tetrahedron model, four DES OpenMP threads plus one GoSPL
-rank were faster end to end than one or three A6000 GPUs. Choose resources using
-full launcher wall time, including initialization and output. The tested PETSc
-build computes on CPUs; GPUs accelerate DES mechanics. Reserve a separate CPU
-for the worker and set `--worker-env OMP_NUM_THREADS=1` and single-threaded BLAS.
+The tested PETSc build computes on CPUs; GPUs accelerate DES mechanics. Reserve
+a separate CPU for the worker and set `--worker-env OMP_NUM_THREADS=1` and
+single-threaded BLAS. Choose resources using complete launcher wall time,
+including initialization, output and both MPI worlds' resource requirements.
 
 Reproduce with the [quickstart](mpi-quickstart.md) and
 [functional drivers](../tests/functional/gospl/README.md). Keep detailed run logs,

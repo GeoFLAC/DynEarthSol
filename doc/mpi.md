@@ -125,19 +125,11 @@ is a proxy: actual halo bytes also depend on node ownership and exchanged fields
 METIS does not currently use measured constitutive/marker weights or migrate
 incrementally. It is rebuilt after each MMG remesh, as RCB is.
 
-For a runtime comparison, use `benchmark_partitioners.py` and
-`plot_partitioners.py` as described in the
-[test guide](../tests/functional/mpi/README.md#rcb-versus-metis). Both methods use
-the same MPI executable, one thread per rank, identical verified CPU masks,
-warmups and randomized paired rounds. Every saved field/checkpoint is checked
-against the parent. Reports distinguish total simulation time, complete launcher
-walltime, partition rebuild cost and logical halo payload. A smaller halo alone
-does not establish a faster run, and local shared-memory results do not predict
-multi-server network performance.
-
-RCB remains the default. Existing paired checks found no consistent end-to-end
-advantage for METIS. A smaller halo alone does not justify switching partitioners;
-measure partition rebuilds, initialization and timestep costs on the target model.
+Use the same parent/MPI correctness checks for each partitioner, selecting
+`DES_MPI_PARTITIONER=rcb` or `metis` before launching the
+[regression driver](../tests/functional/mpi/README.md). RCB remains the default.
+A smaller halo alone does not establish a faster run; include partition rebuilds,
+initialization, output and timestep costs when assessing the target workload.
 
 ### Default geometric partitioning
 
@@ -297,80 +289,19 @@ See the [coupling scope](gospl-mpi-coupling.md#verification-scope) for GoSPL.
 Keep per-run logs, hashes, reports and hardware notes under an ignored `*.local/`
 directory. Version reusable commands, acceptance criteria and scoped conclusions.
 
-## OpenMP versus MPI on one laptop
+## Performance assessment
 
-Use equal CPU budgets: N OpenMP threads versus N MPI ranks with one thread each.
-The following Linux/Open MPI driver pins the OpenMP process to the first N allowed
-CPU IDs and each MPI rank to one of those same IDs. It records and validates actual
-CPU masks and runtime thread counts, warms every variant, interleaves randomized
-measured rounds, and checks physical outputs against the one-thread parent.
+Compare equal CPU budgets and retain the same geometry, initial state and physical
+outputs. Measure complete wall time including initialization, remeshing, output
+and MPI startup. Use warmups and repeated runs without competing jobs; record CPU
+placement and GPU identities. Local shared-memory measurements do not predict
+multi-node or adaptive-model speedup. Keep workload-specific measurement and
+plotting scripts with their results under ignored `*.local/` directories.
 
-```sh
-python tests/functional/mpi/benchmark_scaling.py \
-  --serial /path/to/parent/dynearthsol2d --mpi ./dynearthsol2d.mpi \
-  --workers 1 2 3 4 6 8 --repeats 3 --workdir /tmp/des-scaling
-```
-
-No competing builds/simulations should run during timing. The fixed-mesh inputs
-derive from core-complex/MMG, with 1,000 steps at 500 m / 125 m resolution.
-Reports retain simulation time and complete walltime including MPI launch.
-These short cases isolate timestep scaling; they do not predict complete adaptive
-run performance. On hybrid CPUs, Linux/WSL CPU IDs do not necessarily expose the
-physical P/E/LP core type. Affinity gives repeatable CPU sets, not a guarantee of
-identical physical cores or stable laptop clocks.
-
-## Communication overhead
-
-`benchmark_overhead.py` compares two MPI executables with blocking and overlap
-modes using the same CPU masks, one thread per rank, warmups and randomized
-paired rounds. See the [timing commands](../tests/functional/mpi/README.md#mpi-overhead-measurements).
-Overlap can help larger fixed meshes and cost time on small cases. Include root
-collections and adaptive mesh management in end-to-end measurements. Rank timings
-and halo payloads diagnose bottlenecks; neither alone establishes a speedup.
-
-## Accelerator preparation and hardware choice
-
-`mpi_transport.hpp` accepts contiguous buffers and never dereferences their
-pointers. The CPU solver uses host buffers. The standalone transport test exercises
-unequal and asymmetric zero-length messages with the same helper:
-
-```sh
-mpicxx -std=c++17 -O2 -DOMPI_SKIP_MPICXX=1 -I. -Inanoflann/include \
-  tests/functional/mpi/transport_smoke.cxx -o /tmp/des-transport
-mpiexec -n 4 /tmp/des-transport
-```
-
-A `-DDES_TEST_CUDA` build additionally needs CUDA headers/runtime libraries and
-CUDA-aware Open MPI. It selects one GPU per local rank, rejects duplicate device
-UUIDs, checks `MPIX_Query_cuda_support`, and compares received device-buffer data.
-This transport harness does not establish full-solver correctness, NVLink routing
-or GPUDirect. The query checks MPI capability, not the actual path taken; see the
-[Open MPI capability API](https://docs.open-mpi.org/en/main/man-openmpi/man3/MPIX_Query_cuda_support.3.html).
-
-The NVIDIA solver backend packs/unpacks on GPUs, synchronizes producers before
-MPI and consumers after MPI, and initially uses one rank per GPU with pinned host
-staging. A separate CUDA-aware transport may use NVLink/NVSwitch or
-PCIe depending on hardware and transport; verify the path with profiling. Noncontiguous
-GPU MPI datatypes can be expensive; see [Open MPI CUDA support](https://docs.open-mpi.org/en/main/tuning-apps/accelerators/cuda.html).
-CPU MMG uses a collect/remesh/repartition/upload stage.
-
-The CPU solver and `accelerator_halo.cxx` now share the exact SoA pack/unpack
-indexing in `mpi_halo_kernels.hpp`. The harness uses OpenACC allocations and
-synchronous device kernels, then passes contiguous device addresses to the same
-MPI post/wait helpers. It covers irregular rows, scalar/vector/tensor widths,
-asymmetric empty messages and reusable buffers in both dimensions. Explicit host
-mode passed at 1/2/3/4/6/8 ranks. Host success verifies indexing and transport only.
-Full solver verification is separate from halo checks; passing transport checks
-alone does not establish solver correctness, performance or NVLink routing. See
-the [accelerator test commands](../tests/functional/mpi/README.md#accelerator-halo-checks).
-
-The existing OpenACC build targets NVIDIA GPUs. Other accelerators need a
-supported backend and separate kernel/solver validation.
-
-Full timestep and MMG-transition checks accompany the GPU backend. Compare
-complete scientific runs, including MMG, initialization and output, and retain
-CPU comparisons separately from one-GPU/multi-GPU comparisons. Passing halo or
-short solver checks does not predict multi-GPU solver speedup.
+The [halo checks](../tests/functional/mpi/README.md#accelerator-halo-checks) exercise
+the shared SoA pack/unpack indexing and MPI post/wait helpers, including irregular
+rows and empty messages. They do not establish full-solver correctness or NVLink
+routing. Use the full solver CPU/GPU checks for timestep and MMG transitions.
 
 ## Remeshing limits
 

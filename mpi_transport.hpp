@@ -22,7 +22,4 @@ inline int mpi_post_buffers(const MpiPeerBuffer* peers,int n,int tag,MPI_Request
 inline void mpi_finish_buffers(int pending,MPI_Request* requests) {
     MPI_Waitall(pending,requests,MPI_STATUSES_IGNORE);
 }
-inline void mpi_exchange_buffers(const MpiPeerBuffer* peers,int n,int tag,MPI_Request* requests) {
-    mpi_finish_buffers(mpi_post_buffers(peers,n,tag,requests),requests);
-}
 #endif

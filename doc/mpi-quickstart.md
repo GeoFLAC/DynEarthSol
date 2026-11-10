@@ -83,8 +83,8 @@ two-rank cases. For one available GPU use `--ranks 1`. For a direct model run,
 use `mpiexec -n 2 /path/to/dynearthsol3d.mpi.gpu model.cfg`.
 
 Halos use pinned host staging. Initialization, MMG, remapping and global output
-remain on the root CPU. GPU count does not imply speedup; the measured small
-coupled workload favored CPU OpenMP. See [architecture and limitations](mpi.md).
+remain on the root CPU. GPU count does not imply speedup; measure the complete
+model's wall time. See [architecture and limitations](mpi.md).
 
 ## Independent GoSPL ranks and continuation
 

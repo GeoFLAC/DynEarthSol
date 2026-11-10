@@ -1,6 +1,6 @@
 # MPI validation and example reproduction
 
-`run_mpi.py` runs short correctness checks and optional repeatable timings.
+`run_mpi.py` runs short correctness checks.
 `reproduce_examples.py` runs the existing scientific examples and retains their
 configurations, checks every saved physical dataset/checkpoint against a parent
 serial executable, compares complete monitor CSV records, and optionally plots
@@ -44,6 +44,7 @@ overlays the checked serial/MPI strain histories; it is a correctness figure,
 not a speedup measurement. `--threads 2` checks the hybrid execution path;
 ADR restart can lose byte equality with multiple OpenMP threads, as documented
 by upstream, so that failure must not be hidden by relaxing the restart checker.
+
 ## Full NVIDIA GPU MPI checks
 
 For DES/GoSPL MPI coupling with independent rank counts, see the
@@ -86,16 +87,6 @@ against GPU MPI and records that reference backend explicitly. Keep both reports
 host compiler differences can change the initial Triangle mesh, and adaptive
 CPU/GPU trajectories can diverge. Never relabel a failed CPU comparison as passed
 because the GPU MPI comparison succeeds.
-
-`benchmark_devices.py --variants variants.json --workdir results` compares
-OpenMP, CPU MPI and GPU MPI on an allocated single host. Variant records specify
-`name`, `kind` (`openmp`, `mpi`, `gpu`), `workers`, `executable`, `launcher` and
-`env`, keeping different MPI ABIs and library paths separate. All variants start
-from the same CPU frame-zero checkpoint, giving identical geometry and fields.
-One warmup and at least three randomized measured rounds are checked in full.
-Actual CPU affinities, GPU UUIDs, executable/checkpoint hashes and phase/MPI
-timings are retained. Total simulation time includes restart initialization and
-output. Overlapping operation/communication timers are not additive phases.
 
 ## Scientific reproductions
 
@@ -181,105 +172,22 @@ with `maxwell-current.cfg` copied there under a local case name: run `make set`
 with the parent binary, then `make cmp FRAME=50` with the changed MPI binary.
 Perform both 2D and 3D comparisons; see `AGENTS.md` and `CONTRIBUTING.md`.
 
-## Spatial partitions and CPU scaling
+## Partition and overlap checks
 
-The MPI backend now stores compact owned/ghost meshes on workers, exchanges
-neighbor halos and rebuilds balanced element ownership after every MMG remesh.
-Rank zero still owns global management state. See [the architecture guide](../../../doc/mpi.md)
-for central operations, load metrics, trace figures and the unimplemented GPU path.
+Workers keep compact owned/ghost meshes and exchange neighbor halos; root retains
+global management state. Ownership is rebuilt after every MMG remesh. See the
+[architecture guide](../../../doc/mpi.md) for central operations and scaling limits.
 
-`run_mpi.py` defaults to 1, 2, 3, 4, 6 and 8 ranks and also exercises hybrid
-OpenMP, averaged fields across remeshing and empty partitions. It retains every
-physical field comparison. To compare equal CPU budgets with verified Linux
-CPU affinity, warmups and three interleaved measured rounds:
-
-```sh
-python tests/functional/mpi/benchmark_scaling.py \
-  --serial /path/to/parent/dynearthsol2d --mpi ./dynearthsol2d.mpi \
-  --workdir /tmp/des-scaling
-python tests/functional/mpi/plot_scaling.py /tmp/des-scaling/scaling-XXXX/results.json \
-  --output /tmp/des-scaling-figures
-```
-
-`pin_cpu.py` is the benchmark's process wrapper. Each MPI rank gets one allowed
-CPU ID and one OpenMP thread; the OpenMP process gets the same N allowed IDs.
-CPU masks, thread counts, commands, sample times, executable hashes and physical
-comparison reports are retained. Read the hardware/clock limitations in the guide;
-short fixed-mesh timings do not establish full adaptive simulation performance.
+`run_mpi.py` defaults to ranks 1/2/3/4/6/8 and also checks hybrid OpenMP,
+averaging across remeshing and empty partitions. Repeat the same physical-field
+checks with `DES_MPI_PARTITIONER=metis` using a METIS-enabled executable.
+`DES_MPI_OVERLAP=0` and `1` select blocking and overlapped halo assembly; use the
+same reference and inputs for both. No extra simulation cfg parameter is needed.
 
 `plot_partitions.py RUN [RUN ...] --output FIGURES` reads actual partition traces
-and matching `run.log` files. It checks ownership against per-rank counts before
-drawing 2D maps and load/ghost bars. `transport_smoke.cxx` exercises the shared
-contiguous-buffer transport with unequal and zero-length messages. Its optional
-CUDA mode requires a separate CUDA-aware MPI system; CPU success does not validate
-GPU execution or NVLink routing.
-
-## MPI overhead measurements
-
-### RCB versus METIS
-
-Use the same METIS-enabled executable for both methods, with parent executables
-for physical reference outputs:
-
-```sh
-python tests/functional/mpi/benchmark_partitioners.py \
-  --serial /path/to/parent/dynearthsol2d --mpi ./dynearthsol2d.mpi \
-  --serial3d /path/to/parent/dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
-  --ranks 3 4 --repeats 5 --workdir /tmp/des-partitioners
-python tests/functional/mpi/plot_partitioners.py \
-  /tmp/des-partitioners/partitioners-XXXX/results.json --output /tmp/des-partitioner-figures
-```
-
-The default six cases cover small/large fixed meshes and repeated MMG remeshing
-in both dimensions. `--cases` can select a subset; omit the 3D executables only
-when selecting exclusively 2D cases. `--ranks` also accepts other local process
-counts. At least three repeats are required. Use Linux/Open MPI with enough
-allowed CPU IDs; run without competing builds or simulations.
-
-Each method is warmed up. Within each round, process-count order and method
-order within each pair are randomized. Both methods use identical pinned CPU
-IDs, one OpenMP thread per process and enabled halo overlap. Actual CPU masks,
-thread count and requested/actual partitioner names are verified. Every saved
-frame and checkpoint in every run must be finite and exactly match the parent;
-remesh and partition-generation counts must match too. A failed/incomplete run
-retains `completed: false` and cannot be plotted as a successful benchmark.
-
-Reports retain total simulation time, complete launcher walltime, all partition
-rebuild times, communication timers, logical halo/root payloads, per-rank loads,
-paired sample IDs, commands and source/executable hashes. Partition time includes
-owner/halo-map construction and is already included in total simulation time.
-The plotter also extracts initialization, timestep-computation and output times
-from the retained solver logs, then writes a standalone `timings.json` with those
-phases for later plotting without the original run directories. Initialization
-can dominate short runs, so inspect timestep time as well as the complete run.
-The communication timer on rank zero includes packing, MPI calls and waiting;
-it is not an isolated network-latency measurement. Counts/bytes can be compared
-directly, while elapsed time also depends on scheduling, imbalance and cache
-behavior. The plotter reports medians, full sample ranges and how many paired
-rounds each method won. Local shared-memory timings do not predict multi-server
-network performance or establish that a custom RCB refinement is worthwhile.
-
-### Before/after halo optimizations
-
-Compare the preceding MPI executable with the updated executable in blocking and
-overlap modes, using the same pinned CPU IDs and three interleaved measured rounds:
-
-```sh
-python tests/functional/mpi/benchmark_overhead.py \
-  --before /path/to/previous/dynearthsol2d.mpi --after ./dynearthsol2d.mpi \
-  --serial /path/to/parent/dynearthsol2d --workers 3 4 --repeats 3 \
-  --workdir /tmp/des-overhead
-python tests/functional/mpi/plot_overhead.py /tmp/des-overhead/overhead-XXXX/results.json \
-  --output /tmp/des-overhead-figures
-```
-
-Do not run other simulations/builds during timing. The fixed-mesh cases use
-4,001 and 64,177 elements for 1,000 steps; the small adaptive case uses 196 steps.
-Every measured run checks all saved physical fields against the parent. Reports
-include executable hashes, validated affinity, sample ranges, logical transfer
-payloads, and per-rank operation/communication profiles. Seconds outside timed
-communication include scheduling and other overhead, so they are not pure compute
-times. A short test with balanced element counts does not prove balanced runtime.
+and matching `run.log` files, checks unique complete ownership against per-rank
+counts, and draws 2D ownership maps and load/ghost bars. See
+[trace generation](../../../doc/mpi.md#inspecting-actual-partitions).
 
 ## Accelerator halo checks
 

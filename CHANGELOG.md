@@ -33,25 +33,23 @@ For a release, the full auto-generated list of merged pull requests is in its
   global mesh for MMG, phase changes, marker/surface management and output.
   Both PT relaxation methods, including initial equilibrium and failure rollback,
   use the distributed compute meshes and collective convergence checks.
-  CPU transport checks and pinned OpenMP/MPI scaling drivers accompany the backend;
+  CPU halo and solver regression checks accompany the backend;
   see `doc/mpi.md`.
 - Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
   timestep fields with one device per rank and pinned host staging for halos.
   Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
-  checkpoint and restart checks accompany separate CPU/GPU scaling tools;
+  checkpoint and restart checks accompany the backend;
   scientific equivalence and speedup must be verified for each workload.
 - MPI interior-node/halo overlap for thermal, force and mass assembly, selectable
   with `DES_MPI_OVERLAP=0/1`. Mesh checks collect geometry only, and inactive
   serpentinization/monitor paths avoid unused collections. Per-rank operation and
-  communication profiles accompany controlled before/after timing figures.
+  communication profiles expose rank loads and halo traffic.
   Shared SoA halo packers have explicit OpenACC host/device test modes; host
   checks alone do not verify full GPU solver behavior or NVLink transport.
 - Optional METIS partitioning (`usempi=1 usemetis=1`, runtime
   `DES_MPI_PARTITIONER=metis`), using shared-node connectivity and a communication
   volume objective. RCB remains the default. Resized inactive hydraulic scratch
   state after remeshing to prevent out-of-bounds MPI packing/collection.
-  Paired CPU benchmarks compare RCB/METIS total runtime, partitioning cost and
-  halo traffic in 2D/3D, with exact parent-output checks and timing figures.
 - A scientific-example reproduction driver checks complete serial/MPI fields,
   checkpoints and monitors. A separate current-format Maxwell case checks the
   analytical constitutive response in 2D and 3D without the historical source patch.

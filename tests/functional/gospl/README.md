@@ -86,15 +86,5 @@ interpolated fields/elevation. Sampling uses an interior box and a single-valued
 top surface, appropriate to the retained fixture. Reported differences need
 case-specific scientific interpretation; they are not a universal tolerance.
 
-`benchmark_coupled.py` runs one shared initial checkpoint with CPU OMP1/OMP4,
-CPU MPI3 and GPU1/GPU3, all coupled to GoSPL1. It reserves distinct physical CPUs
-for DES and the worker, warms each variant once, then interleaves three measured
-rounds. Every output is compared. `--cpu`, `--gpu`, `--seed-config`, `--extension`,
-`--gospl-python`, `--workdir` and the three launcher prefixes are required.
-Use `--worker-env`/`--gpu-env` to isolate MPI libraries. Initialization, compute,
-output, full launcher wall time and worker-call timings are separate; overlapping
-timers must not be added. `--summarize-existing PATH` parses retained timing logs
-without rerunning models.
-
 Verification scope and limitations are in the
 [coupling guide](../../../doc/gospl-mpi-coupling.md#verification-scope).
