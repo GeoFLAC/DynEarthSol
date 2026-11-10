@@ -4,10 +4,14 @@
 typedef Array2D<int, 32> nn_t;
 typedef Array2D<double, 32> ratio_t;
 
+struct RemeshScratch;
+
+// The element pass (is_surface false) fills rs.split_parent (remesh-scratch.hpp).
 void nearest_neighbor_interpolation(const Param& Param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
+                                    RemeshScratch &rs,
                                     const bool is_surface = false);
 
 #endif

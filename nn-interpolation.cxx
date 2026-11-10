@@ -11,6 +11,7 @@
 #include "knn.hpp"
 #include "markerset.hpp"
 #include "nn-interpolation.hpp"
+#include "remesh-scratch.hpp"
 
 
 namespace {
@@ -307,7 +308,7 @@ namespace {
                     // in one old element (any rest is new material outside the old mesh).
                     // Mark the element as unchanged instead to keep the result
                     // of nearest neighbor interpolation. The ancestor is recorded only for
-                    // var.remesh_elem_split_mat / _time: inject_field skips is_changed <= 0.
+                    // RemeshScratch::split_parent: inject_field skips is_changed <= 0.
                     elems_vec[i][0] = elem_keys[0];
                     ratios_vec[i][0] = 1.0;
                     is_changed[e] = -1;
@@ -676,6 +677,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
+                                    RemeshScratch &rs,
                                     const bool is_surface)
 {
 #ifdef NPROF_DETAIL
@@ -707,12 +709,13 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
-        // var.remesh_elem_split_mat / _time, so the replenisher assigns a one-ancestor element
-        // its parent's mattype instead of guessing from nearest markers across an interface.
+        // rs.split_parent, so the replenisher assigns a one-ancestor element its parent's
+        // mattype instead of guessing from nearest markers across an interface.
         // var.elemmarkers and var.markers_in_elem still describe the OLD mesh here.
         if (!is_surface) {
-            var.remesh_elem_split_mat.assign(var.nelem, -1);
-            var.remesh_elem_split_time.assign(var.nelem, 0.);
+            SplitParents &split = rs.split_parent;
+            split.mat.assign(var.nelem, -1);
+            split.time.assign(var.nelem, 0.);
             const MarkerSet &ms = *var.markersets[0];
             for (int e = 0; e < var.nelem; ++e) {
                 int parent = -1;
@@ -729,13 +732,13 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
                 for (int t = 0; t < (int)em.size(); ++t)
                     if (em[t] > 0) { ++nnz; mt = t; }
                 if (nnz != 1) continue;
-                var.remesh_elem_split_mat[e] = mt;
+                split.mat[e] = mt;
                 // nnz == 1: the parent holds at least one marker and all are mattype mt
                 const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[parent], mt);
                 if (m0 < 0)
                     die(EXIT_INTERNAL_ASSERT, "nearest_neighbor_interpolation: elemmarkers counts "
                         "a marker that markers_in_elem lacks");
-                var.remesh_elem_split_time[e] = ms.get_time(m0);
+                split.time[e] = ms.get_time(m0);
             }
         }
 

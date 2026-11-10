@@ -865,7 +865,7 @@ struct Variables {
     // These 5 arrays are allocated by external library
     array_t *coord;
     conn_t *connectivity;
-    conn_t *connectivity_surface;
+    conn_t *connectivity_surface = nullptr;   // create_boundary_facets fills it
     segment_t *segment;
     segflag_t *segflag;
     regattr_t *regattr;
@@ -898,7 +898,7 @@ struct Variables {
     double_vec vbc_vertical_ratio_x0;
     double_vec vbc_vertical_ratio_x1;
 
-    int_vec *top_elems;
+    int_vec *top_elems = nullptr;   // create_top_elems fills it
     int ntop_elems;
     int_vec2D *markers_in_elem;
     int_vec2D *hydrous_markers_in_elem;
@@ -971,23 +971,6 @@ struct Variables {
     double_vec *spr_blend_weight;
     double_vec *spr_p_ref_old;
     int_vec *remesh_is_changed;
-
-    // Per-remesh scratch, per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
-    // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
-    // found" warning. Empty outside remeshing.
-    std::vector<char> remesh_affected_old_node;
-
-    // Per-remesh scratch, per NEW node: 1 if barycentric_node_interpolation found it outside the
-    // old mesh and copied the nearest old node's fields. restore_side_fields (option 13) and
-    // remesh() overwrite some of those copies (see there); the rest stay. Empty outside remeshing.
-    std::vector<char> remesh_node_outside;
-
-    // Per-remesh scratch, per NEW element: if its part inside the old mesh lies in exactly one old
-    // element whose markers are all one mattype, that mattype, else -1; _time: that old element's
-    // lowest-index marker's time. Filled by nearest_neighbor_interpolation, read by the marker
-    // replenishment, cleared after remap_markers. Empty outside remeshing.
-    std::vector<int> remesh_elem_split_mat;
-    std::vector<double> remesh_elem_split_time;
 
     // tensor_t *stress_old;
 

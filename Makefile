@@ -621,6 +621,7 @@ INCS =	\
 	parameters.hpp \
 	phasechanges.hpp \
 	pseudo_transient.hpp \
+	remesh-scratch.hpp \
 	remeshing.hpp \
 	rheology.hpp \
 	runtime_info.hpp \

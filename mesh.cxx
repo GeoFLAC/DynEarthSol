@@ -3317,9 +3317,11 @@ void create_top_elems(Variables& var)
 
     var.ntop_elems = telems.size();
 
-    var.top_elems = new int_vec(var.ntop_elems);
-    for (int i=0; i<var.ntop_elems; i++)
-        (*var.top_elems)[i] = telems[i];
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.top_elems)
+        var.top_elems->assign(telems.begin(), telems.end());
+    else
+        var.top_elems = new int_vec(telems.begin(), telems.end());
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -3634,7 +3636,11 @@ void create_boundary_facets(Variables& var)
     }
 
     int etop = var.bfacets[iboundz1]->size();
-    var.connectivity_surface = new conn_t(etop);
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.connectivity_surface)
+        *var.connectivity_surface = conn_t(etop);
+    else
+        var.connectivity_surface = new conn_t(etop);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)

@@ -9,6 +9,7 @@
 #include "utils.hpp"
 #include "knn.hpp"
 #include "brc-interpolation.hpp"
+#include "remesh-scratch.hpp"
 
 namespace { // anonymous namespace
 
@@ -105,6 +106,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
                            const conn_t &old_connectivity,
                            const Support &old_support,
                            brc_t &brc, int_vec &el,
+                           const std::vector<char> *affected_old_node,
                            std::vector<char> *outside_nodes)
 {
 #ifdef NPROF_DETAIL
@@ -181,7 +183,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
         neighbor* neighbors = kdtree.search(block_queries, (end - start), max_el);
 
         #pragma omp parallel for default(none) schedule(guided) \
-            shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors, start, end, outside_nodes)
+            shared(var, bary, old_coord, old_connectivity, old_support, el, brc, neighbors, start, end, \
+                   affected_old_node, outside_nodes)
         for (int i = start; i < end; i++) {
             
             int local_i = i - start;
@@ -300,12 +303,12 @@ void prepare_interpolation(const Param& param, const Variables &var,
                     goto found;
                 }
                 // Otherwise the nearest-node fallback below is used. Warn only for an interior
-                // node whose nearest old node is not flagged in var.remesh_affected_old_node: a
-                // boundary node may sit just outside the old mesh after remeshing (a restored wall,
-                // a regenerated top or bottom).
+                // node whose nearest old node is not flagged in affected_old_node: a boundary
+                // node may sit just outside the old mesh after remeshing (a restored wall, a
+                // regenerated top or bottom).
                 const bool near_affected_old_node =
-                    nn >= 0 && nn < (int)var.remesh_affected_old_node.size()
-                    && var.remesh_affected_old_node[nn];
+                    affected_old_node && nn >= 0 && nn < (int)affected_old_node->size()
+                    && (*affected_old_node)[nn];
                 if ((*var.bcflag)[i] == 0 && !near_affected_old_node) {
                     printf("Warning: prepare_interpolation: interior node %d (bcflag=0) "
                            "not found after capped BFS (MAX_LAYERS=%d; %zu/%d elements searched), "
@@ -320,7 +323,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
                 // using nearest old_coord instead
                 e = nn_elem[0];
                 bary.transform(old_coord[nn], e, r);
-                // var.remesh_node_outside; per-i write, thread-safe
+                // RemeshScratch::node_outside; per-i write, thread-safe
                 if (outside_nodes)
                     (*outside_nodes)[i] = 1;
             }
@@ -353,7 +356,8 @@ void prepare_interpolation(const Param& param, const Variables &var,
 void barycentric_node_interpolation(const Param& param, Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
-                                    const conn_t &old_connectivity)
+                                    const conn_t &old_connectivity,
+                                    RemeshScratch &rs)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -362,9 +366,9 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     int_vec el(n);
     brc_t brc(n);
-    var.remesh_node_outside.assign(n, 0);
+    rs.node_outside.assign(n, 0);
     prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el,
-                          &var.remesh_node_outside);
+                          &rs.affected_old_node, &rs.node_outside);
 
     double_vec *new_temperature = new double_vec(n);
     interpolate_field(brc, el, old_connectivity, *var.temperature, *new_temperature, n);
@@ -451,7 +455,7 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
     prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el,
-                          nullptr);
+                          nullptr, nullptr);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);
 

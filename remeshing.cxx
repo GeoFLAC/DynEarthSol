@@ -27,6 +27,7 @@
 #include "utils.hpp"
 #include "markerset.hpp"
 #include "remeshing.hpp"
+#include "remesh-scratch.hpp"
 
 #ifdef USEMMG
 #ifdef THREED
@@ -1202,22 +1203,22 @@ void decimate_below_hmin(const Param &param, const array_t &coord, int nnode,
 }
 
 
-// Flag in var.remesh_affected_old_node every original node in points_to_delete or moved before
-// meshing (qcoord != original_coord). Call before qcoord is renumbered.
-void record_affected_old_nodes(Variables &var, const array_t &original_coord, const double *qcoord,
-                               int old_nnode, const int_vec &points_to_delete)
+// Flag in affected_old_node (RemeshScratch) every original node in points_to_delete or moved
+// before meshing (qcoord != original_coord). Call before qcoord is renumbered.
+void record_affected_old_nodes(std::vector<char> &affected_old_node, const array_t &original_coord,
+                               const double *qcoord, int old_nnode, const int_vec &points_to_delete)
 {
-    if ((int)var.remesh_affected_old_node.size() != old_nnode)
+    if ((int)affected_old_node.size() != old_nnode)
         die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: record not sized to the old mesh");
     for (int n : points_to_delete) {
         if (n < 0 || n >= old_nnode)
             die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: deleted node is not an old node");
-        var.remesh_affected_old_node[n] = 1;
+        affected_old_node[n] = 1;
     }
     for (int n = 0; n < old_nnode; ++n)
         for (int d = 0; d < NDIMS; ++d)
             if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
-                var.remesh_affected_old_node[n] = 1;
+                affected_old_node[n] = 1;
                 break;
             }
 }
@@ -1225,7 +1226,8 @@ void record_affected_old_nodes(Variables &var, const array_t &original_coord, co
 
 void new_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
-              const segment_t &original_segment, const segflag_t &original_segflag)
+              const segment_t &original_segment, const segflag_t &original_segflag,
+              std::vector<char> &affected_old_node)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1327,7 +1329,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         points_to_delete.resize(last - points_to_delete.begin());
     }
 
-    record_affected_old_nodes(var, original_coord, qcoord, old_nnode, points_to_delete);
+    record_affected_old_nodes(affected_old_node, original_coord, qcoord, old_nnode, points_to_delete);
 
     // delete points
     switch (param.mesh.remeshing_option) {
@@ -3213,7 +3215,7 @@ void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
 // Elements flatten_* broke: a boundary node was snapped onto its restored plane (qcoord !=
 // original_coord) and the post-flatten quality fell below min_quality. Also records the moved
 // and deleted old nodes (record_affected_old_nodes). OLD element ids.
-std::vector<char> detect_flatten_broken(const Param &param, Variables &var,
+std::vector<char> detect_flatten_broken(const Param &param, std::vector<char> &affected_old_node,
                                         const array_t &original_coord,
                                         const double *qcoord, const int *qconn,
                                         int old_nnode, int old_nelem,
@@ -3223,7 +3225,7 @@ std::vector<char> detect_flatten_broken(const Param &param, Variables &var,
     for (int n = 0; n < old_nnode; ++n)
         for (int d = 0; d < NDIMS; ++d)
             if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
-    record_affected_old_nodes(var, original_coord, qcoord, old_nnode, points_to_delete);
+    record_affected_old_nodes(affected_old_node, original_coord, qcoord, old_nnode, points_to_delete);
     std::vector<char> flatten_broken(old_nelem, 0);
     for (int e = 0; e < old_nelem; ++e) {
         const int *el = qconn + e*NODES_PER_ELEM;
@@ -4012,7 +4014,7 @@ static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &c
 // more node per redo, so it ends.
 // A fold the marking cannot remove still stops (die_collapse_fold): one with no bottom node left,
 // or whose only unmarked nodes are on the top or on two side walls. `pts` returns with the marked
-// nodes appended, for R7 and remesh_affected_old_node.
+// nodes appended, for R7 and RemeshScratch::affected_old_node.
 void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
                             const double *coord, const uint_vec &bcflag,
                             const int *conn, const int *segment, const int *segflag,
@@ -4285,7 +4287,8 @@ static void build_wall_anisotropic_metric(const Param &param, const SideInflowSt
 #ifdef THREED
 void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
-              const segment_t &original_segment, const segflag_t &original_segflag)
+              const segment_t &original_segment, const segflag_t &original_segflag,
+              std::vector<char> &affected_old_node)
 {
     // We don't want to refine large elements during remeshing,
     // so using negative size as the max area
@@ -4406,7 +4409,7 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     // The freeze masks and the gated MMG run: FREEZE / REQUIRED POLICY.
     std::vector<char> flatten_broken =
-        detect_flatten_broken(param, var, original_coord, qcoord, qconn,
+        detect_flatten_broken(param, affected_old_node, original_coord, qcoord, qconn,
                               old_nnode, old_nelem, points_to_delete);
     std::vector<char> req_node, req_elem, split_node;
     CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
@@ -4535,7 +4538,8 @@ int lift_to_unfold(double *xz, const int *conn, int nn, int ne, const int *seg, 
 
 void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
               const array_t &original_coord, const conn_t &original_connectivity,
-              const segment_t &original_segment, const segflag_t &original_segflag)
+              const segment_t &original_segment, const segflag_t &original_segflag,
+              std::vector<char> &affected_old_node)
 {
     // We don't want to refine large elements during remeshing,
     // so using negative size as the max area
@@ -4696,14 +4700,14 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
             mseg1 = c_seg.data();
             msegflag = c_segflag.data();
             mmetric = c_metric.data();
-            for (int n : removed) points_to_delete.push_back(n);   // for remesh_affected_old_node and R7
+            for (int n : removed) points_to_delete.push_back(n);   // for RemeshScratch::affected_old_node and R7
             collapse_needed = true;
         }
     }
 
     // The freeze masks and the gated MMG run: FREEZE / REQUIRED POLICY.
     std::vector<char> flatten_broken =
-        detect_flatten_broken(param, var, original_coord, qcoord, qconn,
+        detect_flatten_broken(param, affected_old_node, original_coord, qcoord, qconn,
                               old_nnode, old_nelem, points_to_delete);
     std::vector<char> req_node, req_elem, split_node;
     CollapseRemap remap = { &c_new_to_old_node, &c_new_to_old_elem, &points_to_delete };
@@ -5663,14 +5667,14 @@ int nearest_patch_node(const Variables &var, int n, int nd, Use use)
 
 // Re-impose the recorded profile (SideProfile) on the material that entered through each
 // receiving restored wall (sis.in) since the last remesh. The band's new nodes outside the old mesh
-// (var.remesh_node_outside) get temperature, init_elem_size_n and the coord0 depth from the profile
+// (node_outside, RemeshScratch) get temperature, init_elem_size_n and the coord0 depth from the profile
 // at their position, the wall-normal coord0 from SideProfile::wall_shift and, in 3D, the
 // along-strike coord0 from a neighbour. The band's elements get zero strain and the profile
 // radiogenic source; stress and RSF keep their remap. Then, inflow or not, the coord0 that the
 // nearest-node fallback copied at the other outside top and side-wall bottom nodes is re-seated.
 // MUST run before the plstrain_remesh snapshot, so the zeroed plstrain seeds the freeze baseline.
 void restore_side_fields(const Param &param, Variables &var,
-                         const SideInflowState &sis)
+                         const SideInflowState &sis, const std::vector<char> &node_outside)
 {
     if (param.mesh.remeshing_option != 13) return;
 
@@ -5682,8 +5686,8 @@ void restore_side_fields(const Param &param, Variables &var,
         if (!prof.empty()) prof.wall_shift += side_wall_plane(param.mesh, t) - sis.pos_in[t];
     }
     // barycentric_node_interpolation recorded it for every new node
-    if ((int)var.remesh_node_outside.size() != var.nnode)
-        die(EXIT_INTERNAL_ASSERT, "restore_side_fields: remesh_node_outside is not per new node");
+    if ((int)node_outside.size() != var.nnode)
+        die(EXIT_INTERNAL_ASSERT, "restore_side_fields: node_outside is not per new node");
 
     // in-band tolerance = the flatten_* deletion distance (min_dist)
     const double tol = refine_floors(param.mesh).min_dist;
@@ -5708,7 +5712,7 @@ void restore_side_fields(const Param &param, Variables &var,
 
         SideProfileAt at;
         for (int n = 0; n < var.nnode; ++n) {
-            if (!var.remesh_node_outside[n]) continue;
+            if (!node_outside[n]) continue;
             const double c = (*var.coord)[n][axis];
             const bool in_band = lower ? (c <= old_in + tol) : (c >= old_in - tol);
             if (!in_band) continue;
@@ -5748,7 +5752,7 @@ void restore_side_fields(const Param &param, Variables &var,
             double cw = 0, cs = 0, cz = 0;   // centroid: wall-normal, along-strike, depth
             for (int i = 0; i < NODES_PER_ELEM; ++i) {
                 int n = conn[i];
-                if (var.remesh_node_outside[n]) any_outside = true;
+                if (node_outside[n]) any_outside = true;
                 cw += (*var.coord)[n][axis];
                 cs += side_wall_strike((*var.coord)[n], t);
                 cz += (*var.coord)[n][NDIMS-1];
@@ -5775,7 +5779,7 @@ void restore_side_fields(const Param &param, Variables &var,
     // off. Take the displacement (coord - coord0) of the nearest connected node inside the old mesh.
     // A 2D band sets every horizontal component.
     const char all_horizontal = (1 << (NDIMS-1)) - 1;   // node_done if bands set every one
-    auto inside_old = [&var](int p) { return !var.remesh_node_outside[p]; };
+    auto inside_old = [&node_outside](int p) { return !node_outside[p]; };
     int n_strike = 0, count_strike = 0;
     for (int n = 0; n < var.nnode; ++n) {
         if (!node_done[n] || node_done[n] == all_horizontal) continue;
@@ -5799,12 +5803,12 @@ void restore_side_fields(const Param &param, Variables &var,
     // a smooth field is off only by its change over that distance, and update_temperature
     // re-imposes the top temperature. The other outside nodes (mid-wall, interior) keep the copy,
     // with a warning.
-    auto not_copy = [&var, &node_done](int p) { return !var.remesh_node_outside[p] || node_done[p]; };
+    auto not_copy = [&node_outside, &node_done](int p) { return !node_outside[p] || node_done[p]; };
     auto top_source = [&var, &not_copy](int p) { return ((*var.bcflag)[p] & BOUNDZ1) && not_copy(p); };
     auto above_floor = [&var, &not_copy](int p) { return !((*var.bcflag)[p] & BOUNDZ0) && not_copy(p); };
     int n_top = 0, count_top = 0, n_bot = 0, count_bot = 0, n_other = 0;
     for (int n = 0; n < var.nnode; ++n) {
-        if (!var.remesh_node_outside[n] || node_done[n]) continue;
+        if (!node_outside[n] || node_done[n]) continue;
         const uint f = (*var.bcflag)[n];
         const bool top = f & BOUNDZ1;
         bool wall_bottom = false;
@@ -5996,6 +6000,23 @@ void relocate_wall_division_nodes(const Param &param, Variables &var,
 }
 #endif  // !THREED
 
+// The mesh before a remesh, moved out of var: var's arrays are empty until the meshing fills them.
+struct OldMesh {
+    array_t coord;
+    conn_t connectivity;
+    conn_t connectivity_surface;
+    segment_t segment;
+    segflag_t segflag;
+
+    explicit OldMesh(Variables &var) :
+        coord(std::move(*var.coord)),
+        connectivity(std::move(*var.connectivity)),
+        connectivity_surface(std::move(*var.connectivity_surface)),
+        segment(std::move(*var.segment)),
+        segflag(std::move(*var.segflag))
+    {}
+};
+
 } // anonymous namespace
 
 
@@ -6102,6 +6123,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // relocate_wall_division_nodes, correct_inflow_band_marker_mattype and restore_side_fields.
     SideInflowState side_inflow;
 
+    // what this remesh's steps pass each other (remesh-scratch.hpp); freed on return
+    RemeshScratch rs;
+
     // var.mat binds var's fields by reference (MatProps), and from here they are moved out, swapped
     // for the new mesh's (nearest_neighbor_interpolation, barycentric_node_interpolation) or
     // recreated (remap_markers, reallocate_variables). reallocate_variables rebuilds it once they
@@ -6111,41 +6135,36 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     var.mat = nullptr;
 
     {
-        // the old mesh, moved out of var: var's arrays are empty until the meshing fills them
-        array_t old_coord(std::move(*var.coord));
-        conn_t old_connectivity(std::move(*var.connectivity));
-        conn_t old_connectivity_surface(std::move(*var.connectivity_surface));
-        segment_t old_segment(std::move(*var.segment));
-        segflag_t old_segflag(std::move(*var.segflag));
+        OldMesh old(var);
 
-        const int old_nnode = old_coord.size();
-        const int old_nelem = old_connectivity.size();
-        const int old_nseg  = old_segment.size();
+        const int old_nnode = old.coord.size();
+        const int old_nelem = old.connectivity.size();
+        const int old_nseg  = old.segment.size();
         const char *remesh_engine = "?";
 
-        // filled by the meshing routine (Variables::remesh_affected_old_node)
-        var.remesh_affected_old_node.assign(old_nnode, 0);
+        // filled by the meshing routine (record_affected_old_nodes)
+        rs.affected_old_node.assign(old_nnode, 0);
 
         // while var.bcflag still describes the old mesh
         if (param.mesh.remeshing_option == 13)
-            side_inflow = side_inflow_state(param, var.time / YEAR2SEC, old_nnode, old_coord,
+            side_inflow = side_inflow_state(param, var.time / YEAR2SEC, old_nnode, old.coord,
                                             *var.bcflag);
 
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
             remesh_engine = "MMG";
-            optimize_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                    old_segment, old_segflag);
+            optimize_mesh(param, var, bad_quality, old.coord, old.connectivity,
+                    old.segment, old.segflag, rs.affected_old_node);
 #else
             remesh_engine = "TetGen";
-            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                    old_segment, old_segflag);
+            new_mesh(param, var, bad_quality, old.coord, old.connectivity,
+                    old.segment, old.segflag, rs.affected_old_node);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
-            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
-                    old_segment, old_segflag);
+            new_uniformed_regular_mesh(param, var, old.coord, old.connectivity,
+                    old.segment, old.segflag);
         } else {
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             die(EXIT_CONFIG_VALUE);
@@ -6154,21 +6173,21 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         if (param.mesh.meshing_elem_shape == 0) {
 #if defined USEMMG
             remesh_engine = "MMG";
-            optimize_mesh_2d(param, var, bad_quality, old_coord, old_connectivity,
-                old_segment, old_segflag);
+            optimize_mesh_2d(param, var, bad_quality, old.coord, old.connectivity,
+                old.segment, old.segflag, rs.affected_old_node);
 #else
             remesh_engine = "Triangle";
-            new_mesh(param, var, bad_quality, old_coord, old_connectivity,
-                old_segment, old_segflag);
+            new_mesh(param, var, bad_quality, old.coord, old.connectivity,
+                old.segment, old.segflag, rs.affected_old_node);
 #endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
-            new_uniformed_regular_mesh(param, var, old_coord, old_connectivity,
-                old_segment, old_segflag);
+            new_uniformed_regular_mesh(param, var, old.coord, old.connectivity,
+                old.segment, old.segflag);
         } else if (param.mesh.meshing_elem_shape == 2) {
             remesh_engine = "uniform equilateral";
-            new_uniformed_equilateral_mesh(param, var, old_coord, old_connectivity,
-                old_segment, old_segflag);
+            new_uniformed_equilateral_mesh(param, var, old.coord, old.connectivity,
+                old.segment, old.segflag);
         } else {
             std::cerr << "Error: unknown meshing_elem_shape: " << param.mesh.meshing_elem_shape << '\n';
             die(EXIT_CONFIG_VALUE);
@@ -6178,7 +6197,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         // Per-engine remesh report, with the free-surface (BOUNDZ1) facet count.
         int old_ntop_facets = 0;
         for (int i=0; i<old_nseg; ++i)
-            if (static_cast<uint>(old_segflag[i][0]) & BOUNDZ1) ++old_ntop_facets;
+            if (static_cast<uint>(old.segflag[i][0]) & BOUNDZ1) ++old_ntop_facets;
         int new_ntop_facets = 0;
         for (int i=0; i<var.nseg; ++i)
             if (static_cast<uint>((*var.segflag)[i][0]) & BOUNDZ1) ++new_ntop_facets;
@@ -6214,7 +6233,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         create_boundary_flags(var);
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
-        delete var.connectivity_surface;
         create_boundary_facets(var);
 
 #ifndef THREED
@@ -6224,22 +6242,21 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
 
         {
-            Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
+            Barycentric_transformation bary(old.coord, old.connectivity, *var.volume);
 
             // interpolating fields defined on elements
-            nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
+            nearest_neighbor_interpolation(param, var, bary, old.coord, old.connectivity, rs);
 
-            Barycentric_transformation bary_surface(old_coord, old_connectivity_surface, old_surface_area, true);
+            Barycentric_transformation bary_surface(old.coord, old.connectivity_surface, old_surface_area, true);
 
             // interpolating fields defined on surface elements
-            nearest_neighbor_interpolation(param, var, bary_surface, old_coord, old_connectivity_surface, true);
+            nearest_neighbor_interpolation(param, var, bary_surface, old.coord, old.connectivity_surface,
+                                           rs, true);
 
             // interpolating fields defined on nodes
-            barycentric_node_interpolation(param, var, bary, old_coord, old_connectivity);
+            barycentric_node_interpolation(param, var, bary, old.coord, old.connectivity, rs);
         }
 
-        // Done with the old mesh; remesh_node_outside stays for restore_side_fields below.
-        var.remesh_affected_old_node.clear();
         create_support(var);
         // delete var.neighbor;
         // delete var.contact;
@@ -6247,14 +6264,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         // create_neighbor(var);
 
         // remap markers. elemmarkers and markers_in_elem are updated here, too.
-        remap_markers(param, var, old_coord, old_connectivity);
-        var.remesh_elem_split_mat.clear();   // single-parent maps are only valid for this remesh
-        var.remesh_elem_split_time.clear();
+        remap_markers(param, var, old.coord, old.connectivity, rs.split_parent);
 
         // reset stray marker mattypes in the inflow band before they advect inland
         correct_inflow_band_marker_mattype(param, var, side_inflow.in);
   
-        // old_coord et al. are destroyed before exiting this block
+        // old is destroyed before exiting this block
     }
 
     // Drain GPU queue before freeing old field arrays and reallocating new ones.
@@ -6278,7 +6293,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         var.bnodes[i]->clear();
     create_boundary_nodes(var);
 
-    delete var.top_elems;
     create_top_elems(var);
 
     update_surface_info(var, var.surfinfo);
@@ -6292,8 +6306,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     }
 
     // before the plstrain_remesh snapshot below (see restore_side_fields)
-    restore_side_fields(param, var, side_inflow);
-    var.remesh_node_outside.clear();
+    restore_side_fields(param, var, side_inflow, rs.node_outside);
 
     delete var.stress_n;
     var.stress_n = nullptr;
