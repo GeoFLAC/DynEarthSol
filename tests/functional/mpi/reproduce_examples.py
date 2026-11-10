@@ -87,6 +87,8 @@ def execute(command, directory, threads, timeout):
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
+                # The group can exit before cleanup reaches killpg; still reap
+                # the child with wait below.
                 pass
             try:
                 process.wait(timeout=5)

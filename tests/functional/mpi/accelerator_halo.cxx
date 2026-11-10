@@ -123,7 +123,7 @@ int main(int argc,char** argv) {
         for(int iteration=0;iteration<3;++iteration) {
             buffers.clear();
             for(auto* p:peers) {
-                std::vector<double> input(p->stride*columns),empty(input.size(),-1);
+                std::vector<double> input(std::size_t(p->stride)*columns),empty(input.size(),-1);
                 for(int c=0;c<columns;++c)for(int i=0;i<p->stride;++i)
                     input[c*p->stride+i]=iteration*10000000+rank*100000+p->rank*1000+c*p->stride+i;
                 acc_memcpy_to_device(p->field,input.data(),input.size()*sizeof(double));
@@ -136,7 +136,7 @@ int main(int argc,char** argv) {
             mpi_finish_buffers(pending,requests.data());
             for(auto* p:peers) {
                 if(p->nrecv)mpi_unpack_device_columns(p->target,p->stride,columns,p->receiving,p->nrecv,p->receive);
-                std::vector<double> output(p->stride*columns),expected(output.size(),-1);
+                std::vector<double> output(std::size_t(p->stride)*columns),expected(output.size(),-1);
                 acc_memcpy_from_device(output.data(),p->target,output.size()*sizeof(double));
                 for(int c=0;c<columns;++c)for(int i=0;i<p->nrecv;++i)
                     expected[c*p->stride+p->recv_ids[i]]=iteration*10000000+p->rank*100000+rank*1000+c*p->stride+(7*i+3)%p->stride;

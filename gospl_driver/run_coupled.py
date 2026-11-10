@@ -13,7 +13,6 @@ import secrets
 import shlex
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 
@@ -103,6 +102,8 @@ def main():
                                 process.wait(timeout=3)
                                 continue
                             except subprocess.TimeoutExpired:
+                                # The grace period ended; terminate the whole
+                                # worker process group below, then reap it.
                                 pass
                         os.killpg(process.pid, signal.SIGTERM)
                         try:

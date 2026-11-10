@@ -12,8 +12,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import h5py
-import numpy as np
 
 from run_coupling_smoke import audit
 

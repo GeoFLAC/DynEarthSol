@@ -64,13 +64,13 @@ def main():
             try:
                 if operation not in OPERATIONS:
                     raise ValueError('Unsupported coupling operation: ' + operation)
-                if operation == 'prepare_restart':
-                    from checkpoint import prepare
-                    value=prepare(comm,*values)
-                elif operation in ('save_checkpoint','load_checkpoint'):
+                if operation in ('prepare_restart','save_checkpoint','load_checkpoint'):
                     import checkpoint
-                    action=checkpoint.save if operation=='save_checkpoint' else checkpoint.load
-                    value=action(interface._models[values[0]],comm,*values[1:])
+                    if operation == 'prepare_restart':
+                        value=checkpoint.prepare(comm,*values)
+                    else:
+                        action=checkpoint.save if operation=='save_checkpoint' else checkpoint.load
+                        value=action(interface._models[values[0]],comm,*values[1:])
                 elif operation == 'verbose':
                     interface._models[values[0]].verbose = values[1]
                     value = 0
@@ -117,7 +117,9 @@ def main():
 if __name__ == '__main__':
     try:
         status = main()
-    except BaseException:
+    except (Exception, KeyboardInterrupt, SystemExit):
+        # An uncaught failure or interrupt on one rank must abort its peers;
+        # otherwise they can remain blocked in a collective or finalization.
         traceback.print_exc()
         MPI.COMM_WORLD.Abort(53)
     else:

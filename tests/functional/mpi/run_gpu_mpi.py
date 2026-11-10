@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import sys
 import tempfile
 
 from run_mpi import configure, execute, metrics
