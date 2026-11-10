@@ -83,21 +83,24 @@ struct SurfaceTopo {
 //  2. restore_stress_from_ref LAST -- it undoes the centering for whatever
 //     produced the final centered stress (the blend, or the NN remap alone).
 // Each takes the SurfaceTopo of its own mesh, built once by the caller: old mesh
-// for the weight/centering pair, new mesh for the recovery/restore pair.
-void compute_spr_blend_weight(const Param& param, const Variables& var);
+// for the weight/centering pair, new mesh for the recovery/restore pair. The
+// stress-remap transients they share are remesh()'s RemeshScratch (remesh-scratch.hpp).
+struct RemeshScratch;
+
+void compute_spr_blend_weight(const Param& param, const Variables& var, RemeshScratch& rs);
 
 void center_stress_to_ref(const Param& param, const Variables& var,
-                          const SurfaceTopo& topo);
+                          const SurfaceTopo& topo, RemeshScratch& rs);
 
 void spr_elem_to_node(const Param& param, const Variables& var,
                       tensor_t* stress_n, double_vec* stressyy_n);
 
 void spr_node_to_elem(const Param& param, const Variables& var,
-                      const SurfaceTopo& topo,
+                      const SurfaceTopo& topo, RemeshScratch& rs,
                       tensor_t* stress, double_vec* stressyy);
 
 void restore_stress_from_ref(const Param& param, const Variables& var,
-                             const SurfaceTopo& topo,
+                             const SurfaceTopo& topo, const RemeshScratch& rs,
                              tensor_t* stress, double_vec* stressyy);
 
 double compute_dt(const Param& param, Variables& var,

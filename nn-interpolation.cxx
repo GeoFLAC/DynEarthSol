@@ -1,5 +1,6 @@
 #include "iostream"
 #include <algorithm>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 
@@ -543,7 +544,7 @@ namespace {
     }
 
 
-    void nn_interpolate_elem_fields(Variables &var,
+    void nn_interpolate_elem_fields(Variables &var, RemeshScratch &rs,
                                     const int_vec &idx,
                                     const int_vec &is_changed,
                                     const int_vec &idx_changed,
@@ -621,17 +622,17 @@ namespace {
             // Deborah-blend weight (computed on the old mesh in spr_elem_to_node):
             // ride it through the remesh so spr_node_to_elem can blend per new
             // element. Null when remesh() switched the SPR chain off.
-            double_vec *new_blend_w = nullptr;
-            if (var.spr_blend_weight) {
-                new_blend_w = new double_vec(e);
-                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.spr_blend_weight, *new_blend_w, e);
+            std::unique_ptr<double_vec> new_blend_w;
+            if (rs.spr_blend_weight) {
+                new_blend_w = std::make_unique<double_vec>(e);
+                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *rs.spr_blend_weight, *new_blend_w, e);
             }
 
             // Untouched-stress carry-through: ride the centering reference through
             // the remesh (verbatim for unchanged elements); is_changed here IS
-            // var.remesh_is_changed, which spr_node_to_elem consumes.
-            double_vec *new_p_ref_old = new double_vec(e);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.spr_p_ref_old, *new_p_ref_old, e);
+            // rs.remesh_is_changed, which spr_node_to_elem consumes.
+            auto new_p_ref_old = std::make_unique<double_vec>(e);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *rs.spr_p_ref_old, *new_p_ref_old, e);
 
             delete var.radiogenic_source;
             var.radiogenic_source = new_radiogenic_source;
@@ -653,11 +654,8 @@ namespace {
             delete var.stressyy;
             var.stressyy = new_stressyy;
 
-            delete var.spr_blend_weight;
-            var.spr_blend_weight = new_blend_w;
-
-            delete var.spr_p_ref_old;
-            var.spr_p_ref_old = new_p_ref_old;
+            rs.spr_blend_weight = std::move(new_blend_w);
+            rs.spr_p_ref_old = std::move(new_p_ref_old);
 
             // b = new tensor_t(e);
             // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
@@ -696,11 +694,11 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         int_vec idx_changed(nqueries);
 
         // Is the element changed during remeshing? The element pass fills
-        // var.remesh_is_changed (allocated by remesh(), read by spr_node_to_elem
+        // rs.remesh_is_changed (allocated by remesh(), read by spr_node_to_elem
         // to keep the stress of unchanged elements verbatim); the surface pass
         // uses a local.
         int_vec is_changed_surf(is_surface ? nqueries : 0);
-        int_vec &is_changed = is_surface ? is_changed_surf : *var.remesh_is_changed;
+        int_vec &is_changed = is_surface ? is_changed_surf : *rs.remesh_is_changed;
 
         nn_t elems_vec;
         ratio_t ratios_vec;
@@ -742,7 +740,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
             }
         }
 
-        nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
+        nn_interpolate_elem_fields(var, rs, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 
 #ifdef NPROF_DETAIL

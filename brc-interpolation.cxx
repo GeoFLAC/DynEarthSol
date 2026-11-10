@@ -1,6 +1,7 @@
 #include "algorithm"
 #include "iostream"
 #include "unordered_set"
+#include <memory>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -396,16 +397,16 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
     // Null when remesh() switched the SPR chain off: nothing to carry across.
-    tensor_t *new_stress_n = nullptr;
-    if (var.stress_n) {
-        new_stress_n = new tensor_t(n);
-        interpolate_field(brc, el, old_connectivity, *var.stress_n, *new_stress_n, n);
+    std::unique_ptr<tensor_t> new_stress_n;
+    if (rs.stress_n) {
+        new_stress_n = std::make_unique<tensor_t>(n);
+        interpolate_field(brc, el, old_connectivity, *rs.stress_n, *new_stress_n, n);
     }
 
-    double_vec *new_stressyy_n = nullptr;
-    if (var.stressyy_n) {
-        new_stressyy_n = new double_vec(n);
-        interpolate_field(brc, el, old_connectivity, *var.stressyy_n, *new_stressyy_n, n);
+    std::unique_ptr<double_vec> new_stressyy_n;
+    if (rs.stressyy_n) {
+        new_stressyy_n = std::make_unique<double_vec>(n);
+        interpolate_field(brc, el, old_connectivity, *rs.stressyy_n, *new_stressyy_n, n);
     }
 
     delete var.temperature;
@@ -432,11 +433,8 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     delete var.coord0;
     var.coord0 = new_coord0;
 
-    delete var.stress_n;
-    var.stress_n = new_stress_n;
-
-    delete var.stressyy_n;
-    var.stressyy_n = new_stressyy_n;
+    rs.stress_n = std::move(new_stress_n);
+    rs.stressyy_n = std::move(new_stressyy_n);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
