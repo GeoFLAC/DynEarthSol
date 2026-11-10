@@ -33,10 +33,12 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 COLORS = ['#0072B2', '#D55E00', '#009E73', '#CC79A7']
 
 
-def load_study(study, record_source):
-    """Read a recorded study after verifying its archived runner."""
+def load_study(study, record_source, active_runner=None):
+    """Verify the archived and optional active runner before recording a study."""
     summary = json.loads((study/'summary.json').read_text())
     assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
+    if active_runner is not None:
+        assert hashlib.sha256(active_runner.read_bytes()).hexdigest() == summary['runner_sha256']
     record_source(study/'summary.json'); record_source(study/'runner.py')
     return summary
 

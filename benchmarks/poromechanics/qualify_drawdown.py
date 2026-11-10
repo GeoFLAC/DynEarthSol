@@ -5,7 +5,6 @@ Bishop's factor of safety on DES's own pore pressure at the first state,
 re-reads one trial from raw saves, writes figures/drawdown.* and
 data/drawdown/, and returns the review record.
 """
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -32,9 +31,7 @@ def _bracket(state):
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     case = min(summary['cases'], key=lambda c: c['spacing_m'])
     folder = study/f"h{case['spacing_m']:g}"
     audit = None

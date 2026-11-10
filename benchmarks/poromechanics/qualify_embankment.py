@@ -5,7 +5,6 @@ largest stable trial on the finest mesh from raw saves, reuses its recorded
 Bishop reference, writes figures/embankment.* and
 data/embankment/, and returns the review record.
 """
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -41,9 +40,7 @@ def _displacement(folder, name):
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     fs_bishop = summary['fs_bishop']
     xc, zc, R = summary['bishop_circle']
     assert fs_bishop > 0 and R > 0 and np.isfinite([fs_bishop, xc, zc, R]).all()

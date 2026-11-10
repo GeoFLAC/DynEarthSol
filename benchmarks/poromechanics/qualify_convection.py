@@ -37,10 +37,7 @@ def rates(summary):
 
 
 def build(study, output, record_source, coarse=None):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    assert hashlib.sha256(Path(cc.__file__).read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source, Path(cc.__file__))
     for case in summary['cases']:
         folder = study/f"ra{case['ra_over_critical']:g}-seed{case['seed_K']:g}"
         actual = cc.amplitudes(folder)

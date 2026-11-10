@@ -4,7 +4,6 @@ Interface as qualify_theis: build(study, output, record_source) recomputes Nu
 from the raw fields of the finest runs, writes figures/nusselt.* and
 data/nusselt/, and returns the review record.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -22,9 +21,7 @@ KEY = 'nusselt'
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     ras = sorted({c['ra'] for c in summary['cases']})
     finest = {ra: min((c for c in summary['cases'] if c['ra'] == ra), key=lambda c: c['spacing_m']) for ra in ras}
     for ra, case in finest.items():

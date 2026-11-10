@@ -4,7 +4,6 @@ Interface as qualify_convection: build(study, output, record_source) with the
 slab_refinement.py output. SPEC_UPDATE turns review.SPECS['averaged_aquifer']
 from an analytical-only reference into the numerical comparison.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -30,9 +29,7 @@ def _binned(ax, r, v, color, marker='o', label=None):
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     cases = sorted(summary['cases'], key=lambda c: -c['resolution_m'])
     finest = cases[-1]
     case = study/f"res{finest['resolution_m']:g}"/'slab-3d'

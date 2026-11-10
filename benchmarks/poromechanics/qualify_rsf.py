@@ -4,7 +4,6 @@ Interface as qualify_theis: build(study, output, record_source) replays the
 finest step from raw saves, writes figures/rsf.* and data/rsf/, and returns
 the review record.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,9 +20,7 @@ KEY = 'rsf'
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     cases = sorted(summary['cases'], key=lambda c: -c['dt'])
     for case in cases:
         folder = study/f"r{case['refine']:g}"

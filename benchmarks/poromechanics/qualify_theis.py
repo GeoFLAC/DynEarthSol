@@ -5,7 +5,6 @@ errors from the raw pressure fields, writes figures/theis.* and data/theis/,
 and returns the review record. SPEC updates review.SPECS['theis'] from an
 analytical-only reference to the numerical comparison.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -23,9 +22,7 @@ KEY = 'theis'
 
 
 def build(study, output, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source)
     ref = summary['reference']
     T, S, scale = ref['transmissivity'], ref['storativity'], ref['pressure_scale_Pa']
     schedule = [(0.0, ref['Q']), (ref['pump_until_s'], 0.0)]

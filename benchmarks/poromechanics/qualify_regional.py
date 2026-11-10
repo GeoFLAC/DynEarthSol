@@ -5,7 +5,6 @@ with the mesh sequence, a time-step check (one mesh, four times the steps)
 and the final run on the finest mesh with those steps, which supplies the
 bowl, the wells and the headline.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,10 +20,7 @@ KEY = 'regional'
 
 
 def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    assert rs.digest(Path(rs.__file__)) == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
+    summary = pf.load_study(study, record_source, Path(rs.__file__))
     for case in summary['cases']:
         folder = study/f"h{case['spacing_m']:g}"
         assert rs.digest(folder/'basin.cfg') == case['input_sha256']
