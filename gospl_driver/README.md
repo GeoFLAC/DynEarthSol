@@ -216,12 +216,13 @@ DES output goes to the working directory, GoSPL output to the YAML's
 
 `GOSPL=1 ./build.sh` in the repository root builds `dynearthsol/gcc-11-gospl`
 with the gospl conda environment, gospl_extensions and a 3D `dynearthsol3d`
-already inside, and the environment activated in every login shell. Mount the
-directory holding your cfg and GoSPL YAML and run from it:
+built with `usemmg=1` already inside, and the environment activated in every
+login shell. Put your cfg and GoSPL YAML in `./runs`, which is mounted at `~/DynEarthSol/runs`, and
+run there, so the output lands back in `./runs` on the host:
 
 ```bash
-docker run --rm -it -v /path/to/case:/home/human/case dynearthsol/gcc-11-gospl \
-  bash -lc 'cd ~/case && ~/DynEarthSol/dynearthsol-gospl your_input.cfg'
+docker run --rm -it --network none -v "$PWD/runs":/home/human/DynEarthSol/runs \
+  dynearthsol/gcc-11-gospl bash -lc 'cd runs && ../dynearthsol-gospl your_input.cfg'
 ```
 
 ## Coupling Details

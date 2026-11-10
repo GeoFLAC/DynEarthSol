@@ -5,3 +5,8 @@
 **/*.vtu
 **/*.vtp
 **/*.info
+mmg/build
+runs
+**/*.o
+**/*.dSYM
+dynearthsol-gospl

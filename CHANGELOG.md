@@ -62,6 +62,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
   markers. `examples/subduction.cfg` runs it ([#110]).
 
+- The Docker images build `usemmg=1` and `hdf5=1` in the container, offline
+  (`--network none`), and `docker run` mounts `./runs` for results, written as
+  your uid ([#119]).
+- The GoSPL image's executable is built with `usemmg=1`, and
+  `CXXVERSION=clang-14 GOSPL=1 ./build.sh` builds a GoSPL image with clang,
+  and `build.sh` reads a layer cache that CI publishes on ghcr.io, so it does
+  not rebuild the compilers and the conda environment, unless that cache was
+  built from another `Dockerfile` or `ubuntu:22.04` ([#119]).
+
 ### Changed
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
@@ -145,6 +154,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 - GPU runs with averaged output (the default) are faster: the averaging no
   longer moves fields off the device every step (3D 7.9 to 1.6 ms/step on an
   RTX A5000) ([#114]).
+
+- **Breaking.** The Docker images no longer set `OMP_NUM_THREADS=8`; OpenMP
+  uses every CPU the container has, and `omp N` sets it ([#119]).
+- **Breaking.** `build.sh` no longer offers `CXXVERSION=gcc-8`; every image is
+  Ubuntu 22.04, with gcc 11 or clang 14 ([#119]).
 
 ### Fixed
 
@@ -233,6 +247,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   with `OMP: Error #15`; `usemmg=1` configures MMG with the gospl env active.
   The docs give the macOS gospl_extensions build and the mamba commands
   ([#118]).
+- `make usemmg=1` rebuilds an `mmg/build` configured on another machine (a Mac
+  build copied into a container) instead of failing to link its library; a
+  failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -405,4 +422,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
+[#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
