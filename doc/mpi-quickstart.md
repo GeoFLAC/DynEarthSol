@@ -10,6 +10,13 @@ and submodules on a connected machine before staging the checkout.
 Prerequisites: C++17 compiler, MPI C++ wrapper, HDF5, Python with NumPy and h5py,
 and the repository submodules. MMG also needs CMake and a C compiler.
 
+Native macOS CPU builds use Apple clang and an MPI wrapper backed by clang.
+Homebrew can provide the dependencies with
+`brew install cmake libomp open-mpi hdf5`; install NumPy and h5py in your Python
+environment. The Makefile detects Homebrew's OpenMP and HDF5 paths. The CPU
+commands below were checked on Apple Silicon; see the
+[macOS results](validation-2026-11-10.md#native-macos-cpu-verification).
+
 Reserve at least six CPU slots for this driver: its empty-partition test uses
 six ranks and its hybrid check uses two ranks with two threads each.
 

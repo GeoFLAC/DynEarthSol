@@ -228,3 +228,57 @@ checks passed at ranks 1/2 in both dimensions. The Python review cleanup also
 passed two-rank protocol failure, rank-local KeyboardInterrupt/SystemExit cleanup
 and 14 coupled remeshing-continuation comparisons. Review artifacts are retained
 under `results/pr-review-*`, `results/pr128-*` and the mounted Nemex run directories.
+
+## Native macOS CPU verification
+
+The MPI branch now includes current `master` (`6195cc2`, the Docker images
+update in PR #119) through merge `8f34026`. The merge was conflict-free and
+does not change the solver's C++/Python sources. Earlier cluster/GPU results
+above keep their original provenance; this repeat checks native CPU execution.
+
+The host was arm64 macOS 26.6.2 with eight physical CPUs, Apple clang 21.0.0,
+Open MPI 5.0.9, libomp 23.1.3, HDF5 2.2.0, Python 3.14, NumPy 2.5.4 and
+h5py 3.16.0. Both current-master references and merged-branch executables used
+`usemmg=1 hdf5=1 openmp=1`, C++17 and the default `opt=2`. MMG libraries from
+the same pinned submodule were reused between checkouts through the existing
+`MMG_INCLUDE`/`MMG_LIB_DIR` overrides.
+
+- Both dimensions built successfully as serial/OpenMP and MPI executables.
+  No macOS-specific solver fix was needed.
+- Current-master `make set` / merged-branch `make cmp` passed bit-exact for
+  `test-tiny.cfg` (2D) and `test-3d-tiny.cfg` (3D), for both serial executables
+  and two-rank MPI execution, with one OpenMP thread per rank.
+- The existing `run_mpi.py --ranks 1 2` matrix passed all **34** comparisons
+  bit-exact against current-master serial references. This includes hybrid
+  two-rank/two-thread runs, hydraulic/PT/hydration cases, MMG, averaging,
+  restart and six-rank empty partitions. Root I/O/configuration failures and
+  `--help` also terminated without hanging.
+- `run_pt_mpi.py` passed **20** checks at two ranks across dimensions 2/3,
+  methods 0/1 and elastic, Maxwell, hydrostatic, dynamic and failure cases.
+  Four checks verified collective nonconvergence/rollback. Of the 16 field
+  comparisons, ten were bit-exact and six ADR comparisons passed the existing
+  `rtol=1e-8`, `atol=1e-12`; no tolerance was relaxed.
+
+Build as in the [CPU quickstart](mpi-quickstart.md#cpu-mpi). With `MASTER_ROOT`
+pointing at a checkout of the recorded master commit built with the same flags,
+the two existing validation commands are:
+
+```sh
+python tests/functional/mpi/run_mpi.py \
+  --serial "$MASTER_ROOT/dynearthsol2d" --mpi ./dynearthsol2d.mpi \
+  --serial3d "$MASTER_ROOT/dynearthsol3d" --mpi3d ./dynearthsol3d.mpi \
+  --launcher 'mpiexec --bind-to none' --ranks 1 2 \
+  --workdir "$REVIEW_WORK/macos-mpi"
+python tests/functional/mpi/run_pt_mpi.py \
+  --serial "$MASTER_ROOT/dynearthsol2d" --mpi ./dynearthsol2d.mpi \
+  --serial3d "$MASTER_ROOT/dynearthsol3d" --mpi3d ./dynearthsol3d.mpi \
+  --launcher 'mpiexec --bind-to none' --ranks 2 \
+  --cases elastic maxwell hydrostatic dynamic failure \
+  --workdir "$REVIEW_WORK/macos-pt"
+```
+
+Reports, build logs and parent/changed regression logs are retained locally in
+`benchmarks-cores/mpi-macos.local/`. The original generated model directories
+are recorded in the driver logs. These are short CPU correctness checks on one
+Apple Silicon host, not a macOS scaling benchmark. GPU, GoSPL coupling, Intel
+Macs and multi-node execution were not exercised in this repeat.
