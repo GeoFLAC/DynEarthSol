@@ -31,6 +31,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
   with commit-message guidelines and an AI-usage policy, pull request and issue
   templates, and `AGENTS.md` for coding assistants ([#96]).
+- Rules in `CONTRIBUTING.md` for code comments, source files and classes,
+  which also keep history out of the docs; `AGENTS.md` asks coding assistants
+  and AI reviewers to follow them ([#129]).
 - Frames embed their step, counts and time, so a run restarts and is read
   without its `.info` index; `utils/recreate_info.py` rebuilds the index ([#96]).
 - Provenance records: the executable embeds its build identity, each run writes
@@ -428,3 +431,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+[#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
