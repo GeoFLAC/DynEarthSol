@@ -226,47 +226,8 @@ def analyze(folder, method):
     return report
 
 
-def figures(output, selected):
-    """One selected problem result; numerical controls remain in the tables."""
-    target = output/'fig'; target.mkdir(exist_ok=True)
-    folder = output/selected
-    cfg = configparser.ConfigParser(); cfg.read(folder/'input.cfg')
-    inflow = -json.loads(cfg['bc']['hbc_flux'])[4]
-    from setup_drawings import content
-    content(target, inflow)
-    plot_result(folder, target, inflow)
-    write_json(output/'selection.json', dict(case=selected, history_sha256=digest(folder/'history.csv'),
-                                             explanation='Finest PT mesh; method and timestep controls are kept in separate tables.'))
 
 
-def plot_result(folder, target, inflow=INFLOW):
-    import diagram_style as ds
-    import prepare_figures as pf
-    model = Dynearthsol(str(folder/'column'))
-    rows = scan_frames(str(folder/'column'))
-    x = model.read_field(0, 'coordinate')
-    history = np.loadtxt(folder/'history.csv', delimiter=',', skiprows=1)
-    width = float(np.ptp(x[:, 0]))
-    depth = np.linspace(0, REF.height, 301)
-    with pf.plt.rc_context(ds.FIGURE_RC):
-        fig, axes = ds.result_figure(2)
-        for t, color in zip((.1, .5, 1., 4.), ds.SERIES):
-            row = min(rows, key=lambda r: abs(r['time']-t))
-            pressure = model.read_field(row['frame'], 'pore pressure')
-            ds.analytical(axes[0], reference(depth, row['time'], inflow=inflow)[0][0], depth,
-                          color=color, label=f"$t={row['time']:g}$ s")
-            line = np.isclose(x[:, 0], width/2)
-            ds.des(axes[0], pressure[line], -x[line, -1], color=color, label='_nolegend_')
-        axes[0].invert_yaxis()
-        ds.panel(axes[0], 'a', 'Pressure while the column fills', xlabel='pressure (Pa)', ylabel='depth (m)')
-        ds.key(axes[0], loc='upper right')
-        sampled = history[::max(1, len(history)//24)]
-        for exact, discrete, label, color in ((5, 1, 'stored fluid', ds.WATER), (8, 6, 'drain outflow', ds.HOT)):
-            ds.analytical(axes[1], history[:, 0], history[:, exact]/width*1e6, color=color, label=label)
-            ds.des(axes[1], sampled[:, 0], sampled[:, discrete]/width*1e6, color=color, label='_nolegend_')
-        ds.panel(axes[1], 'b', 'Independent water balance', xlabel='time (s)', ylabel=r'volume / area ($\mu$m)')
-        ds.key(axes[1])
-        pf.save_figure(fig, target, 'result')
 
 
 def main():
@@ -318,10 +279,6 @@ def main():
     summary = dict(reference_checks=reference_checks(), cases=reports or
                    [analyze(out/name, manifest['method']) for name in manifest['cases']])
     write_json(out/'summary.json', summary)
-    if args.figures:
-        assert manifest['method'] == 'pt' and summary['cases'][0]['dimension'] == 2
-        selected = min(manifest['cases'], key=lambda name: float(name[1:]))
-        figures(out, selected)
 
 
 if __name__ == '__main__':

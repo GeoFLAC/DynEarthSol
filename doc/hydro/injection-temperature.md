@@ -121,7 +121,7 @@ Recorded studies: `results/runs/injection-temperature-20261108/`.
 
 ## Completed 3D slab
 
-The 0.2 m slab completes at source `4ec082f`. Maximum temperature errors
+The 0.2 m slab completes at source `3774df0`. Maximum temperature errors
 at 125,000, 250,000, 375,000 and 500,000 s are 5.851, 4.064, 3.240 and
 2.767% of the imposed temperature rise. Stored heat is lower than the
 reference by a fixed 71.259 kJ startup amount: 0.2728% of supplied heat

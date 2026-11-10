@@ -85,6 +85,6 @@ python3 tests/functional/hydromechanics/check_theis_wells.py \
 
 The recorded study and output hashes are in
 [summary.json](../../benchmarks/poromechanics/results/runs/transport-qualification-20261108/multiwell/summary.json).
-It binds the executable to the frozen solver qualification for `c5fc173`.
+It binds the executable to the frozen solver qualification for `3774df0`.
 The existing coupled small-strain test remains under
 `check_multiwell.py`; this analytical check is `check_theis_wells.py`.

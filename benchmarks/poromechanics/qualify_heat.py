@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import consolidation_refinement as cr
-import prepare_figures as pf
+import consolidation as pf
 
 
 def load_case(study, spacing, steps, consumed, executable=None):

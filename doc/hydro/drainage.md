@@ -65,7 +65,7 @@ run left `control.characteristic_speed` at 0
 with no boundary velocity, so the skeleton never moved; it is kept with a
 note (`mesh-2d/NOTE-explicit.txt`) and excluded.
 
-The 3D sanity check at `4ec082f` uses 0.05 m spacing and 480 PT steps.
+The 3D sanity check at `3774df0` uses 0.05 m spacing and 480 PT steps.
 At the same four times its pressure errors are 0.527 / 0.300 / 0.188 / 0.135%
 of $\rho_f gH$, and settlement errors are 0.190 / 0.059 / 0.029 / 0.014%.
 These agree with the 2D sequence at the same spacing; this single 3D mesh

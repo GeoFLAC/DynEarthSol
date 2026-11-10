@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-import prepare_figures as pf
+import consolidation as pf
 
 
 def digest(path):

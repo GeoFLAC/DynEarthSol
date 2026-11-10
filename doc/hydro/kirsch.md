@@ -96,8 +96,6 @@ application_run=benchmarks/poromechanics/results/runs/application-qualification-
 python3 tests/functional/hydromechanics/check_kirsch.py \
   "$application_solver" "$application_run" \
   --spacings .2 .1 .05 .025 --binary-manifest "$application_manifest"
-python3 benchmarks/poromechanics/qualify_kirsch.py \
-  "$application_run" "$application_run/review"
 ```
 
 The [qualification record](../../benchmarks/poromechanics/results/runs/application-qualification-20261108/kirsch/qualification.json)

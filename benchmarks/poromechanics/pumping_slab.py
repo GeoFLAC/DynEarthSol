@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pump a thin 3D DES slab and compare it with the averaged-aquifer reference.
 
-Usage: pumping_slab.py OUTPUT_DIRECTORY [--plot-only]
+Usage: pumping_slab.py OUTPUT_DIRECTORY [--analyze-only]
 A quarter slab (symmetry rollers at x=0 and y=0, roller base, free top) has a
 full-height well on its corner edge. While the pressure front stays well inside
 the domain, the slab approaches the plane-stress model of
@@ -19,10 +19,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-os.environ.setdefault('MPLCONFIGDIR', '/tmp/des-hydromechanics-matplotlib')
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import numpy as np
 
 from averaged_aquifer_reference import AveragedAquifer
@@ -95,45 +91,12 @@ def compare(case):
     return aq, rows
 
 
-def figure(aq, rows, output):
-    blue, orange, ink, ink2 = '#2a78d6', '#eb6834', '#0b0b0b', '#52514e'
-    plt.rcParams.update({'font.size': 9, 'axes.spines.top': False, 'axes.spines.right': False,
-                         'axes.grid': True, 'grid.color': '#e6e5e1', 'grid.linewidth': 0.6,
-                         'legend.frameon': False, 'axes.titlelocation': 'left'})
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), gridspec_kw=dict(wspace=0.25))
-    r = np.geomspace(BAND[0], BAND[1], 200)
-    last = rows[-1]
-    for k, row in enumerate((rows[0], last)):
-        ref = aq.line_well(r, row['time_s'], Q)
-        shade = '#86b6ef' if k == 0 else '#1c5cab'
-        axes[0].plot(r, -ref['pressure'] / 1e3, color=ink, linewidth=1.6)
-        axes[0].plot(row['plot']['r_node'], -row['plot']['p'] / 1e3, 'o', markersize=2.5,
-                     color=shade, alpha=0.6, label=f"DES, t = {row['time_s']:.0f} s")
-    axes[0].plot([], [], color=ink, label='Reference (plane stress)')
-    axes[0].set(xscale='log', xlabel='Radius (m)', ylabel='Pressure drop (kPa)',
-                title='(a) Pore pressure across the slab')
-    axes[0].legend()
-    ref = aq.line_well(r, last['time_s'], Q)
-    axes[1].plot(r, -ref['areal_strain'] * 1e6, color=ink, linewidth=1.6,
-                 label='Reference: areal = vertical')
-    axes[1].plot(last['plot']['r_elem'], -last['plot']['areal'] * 1e6, 'o', markersize=2.5,
-                 color=blue, alpha=0.6, label='DES areal strain')
-    axes[1].plot(last['plot']['r_elem'], -last['plot']['vertical'] * 1e6, 's', markersize=2.5,
-                 color=orange, alpha=0.6, label='DES vertical strain')
-    axes[1].set(xscale='log', xlabel='Radius (m)', ylabel='Contraction (microstrain)',
-                title=f"(b) Strain split at t = {last['time_s']:.0f} s")
-    axes[1].legend()
-    fig.suptitle('Thin 3D DES slab vs the averaged-aquifer reference', x=0.06, ha='left',
-                 fontsize=11, fontweight='semibold', y=1.02)
-    for suffix in ('png', 'svg', 'pdf'):
-        fig.savefig(output / f'pumping_slab.{suffix}', dpi=180, bbox_inches='tight')
-    plt.close(fig)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--plot-only', action='store_true')
+    parser.add_argument('--analyze-only', '--plot-only', dest='plot_only', action='store_true', help='Check saved runs')
     parser.add_argument('--resolution', type=float, default=20.0, help='Uniform mesh spacing in m')
     args = parser.parse_args()
     if not math.isfinite(args.resolution) or args.resolution <= 0:
@@ -155,7 +118,6 @@ def main():
                            env=dict(os.environ, OMP_NUM_THREADS='1'),
                            stdout=stream, stderr=subprocess.STDOUT, timeout=3600)
     aq, rows = compare(case)
-    figure(aq, rows, output)
     summary = [{k: v for k, v in row.items() if k != 'plot'} for row in rows]
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(json.dumps(summary, indent=2))

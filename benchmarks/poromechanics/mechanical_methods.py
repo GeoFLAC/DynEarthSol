@@ -9,7 +9,6 @@ Run one dimension at a time with a 6 GiB virtual-memory limit.
 import argparse
 import configparser
 import hashlib
-import html
 import itertools
 import json
 import math
@@ -21,7 +20,7 @@ import time
 import numpy as np
 
 import consolidation_refinement as cr
-import prepare_figures as pf
+import consolidation as pf
 
 
 def cases(settings):
@@ -58,7 +57,7 @@ def run(output, settings):
                       source_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
                       executable_sha256=cr.digest(executable),
                       analysis_sha256={name: cr.digest(Path(__file__).with_name(name)) for name in
-                                       ('mechanical_methods.py', 'prepare_figures.py',
+                                       ('mechanical_methods.py', 'consolidation.py',
                                         'consolidation_refinement.py', 'terzaghi_reference.py')},
                       reader_sha256=cr.digest(pf.ROOT / 'Dynearthsol.py'), cases={})
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -153,7 +152,6 @@ def analyze(output, settings):
     provenance = json.loads((output / 'provenance.json').read_text())
     report = dict(settings=settings, analysis_sha256=cr.digest(Path(__file__)),
                   qualification='Exploratory; stability alone does not establish accuracy.', cases={})
-    curves = {}
     for name, record in provenance['cases'].items():
         folder = output / name / f'terzaghi-{settings["dimension"]}d'
         if cr.digest(folder / 'input.cfg') != record['input_sha256']:
@@ -175,52 +173,12 @@ def analyze(output, settings):
                 result['late_max_pressure_error_over_load'] = float(case['pressure_error'][late].max())
                 result['late_max_settlement_error_over_drained'] = float(case['settlement_error'][late].max())
                 result['drainage_time_s'] = case['reference'].height**2/case['reference'].diffusivity
-                curves[name] = case
             except (RuntimeError, ValueError, np.linalg.LinAlgError) as error:
                 result.update(status='unqualified', error=str(error))
         else:
             result['error'] = record['error']
         report['cases'][name] = result
     cr.write_json(output / 'summary.json', report)
-    figure, axes = pf.plt.subplots(len(settings['initial_speeds_m_s']), 2, squeeze=False,
-                                   figsize=(11, 3.5*len(settings['initial_speeds_m_s'])))
-    for row, speed in enumerate(settings['initial_speeds_m_s']):
-        for name, case in curves.items():
-            control = provenance['cases'][name]['control']
-            if name.startswith('pt'):
-                color, style, label = 'black', (':' if name == 'pt0' else '-'), name.upper()
-            else:
-                if float(control['characteristic_speed']) != speed:
-                    continue
-                scaling = float(control['inertial_scaling'])
-                scales = settings.get('scalings', [1e4, 1e5, 1e6])
-                color = pf.COLORS[scales.index(scaling) % len(pf.COLORS)]
-                method = name.split('-S')[0]
-                style = {'explicit': ':', 'gvs-shear': '--', 'gvs-bulk': '-'}[method]
-                label = f'{method}, S={scaling:g}'
-            active = case['times'] > 0
-            for column, field in enumerate(('pressure_error', 'settlement_error')):
-                axes[row, column].semilogy(case['times'][active], case[field][active],
-                                           color=color, linestyle=style, label=label)
-        for column, ylabel in enumerate(('max pressure error / load', 'settlement error / drained')):
-            axes[row, column].set(xlabel='physical time (s)', ylabel=ylabel,
-                                   title=f'initial velocity scale {speed:g} m/s')
-            axes[row, column].grid(alpha=.2)
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    figure.legend(handles, labels, loc='upper center', ncol=3, fontsize=8,
-                  bbox_to_anchor=(.5, -.02))
-    figure.tight_layout()
-    pf.save_figure(figure, output, 'mechanical-methods')
-    rows = ''.join('<tr><td>'+html.escape(name)+'</td><td>'+html.escape(result['status'])+
-                   '</td><td>'+html.escape(str(result.get('late_max_pressure_error_over_load', '')))+
-                   '</td><td>'+html.escape(str(result.get('error', '')))+ '</td></tr>'
-                   for name, result in report['cases'].items())
-    (output / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Mechanical methods</title>'
-        '<h1>Mechanical method exploration</h1><p>'+html.escape(report['qualification'])+
-        '</p><p><a href="summary.json">Metrics</a> · <a href="provenance.json">Provenance</a> · '
-        '<a href="mechanical-methods.pdf">PDF</a></p><img src="mechanical-methods.svg" width="1000" '
-        'alt="Pressure and settlement error histories"><table border="1"><tr><th>Case</th><th>Status</th>'
-        '<th>Late pressure/load error</th><th>Failure or limit</th></tr>'+rows+'</table>\n')
     print(json.dumps(report, indent=2))
 
 

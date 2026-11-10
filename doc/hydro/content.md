@@ -172,13 +172,13 @@ ulimit -v 6291456
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 solver=benchmarks/poromechanics/results/runs/restart-timestep-20261108/candidate/dynearthsol2d
 python3 benchmarks/poromechanics/fluid_content.py "$solver" /new/content-spatial \
-  --spacings .2 .1 .05 --dt .005 --duration 4 --figures
+  --spacings .2 .1 .05 --dt .005 --duration 4
 python3 benchmarks/poromechanics/fluid_content.py "$solver" /new/content-time \
   --spacings .05 --dt .01 --duration 1
 python3 benchmarks/poromechanics/fluid_content.py "$solver" /new/content-gvs \
   --method gvs-bulk --spacings .2 --duration .1 --inflow .001
 python3 benchmarks/poromechanics/fluid_content.py "$solver" /new/content-spatial \
-  --replay --figures
+  --replay
 ```
 
 The retained studies, input files, every-step CSV tables, all-frame hashes

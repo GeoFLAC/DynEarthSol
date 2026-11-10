@@ -185,11 +185,11 @@ ulimit -v 6291456
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 solver=benchmarks/poromechanics/results/runs/restart-timestep-20261108/candidate/dynearthsol2d
 python3 benchmarks/poromechanics/thermal_cell.py "$solver" /new/thermal-cell \
-  --dt .01 --figures
+  --dt .01
 python3 benchmarks/poromechanics/thermal_cell.py "$solver" /new/thermal-fine \
   --methods pt --boundaries fixed --dt .000625
 python3 benchmarks/poromechanics/thermal_cell.py "$solver" /new/thermal-cell \
-  --replay --figures
+  --replay
 ```
 
 Use the corresponding frozen HDF5/3D executable and `--ndims 3` for the

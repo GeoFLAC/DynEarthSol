@@ -78,4 +78,4 @@ python3 tests/functional/hydromechanics/check_open_flow.py \
 
 The recorded study, input/seed hashes and all-frame budgets are in
 [summary.json](../../benchmarks/poromechanics/results/runs/transport-qualification-20261108/open-flow/summary.json).
-The executable is bound to the frozen solver qualification for `c5fc173`.
+The executable is bound to the frozen solver qualification for `3774df0`.

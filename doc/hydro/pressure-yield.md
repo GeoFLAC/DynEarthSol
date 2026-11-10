@@ -77,7 +77,7 @@ pressures on a narrow axis the late bias looks large; the review figure
 therefore shows the yield-front depth, the DES stress paths and the signed
 error by step and mesh.
 
-The complete 3D sanity check at `4ec082f` (0.2 m, 400 steps) yields
+The complete 3D sanity check at `3774df0` (0.2 m, 400 steps) yields
 28 of 50 elements. Maximum onset error is 1.9504%, mean error 1.1285%, and
 the largest saved pressure increment is 0.3040% of the analytical onset.
 The first onset is 37.207 kPa against 37.085 kPa at its element centroid.

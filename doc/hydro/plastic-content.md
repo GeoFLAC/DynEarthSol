@@ -327,7 +327,7 @@ For pore recovery, build the chosen dimension/container, then run:
 
 ```sh
 python3 tests/functional/hydromechanics/check_recovery.py ./dynearthsol2d /new/recovery
-python3 benchmarks/poromechanics/recovery.py /new/recovery /new/recovery-fig
+# Plotting instructions and scripts are in the DES manual.
 ```
 
 The checker writes exact inputs and the summary; the plotter exports the

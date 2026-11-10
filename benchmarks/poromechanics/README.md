@@ -1,43 +1,12 @@
-# Hydromechanics figures and analytical references
+# Poromechanics benchmarks and analytical references
 
-Open the generated `results/review/index.html` after building the review:
-one best-verified
-snapshot per benchmark, with a setup schematic, analytical equations,
-reference curves, measured errors and scope. Its offline analytical appendix
-includes the derivations and reference limits for every selected case.
-The [review document](../../doc/hydro/index.md)
-links the formulations, source ownership and reference comparisons.
-
-`build_review.py` redraws the selected snapshots from their frozen evidence.
-`review.py` owns the pages and analytical derivations, and
-`setup_drawings.py` supplies the vector setup drawings;
-the builder rejects a new selected case without that material. Each problem has a separate HTML/Markdown page, with short names such as
-`heat.html` and `wave.html`. Setup/result figures export to PNG/SVG/PDF;
-equations use individual SVGs and editable LaTeX. The heat case is described in
-[groundwater heat transport](../../doc/hydro/heat.md).
-
-`benchmarks/poromechanics/results` holds generated results and is not
-part of the repository; it can be a link to a separate results directory.
-
-## Export the checked review for the manual
-
-After a review passes its data, figure and link checks, export it to a new
-upload folder:
-
-```sh
-python3 benchmarks/poromechanics/export_manual.py REVIEW NEW_UPLOAD
-```
-
-The exporter follows the current DES3D structure: poromechanics benchmarks
-by subject, groundwater/slope applications under Tutorials, and RSF/fault
-heating under fault benchmarks. It keeps supporting assets in one static
-folder and rewrites links between chapters. `EXPORT.json` lists every
-chapter destination and file checksum. Runtime identities are removed from
-portable metadata; physical checkpoint payloads remain unchanged. The
-source review stays intact. Test the upload in a separate manual checkout
-with the site's production build before installing it; exporting does not
-publish the site.
-The analysis and replay commands read results through that path.
+Inputs, analytical references and study runners live here. The complete theory,
+benchmark comparisons, application figures and figure scripts live in the
+[DES manual](https://geoflac.github.io/des3d/). Figure sources are in des3d's
+`docs/benchmarks/poromechanics/img/_src/` and
+`docs/tutorial/groundwater-slopes/img/_src/`; set `DES_DIR` to this checkout.
+The [implementation notes](../../doc/hydro/index.md) describe the solver.
+Generated study results are ignored by Git. Run and check them on a compute host.
 
 Build both CPU executables from the repository root, then run:
 
@@ -52,22 +21,18 @@ python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol2d benchmark
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmarks/poromechanics/results/wells-3d
 python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol2d benchmarks/poromechanics/results/poroperm-2d
 python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol3d benchmarks/poromechanics/results/poroperm-3d
-python3 benchmarks/poromechanics/prepare_figures.py --output benchmarks/poromechanics/results/baseline
+python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline
 ```
 
-NumPy, SciPy and Matplotlib are required for this benchmark runner. It uses
+NumPy and SciPy are required for these study runners. It uses
 one OpenMP thread and a 180-second timeout per DES run. An existing output
-directory is refused; use a new destination for another run. To redraw the
-figures without repeating the simulations:
+directory is refused; use a new destination for another run. To check saved runs without repeating the simulations:
 
 ```sh
-python3 benchmarks/poromechanics/prepare_figures.py --output benchmarks/poromechanics/results/baseline --plot-only
+python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline --analyze-only
 ```
 
-Open `results/baseline/index.html` for the gallery. Every figure is saved as
-PNG, SVG and PDF. The same directory includes CSV histories, `summary.json`,
-the exact run configurations, complete logs and raw DES outputs. Generated
-results are ignored by Git.
+Each study saves its configurations, logs, raw fields, metrics and provenance.
 
 The [implementation guide](../../doc/hydro/design.md) describes physical-step
 ownership and restart boundaries. `check_poroperm.py`
@@ -91,11 +56,8 @@ acceptance budgets and measured results. Run the cases sequentially:
 )
 ```
 
-The refinement runner saves an `index.html` gallery, PNG/SVG/PDF plots,
-CSV data and checksummed provenance. Its `--plot-only` option rebuilds the
-report from recorded inputs and raw saves without rerunning DES. The finest
-3D case took about 324 s on the recorded host; larger studies need a separate
-resource/runtime budget. All output directories must be new.
+The refinement runner saves CSV metrics and checksummed JSON provenance. Its
+`--analyze-only` option checks recorded inputs and raw saves.
 
 `pumping_slab.py` compares a uniform thin slab against the averaged-aquifer
 reference with pressure/strain error limits and executable/config hashes.
@@ -123,9 +85,9 @@ python3 benchmarks/poromechanics/compare_biot_storage.py --parent-bindir /path/t
 ```
 
 The default is `alpha=0.6`, with `K_s=K/(1-alpha)`. Each dimension uses the
-same input before/after and is compared at its own exact saved times. Open
-`results/biot-storage-comparison/index.html`; the figures, logs, hashes and
-CSV histories are kept together. `--plot-only` preserves original provenance.
+same input before/after and is compared at its own exact saved times.
+JSON metrics, logs, hashes and CSV histories are kept together.
+`--analyze-only` preserves original provenance.
 Use `--biot 1 --fixed-dt-seconds 0.5` in a new output directory to isolate
 the small finite-grain correction from changes in automatic timestep size.
 The alpha=1 run retains the original `K_s=37e9 Pa`.
@@ -168,33 +130,7 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
   steady, mechanics-mode and fixed/remeshed restart checks. The fixtures
   explicitly disable heat for these isothermal comparisons.
 
-For a review of actual unsaturated DES fields against the references, export
-the completed two-dimension verification results:
-
-```sh
-python3 benchmarks/poromechanics/unsaturated_figures.py benchmarks/poromechanics/results/unsaturated-integration-20261107 benchmarks/poromechanics/results/unsaturated-integration-20261107/figures
-```
-
-This writes an HTML gallery, PNG/SVG/PDF profiles, compact CSV data and hashes
-of the consumed inputs/saves. The profile errors must reproduce the test
-summaries. The export requires completed `unsaturated-2d` and `unsaturated-3d`
-subdirectories and refuses an existing output directory. These plots qualify
-transport comparisons; production Bishop mechanics remains unfinished.
-
-The existing Terzaghi traction configurations are used with `PT_option=1`,
-`PT_absolute_tolerance=1e-6` and explicit `gravity=10`, matching the completed
-PT regression audit. Other inputs are preserved. Pressure references take
-properties directly from the run configuration rather than the old notebooks.
-The analytical model uses `1/M = phi/K_f + (alpha-phi)/K_s`, constrained modulus
-`K+4G/3`, and diffusivity `(k/mu)/(1/M+alpha^2/(K+4G/3))`.
-
-DES frame zero is pre-load. The reference at zero time is the undrained
-post-load state, so only positive-time frames enter error metrics. Pressure
-errors are normalized by the applied load; settlement errors are normalized
-by final drained settlement. These coarse baseline runs precede separate
-mesh/time convergence and fluid-balance qualification.
-
-Reference: [PyLith Terzaghi solution](https://github.com/geodynamics/pylith/blob/a44a527dea7b4fb96a27e54791283c53a4a41340/tests/fullscale/poroelasticity/terzaghi/terzaghi_soln.py).
+The manual figure scripts read saved unsaturated 2D/3D profiles.
 
 ## Ordinary explicit, GVS and PT comparisons
 
@@ -217,29 +153,8 @@ python3 benchmarks/poromechanics/mechanical_methods.py benchmarks/poromechanics/
 Run dimensions sequentially. `--spacing`, `--dt-fraction`, `--duration`,
 `--initial-speeds`, `--scalings` and `--methods` support controlled followups;
 `--max-steps` and `--timeout` bound each run. GVS uses adaptive `fixed_dt=0`.
-The output contains `index.html`, PNG/SVG/PDF error histories, CSV histories,
-JSON metrics and provenance, input/executable/output hashes and raw saves.
+The output contains CSV histories, JSON metrics and provenance,
+input/executable/output hashes and raw saves. Figure scripts live in the manual.
 Replay refuses changed inputs or raw saves. Reported physical-reference
 kinetic and skeleton strain energies are diagnostics, not a coupled energy
 balance or a substitute for force and analytical-error checks.
-
-## Rebuild the selective review
-
-```sh
-python3 benchmarks/poromechanics/build_review.py benchmarks/poromechanics/results benchmarks/poromechanics/results/review --refresh
-```
-
-The review records its selected cases in `provenance.json`, with a plain-language
-explanation and a black reference curve overlaid on DES markers. Selection
-uses the predefined finest grid and target time, without parameter fitting.
-It includes portable Markdown, PNG/SVG/PDF figures, compact profiles, input
-decks and provenance. Unfinished applications and exploratory mechanics
-results are not presented as completed application validations. Raw runs
-remain available through the supporting evidence rather than the main page.
-
-The [undrained-wave qualification](../../doc/hydro/dynamics.md)
-explains the physical-inertia formulation and reproducible wave runner.
-Its selected 3D result is one figure with pressure and velocity; separate
-mesh/time studies remain in the evidence appendix.
-The portable review includes that physical-inertia derivation and checkpoint
-compatibility note under `appendix/`.

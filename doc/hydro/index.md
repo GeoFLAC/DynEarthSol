@@ -8,10 +8,10 @@ explicit and uses stable substeps within the mechanical interval. The
 [finite-density mass and energy](mass.md) give the equations and restrictions.
 
 The [benchmark guide](../../benchmarks/poromechanics/README.md) provides
-commands, inputs and independent references. A generated review gives one
-selected result per problem, with a setup diagram, reference derivation,
-measured error, input deck, portable figures and source hashes. The
-[DES manual](https://geoflac.github.io/des3d/) is the user-facing documentation.
+commands, inputs and independent references. The
+[DES manual](https://geoflac.github.io/des3d/) gives one selected result per
+problem with a setup diagram, reference derivation, measured error, input
+bundle and portable figures. Its source repository owns the figure scripts.
 
 ## Formulations and comparisons
 
@@ -42,8 +42,5 @@ reference. Application comparisons retain early-time and resolution limits;
 these examples do not establish complete earthquake cycles, general
 retentive remapping or fully qualified thermal plumes.
 
-Build and package a review using the commands in the benchmark guide.
-`provenance.json` identifies the data and source versions used by its figures;
-`EXPORT.json` records the website chapter destinations and exported hashes.
 Generated fields, experimental histories and local coordination notes are
 not source-repository inputs.

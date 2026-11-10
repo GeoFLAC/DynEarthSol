@@ -10,7 +10,6 @@ import argparse
 import configparser
 import csv
 import hashlib
-import html
 import json
 import math
 import os
@@ -20,7 +19,7 @@ import time
 
 import numpy as np
 
-import prepare_figures as pf
+import consolidation as pf
 
 
 def digest(path):
@@ -89,7 +88,7 @@ def simulate(output, settings):
     provenance = dict(source_commit=subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=pf.ROOT, text=True).strip(),
         analysis_sha256={name: digest(Path(__file__).with_name(name)) for name in
-                         ('consolidation_refinement.py', 'prepare_figures.py', 'terzaghi_reference.py')},
+                         ('consolidation_refinement.py', 'consolidation.py', 'terzaghi_reference.py')},
         reader_sha256=digest(pf.ROOT / 'Dynearthsol.py'), runs=plan(settings))
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     for key, run in provenance['runs'].items():
@@ -153,7 +152,6 @@ def analyze(output, settings):
 
     summary = dict(settings=settings, provenance=provenance, analysis_sha256=digest(Path(__file__)),
                    runs=records, dimensions={})
-    fig, axes = pf.plt.subplots(2, 2, figsize=(10, 8), constrained_layout=True)
     for dim in settings['dimensions']:
         spatial = sorted((r for r in records if r['dimension'] == dim and 'spatial' in r['roles']),
                          key=lambda r: -r['spacing_m'])
@@ -185,18 +183,6 @@ def analyze(output, settings):
         summary['dimensions'][str(dim)] = dict(checks=checks, spatial_pressure_orders=orders(pe, h),
             spatial_settlement_orders=orders(se, h), temporal_changes=changes,
             temporal_pressure_orders=orders(pc, dt), temporal_settlement_orders=orders(sc, dt))
-        for ax, x, y in [(axes[0, 0], h, pe), (axes[0, 1], h, se),
-                          (axes[1, 0], dt, pc), (axes[1, 1], dt, sc)]:
-            ax.loglog(x, y, 'o-', label=f'{dim}D')
-    for ax in axes.flat:
-        ax.grid(alpha=0.25, which='both')
-        ax.legend()
-    axes[0, 0].set(title='Mesh: pressure error / applied load', xlabel='Spacing (m)')
-    axes[0, 1].set(title='Mesh: settlement error / drained value', xlabel='Spacing (m)')
-    axes[1, 0].set(title='Time: pressure difference, dt versus dt/2', xlabel='Physical dt (s)')
-    axes[1, 1].set(title='Time: settlement difference, dt versus dt/2', xlabel='Physical dt (s)')
-    fig.suptitle('DES Terzaghi refinement at common physical sample times')
-    pf.save_figure(fig, output, 'terzaghi_refinement')
     summary['passed'] = all(all(d['checks'].values()) for d in summary['dimensions'].values())
     write_json(output / 'summary.json', summary)
     columns = ['dimension', 'spacing_m', 'dt_s', 'nodes', 'elements', 'hydraulic_row_bound_s',
@@ -205,26 +191,6 @@ def analyze(output, settings):
         writer = csv.DictWriter(stream, fieldnames=columns, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(records)
-    rows = ''.join(f'<tr><td>{html.escape(r["key"])}</td><td>{r["elements"]}</td>'
-                   f'<td>{100*r["max_pressure_error_over_load"]:.4g}%</td>'
-                   f'<td>{100*r["max_settlement_error_over_drained"]:.4g}%</td></tr>' for r in records)
-    (output / 'index.html').write_text(
-        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Terzaghi refinement</title>'
-        '<style>body{font:17px/1.5 system-ui;max-width:1100px;margin:32px auto;padding:0 20px}'
-        'img{width:100%}td,th{padding:6px 16px;text-align:left}</style>'
-        '<h1>Terzaghi mesh and timestep refinement</h1><p>Actual DES 2D/3D output; '
-        'fixed mesh, zero gravity, independent Biot reference. Spatial runs share one dt; '
-        'temporal runs share one mesh. Each run remains below its independently assembled '
-        'one-substep hydraulic bound. Frame zero is pre-load and excluded.</p>'
-        '<p>Pressure error is normalized by load, settlement by drained settlement. '
-        'Time plots show differences between successive timesteps on the same mesh. '
-        'Observed orders apply to these samples; no universal order is asserted.</p>'
-        f'<p>Acceptance checks: {"PASS" if summary["passed"] else "FAIL"}. '
-        '<a href="summary.json">Full metrics and provenance</a> · <a href="metrics.csv">CSV</a> · '
-        '<a href="terzaghi_refinement.svg">SVG</a> · <a href="terzaghi_refinement.pdf">PDF</a></p>'
-        '<img src="terzaghi_refinement.png" alt="Mesh and timestep error trends">'
-        '<table><tr><th>Run</th><th>Elements</th><th>Pressure/load</th>'
-        f'<th>Settlement/drained</th></tr>{rows}</table></html>')
     print(json.dumps(summary['dimensions'], indent=2))
     return summary['passed']
 
@@ -240,7 +206,7 @@ def main():
     parser.add_argument('--duration', type=float, default=400.0)
     parser.add_argument('--sample-interval', type=float, default=100.0)
     parser.add_argument('--timeout', type=float, default=600)
-    parser.add_argument('--plot-only', action='store_true')
+    parser.add_argument('--analyze-only', '--plot-only', dest='plot_only', action='store_true', help='Check saved runs')
     args = parser.parse_args()
     output = args.output.resolve()
     if args.plot_only:
