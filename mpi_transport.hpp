@@ -20,6 +20,6 @@ inline int mpi_post_buffers(const MpiPeerBuffer* peers,int n,int tag,MPI_Request
     return pending;
 }
 inline void mpi_finish_buffers(int pending,MPI_Request* requests) {
-    MPI_Waitall(pending,requests,MPI_STATUSES_IGNORE);
+    if(pending) MPI_Waitall(pending,requests,MPI_STATUSES_IGNORE);
 }
 #endif

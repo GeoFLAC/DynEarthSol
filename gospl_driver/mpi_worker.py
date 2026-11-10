@@ -90,14 +90,14 @@ def main():
             except Exception:
                 error = traceback.format_exc()
             errors = comm.allgather(error)
+            error = next((e for e in errors if e), None)
             if rank == 0:
-                error = next((e for e in errors if e), None)
                 duration = time.perf_counter() - started
                 log.write(json.dumps(dict(operation=operation, mpi_size=comm.size,
                                           seconds=duration, ok=error is None)) + '\n')
                 connection.send(dict(ok=error is None, value=value if error is None else None,
                                      error=error))
-            if any(errors):
+            if error:
                 # All ranks have agreed on the error. Destroy collectively and
                 # leave through MPI_Finalize instead of concurrent MPI_Abort.
                 exit_status = 53

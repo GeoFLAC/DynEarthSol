@@ -84,12 +84,12 @@ void pack(const Fields& f,const int_vec& rows,double_vec& out) {
         k+=std::size_t(rows.size())*f.fields[i].columns;
     }
 }
-void unpack(const Fields& f,const int_vec& rows,const double* in) {
+void unpack(const Fields& f,const int* rows,int nrows,const double* in) {
     std::size_t k=0;
-    if(rows.empty())return;
+    if(!nrows)return;
     for(int i=0;i<f.n;++i) {
-        mpi_unpack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows.data(),rows.size(),in+k);
-        k+=std::size_t(rows.size())*f.fields[i].columns;
+        mpi_unpack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows,nrows,in+k);
+        k+=std::size_t(nrows)*f.fields[i].columns;
     }
 }
 #ifdef ACC
@@ -139,40 +139,21 @@ void local_archive(MpiState& a,Variables& v) {
 #define F(x) a.value(v.x);
     MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
     MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers) F(markers_in_elem) F(hydrous_elemmarkers)
+    F(connectivity) F(elemmarkers)
     F(top_elems) F(ntop_elems) F(surfinfo.top_nodes) F(surfinfo.ntop)
-    F(log_table) F(tan_table) F(sin_table)
 #undef F
     a.value(v.support.arr_data);a.value(v.support.idx_data);a.value(v.support.lidx_data);v.support.rebind();
-    int nm=v.markersets.size();a.value(nm);
-    if(a.reading()) while(int(v.markersets.size())>nm) {delete v.markersets.back();v.markersets.pop_back();}
-    for(int j=0;j<nm;++j) {
-        std::string name=a.reading()?"":v.markersets[j]->get_name();a.value(name);
-        if(a.reading() && j==int(v.markersets.size())) v.markersets.push_back(new MarkerSet(name));
-        v.markersets[j]->mpi_state(a);
-    }
-    if(a.reading()) {
-        if(!v.ntmp) v.ntmp=new double_vec;
-        if(!v.etmp) v.etmp=new double_vec;
-        if(!v.etmp_int) v.etmp_int=new int_vec;
-        if(!v.tmp_result) v.tmp_result=new elem_cache;
-        v.ntmp->resize(v.nnode);v.etmp->resize(v.nelem);
-        v.etmp_int->resize(v.nelem);v.tmp_result->resize(v.nelem,false);
-    }
 }
 void release(Variables& v) {
     delete v.mat;v.mat=nullptr;
 #define F(x) delete v.x;v.x=nullptr;
     MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
     MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers) F(markers_in_elem) F(hydrous_elemmarkers)
-    F(log_table) F(tan_table) F(sin_table) F(bnormals) F(bcflag)
+    F(connectivity) F(elemmarkers) F(bnormals) F(bcflag)
     F(top_elems) F(surfinfo.top_nodes)
     F(ntmp) F(etmp) F(etmp_int) F(tmp_result)
 #undef F
     for(int i=0;i<nbdrytypes;++i) {delete v.bnodes[i];delete v.bfacets[i];v.bnodes[i]=nullptr;v.bfacets[i]=nullptr;}
-    for(auto* m:v.markersets) delete m;
-    v.markersets.clear();
 }
 template<class T> void select(const std::vector<T>* src,std::vector<T>*& dst,const int_vec& ids) {
     if(!src) {delete dst;dst=nullptr;return;}
@@ -186,18 +167,11 @@ template<class T,int N> void select(const Array2D<T,N>* src,Array2D<T,N>*& dst,c
     dst->resize(ids.size(),false);
     for(int d=0;d<N;++d) for(int i=0;i<int(ids.size());++i) (*dst)[i][d]=(*src)[ids[i]][d];
 }
-template<class T> void copy(const T* src,T*& dst) {
-    if(!src) {delete dst;dst=nullptr;return;}
-    if(!dst) dst=new T;
-    *dst=*src;
-}
-template<class T,int N> void assign(Array2D<T,N>& dst,const Array2D<T,N>& src) {
-    dst.resize(src.size(),false); std::copy(src.data(),src.data()+src.num_elements(),dst.data());
-}
 template<class T,int N> void copy(const Array2D<T,N>* src,Array2D<T,N>*& dst) {
     if(!src) {delete dst;dst=nullptr;return;}
     if(!dst) dst=new Array2D<T,N>;
-    assign(*dst,*src);
+    dst->resize(src->size(),false);
+    std::copy(src->data(),src->data()+src->num_elements(),dst->data());
 }
 
 void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
@@ -214,7 +188,7 @@ void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
 #undef F
 #define F(x) select(g.x,v.x,p.elements);
     MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers) F(hydrous_elemmarkers)
+    F(connectivity) F(elemmarkers)
 #undef F
     for(int e=0;e<v.nelem;++e) for(int j=0;j<NODES_PER_ELEM;++j)
         (*v.connectivity)[e][j]=p.node_local.at((*v.connectivity)[e][j]);
@@ -242,7 +216,7 @@ void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
         }
         v.support.idx_data[n+1]=v.support.arr_data.size();
     }
-    v.support.rebind();copy(g.log_table,v.log_table);copy(g.tan_table,v.tan_table);copy(g.sin_table,v.sin_table);
+    v.support.rebind();
     if(!v.top_elems)v.top_elems=new int_vec;
     v.top_elems->clear();
     if(g.top_elems)for(int id:*g.top_elems) {
@@ -257,27 +231,13 @@ void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
         if(at!=p.node_local.end())v.surfinfo.top_nodes->push_back(at->second);
     }
     v.surfinfo.ntop=v.surfinfo.top_nodes->size();
-    if(!v.markers_in_elem) v.markers_in_elem=new int_vec2D;
-    v.markers_in_elem->assign(v.nelem,int_vec{});
-    while(v.markersets.size()>g.markersets.size()) {delete v.markersets.back();v.markersets.pop_back();}
-    for(int set=0;set<int(g.markersets.size());++set) {
-        const MarkerSet& source=*g.markersets[set];
-        if(set==int(v.markersets.size())) v.markersets.push_back(new MarkerSet(source.get_name()));
-        int_vec ids,elems;
-        for(int m=0;m<source.get_nmarkers();++m) {
-            auto at=p.element_local.find(source.get_elem(m));if(at==p.element_local.end())continue;
-            if(set==0) (*v.markers_in_elem)[at->second].push_back(ids.size());
-            ids.push_back(m);elems.push_back(at->second);
-        }
-        v.markersets[set]->mpi_subset(source,ids,elems);
-    }
 }
 const char* op_name(MpiOp op) {
     switch(op) {
 #define F(x) case MpiOp::x:return #x
         F(State);F(Temperature);F(PorePressure);F(StrainRate);F(Stress);F(Force);F(Velocity);
         F(Coordinate);F(Rotation);F(Volume);F(Dvoldt);F(Edvoldt);F(Nmd);F(Mass);F(TimeStep);
-        F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SurfaceIdle);F(SwapVolume);
+        F(OldMeanStress);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SurfaceIdle);F(SwapVolume);
         F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Geometry);F(Boundary);F(Sample);F(Average);F(Metrics);
         F(Report);F(Stop);F(Count);
 #undef F
@@ -402,6 +362,10 @@ struct MpiSimulation::Impl {
             // Only root management changes marker composition. Refresh here,
             // before rebuilding the compact caches from the new marker counts.
             master->mat->refresh_elem_cache();
+            // Marker operations stay on the management mesh. Compute ranks
+            // need material counts, not copies of the individual records.
+            if(rebalance && !master->markersets.empty())
+                master->markersets[0]->check_marker_elem_consistency(*master);
             // Serial remeshing leaves this inactive hydraulic scratch array at
             // its old size. Compact selection/collection still visits it.
             if(!param.control.has_hydraulic_diffusion && master->old_mean_stress)
@@ -409,19 +373,30 @@ struct MpiSimulation::Impl {
             global_n=master->nnode;global_e=master->nelem;
             if(rebalance || parts.empty()) {parts=mpi_partition_mesh(*master,size);++generation;trace();}
         }
-        MPI_Bcast(&global_n,1,MPI_INT,0,MPI_COMM_WORLD);MPI_Bcast(&global_e,1,MPI_INT,0,MPI_COMM_WORLD);
+        int extent[]={global_n,global_e};
+        MPI_Bcast(extent,2,MPI_INT,0,MPI_COMM_WORLD);global_n=extent[0];global_e=extent[1];
         for(int r=0;r<size;++r) {
             std::uint64_t n=0;
-            if(rank==0) {
+            if(rank==0 && r) {
                 make_local(*master,parts[r],packing);MpiState a(bytes,true);parts[r].archive(a);local_archive(a,packing);n=bytes.size();
-                if(r) {MPI_Send(&n,1,MPI_UINT64_T,r,20,MPI_COMM_WORLD);MPI_Send(bytes.data(),count(n),MPI_BYTE,r,21,MPI_COMM_WORLD);state_bytes+=n;}
+                MPI_Send(&n,1,MPI_UINT64_T,r,20,MPI_COMM_WORLD);MPI_Send(bytes.data(),count(n),MPI_BYTE,r,21,MPI_COMM_WORLD);state_bytes+=n;
             }
             if(rank==r) {
-                if(r) {MPI_Recv(&n,1,MPI_UINT64_T,0,20,MPI_COMM_WORLD,MPI_STATUS_IGNORE);bytes.resize(n);MPI_Recv(bytes.data(),count(n),MPI_BYTE,0,21,MPI_COMM_WORLD,MPI_STATUS_IGNORE);}
-                MpiState a(bytes,false);part.archive(a);local_archive(a,local);a.finish();
+                if(r) {
+                    MPI_Recv(&n,1,MPI_UINT64_T,0,20,MPI_COMM_WORLD,MPI_STATUS_IGNORE);bytes.resize(n);
+                    MPI_Recv(bytes.data(),count(n),MPI_BYTE,0,21,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+                    MpiState a(bytes,false);part.archive(a);local_archive(a,local);a.finish();
+                } else {
+                    part=parts[0];make_local(*master,part,local);
+                }
+                if(!local.ntmp) local.ntmp=new double_vec;
+                if(!local.etmp) local.etmp=new double_vec;
+                if(!local.etmp_int) local.etmp_int=new int_vec;
+                if(!local.tmp_result) local.tmp_result=new elem_cache;
+                local.ntmp->resize(local.nnode);local.etmp->resize(local.nelem);
+                local.etmp_int->resize(local.nelem);local.tmp_result->resize(local.nelem,false);
                 if(!local.mat) local.mat=new MatProps(param,local);else local.mat->refresh_elem_cache();
                 local.mpi=master?master->mpi:local.mpi;
-                if(rebalance && !local.markersets.empty()) local.markersets[0]->check_marker_elem_consistency(local);
             }
         }
         double hydro=rank==0?master->mat->hydro_diff_max:0;
@@ -461,9 +436,13 @@ struct MpiSimulation::Impl {
             counts.assign(size,0);offsets.assign(size,0);
             for(int r=0;r<size;++r) {
                 const auto& p=parts[r];int n=nodes?p.owned_nodes:p.owned_elements;
-                if(surface)n=nodes?p.surface_owned_nodes.size():p.surface_owned_elements.size();
+                if(surface && !query) {
+                    const auto& selected=nodes?p.surface_owned_nodes:p.surface_owned_elements;
+                    const auto& ids=nodes?p.nodes:p.elements;n=selected.size();
+                    for(int i:selected)global_rows.push_back(ids[i]);
+                }
                 if(query) {n=0;const auto& map=nodes?p.node_local:p.element_local;const int owned=nodes?p.owned_nodes:p.owned_elements;
-                    for(int id:*query) {auto at=map.find(id);if(at!=map.end() && at->second<owned) ++n;}}
+                    for(int id:*query) {auto at=map.find(id);if(at!=map.end() && at->second<owned) {++n;global_rows.push_back(id);}}}
                 counts[r]=count(std::size_t(n)*from.columns);
                 if(r)offsets[r]=offsets[r-1]+counts[r-1];
             }
@@ -472,15 +451,13 @@ struct MpiSimulation::Impl {
         double start=MPI_Wtime();
         MPI_Gatherv(send.data(),count(send.size()),MPI_DOUBLE,recv.data(),counts.data(),offsets.data(),MPI_DOUBLE,0,MPI_COMM_WORLD);
         communication_s+=MPI_Wtime()-start;
+        std::size_t row_start=0;
         if(rank==0) for(int r=0;r<size;++r) {
-            const auto& p=parts[r];const auto& ids=nodes?p.nodes:p.elements;
-            const int_vec* selected=nodes?&p.node_rows:&p.element_rows;
-            if(surface) selected=nodes?&p.surface_owned_nodes:&p.surface_owned_elements;
-            global_rows.clear();
-            if(query) {const auto& map=nodes?p.node_local:p.element_local;int owned=nodes?p.owned_nodes:p.owned_elements;
-                for(int id:*query) {auto at=map.find(id);if(at!=map.end() && at->second<owned) global_rows.push_back(id);}}
-            else for(int i:*selected)global_rows.push_back(ids[i]);
-            unpack(to,global_rows,recv.data()+offsets[r]);if(r)root_bytes+=std::uint64_t(counts[r])*sizeof(double);
+            const auto& ids=nodes?parts[r].nodes:parts[r].elements;
+            const int n=counts[r]/from.columns;
+            if(n)unpack(to,surface||query?global_rows.data()+row_start:ids.data(),n,recv.data()+offsets[r]);
+            row_start+=n;
+            if(r)root_bytes+=std::uint64_t(counts[r])*sizeof(double);
         }
     }
     void scatter_surface(bool nodes,const Fields& from,const Fields& to) {
@@ -497,7 +474,7 @@ struct MpiSimulation::Impl {
         }
         recv.resize(std::size_t(own.size())*to.columns);double start=MPI_Wtime();
         MPI_Scatterv(scatter.data(),counts.data(),offsets.data(),MPI_DOUBLE,recv.data(),count(recv.size()),MPI_DOUBLE,0,MPI_COMM_WORLD);
-        communication_s+=MPI_Wtime()-start;unpack(to,own,recv.data());
+        communication_s+=MPI_Wtime()-start;unpack(to,own.data(),own.size(),recv.data());
     }
     void full() {
         if(root_version==version)return;
@@ -512,9 +489,9 @@ struct MpiSimulation::Impl {
         if(rank==0){gn.add(master->coord);ge.add(master->volume);}
         gather_rows(true,ln,gn);gather_rows(false,le,ge);geometry_version=version;
     }
-    Fields surface_n(Variables& v) {
+    Fields surface_n(Variables& v,bool velocity=true) {
         Fields f;f.add(v.coord);f.add(v.volume_n);
-        if(param.control.surface_process_option==11)f.add(v.vel);
+        if(velocity && param.control.surface_process_option==11 && param.control.gospl_velocity_coupling)f.add(v.vel);
         return f;
     }
     Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
@@ -532,33 +509,6 @@ struct MpiSimulation::Impl {
         if(rank){MpiState a(bytes,false);a.value(queries_n);a.value(queries_e);a.finish();}
         Fields gn,ge;if(rank==0){gn=node_fields(*master);ge=element_fields(*master);}
         gather_rows(true,node_fields(local),gn,false,&queries_n);gather_rows(false,element_fields(local),ge,false,&queries_e);
-    }
-    void average() {
-        const int interval=param.mesh.quality_check_step_interval;
-        if(interval<=1)return;
-        if(local.steps%interval==1) {
-#ifdef ACC
-            average_time=local.time;
-            average_coord.resize(local.nnode,false);average_strain.resize(local.nelem,false);
-            average_stress.resize(local.nelem,false);average_plastic.resize(local.nelem);
-            #pragma acc parallel loop collapse(2)
-            for(int c=0;c<NDIMS;++c)for(int n=0;n<local.nnode;++n)average_coord[n][c]=(*local.coord)[n][c];
-            #pragma acc parallel loop collapse(2)
-            for(int c=0;c<NSTR;++c)for(int e=0;e<local.nelem;++e) {
-                average_strain[e][c]=(*local.strain)[e][c];average_stress[e][c]=(*local.stress)[e][c];
-            }
-            #pragma acc parallel loop
-            for(int e=0;e<local.nelem;++e)average_plastic[e]=0.0;
-#else
-            average_time=local.time;assign(average_coord,*local.coord);assign(average_strain,*local.strain);
-            assign(average_stress,*local.stress);average_plastic.assign(local.nelem,0.0);
-#endif
-        } else {
-            #pragma acc parallel loop collapse(2)
-            for(int c=0;c<NSTR;++c) for(int e=0;e<part.owned_elements;++e) average_stress[e][c]+=(*local.stress)[e][c];
-            #pragma acc parallel loop
-            for(int e=0;e<part.owned_elements;++e) average_plastic[e]+=(*local.delta_plstrain)[e];
-        }
     }
     void collect_averages() {
         if(param.mesh.quality_check_step_interval<=1)return;
@@ -593,7 +543,6 @@ struct MpiSimulation::Impl {
         case MpiOp::Mass:compute_mass(param,v,arg,*v.volume_n,*v.mass,*v.tmass,*v.hmass,*v.ymass,*v.tmp_result);
             exchange(MpiEntity::Node,{{v.volume_n->data(),1},{v.mass->data(),1},{v.tmass->data(),1},{v.hmass->data(),1},{v.ymass->data(),1}});break;
         case MpiOp::OldMeanStress:update_old_mean_stress(param,v,*v.stress,*v.old_mean_stress);break;
-        case MpiOp::Friction:refresh_rsf_friction(param,v,*v.dyn_fric_coeff,*v.state_variable);break;
         case MpiOp::TimeStep:scalar=compute_dt(param,v,arg!=0);if(rank==0){master->max_global_vel_mag=v.max_global_vel_mag;master->global_dt_min=v.global_dt_min;}break;
         case MpiOp::Residual:scalar=calculate_residual_force(v,*v.force_residual);if(rank==0)master->l2_residual=scalar;break;
         case MpiOp::PhysicalPT:
@@ -624,8 +573,8 @@ struct MpiSimulation::Impl {
             if(rank==0) surface_processes(param,*master,*master->coord,*master->stress,*master->strain,*master->strain_rate,
                 *master->plstrain,*master->volume,*master->volume_n,master->surfinfo,master->markersets,*master->elemmarkers,*master->markers_in_elem);
             if(whole)distribute(false);
-            else {Fields gn,ge;if(rank==0){gn=surface_n(*master);ge=surface_e(*master);}
-                scatter_surface(true,gn,surface_n(v));scatter_surface(false,ge,surface_e(v));}
+            else {Fields gn,ge;if(rank==0){gn=surface_n(*master,false);ge=surface_e(*master);}
+                scatter_surface(true,gn,surface_n(v,false));scatter_surface(false,ge,surface_e(v));}
             break;
         }
         case MpiOp::Remesh:full();if(rank==0)remesh(param,*master,int(arg));distribute(true);break;
@@ -635,7 +584,8 @@ struct MpiSimulation::Impl {
         case MpiOp::Geometry:geometry();break;
         case MpiOp::Boundary:boundary();break;
         case MpiOp::Sample:query();break;
-        case MpiOp::Average:average();break;
+        case MpiOp::Average:Output::average_fields(v,param.mesh.quality_check_step_interval,
+            average_time,average_coord,average_strain,average_stress,average_plastic);break;
         case MpiOp::Metrics:compute_earthquake_metrics(v,measurements[0],measurements[1]);break;
         case MpiOp::Report: {
             MPI_Reduce(&payload_bytes,&all_payload_bytes,1,MPI_UINT64_T,MPI_SUM,0,MPI_COMM_WORLD);
@@ -652,7 +602,12 @@ struct MpiSimulation::Impl {
         // Every command boundary permits host-side scalar/cache changes, output
         // or state redistribution. No outstanding GPU producer may cross it.
         #pragma acc wait
-        if(op!=MpiOp::Collect && op!=MpiOp::Geometry && op!=MpiOp::Boundary && op!=MpiOp::Sample && op!=MpiOp::Average && op!=MpiOp::Metrics) ++version;
+        // Scalar diagnostics do not invalidate current copies of field arrays.
+        switch(op) {
+        case MpiOp::Collect:case MpiOp::Geometry:case MpiOp::Boundary:case MpiOp::Sample:
+        case MpiOp::Average:case MpiOp::Metrics:case MpiOp::TimeStep:case MpiOp::Residual:case MpiOp::Report:break;
+        default:++version;
+        }
         ++calls[int(op)];elapsed[int(op)]+=MPI_Wtime()-started;
         operation_comm[int(op)]+=communication_s-comm_before;inside=false;
     }
@@ -689,7 +644,8 @@ struct MpiSimulation::Impl {
 #ifdef ACC
             unpack_device(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].gpu_recv);
 #else
-            unpack(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].recv.data());
+            const auto& rows=pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements;
+            unpack(pending_fields,rows.data(),rows.size(),peer[i].recv.data());
 #endif
         }
         communication_s+=MPI_Wtime()-started;pending_active=false;
@@ -756,17 +712,27 @@ void MpiSimulation::attach(Variables& v){impl_->master=&v;impl_->active=true;syn
 void MpiSimulation::synchronize(Variables& v){dispatch(MpiOp::State,v);}
 bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
     auto& m=*impl_;if(!distributed() || m.inside || m.master!=&v)return false;
+    // Keep marker maintenance and requested surface reports on root. Other
+    // erosion-free steps use the existing compact mechanical correction.
+    if(op==MpiOp::Surface) {
+        const bool surface_report=NDIMS==2 && m.param.control.is_reporting_terrigenous_info &&
+            v.steps!=0 && v.steps%10000==0;
+        if(v.steps%m.param.mesh.quality_check_step_interval!=0 && !surface_report) {
+            bool idle=m.param.control.surface_process_option==0;
 #ifdef HAS_GOSPL_CPP_INTERFACE
-    // Preserve marker maintenance at mesh checks. Idle GoSPL steps retain local
-    // mechanical surface correction, without root state transfers or worker RPC.
-    if(op==MpiOp::Surface && m.param.control.surface_process_option==11 && v.gospl_driver &&
-       v.steps%m.param.mesh.quality_check_step_interval!=0 &&
-       !v.gospl_driver->coupling_due(v.dt/YEAR2SEC)) {
-        v.gospl_driver->advance_clock(v.dt/YEAR2SEC);
-        m.master->surfinfo.max_surf_vel=0;
-        op=MpiOp::SurfaceIdle;
-    }
+            if(m.param.control.surface_process_option==11 && v.gospl_driver &&
+               !v.gospl_driver->coupling_due(v.dt/YEAR2SEC)) {
+                v.gospl_driver->advance_clock(v.dt/YEAR2SEC);
+                idle=true;
+            }
 #endif
+            if(idle) {
+                std::fill(m.master->surfinfo.dh->begin(),m.master->surfinfo.dh->end(),0.0);
+                m.master->surfinfo.max_surf_vel=0;
+                op=MpiOp::SurfaceIdle;
+            }
+        }
+    }
     Command c{};c.operation=int(op);c.steps=v.steps;c.time=v.time;c.dt=v.dt;c.max_vbc=v.max_vbc_val;
     c.max_vel=v.max_global_vel_mag;c.global_dt=v.global_dt_min;c.surface_vel=v.surfinfo.max_surf_vel;c.argument=arg;
     c.hydraulic=m.param.control.has_hydraulic_diffusion;c.body_adjustment=m.param.ic.has_body_force_adjustment;
@@ -794,8 +760,8 @@ void MpiSimulation::boundary(const Variables& v){dispatch(MpiOp::Boundary,v);}
 void MpiSimulation::sample(const Variables& v,const int_vec& nodes,const int_vec& elements){impl_->queries_n=nodes;impl_->queries_e=elements;dispatch(MpiOp::Sample,v);}
 bool MpiSimulation::metrics(const Variables& v,double& s,double& p){if(!dispatch(MpiOp::Metrics,v))return false;s=impl_->measurements[0];p=impl_->measurements[1];return true;}
 void MpiSimulation::minimum(double* data,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,data,n,MPI_DOUBLE,MPI_MIN,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
-double MpiSimulation::maximum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
-double MpiSimulation::sum(double v){double r,t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
+double MpiSimulation::maximum(double v){maximum(&v,1);return v;}
+double MpiSimulation::sum(double v){sum(&v,1);return v;}
 void MpiSimulation::sum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 void MpiSimulation::maximum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
 int MpiSimulation::sum(int v){int r;double t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}

@@ -4,16 +4,14 @@
 #include <cstring>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <string>
 #include <type_traits>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 #include "array2d.hpp"
 #include "utils.hpp"
 
-// An in-memory state transfer between ranks of the same executable. No pointers,
-// container internals or unused marker capacity are put into the message.
+// An in-memory state transfer between ranks of the same executable. No pointers
+// or container internals are put into the message; marker records stay on root.
 class MpiState {
 public:
     MpiState(std::vector<unsigned char>& bytes, bool writing)
@@ -54,38 +52,6 @@ public:
         if (present) value(*item);
     }
     template<class A, class B> void value(std::pair<A,B>& item) { value(item.first); value(item.second); }
-    template<class K, class V> void value(std::map<K,V>& items) {
-        std::uint64_t size = items.size(); value(size);
-        if (reading()) {
-            items.clear();
-            for (std::uint64_t i = 0; i < size; ++i) {
-                K key{}; V val{}; value(key); value(val); items.emplace(key, val);
-            }
-        } else for (const auto& item : items) {
-            K key = item.first; V val = item.second; value(key); value(val);
-        }
-    }
-    template<class K, class V> void value(std::unordered_map<K,V>& items) {
-        // Sort the wire representation independently of a container's hash iteration order.
-        std::map<K,V> sorted;
-        if (writing_) sorted.insert(items.begin(), items.end());
-        value(sorted);
-        if (reading()) { items.clear(); items.insert(sorted.begin(), sorted.end()); }
-    }
-    void value(std::string& item) {
-        std::uint64_t size = item.size(); value(size);
-        if (reading()) item.resize(size);
-        if (size) raw(&item[0], size);
-    }
-    template<class T, int N> void prefix(Array2D<T,N>& items, int count) {
-        for (int d = 0; d < N; ++d) {
-            auto component = items.component(d);
-            for (int i = 0; i < count; ++i) value(component[i]);
-        }
-    }
-    template<class T> void prefix(std::vector<T>& items, int count) {
-        raw(items.data(), std::size_t(count) * sizeof(T));
-    }
     void finish() const {
         if (reading() && position_ != bytes_.size())
             die(EXIT_INTERNAL_ASSERT, "unused bytes in MPI state");

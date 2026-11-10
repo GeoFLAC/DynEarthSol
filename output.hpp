@@ -42,6 +42,10 @@ private:
 
     void write_info(const Variables& var, double dt);
     void _write(const Variables& var, bool disable_averaging=false);
+    // Shared with compact compute ranks; the caller waits before host use.
+    static void average_fields(const Variables&, int interval, double& time0,
+                               array_t& coord0, tensor_t& strain0,
+                               tensor_t& stress_avg, double_vec& delta_plstrain_avg);
 
 public:
     Output(const Param& param, const BuildInfo& build, const CpuInfo& cpu,

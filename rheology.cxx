@@ -278,11 +278,8 @@ void refresh_rsf_friction(const Param& param, Variables& var,
                           double_vec& dyn_fric_coeff,
                           const double_vec& state_variable)
 {
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Friction, var, 0.0)) return;
-#endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
     if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
 
@@ -840,8 +837,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Stress, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -1225,8 +1222,8 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::OldMeanStress, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);

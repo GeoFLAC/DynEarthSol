@@ -370,7 +370,7 @@ namespace {
     // rebuild, at the next quality check or remesh.
     void subduction_phase_changes(const Param& param, Variables& var, MarkerSet& ms)
     {
-        const int mpi_eb=mpi_element_begin(var), mpi_ee=mpi_element_end(var);
+        const int mpi_eb=0, mpi_ee=mpi_element_end(var);
 
         int n = ms.get_nmarkers();
         if (n == 0) return;
@@ -745,7 +745,7 @@ void phase_changes(const Param& param, Variables& var)
         return;
     }
 
-    const int mpi_eb=mpi_element_begin(var), mpi_ee=mpi_element_end(var);
+    const int mpi_eb=0, mpi_ee=mpi_element_end(var);
     int is_error = 0;
 
     #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(+:is_error) async firstprivate(mpi_eb,mpi_ee)

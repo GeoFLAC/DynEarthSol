@@ -226,8 +226,8 @@ void compute_volume(const Variables &var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Volume, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -264,8 +264,8 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Dvoldt, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -319,8 +319,8 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Edvoldt, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -357,8 +357,8 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Nmd, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -1606,8 +1606,8 @@ double compute_dt(const Param& param, Variables& var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::TimeStep, var, include_rsf_state_limit ? 1.0 : 0.0)) return var.mpi->result();
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -1841,8 +1841,8 @@ void compute_mass(const Param &param, const Variables &var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Mass, var, max_vbc_val)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);

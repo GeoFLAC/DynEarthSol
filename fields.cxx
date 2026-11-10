@@ -158,8 +158,8 @@ void update_temperature(const Param &param, const Variables &var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Temperature, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -292,8 +292,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::PorePressure, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -420,8 +420,8 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::StrainRate, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -631,8 +631,8 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Force, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -767,8 +767,8 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Residual, var, 0.0)) return var.mpi->result();
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -804,8 +804,8 @@ void update_velocity(const Variables& var, array_t& vel)
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Velocity, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
@@ -829,8 +829,8 @@ void update_coordinate(const Variables& var, array_t& coord)
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Coordinate, var, 0.0)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -902,8 +902,8 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain,
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Rotation, var, dt)) return;
 #endif
-    const int mpi_eb = mpi_element_begin(var), mpi_ee = mpi_element_end(var);
-    const int mpi_nb = mpi_node_begin(var), mpi_ne = mpi_node_end(var);
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
 
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);

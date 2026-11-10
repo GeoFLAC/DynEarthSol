@@ -19,7 +19,7 @@ from petsc4py import PETSc
 
 
 def _sha(value):
-    return hashlib.sha256(np.ascontiguousarray(value).tobytes()).hexdigest()
+    return hashlib.sha256(memoryview(np.ascontiguousarray(value))).hexdigest()
 
 
 def _configuration(model):
@@ -58,8 +58,10 @@ def _capture(model):
             # save() serializes the complete snapshot once and rejects unknown
             # nonserializable values before writing this rank's state file.
             data[name]=value
+    # Partition IDs stay fixed while save() serializes this snapshot. Reuse the
+    # arrays already in data so pickle can preserve their shared storage.
     return dict(data=data,vectors=vectors,matrices=matrices,solvers=solvers,resources=resources,
-                owned_ids=np.asarray(model.glbIDs).copy(),local_ids=np.asarray(model.locIDs).copy(),
+                owned_ids=np.asarray(model.glbIDs),local_ids=np.asarray(model.locIDs),
                 mesh_sha=_sha(model.mCoords),configuration=_configuration(model),petsc=PETSc.Sys.getVersion())
 
 
@@ -75,7 +77,10 @@ def save(model,comm,prefix):
     error=None;digest=None
     try:
         folder.mkdir(parents=True,exist_ok=True,mode=0o700)
-        payload=pickle.dumps(_capture(model),protocol=5)
+        snapshot=_capture(model)
+        mesh_sha=snapshot['mesh_sha']
+        payload=pickle.dumps(snapshot,protocol=5)
+        del snapshot
         digest=hashlib.sha256(payload).hexdigest()
         tmp=folder/('rank-%04d.tmp'%comm.rank)
         with tmp.open('wb') as stream:stream.write(payload);stream.flush();os.fsync(stream.fileno())
@@ -87,7 +92,7 @@ def save(model,comm,prefix):
     if comm.rank==0:
         try:
             shutil.copyfile(model.meshFile,folder/'mesh.npz')
-            metadata=dict(format=1,mpi_size=comm.size,files=digests,mesh_sha=_sha(model.mCoords),time=float(model.tNow))
+            metadata=dict(format=1,mpi_size=comm.size,files=digests,mesh_sha=mesh_sha,time=float(model.tNow))
             tmp=folder/'manifest.tmp';tmp.write_text(json.dumps(metadata,indent=2)+'\n');tmp.rename(folder/'manifest.json')
         except Exception as exc:error=str(exc)
     error=comm.bcast(error,root=0)

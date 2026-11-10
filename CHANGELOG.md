@@ -31,6 +31,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   halo exchanges. Ownership is rebalanced after every MMG remesh; partition traces
   and figures expose element, node, marker and ghost loads. Rank zero retains the
   global mesh for MMG, phase changes, marker/surface management and output.
+  Individual marker records stay on rank zero; compute ranks keep material counts.
   Both PT relaxation methods, including initial equilibrium and failure rollback,
   use the distributed compute meshes and collective convergence checks.
   CPU halo and solver regression checks accompany the backend;

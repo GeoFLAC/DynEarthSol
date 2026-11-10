@@ -148,8 +148,9 @@ Workers do not receive the full mesh. Rank zero also retains a global management
 copy, so root memory and centralized operations remain scaling limits.
 
 Ownership and halo maps are rebuilt after **every** MMG remesh, even if node and
-element counts are unchanged. Owned and ghost marker subsets are reconstructed,
-including marker history and barycentric coordinates, with consistency checks.
+element counts are unchanged. Compute ranks retain per-element material counts;
+individual marker histories, barycentric coordinates and index lists stay on
+the management mesh, where marker consistency is checked after rebalancing.
 MMG and interpolation run centrally, preserving existing 2D/3D behavior without
 requiring ParMMG. Repartitioning occurs after remeshing, not periodically between
 remeshes. Cost-weighted partitioning remains a possible improvement if measured
@@ -168,8 +169,10 @@ Rank zero drives initialization/isostasy, scheduling, phase changes, hydrous-mar
 advection, marker creation/correction, MMG/interpolation, surface management and
 output. Workers wait during this work. Thus **not every operation is parallel**.
 A global state is collected only when needed by these operations, checkpoints,
-output or optional earthquake moment accumulation. Ordinary surface options 0/1
-collect/scatter a top/boundary strip. Quality checks collect coordinates and
+output or optional earthquake moment accumulation. Surface option 1
+collects/scatters a top/boundary strip. Option 0 uses compact mechanical surface
+correction outside mesh checks and requested surface reports, with neighbor
+halos. Quality checks collect coordinates and
 element volumes; advanced surface work can require full state. The optional
 serpentinization grid collects state only when that model feature is active.
 Monitor output collects queried rows and their dependencies.

@@ -17,7 +17,7 @@ void mpi_select_device();
 enum class MpiOp {
     State, Temperature, PorePressure, StrainRate, Stress, Force, Velocity,
     Coordinate, Rotation, Volume, Dvoldt, Edvoldt, Nmd, Mass, TimeStep,
-    OldMeanStress, Friction, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SurfaceIdle, SwapVolume,
+    OldMeanStress, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SurfaceIdle, SwapVolume,
     Remesh, PhaseChange, Hydrous, Collect, Geometry, Boundary, Sample, Average, Metrics, Report, Stop, Count
 };
 
@@ -82,8 +82,6 @@ inline MpiNodeRows mpi_gather_nodes(const Variables& v,int pass) {
     return {nullptr,v.nnode};
 }
 
-inline int mpi_element_begin(const Variables&) { return 0; }
-inline int mpi_node_begin(const Variables&) { return 0; }
 inline int mpi_element_end(const Variables& var) {
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) return var.mpi->owned_elements();
