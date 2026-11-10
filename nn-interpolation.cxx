@@ -11,6 +11,7 @@
 #include "knn.hpp"
 #include "markerset.hpp"
 #include "nn-interpolation.hpp"
+#include "geometry.hpp"
 
 
 namespace {
@@ -567,6 +568,17 @@ namespace {
         } else {
             const int e = var.nelem;
 
+            for (double_vec **history : {&var.pore_strain, &var.matrix_pressure,
+                                        &var.pore_dilation, &var.pore_plastic_increment, &var.pore_recovery}) {
+                if (!*history) continue;
+                double_vec *mapped = new double_vec(e);
+                inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, **history, *mapped, e);
+                boundary_field(is_changed, idx_changed, empty_vec, 0.0, *mapped, e);
+                #pragma acc wait
+                delete *history;
+                *history = mapped;
+            }
+
             double_vec *new_plstrain = new double_vec(e);
             inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, *var.plstrain, *new_plstrain, e);
 
@@ -739,6 +751,15 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
             }
         }
 
+        if (!is_surface && var.shear_heat) {
+            #pragma acc wait
+            double_vec *power = new double_vec(var.nelem);
+            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec,
+                         *var.shear_heat, *power, var.nelem);
+            #pragma acc wait
+            delete var.shear_heat;
+            var.shear_heat = power;
+        }
         nn_interpolate_elem_fields(var, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 

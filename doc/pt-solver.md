@@ -246,7 +246,7 @@ The [focused tests](../tests/residual-assembly-test/README.md) exercise actual f
 constraint, material, residual and failed-solve paths in 2D/3D on ASan/UBSan,
 OpenMP and OpenACC. Separate [functional tests](../tests/functional/pt_restart.md)
 cover initial checkpoints, pending remesh stages and regular output scheduling.
-The existing [EP/RSF benchmark](../benchmarks/simple_shear_rsf/README.md) has an
+The existing [EP/RSF benchmark](../benchmarks/faults-friction/simple_shear_rsf/README.md) has an
 opt-in PT mode. Maxwell relaxation has also been checked against its discrete
 update and continuum time-convergence reference. Those checks do not establish
 convergence for every material/loading combination.
@@ -272,13 +272,13 @@ separate numerical contracts and validation.
 
 ## Short runnable example
 
-`examples/pt-elastic-load.cfg` applies a -1e5 Pa top traction to a unit elastic
+`examples/fundamentals/pt-elastic-load.cfg` applies a -1e5 Pa top traction to a unit elastic
 cell with roller sides and a clamped base. It runs three 0.01 s physical steps
 on a fixed mesh without hydraulic diffusion. From the repository root:
 
 ```sh
 make ndims=2
-OMP_NUM_THREADS=1 ./dynearthsol2d examples/pt-elastic-load.cfg
+OMP_NUM_THREADS=1 ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg
 ```
 
 The supplied configuration uses `PT_option=0` (localized stress/velocity
@@ -310,8 +310,8 @@ axis constraints, and checks the new vector and reported free-rank RMS, then
 checks that a restart retains the accepted diagnostic:
 
 ```sh
-OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-0 --option 0
-OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-force-1 --option 1
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-force-0 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-force-1 --option 1
 ```
 
 Use distinct output directories; repeat with the 3D executable as needed.
@@ -323,8 +323,8 @@ against an independent homogeneous Crank-Nicolson reference. The default run is
 checked throughout, including nonzero motion after loading:
 
 ```sh
-OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-0 --ndims 2 --option 0
-OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-maxwell-1 --ndims 2 --option 1
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-maxwell-0 --ndims 2 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_maxwell_creep.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-maxwell-1 --ndims 2 --option 1
 ```
 
 For 3D, replace the executable with `./dynearthsol3d` and use `--ndims 3`.

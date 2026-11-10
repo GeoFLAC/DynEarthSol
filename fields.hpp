@@ -4,7 +4,9 @@
 // Element shape gradients shared by field updates and the current-rate timestep bound.
 #ifdef THREED
 #pragma acc routine seq
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], double shpdy[4], double shpdz[4])
+inline void get_local_shape_fn(const Variables &var, int e,
+                               double shpdx[NODES_PER_ELEM], double shpdy[NODES_PER_ELEM],
+                               double shpdz[NODES_PER_ELEM])
 {
     ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
@@ -34,7 +36,8 @@ inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], dou
 }
 #else
 #pragma acc routine seq
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], double shpdz[3])
+inline void get_local_shape_fn(const Variables &var, int e,
+                               double shpdx[NODES_PER_ELEM], double shpdz[NODES_PER_ELEM])
 {
     ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
@@ -53,10 +56,18 @@ inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], dou
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_tmp(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);
+#pragma acc routine seq
+inline bool has_temperature_transport(const Param &param)
+{
+    return param.control.has_thermal_diffusion || param.control.has_fluid_thermal_advection ||
+           param.heat_injection.enabled || param.control.has_shear_heating;
+}
+void accumulate_shear_heat(const Variables &var);
 void update_temperature(const Param &param, const Variables &var,
     double_vec &temperature, elem_cache& tmp_result);
-void update_pore_pressure(const Param &param, const Variables &var,
-    double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache& tmp_result, tensor_t &stress, double_vec& old_mean_stress);
+void apply_temperature_bcs(const Param &param, const Variables &var, double_vec &temperature);
+#pragma acc routine seq
+bool prescribed_temperature(const Param &param, const Variables &var, int n, double &value);
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 // Optional caller-owned nnode-sized output includes physical loads but excludes
 // artificial damping. It must not alias force, force_residual or assembly inputs.

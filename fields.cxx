@@ -1,11 +1,14 @@
 #include <iostream>
+#include <limits>
 
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "bc.hpp"
 #include "matprops.hpp"
 #include "fields.hpp"
+#include "hydraulics.hpp"
 #include "utils.hpp"
+#include "point_sources.hpp"
 
 void allocate_variables(const Param &param, Variables& var)
 {
@@ -17,11 +20,42 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.mass = new double_vec(n);
     var.tmass = new double_vec(n);
-    var.hmass = new double_vec(n);
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
 
-    var.old_mean_stress = new double_vec(e, 0);
+    allocate_hydraulic_state(var);
+    if (param.control.hydraulic_content_model == 1) {
+        var.fluid_reference_temperature = param.bc.surface_temperature;
+        var.fluid_split = new double_vec(n,0);
+        var.solid_mass = new double_vec(n,0);
+        var.solid_capacity = new double_vec(n,0);
+        var.pending_temperature = new double_vec(n,0);
+        if (has_temperature_transport(param)) var.energy_balance = new double_vec(6,0);
+        var.fluid_balance->assign(6,0);
+    }
+    if (param.injection.enabled) var.fluid_point_source = new double_vec(n,0);
+    if (param.heat_injection.enabled) var.heat_source = new double_vec(n,0);
+    if (!param.injection.temperature.empty()) {
+        var.inflow_rate = new double_vec(n,0);
+        var.inflow_heat = new double_vec(n,0);
+    }
+    if (std::any_of(param.mat.matrix_exchange.begin(), param.mat.matrix_exchange.end(),
+                    [](double h) { return h > 0; }))
+        var.matrix_pressure = new double_vec(e, 0);
+    if (param.control.has_thermal_pressurization)
+        var.old_temperature = new double_vec(var.nnode);
+    if (param.control.has_shear_heating) {
+        var.shear_heat = new double_vec(e, 0);
+        var.pending_heat = new double_vec(e, 0);
+    }
+    if (param.mat.porosity_model)
+        var.pore_strain = new double_vec(e, 0);
+    if (std::any_of(param.mat.pore_healing_time.begin(), param.mat.pore_healing_time.end(),
+                    [](double t) { return t > 0; })) {
+        var.pore_dilation = new double_vec(e,0);
+        var.pore_plastic_increment = new double_vec(e,0);
+        var.pore_recovery = new double_vec(e,0);
+    }
 
     {
         // these fields are reallocated during remeshing interpolation
@@ -29,8 +63,6 @@ void allocate_variables(const Param &param, Variables& var)
         var.stressyy = new double_vec(e, 0);
         var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
-        var.ppressure = new double_vec(n);
-        var.dppressure = new double_vec(n);
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
@@ -100,6 +132,13 @@ void reallocate_variables(const Param& param, Variables& var)
     const int n = var.nnode;
     const int e = var.nelem;
 
+    if (var.fluid_split) {
+        var.fluid_split->resize(n);
+        var.solid_mass->resize(n);
+        var.solid_capacity->resize(n);
+        var.pending_temperature->resize(n);
+    }
+
     delete var.volume;
     delete var.volume_n;
     var.volume = new double_vec(e);
@@ -110,8 +149,15 @@ void reallocate_variables(const Param& param, Variables& var)
     var.mass = new double_vec(n);
     var.tmass = new double_vec(n);
 
-    delete var.hmass;
-    var.hmass = new double_vec(n);
+    reset_hydraulic_assembly(param, var);
+    delete var.fluid_point_source;
+    var.fluid_point_source = param.injection.enabled ? new double_vec(n,0) : nullptr;
+    delete var.heat_source;
+    var.heat_source = param.heat_injection.enabled ? new double_vec(n,0) : nullptr;
+    delete var.inflow_rate;
+    delete var.inflow_heat;
+    var.inflow_rate = param.injection.temperature.empty() ? nullptr : new double_vec(n,0);
+    var.inflow_heat = param.injection.temperature.empty() ? nullptr : new double_vec(n,0);
     delete var.ymass;
     var.ymass = new double_vec(n);
   
@@ -137,28 +183,209 @@ void reallocate_variables(const Param& param, Variables& var)
     // already swapped in remapped copies sized to the new mesh, which
     // spr_node_to_elem reads before overwriting with the SPR average.
 
-    if (param.control.has_hydraulic_diffusion) {
-        delete var.old_mean_stress;
-        var.old_mean_stress = new double_vec(var.nelem);
-    }
-
     // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
     // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
     // Called earlier the cache is built from empty counts -- wrong means, not a crash.
     delete var.mat;
     var.mat = new MatProps(param, var);
 
+    apply_temperature_bcs(param, var, *var.temperature);
+
 }
 
 
-void update_temperature(const Param &param, const Variables &var,
-                        double_vec &temperature, elem_cache &tmp_result)
+namespace {
+#pragma acc routine seq
+double thermal_boundary_value(const Param &param, int side)
 {
+    const double value = param.bc.tbc_value[side];
+    return std::isfinite(value) ? value :
+        (side == 4 ? param.bc.mantle_temperature : param.bc.surface_temperature);
+}
+
+// Galerkin transport with symmetric graph diffusion for advection; rows sum
+// to zero. Zero flow retains ordinary Galerkin conduction on obtuse elements.
+#pragma acc routine seq
+void thermal_transport_operator(const Param &param, const Variables &var, int e,
+                                double a[NODES_PER_ELEM][NODES_PER_ELEM])
+{
+#ifdef THREED
+    double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+    get_local_shape_fn(var, e, dx, dy, dz);
+    const double *g[NDIMS] = {dx, dy, dz};
+#else
+    double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+    get_local_shape_fn(var, e, dx, dz);
+    const double *g[NDIMS] = {dx, dz};
+#endif
+    double q[NDIMS];
+    hydraulic_element_flux(param, var, e, q);
+    const double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
+    const double cv = var.mat->rho_fluid_reference(e)*var.mat->cp_fluid(e)*
+        (*var.volume)[e]/NODES_PER_ELEM;
+    double c[NODES_PER_ELEM];  // lumped advection; the same for every test node
+    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        c[j] = 0;
+        for (int d = 0; d < NDIMS; ++d) c[j] += cv*q[d]*g[d][j];
+    }
+    for (int i = 0; i < NODES_PER_ELEM; ++i)
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            a[i][j] = c[j];
+            for (int d = 0; d < NDIMS; ++d) a[i][j] += kv*g[d][i]*g[d][j];
+        }
+    for (int i = 0; i < NODES_PER_ELEM; ++i)
+        for (int j = i+1; j < NODES_PER_ELEM; ++j) {
+            // Clip positive couplings, but by no more than advection adds.
+            const double diffusion = std::max(0.0, std::min(std::max(a[i][j], a[j][i]),
+                                                            std::max(c[i], c[j])));
+            a[i][j] -= diffusion; a[j][i] -= diffusion;
+            a[i][i] += diffusion; a[j][j] += diffusion;
+        }
+}
+} // namespace
+
+#pragma acc routine seq
+bool prescribed_temperature(const Param &param, const Variables &var, int n, double &value)
+{
+    const uint flags[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
+    for (int i = 0; i < 6; ++i)
+        if (param.bc.tbc[i] == 1 && ((*var.bcflag)[n] & flags[i])) {
+            value = thermal_boundary_value(param,i);
+            return true;
+        }
+    return false;
+}
+
+void apply_temperature_bcs(const Param &param, const Variables &var, double_vec &temperature)
+{
+    if (!param.bc.custom_temperature_boundary) return;
+    const uint flags[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
+    for (int n = 0; n < var.nnode; ++n) {
+        bool fixed = false;
+        double value = 0;
+        for (int i = 0; i < 6; ++i) {
+            if (param.bc.tbc[i] != 1 || !((*var.bcflag)[n] & flags[i])) continue;
+            const double next = thermal_boundary_value(param, i);
+            if (!std::isfinite(next) || (fixed && std::abs(next-value) > 1e-12*std::max(1.0, std::abs(value))))
+                die(EXIT_CONFIG_VALUE, "Intersecting temperature boundaries require equal finite values.");
+            fixed = true; value = next;
+        }
+        if (fixed) temperature[n] = value;
+    }
+}
+
+// Volumetric heat capacity of the injected fluid, from the reference material.
+static double inflow_capacity(const Param &param)
+{
+    const int m = param.mat.mattype_ref;
+    return param.mat.fluid_rho0[m] * param.mat.fluid_heat_capacity[m];
+}
+
+// Fluid injected at a prescribed temperature over [start, stop]: the nodal
+// injected volume rate Q_n and its temperature-weighted sum. Extraction leaves
+// at the local temperature, which the advective transport already carries, so
+// extracting points are left out.
+static void assemble_inflow(const Param &param, const Variables &var, double start, double stop,
+                            bool peak_rate = false)
+{
+    const Injection &source = param.injection;
+    double_vec injecting(source.num_points), weighted(source.num_points);
+    for (int p = 0; p < source.num_points; ++p) {
+        const double strength = source.rate_model == injection_rate_total_amount ?
+            source.total_amount[p] : source.rate[p];
+        injecting[p] = strength > 0 ? 1.0 : 0.0;
+        weighted[p] = injecting[p] * source.temperature[p];
+    }
+    assemble_point_sources(source, var, start, stop, *var.inflow_rate, &injecting, peak_rate);
+    assemble_point_sources(source, var, start, stop, *var.inflow_heat, &weighted, peak_rate);
+}
+
+static double temperature_step_limit(const Param &param, const Variables &var, elem_cache &work)
+{
+    // Absolute element rows bound the assembled lumped diffusion operator.
+    // Half the forward-Euler spectral bound leaves a stability margin.
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(param, var, work)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int e = 0; e < var.nelem; ++e) {
+        if (param.control.has_fluid_thermal_advection) {
+            double a[NODES_PER_ELEM][NODES_PER_ELEM];
+            thermal_transport_operator(param, var, e, a);
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                double row = 0;
+                for (int j = 0; j < NODES_PER_ELEM; ++j) row += std::abs(a[i][j]);
+                work[e][i] = row;
+            }
+            continue;
+        }
+#ifdef THREED
+        double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, dx, dy, dz);
+        const double *g[NDIMS] = {dx, dy, dz};
+#else
+        double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, dx, dz);
+        const double *g[NDIMS] = {dx, dz};
+#endif
+        const double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            double row = 0;
+            for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                double a = 0;
+                for (int d = 0; d < NDIMS; ++d) a += g[d][i] * g[d][j];
+                row += std::abs(a);
+            }
+            work[e][i] = kv * row;
+        }
+    }
+    double limit = std::numeric_limits<double>::max();
+    const double capacity = var.inflow_rate ? inflow_capacity(param) : 0.0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, work) firstprivate(capacity) reduction(min:limit)
+#endif
+    #pragma acc parallel loop gang vector reduction(min:limit)
+    for (int n = 0; n < var.nnode; ++n) {
+        double row = 0;
+        const int *patch = var.support.patch(n), *local = var.support.local(n);
+        for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
+        // Injected fluid relaxes the node towards its temperature at rate rho_f c_f Q_n.
+        if (var.inflow_rate) row += capacity * (*var.inflow_rate)[n];
+        if (row > 0 && (*var.tmass)[n] > 0)
+            limit = std::min(limit, (*var.tmass)[n] / row);
+    }
+    #pragma acc wait
+    return limit;
+}
+
+static void temperature_step(const Param &param, const Variables &var,
+                             double_vec &temperature, elem_cache &tmp_result,
+                             double dt, double time)
+{
+    if (param.heat_injection.enabled) {
+        assemble_point_sources(param.heat_injection,var,time-dt,time,*var.heat_source);
+        for (int n=0; n<var.nnode; ++n) {
+            double prescribed = 0;
+            if ((*var.heat_source)[n] != 0 &&
+                (prescribed_temperature(param,var,n,prescribed) ||
+                 !((*var.tmass)[n]>0 && std::isfinite((*var.tmass)[n]))))
+                die(EXIT_RUNTIME_LOOKUP, "A heat point source reaches a fixed-temperature node or nonpositive heat capacity.");
+        }
+    }
+    const double capacity = var.inflow_rate ? inflow_capacity(param) : 0.0;
+    if (var.inflow_rate) {
+        assemble_inflow(param, var, time-dt, time);
+        for (int n=0; n<var.nnode; ++n) {
+            double prescribed = 0;
+            if ((*var.inflow_rate)[n] != 0 && prescribed_temperature(param,var,n,prescribed))
+                die(EXIT_RUNTIME_LOOKUP, "Fluid injected at a temperature reaches a fixed-temperature node.");
+        }
+    }
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result)
+    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result) firstprivate(dt, capacity)
 #endif
     {
 #ifndef ACC
@@ -170,8 +397,15 @@ void update_temperature(const Param &param, const Variables &var,
 
             ConstConnAccessor conn = (*var.connectivity)[e];
             ElemCacheAccessor tr = tmp_result[e];
-            double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
+            double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
+            if (param.control.has_fluid_thermal_advection) rh *= 1-var.mat->phi(e);
+            // Integrate the previous accepted energy, not its old power times
+            // this step's possibly different dt. Each substep consumes its share.
+            if (var.pending_heat) rh += (*var.pending_heat)[e] / (NODES_PER_ELEM * var.dt);
+            double transport[NODES_PER_ELEM][NODES_PER_ELEM];
+            if (param.control.has_fluid_thermal_advection)
+                thermal_transport_operator(param, var, e, transport);
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
             get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
@@ -180,6 +414,13 @@ void update_temperature(const Param &param, const Variables &var,
             get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
             for (int i=0; i<NODES_PER_ELEM; ++i) {
+                if (param.control.has_fluid_thermal_advection) {
+                    double value = -rh;
+                    for (int j = 0; j < NODES_PER_ELEM; ++j)
+                        value += transport[i][j]*temperature[conn[j]];
+                    tr[i] = value;
+                    continue;
+                }
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
 #ifdef THREED
@@ -198,10 +439,11 @@ void update_temperature(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop gang vector firstprivate(dt, capacity) async
         for (int n=0;n<var.nnode;n++) {
-            if ((*var.bcflag)[n] & BOUNDZ1)
-                temperature[n] = param.bc.surface_temperature;
+            double fixed_temperature = 0;
+            if (prescribed_temperature(param, var, n, fixed_temperature))
+                temperature[n] = fixed_temperature;
             else {
                 double tdot = 0;
 
@@ -211,157 +453,56 @@ void update_temperature(const Param &param, const Variables &var,
                 const int* lpatch = var.support.local(n);
                 for (int k=0; k<npatch; ++k)
                     tdot += tmp_result[patch[k]][lpatch[k]];
-                // Combining temperature update and bc in the same loop for efficiency,
-                // since only the top boundary has Dirichlet bc, and all the other boundaries
-                // have no heat flux bc.
-                temperature[n] -= var.dt * tdot / (*var.tmass)[n];
+                if (param.heat_injection.enabled) tdot -= (*var.heat_source)[n];
+                // Injected enthalpy relative to the node: rho_f c_f (sum Q T_in - T sum Q).
+                if (var.inflow_rate)
+                    tdot -= capacity * ((*var.inflow_heat)[n] - temperature[n] * (*var.inflow_rate)[n]);
+                temperature[n] -= dt * tdot / (*var.tmass)[n];
             }
         }
     }
 
-    // Combining temperature update and bc in the same loop for efficiency,
-    // since only the top boundary has Dirichlet bc, and all the other boundaries
-    // have no heat flux bc.
-//    #pragma omp parallel for default(none) shared(var, param, tdot, temperature)
-//    for (int n=0; n<var.nnode; ++n) {
-//        if ((*var.bcflag)[n] & BOUNDZ1)
-//            temperature[n] = param.bc.surface_temperature;
-//        else
-//            temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
-//    }
 #ifdef NPROF
     nvtxRangePop();
 #endif
 }
 
-// Function to check if a node is a boundary node
-inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
-    int boundary_types[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i) {
-        if (((*var.bcflag)[n] & boundary_types[i]) && (var.hbc_types[i] == 1)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-
-void update_pore_pressure(const Param &param, const Variables &var,
-                          double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache &tmp_result, tensor_t& stress, double_vec& old_mean_stress)
+void update_temperature(const Param &param, const Variables &var,
+                        double_vec &temperature, elem_cache &work)
 {
-#ifdef NPROF
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-    // Initialize diff_max_local for reduction
-    double diff_max_local = 1.0e-38;
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        reduction(max:diff_max_local)
-#endif
-        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async
-    for (int e = 0; e < var.nelem; e++) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        ElemCacheAccessor tr = tmp_result[e];
-        double current_mean_stress = trace(stress[e])/NDIMS;
-        double mean_stress_change = current_mean_stress - old_mean_stress[e];
-
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(e);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(e);            // Fluid density
-        double phi_e = var.mat->phi(e);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(e);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(e);
-        double shearm = var.mat->shearm(e);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
-
-        double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-        if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
-
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Pressure-form Darcy mobility remains well-defined when gravity is zero.
-        // This is algebraically equivalent to the former head-form expression:
-        //   (k * gamma_w / mu) * grad(p / gamma_w + z).
-        const double mobility = perm_e / mu_e;
-        const double kv_pressure = mobility * (*var.volume)[e];
-        const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
-
-        // Compute element diffusivity and update max using reduction
-        const double diff_e = mobility / (phi_e * comp_fluid + alpha_b * matrix_comp);
-        diff_max_local = std::max(diff_max_local, diff_e);
-
-        // volume term (poroelastic effect)
-        double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
-#ifdef THREED
-        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
-#else
-        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdz);
-#endif
-
-        for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double pressure_diffusion = 0.0;
-            double gravity_drive = 0.0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-#ifdef THREED
-                const double grad_dot = shpdx[i] * shpdx[j] +
-                                        shpdy[i] * shpdy[j] +
-                                        shpdz[i] * shpdz[j];
-#else
-                const double grad_dot = shpdx[i] * shpdx[j] +
-                                        shpdz[i] * shpdz[j];
-#endif
-                pressure_diffusion += grad_dot * ppressure[conn[j]];
-                gravity_drive += grad_dot * (*var.coord)[conn[j]][NDIMS-1];
-            }
-
-            // Add diffusion, compressibility, poroelastic effects, and source term
-            tr[i] = kv_pressure * pressure_diffusion + kv_gravity * gravity_drive + pe;
-        }
+    // A short pulse can be faster than its whole-step mean. Bound every
+    // thermal substep by the active rates, then integrate its actual overlap.
+    if (var.inflow_rate) assemble_inflow(param, var, var.time - var.dt, var.time, true);
+    if (var.mat->thermal_step_limit == 0 || param.control.has_fluid_thermal_advection)
+        var.mat->thermal_step_limit = temperature_step_limit(param, var, work);
+    const double count = std::ceil(var.dt / var.mat->thermal_step_limit);
+    if (!std::isfinite(count) || count > std::numeric_limits<int>::max())
+        die(EXIT_RUNTIME_RESOURCE, "Thermal timestep needs too many explicit substeps.");
+    const int steps = std::max(1, static_cast<int>(count));
+    for (int i = 0; i < steps; ++i)
+        temperature_step(param, var, temperature, work, var.dt / steps,
+            i+1 == steps ? var.time : var.time-var.dt+(i+1)*(var.dt/steps));
+    if (var.pending_heat) {
+        #pragma acc wait
+        std::fill(var.pending_heat->begin(), var.pending_heat->end(), 0.0);
     }
+}
 
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result)
-#endif
-    #pragma acc parallel loop gang vector async
-    for (int n = 0; n < var.nnode; n++) {
-        tdot[n] = 0.0;
-        {
-            const int npatch = var.support.size(n);
-            const int* patch = var.support.patch(n);
-            const int* lpatch = var.support.local(n);
-            for (int k = 0; k < npatch; ++k)
-                tdot[n] += tmp_result[patch[k]][lpatch[k]];
-        }
-
-        // Update pore pressure for non-boundary nodes
-        if (!is_boundary_node_for_pp(n, var)) {
-            // Ensure mass is non-zero before division
-            if ((*var.hmass)[n] > 0.0) {
-                ppressure[n] -= tdot[n] * var.dt / (*var.hmass)[n]; // Update pore pressure
-                dppressure[n] = tdot[n] * var.dt / (*var.hmass)[n]; // Update pressure change
-            }
-        }
-
-        // if ((*var.bcflag)[n] & BOUNDZ1) {
-        //     ppressure[n] = 0.0; 
-        //     dppressure[n] = 0.0;
-        // }
-            
-    }
-
+void accumulate_shear_heat(const Variables &var)
+{
+    if (!var.pending_heat) return;
     #pragma acc wait
-    // Update global hydro_diff_max after the loop
-    var.mat->hydro_diff_max = diff_max_local;
-#ifdef NPROF
-    nvtxRangePop();
+    int invalid = 0;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) reduction(|:invalid)
 #endif
+    #pragma acc parallel loop gang vector reduction(|:invalid)
+    for (int e = 0; e < var.nelem; ++e) {
+        const double energy = (*var.shear_heat)[e] * var.dt * (*var.volume)[e];
+        (*var.pending_heat)[e] += energy;
+        if (!(energy >= 0 && std::isfinite((*var.pending_heat)[e]))) invalid = 1;
+    }
+    if (invalid) die(EXIT_RUNTIME_NAN, "Non-finite or negative accepted shear heat.");
 }
 
 void update_strain_rate(const Variables& var, tensor_t& strain_rate)
@@ -597,9 +738,21 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
             double buoy = 0;
             if (param.control.gravity != 0) {
-                // Calculate buoyancy based on the gravity and element properties
-                // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
-                buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
+                // Unsaturated pores carry only S of their water weight.
+                double sat = 1;
+                if (param.control.has_hydraulic_diffusion && var.mat->has_retention) {
+                    sat = 0;
+                    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                        double s;
+                        element_se(*var.mat, (*var.elemmarkers)[e],
+                                   (*var.ppressure)[(*var.connectivity)[e][j]], &s);
+                        sat += s;
+                    }
+                    sat /= NODES_PER_ELEM;
+                }
+                const double density = param.control.has_hydraulic_diffusion
+                    ? hydraulic_bulk_density(param,var,e,sat) : var.mat->rho(e);
+                buoy = density * param.control.gravity / NODES_PER_ELEM;
             }
 
 
@@ -642,6 +795,8 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     apply_stress_bcs(param, var, force, displacement_dt);
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
+    apply_platen_force(param, var, force);
+    apply_platen_force(param, var, force_residual);
     if (force_undamped) {
         // Same accelerator queue as assembly and damping; the wait below makes
         // both outputs visible to the caller. Constraint projection is separate.
@@ -653,8 +808,11 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             for (int d=0; d<NDIMS; ++d)
                 (*force_undamped)[n][d] = force[n][d];
     }
-    if (damp_force) apply_damping(param, var, force);
-    
+    if (damp_force) {
+        apply_damping(param, var, force);
+        apply_platen_force(param, var, force);
+    }
+
     #pragma acc wait
 
 #ifdef NPROF

@@ -39,7 +39,7 @@ jobs:
         python-version: '3.10'
         
     - name: Install Python dependencies
-      run: python -m pip install --upgrade pip numpy h5py
+      run: python -m pip install --upgrade pip numpy h5py scipy
 
     - name: get hdf5
       run: |
@@ -51,26 +51,100 @@ jobs:
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
       run: make -j ndims=3 opt=2 openmp=1 hdf5=1
 
+    - name: test 3d output interval overflow and restart
+      run: |
+        for method in pt explicit gvs; do
+          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol3d pt_output_interval.cfg output-interval-3d-$method --schedule overflow --method $method
+        done
+
+    - name: test 3d monitor CSV restart
+      run: python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol3d --threads 1
+
+    - name: test 3d monitor checkpoint validation
+      run: python3 monitor_restart/check_state.py ../../dynearthsol3d monitor-state-3d
+
+    - name: test 3d power-law permeability and restart
+      run: >-
+        OMP_NUM_THREADS=1 python3 hydromechanics/check_poroperm.py
+        ../../dynearthsol3d power-law-3d --permeability-model 2
+
+    - name: test 3d plastic pore recovery
+      run: >-
+        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 hydromechanics/check_recovery.py
+        ../../dynearthsol3d pore-recovery-3d
+
+    - name: test 3d linear Biot content through remeshing
+      run: >-
+        OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
+        ../../dynearthsol3d fluid-remap-3d
+
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 
     - name: test 3d restart
-      working-directory: ./benchmarks-cores
-      run: make fresh-restart-cmp CASE=../tests/functional/3d-evp-regular.cfg && rm -rf functional-test.*
+      working-directory: ./tests/regression
+      run: make fresh-restart-cmp CASE=../functional/3d-evp-regular.cfg && rm -rf functional-test.*
 
     - name: make 2d hdf5
       working-directory: .
       run: make -j ndims=2 opt=2 openmp=1 hdf5=1
 
+    - name: test 2d output interval overflow and restart
+      run: |
+        for method in pt explicit gvs; do
+          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol2d pt_output_interval.cfg output-interval-2d-$method --schedule overflow --method $method
+        done
+
     - name: test elastic plane-strain stress update
       run: python3 plane_strain_elastic/run_plane_strain_elastic.py ../../dynearthsol2d
+
+    - name: test 2d monitor CSV restart
+      run: python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol2d --threads 1
+
+    - name: test 2d monitor checkpoint validation
+      run: python3 monitor_restart/check_state.py ../../dynearthsol2d monitor-state-2d
+
+    - name: test 2d power-law permeability and restart
+      run: >-
+        OMP_NUM_THREADS=1 python3 hydromechanics/check_poroperm.py
+        ../../dynearthsol2d power-law-2d --permeability-model 2
+
+    - name: test 2d plastic pore recovery
+      run: >-
+        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 hydromechanics/check_recovery.py
+        ../../dynearthsol2d pore-recovery-2d
+
+    - name: test 2d linear Biot content through remeshing
+      run: >-
+        OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
+        ../../dynearthsol2d fluid-remap-2d
+
+    - name: test exact simplex overlap moments
+      run: >-
+        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3
+        hydromechanics/check_overlap.py overlap
+
+    - name: test nodal displacement HDF5 output
+      run: >-
+        python3 displacement_output/run_displacement_output.py
+        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
+        --expected-format hdf5 --threads 1
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
+    - name: test selected reference boundaries and remesh continuation
+      run: >-
+        python3 boundary_reset/check_reset.py ../../dynearthsol2d
+        boundary-reset --exe-3d ../../dynearthsol3d
+
+    - name: test selected boundary projections
+      working-directory: ./tests/boundary-reset-test
+      run: make check
+
     - name: test 2d restart
-      working-directory: ./benchmarks-cores
-      run: make fresh-restart-cmp NDIMS=2 CASE=../tests/functional/2d-ep-irregular.cfg && rm -rf functional-test.*
+      working-directory: ./tests/regression
+      run: make fresh-restart-cmp NDIMS=2 CASE=../functional/2d-ep-irregular.cfg && rm -rf functional-test.*
 
     - name: test 2d RSF ATS benchmark subset
       run: bash 2d-rsf-ats.sh

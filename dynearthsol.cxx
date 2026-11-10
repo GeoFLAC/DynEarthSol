@@ -13,6 +13,7 @@
 #include "earthquake_state.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
+#include "hydraulics.hpp"
 #include "ic.hpp"
 #include "input.hpp"
 #include "matprops.hpp"
@@ -170,6 +171,7 @@ void init(const Param& param, Variables& var)
 
     create_new_mesh(param, var);
     create_boundary_flags(var);
+    validate_hydraulic_boundaries(param, var);
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
@@ -206,12 +208,20 @@ void init(const Param& param, Variables& var)
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
+    apply_temperature_bcs(param, var, *var.temperature);
     // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
     var.mat->refresh_elem_cache();
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     // initial_stress_state_1d_load(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
     if(param.control.has_hydraulic_diffusion)
         initial_hydrostatic_state(param, var, *var.ppressure, *var.dppressure);
+    if (var.matrix_pressure)
+        for (int e = 0; e < var.nelem; ++e) {
+            double p = 0;
+            for (int j = 0; j < NODES_PER_ELEM; ++j)
+                p += (*var.ppressure)[(*var.connectivity)[e][j]] / NODES_PER_ELEM;
+            (*var.matrix_pressure)[e] = p;
+        }
 
     initial_weak_zone(param, var, *var.plstrain);
     *var.plstrain_remesh = *var.plstrain;   // a prescribed weak zone is not R2 growth
@@ -231,6 +241,7 @@ void init(const Param& param, Variables& var)
     // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
     // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
     // update_mesh() ungated before the loop.
+    initialize_fluid_content(param,var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
@@ -319,6 +330,11 @@ void restart(const Param& param, Variables& var)
     BinaryInput bin_chkpt(filename_chkpt);
 #endif
     std::cout << "  Reading " << filename_chkpt << "...\n";
+    int content_model = 0;
+    if (bin_chkpt.has_array("hydraulic content model"))
+        bin_chkpt.read_scalar(content_model,"hydraulic content model");
+    if (content_model != param.control.hydraulic_content_model)
+        die(EXIT_IO_RESTART,"Hydraulic content model differs from its checkpoint; numerical and material histories are not interchangeable.");
 
     //
     // Following the same procedure in init()
@@ -341,6 +357,7 @@ void restart(const Param& param, Variables& var)
     }
 
     create_boundary_flags(var);
+    validate_hydraulic_boundaries(param, var);
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
@@ -390,22 +407,49 @@ void restart(const Param& param, Variables& var)
             var.PT_skip_scale_update = skip != 0;
         }
 
-        if (param.control.has_PT) {
-            const int fields = bin_chkpt.has_array("PT output start time") +
-                bin_chkpt.has_array("PT output start step") +
-                bin_chkpt.has_array("PT next regular frame");
+        {
+            // A permitted step-zero conversion can change the mechanical method.
+            // Read the schema written by the checkpoint, not the current mode.
+            const bool pt_schedule = bin_chkpt.has_array("PT output start time") ||
+                bin_chkpt.has_array("PT output start step") || bin_chkpt.has_array("PT next regular frame");
+            const bool generic_schedule = bin_chkpt.has_array("output start time") ||
+                bin_chkpt.has_array("output start step") || bin_chkpt.has_array("next regular frame");
+            if (pt_schedule && generic_schedule)
+                die(EXIT_IO_RESTART, "Ambiguous output schedule in checkpoint.");
+            const char *time_key = pt_schedule ? "PT output start time" : "output start time";
+            const char *step_key = pt_schedule ? "PT output start step" : "output start step";
+            const char *frame_key = pt_schedule ? "PT next regular frame" : "next regular frame";
+            const int fields = bin_chkpt.has_array(time_key) + bin_chkpt.has_array(step_key) +
+                bin_chkpt.has_array(frame_key);
             if (fields != 0 && fields != 3)
-                die(EXIT_IO_RESTART, "Incomplete PT output schedule in checkpoint.");
+                die(EXIT_IO_RESTART, "Incomplete output schedule in checkpoint.");
             if (fields == 3) {
-                bin_chkpt.read_scalar(var.output_start_time, "PT output start time");
-                bin_chkpt.read_scalar(var.output_start_step, "PT output start step");
-                bin_chkpt.read_scalar(var.output_next_regular_frame, "PT next regular frame");
+                bin_chkpt.read_scalar(var.output_start_time, time_key);
+                bin_chkpt.read_scalar(var.output_start_step, step_key);
+                bin_chkpt.read_scalar(var.output_next_regular_frame, frame_key);
                 if (!std::isfinite(var.output_start_time) || var.output_start_step < 0 ||
                     var.output_start_step > var.steps || var.output_next_regular_frame < 1)
-                    die(EXIT_IO_RESTART, "Invalid PT output schedule in checkpoint.");
+                    die(EXIT_IO_RESTART, "Invalid output schedule in checkpoint.");
                 var.output_schedule_restored = true;
             } else if (var.steps > 0) {
-                std::cerr << "Warning: checkpoint lacks PT output schedule; using legacy restart scheduling.\n";
+                std::cerr << "Warning: checkpoint lacks output schedule; using legacy restart scheduling.\n";
+            }
+            const int periods = bin_chkpt.has_array("output step interval") +
+                bin_chkpt.has_array("output time interval");
+            if (periods != 0 && (periods != 2 || fields != 3))
+                die(EXIT_IO_RESTART, "Incomplete output cadence in checkpoint.");
+            if (periods == 2) {
+                int step_interval;
+                double time_interval;
+                bin_chkpt.read_scalar(step_interval, "output step interval");
+                bin_chkpt.read_scalar(time_interval, "output time interval");
+                if (step_interval != param.sim.output_step_interval ||
+                    time_interval != param.sim.output_time_interval_in_yr) {
+                    // An explicitly changed cadence starts at the restart point.
+                    var.output_start_time = var.time;
+                    var.output_start_step = var.steps;
+                    var.output_next_regular_frame = 1;
+                }
             }
         }
     }
@@ -474,11 +518,112 @@ void restart(const Param& param, Variables& var)
         // the R2 baseline, so the first remesh after a restart refines as in a continuous run
         bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
+        const bool heat_version = bin_chkpt.has_array("shear heat version");
+        const bool heat_pending = bin_chkpt.has_array("pending shear heat");
+        const bool heat_power = bin_chkpt.has_array("shear heating");
+        if (heat_version || heat_pending || heat_power) {
+            if (!(heat_version && heat_pending && heat_power))
+                die(EXIT_IO_RESTART, "Incomplete shear-heat checkpoint.");
+            int version = 0;
+            bin_chkpt.read_scalar(version, "shear heat version");
+            if (version != 1) die(EXIT_IO_RESTART, "Unsupported shear-heat checkpoint version.");
+            double_vec pending(var.nelem), power(var.nelem);
+            bin_chkpt.read_array(pending, "pending shear heat");
+            bin_chkpt.read_array(power, "shear heating");
+            for (int e = 0; e < var.nelem; ++e) {
+                if (!(std::isfinite(pending[e]) && pending[e] >= 0 &&
+                      std::isfinite(power[e]) && power[e] >= 0))
+                    die(EXIT_IO_RESTART, "Invalid shear-heat checkpoint energy or power.");
+                if (!var.pending_heat && pending[e] != 0)
+                    die(EXIT_IO_RESTART, "Cannot disable shear heating with undeposited checkpoint energy.");
+            }
+            if (var.pending_heat) {
+                *var.pending_heat = pending;
+                *var.shear_heat = power;
+            }
+        } else if (bin_save.has_array("shear heating")) {
+            // The old rate alone does not identify its generating interval;
+            // using the saved next dt would invent a pending mechanical energy.
+            double_vec legacy_power(var.nelem);
+            bin_save.read_array(legacy_power, "shear heating");
+            if (std::any_of(legacy_power.begin(), legacy_power.end(),
+                            [](double q) { return q != 0; }))
+                die(EXIT_IO_RESTART, "Legacy shear-heating power has no recoverable pending energy; continue with its matching solver.");
+        }
         bin_save.read_array(*var.ppressure, "pore pressure");
         if (param.control.has_hydraulic_diffusion) {
             if (!bin_chkpt.has_array("pending pore pressure increment"))
                 die(EXIT_IO_RESTART, "Hydraulic checkpoint lacks the pending pressure increment; exact continuation is not recoverable.");
             bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
+            if (var.matrix_pressure) {
+                if (!bin_chkpt.has_array("matrix pressure"))
+                    die(EXIT_IO_RESTART, "Matrix exchange requires matrix pressure in the checkpoint.");
+                bin_chkpt.read_array(*var.matrix_pressure, "matrix pressure");
+                for (double p : *var.matrix_pressure)
+                    if (!std::isfinite(p)) die(EXIT_IO_RESTART, "Non-finite matrix pressure checkpoint.");
+            }
+            if (var.fluid_split) {
+                if (!(bin_chkpt.has_array("hydraulic coupling version") &&
+                      bin_chkpt.has_array("hydraulic pressure consumed")))
+                    die(EXIT_IO_RESTART,"Finite-density checkpoint lacks pressure ownership.");
+                int version = 0, consumed = 0;
+                bin_chkpt.read_scalar(version,"hydraulic coupling version");
+                bin_chkpt.read_scalar(consumed,"hydraulic pressure consumed");
+                if (version != 2 || (consumed != 0 && consumed != 1) ||
+                    (param.control.has_PT && consumed))
+                    die(EXIT_IO_RESTART,"Incompatible finite-density pressure ownership.");
+                var.fluid_pressure_consumed = consumed;
+                if (!(bin_chkpt.has_array("fluid reference temperature") &&
+                      bin_chkpt.has_array("hydraulic reference law")))
+                    die(EXIT_IO_RESTART,"Finite-density checkpoint lacks its reference law.");
+                bin_chkpt.read_scalar(var.fluid_reference_temperature,"fluid reference temperature");
+                auto reference = hydraulic_reference(param);
+                double_vec saved(reference.size());
+                bin_chkpt.read_array(saved,"hydraulic reference law");
+                if (saved != reference || !std::isfinite(var.fluid_reference_temperature))
+                    die(EXIT_IO_RESTART,"Finite-density restart requires its saved EOS, porosity law and geometry ownership.");
+                if (!(bin_chkpt.has_array("hydraulic split buffer") && bin_chkpt.has_array("solid mass") &&
+                      bin_chkpt.has_array("solid heat capacity") && bin_chkpt.has_array("pending temperature increment")))
+                    die(EXIT_IO_RESTART,"Incomplete finite-density content checkpoint.");
+                bin_chkpt.read_array(*var.fluid_split,"hydraulic split buffer");
+                bin_chkpt.read_array(*var.solid_mass,"solid mass");
+                bin_chkpt.read_array(*var.solid_capacity,"solid heat capacity");
+                bin_chkpt.read_array(*var.pending_temperature,"pending temperature increment");
+                for (int n = 0; n < var.nnode; ++n)
+                    if (!(std::isfinite((*var.fluid_split)[n]) &&
+                          (*var.solid_mass)[n] > 0 && std::isfinite((*var.solid_mass)[n]) &&
+                          (*var.solid_capacity)[n] >= 0 && std::isfinite((*var.solid_capacity)[n]) &&
+                          std::isfinite((*var.pending_temperature)[n])))
+                        die(EXIT_IO_RESTART,"Invalid finite-density content checkpoint.");
+                if (bin_chkpt.has_array("fluid mass balance"))
+                    bin_chkpt.read_array(*var.fluid_balance,"fluid mass balance");
+                if (var.energy_balance && bin_chkpt.has_array("sensible energy balance"))
+                    bin_chkpt.read_array(*var.energy_balance,"sensible energy balance");
+            } else if (bin_chkpt.has_array("fluid balance"))
+                bin_chkpt.read_array(*var.fluid_balance, "fluid balance");
+            if (var.pore_strain) {
+                if (!bin_chkpt.has_array("pore strain"))
+                    die(EXIT_IO_RESTART, "Evolving porosity requires pore strain in the checkpoint.");
+                bin_chkpt.read_array(*var.pore_strain, "pore strain");
+                for (int e = 0; e < var.nelem; ++e) {
+                    const double phi = var.mat->phi(e);
+                    if (!std::isfinite((*var.pore_strain)[e]) ||
+                        !(phi > 0 && phi < 1 && phi <= var.mat->alpha_biot(e)))
+                        die(EXIT_IO_RESTART, "Invalid porosity checkpoint state.");
+                }
+            }
+            if (var.pore_dilation) {
+                if (!bin_chkpt.has_array("pore dilation") || !bin_chkpt.has_array("plastic volume increment"))
+                    die(EXIT_IO_RESTART,"Pore recovery requires saved recoverable dilation; its plastic history cannot be reconstructed.");
+                bin_chkpt.read_array(*var.pore_dilation,"pore dilation");
+                bin_chkpt.read_array(*var.pore_plastic_increment,"plastic volume increment");
+                for (double value : *var.pore_dilation)
+                    if (!(value >= 0 && std::isfinite(value)))
+                        die(EXIT_IO_RESTART,"Invalid recoverable pore dilation checkpoint.");
+                for (double value : *var.pore_plastic_increment)
+                    if (!std::isfinite(value))
+                        die(EXIT_IO_RESTART,"Invalid plastic pore volume checkpoint.");
+            }
         }
         if (param.control.has_PT) {
             // Optional save diagnostic, not a new checkpoint requirement.
@@ -514,6 +659,33 @@ void restart(const Param& param, Variables& var)
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    if (param.monitor.enabled) {
+        const bool count_saved = bin_chkpt.has_array("monitor point count");
+        const bool positions_saved = bin_chkpt.has_array("monitor point positions");
+        const bool elements_saved = bin_chkpt.has_array("monitor point elements");
+        const bool weights_saved = bin_chkpt.has_array("monitor point weights");
+        if (count_saved != positions_saved || elements_saved != weights_saved ||
+            (elements_saved && !count_saved))
+            die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
+        if (count_saved) {
+            int count = 0;
+            bin_chkpt.read_scalar(count, "monitor point count");
+            if (count < 0) die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
+            if (count == param.monitor.num_points) {
+                double_vec positions(std::size_t(count)*NDIMS), weights;
+                int_vec elements;
+                bin_chkpt.read_array(positions, "monitor point positions");
+                if (elements_saved) {
+                    elements.resize(count);
+                    weights.resize(std::size_t(count)*NODES_PER_ELEM);
+                    bin_chkpt.read_array(elements, "monitor point elements");
+                    bin_chkpt.read_array(weights, "monitor point weights");
+                }
+                monitor_restore(var,positions,elements,weights);
+            }
+        }
     }
 
     // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
@@ -592,6 +764,20 @@ void restart(const Param& param, Variables& var)
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+    bool hydraulic_order_changed = false;
+    if (param.control.has_hydraulic_diffusion) {
+        const bool saved_strain_form = bin_chkpt.has_array("physical hydraulic step");
+        if (saved_strain_form) {
+            int marker = 0;
+            bin_chkpt.read_scalar(marker, "physical hydraulic step");
+            if (marker != 1) die(EXIT_IO_RESTART, "Invalid hydraulic step ordering in checkpoint.");
+        }
+        const bool initial = var.steps == 0 && std::all_of(var.dppressure->begin(),
+            var.dppressure->end(), [](double dp) { return dp == 0; });
+        hydraulic_order_changed = saved_strain_form != hydraulic_strain_form(param);
+        if (hydraulic_order_changed && !initial)
+            die(EXIT_IO_RESTART, "Hydraulic step ordering differs from this checkpoint; use its matching solver/formulation.");
+    }
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
@@ -636,10 +822,34 @@ void restart(const Param& param, Variables& var)
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
-    // Preserve the saved next-step dt and velocity scale for PT. Recomputing
-    // here would select a different interval than uninterrupted execution,
-    // which selects dt at mesh/slow-update stages. Mass was rebuilt above.
-    if (param.control.use_global_velocity_scaling && !param.control.has_PT) {
+    bool dt_controls_changed = false;
+    const int control_fields = bin_chkpt.has_array("dt controls version") +
+                               bin_chkpt.has_array("dt controls");
+    if (control_fields) {
+        if (control_fields != 2)
+            die(EXIT_IO_RESTART, "Incomplete timestep controls in checkpoint.");
+        int version = 0;
+        bin_chkpt.read_scalar(version, "dt controls version");
+        if (version != 1)
+            die(EXIT_IO_RESTART, "Unsupported timestep-controls checkpoint version.");
+        const double_vec current = dt_controls(param);
+        double_vec saved(current.size());
+        bin_chkpt.read_array(saved, "dt controls");
+        if (saved.size() != current.size() ||
+            std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
+            die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
+        dt_controls_changed = saved != current;
+    } else {
+        // Older files identify the mechanical method through their clock schema.
+        dt_controls_changed = (!param.control.has_PT && bin_chkpt.has_array("PT output start time")) ||
+            (param.control.has_PT && bin_chkpt.has_array("output start time")) ||
+            (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
+    }
+
+    // Unchanged controls retain the saved next interval and velocity scale.
+    // Changed controls must use the same timestep/mass pair as a fresh stage.
+    if (dt_controls_changed || hydraulic_order_changed ||
+        (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
@@ -740,6 +950,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
+        apply_platen_velocity(param, var, *var.vel);
 
         #pragma acc wait
 
@@ -880,7 +1091,8 @@ int main(int argc, const char* argv[])
         // bounding box sees the settled mesh.
         build_serpentinization_grid(param, var);
 
-        if (param.sim.has_initial_checkpoint && !param.control.has_PT)
+        if (param.sim.has_initial_checkpoint && !param.control.has_PT &&
+            param.control.hydraulic_content_model == 0)
             var.output->write_checkpoint(param, var);
     }
     else {
@@ -971,6 +1183,11 @@ int main(int argc, const char* argv[])
 
     // Publish and monitor the accepted initial state, not the pre-equilibrium
     // candidate. The first checkpoint therefore records initialization as done.
+    if (param.bc.vbc_z1 == 8) {
+        VelocityConstraints constraints(var.nnode);
+        build_velocity_constraints(param, var, constraints);
+        apply_platen_velocity(param, var, *var.vel);
+    }
     if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
         if (param.control.has_PT)
             require_pt_convergence(param, var, run_initial_equilibrium_pt(param, var));
@@ -978,7 +1195,11 @@ int main(int argc, const char* argv[])
     var.initial_equilibrium_done = true;
     param.ic.has_body_force_adjustment = false;
 
-    if (!param.sim.is_restarting && param.control.has_PT && param.sim.has_initial_checkpoint)
+    if (!param.sim.is_restarting && param.control.hydraulic_content_model == 1)
+        initialize_fluid_content(param,var);
+
+    if (!param.sim.is_restarting && param.sim.has_initial_checkpoint &&
+        (param.control.has_PT || param.control.hydraulic_content_model == 1))
         var.output->write_checkpoint(param, var);
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
@@ -986,29 +1207,29 @@ int main(int argc, const char* argv[])
     var.output->write_exact(var);
     monitor_initialize(param, var);
 
-    if (param.sim.is_restarting && param.control.has_PT && var.steps > 0 &&
+    if (param.sim.is_restarting && var.steps > 0 &&
         var.steps % param.mesh.quality_check_step_interval == 0)
         remesh_if_needed(param, var);
 
-    if (param.control.has_PT && !var.output_schedule_restored) {
+    if (!var.output_schedule_restored) {
         var.output_start_time = var.reference_frame_time;
         var.output_start_step = var.steps;
         var.output_next_regular_frame = 1;
     }
-    const double starting_time = param.control.has_PT ? var.output_start_time : var.reference_frame_time;
+    const double starting_time = var.output_start_time;
     // The disabled-time sentinel must not overflow into a PT checkpoint clock.
-    const double reference_interval_in_yr = param.control.has_PT &&
-        param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
+    const double reference_interval_in_yr = param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
         ? 0 : param.sim.output_time_interval_in_yr;
     var.reference_frame_time = starting_time + reference_interval_in_yr * YEAR2SEC;
-    const double starting_step = param.control.has_PT ? var.output_start_step : var.steps;
-    int next_regular_frame = param.control.has_PT ? var.output_next_regular_frame : 1;
-    if (param.control.has_PT && !param.control.use_global_velocity_scaling)
+    const double starting_step = var.output_start_step;
+    int next_regular_frame = var.output_next_regular_frame;
+    if (!param.control.use_global_velocity_scaling)
         var.reference_frame_time = starting_time +
             next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
+    HydraulicStep hydraulic_step;
 
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "
@@ -1024,8 +1245,12 @@ int main(int argc, const char* argv[])
         var.time += var.dt;
         // Pick up what the previous step's phase changes and remeshing moved.
         var.mat->refresh_elem_cache();
-        if (param.control.has_thermal_diffusion)
+        if (var.old_temperature) *var.old_temperature = *var.temperature;
+        if (has_temperature_transport(param) && param.control.hydraulic_content_model == 0)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
+        prepare_pore_recovery(var);
+        hydraulic_step.begin(param,var);
+        const bool current_pressure = var.fluid_split && !param.control.has_PT;
 
         if (param.control.has_hydraulic_diffusion)
             update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
@@ -1036,6 +1261,9 @@ int main(int argc, const char* argv[])
             update_strain_rate(var, *var.strain_rate);
             compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            if (hydraulic_strain_form(param))
+                update_pore_pressure(param, var, *var.ppressure, *var.dppressure,
+                    *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
@@ -1043,17 +1271,25 @@ int main(int argc, const char* argv[])
                 *var.dyn_fric_coeff, *var.state_variable);
 
             // Nodal Mixed Discretization For Stress
-            if (param.control.is_using_mixed_stress)
+            if (param.control.is_using_mixed_stress && !current_pressure)
                 NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
 
-            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
-            update_velocity(var, *var.vel);
-
-            var.l2_residual = calculate_residual_force(var, *var.force_residual);
+            if (!current_pressure || param.control.has_moving_mesh) {
+                update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+                update_velocity(var, *var.vel);
+                apply_platen_velocity(param, var, *var.vel);
+                var.l2_residual = calculate_residual_force(var, *var.force_residual);
+            }
         }
 
-        if(param.control.has_hydraulic_diffusion)
+        // One physical commit, after acceptance; PT trials never deposit energy.
+        accumulate_shear_heat(var);
+
+        if(param.control.has_hydraulic_diffusion && !hydraulic_strain_form(param) &&
+           param.control.hydraulic_content_model == 0)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
+
+        if (param.control.hydraulic_content_model == 0) update_porosity(var);
 
         // The functions of a slow step are expensive and their inputs change
         // slowly, so they run every slow_updates_interval steps.
@@ -1076,19 +1312,37 @@ int main(int argc, const char* argv[])
         if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
-        else if (param.control.rsf_dtheta_max > 0.0) {
-            // Select the next step from the accepted velocity. The GVS mass
-            // must follow the same current rate used by the state bound.
+        else if (!current_pressure && (param.control.rsf_dtheta_max > 0.0 ||
+                 param.control.use_global_velocity_scaling)) {
+            // A fixed mesh still needs the accepted velocity's GVS mass and
+            // timestep together; changing only dt leaves stale inertia.
             var.dt = compute_dt(param, var);
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
         }
-        else if (phase_change_step) {
+        else if (!current_pressure && (phase_change_step || var.pore_strain)) {
             // A fixed mesh has no update_mesh() to rebuild them.
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
+        }
+        if (var.pore_strain && !current_pressure) var.dt = compute_dt(param, var);
+        if (param.control.hydraulic_content_model == 1) {
+            hydraulic_step.advance(param,var);
+            if (current_pressure) {
+                hydraulic_step.correct_mechanics(param,var);
+                if (param.control.is_using_mixed_stress)
+                    NMD_stress(var,*var.stress,*var.ntmp,*var.etmp);
+                update_force(param,var,*var.force,*var.force_residual,*var.tmp_result);
+                update_velocity(var,*var.vel);
+                apply_platen_velocity(param,var,*var.vel);
+                apply_vbcs(param,var,*var.vel);
+                var.l2_residual = calculate_residual_force(var,*var.force_residual);
+            }
+            var.dt = compute_dt(param,var);
+            compute_mass(param,var,var.max_vbc_val,*var.volume_n,*var.mass,*var.tmass,
+                         *var.hmass,*var.ymass,*var.tmp_result);
         }
 
         // Rebuild the serpentinization grid at each quality check. Markers of
@@ -1133,7 +1387,7 @@ int main(int argc, const char* argv[])
                               starting_time, starting_step, next_regular_frame);
         } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-               (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
+               (var.steps - starting_step) == static_cast<int64_t>(next_regular_frame) * param.sim.output_step_interval)
               ||
               (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
                (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
@@ -1146,8 +1400,7 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
-                if (param.control.has_PT)
-                    var.output_next_regular_frame = next_regular_frame + 1;
+                var.output_next_regular_frame = next_regular_frame + 1;
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
 

@@ -21,7 +21,7 @@ void handle_ats_output(const Param& param,
 
     const bool regular_output_due =
         (((param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-           (var.steps - starting_step) >= next_regular_frame * param.sim.output_step_interval) ||
+           (var.steps - starting_step) >= static_cast<int64_t>(next_regular_frame) * param.sim.output_step_interval) ||
           (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
            (var.time - starting_time) >= next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)) &&
          output_allowed);
@@ -45,8 +45,7 @@ void handle_ats_output(const Param& param,
         following_regular_frame = frames_due + 1;
     }
     // Checkpoints below must carry the index for the next physical step.
-    if (param.control.has_PT)
-        var.output_next_regular_frame = following_regular_frame;
+    var.output_next_regular_frame = following_regular_frame;
 
     bool wrote_earthquake_output = false;
 

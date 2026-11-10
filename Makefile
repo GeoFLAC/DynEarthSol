@@ -574,6 +574,8 @@ SRCS =	\
 	earthquake_state.cxx \
 	fields.cxx \
 	geometry.cxx \
+	hydraulics.cxx \
+	point_sources.cxx \
 	ic.cxx \
 	ic-read-temp.cxx \
 	input.cxx \
@@ -607,6 +609,7 @@ INCS =	\
 	earthquake_state.hpp \
 	fields.hpp \
 	geometry.hpp \
+	hydraulics.hpp \
 	ic.hpp \
 	ic-read-temp.hpp \
 	input.hpp \
@@ -620,11 +623,13 @@ INCS =	\
 	output.hpp \
 	parameters.hpp \
 	phasechanges.hpp \
+	point_sources.hpp \
 	pseudo_transient.hpp \
 	remeshing.hpp \
 	rheology.hpp \
 	runtime_info.hpp \
 	sortindex.hpp \
+	unsaturated.hpp \
 	utils.hpp
 
 ifeq ($(usegospl), 1)

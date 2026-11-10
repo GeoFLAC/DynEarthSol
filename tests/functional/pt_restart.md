@@ -1,5 +1,33 @@
 # PT checkpoint and remeshing regression
 
+## Changed timestep controls
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/check_restart_dt.py EXE OUT --legacy-executable OLD_EXE
+```
+
+Use a fresh output directory and executables of the same dimension and
+container. Twelve tiny-cell cases check exact unchanged PT/explicit
+continuation and the first interval after changing method, physical
+inertia, scaling, characteristic speed, step fraction or fixed timestep.
+The explicit velocity increment also checks the mass actually used.
+
+New checkpoints retain a versioned record of the timestep controls.
+Unchanged controls preserve the saved next interval; changed controls
+select the current interval and matching mass before the first new step.
+Older files detect PT/explicit conversion through the existing output
+clock schema and honor an explicitly changed positive `fixed_dt`.
+An older ordinary-explicit file does not record its previous scaling
+settings: resume it with its original settings to write a current-format
+checkpoint before changing those settings. GVS already reselects its
+adaptive timestep/mass pair at restart.
+
+The test supports native binary and HDF5. The recorded 2D/3D cells select
+0.05/0.0333 s after a PT checkpoint carrying 1 s; the parent incorrectly
+keeps 1 s. This check does not qualify an earthquake-cycle energy budget.
+
+## Unchanged physical continuation
+
 From the repository root, use a CPU executable built with either `hdf5=0` or
 `hdf5=1` (HDF5 comparisons require Python h5py and NumPy):
 
@@ -73,17 +101,31 @@ OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d
 
 Repeat with `--schedule step`, `time`, and `catchup`, new output directories,
 and the 3D executable. Use `--schedule step-default` to omit the time interval
-and exercise the disabled-time default; the PT checkpoint clock must remain
-finite. Repeat with both PT options and with global velocity scaling on/off to
-cover both scheduler paths. The supplied RSF fixture forces global velocity
-scaling on; use an otherwise identical copy with `rheology_type=elastic` to test
-the off setting. The same cell tests binary and HDF5 checkpoints.
+and exercise the disabled-time default; the checkpoint clock must remain
+finite. The runner selects elastic rheology so `--method pt`, `explicit` and
+`gvs` exercise their requested scheduler. Add `--rsf` with `pt` or `gvs` to
+retain the original RSF fixture, which forces global velocity scaling on.
+Repeat PT with both options. The same cell tests binary and HDF5 checkpoints.
 The comparison includes frame numbers, physical steps, output times and all
-subsequent save/checkpoint payloads. Cadence settings remain unchanged on restart.
-PT checkpoints retain the original schedule anchors and the next regular output
-index. Older checkpoints without these fields remain readable with a warning
-and legacy scheduling; incomplete new schedule records are rejected. This test
-does not qualify earthquake-event history or averaged-field accumulator restart.
+subsequent save/checkpoint payloads. The fixed physical timestep isolates the
+output clock; it does not qualify adaptive GVS or changing physical timesteps.
+
+All methods retain the original schedule anchors, next regular output index
+and configured step/time intervals. Unchanged cadence preserves the original
+frame sequence. An explicitly changed interval starts a new cadence at the
+restart step/time. Check decreasing and increasing step intervals with
+`--schedule step --step-after-restart 2` and `6`; use
+`--schedule time --time-after-restart 3.7` to change the time interval to
+3.7 fixed timesteps. These checks compare the physical state against a separate
+run saving every step; output-clock metadata is allowed to differ.
+
+PT's existing schedule field names remain readable. New non-PT checkpoints use
+generic names; the reader detects the saved schema even for a permitted
+step-zero method conversion. Older checkpoints without schedule fields remain
+readable with a warning and legacy scheduling. Without saved interval fields,
+an interval change cannot be detected reliably. Incomplete new records are
+rejected. These checks do not qualify earthquake-event history, averaged-field
+accumulator restart or changing `fixed_dt` during continuation.
 
 ## Nonconvergence diagnostics
 

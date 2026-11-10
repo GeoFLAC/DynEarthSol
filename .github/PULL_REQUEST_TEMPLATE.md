@@ -49,7 +49,7 @@ Fixes #
 
 <!-- CI builds every flag combination and checks restart determinism, but cannot
      tell whether THIS change altered results. If it can, compare a
-     benchmarks-cores case before and after (`make set` on the parent commit,
+     tests/regression case before and after (`make set` on the parent commit,
      then `make cmp`) -- see "Benchmarks and regression testing" in
      CONTRIBUTING.md. -->
 
@@ -75,7 +75,7 @@ Fixes #
 - Follows [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md); builds for `ndims=2` and `ndims=3`:
 - Entry under `## [Unreleased]` in [CHANGELOG.md](../blob/master/CHANGELOG.md):
 - New parameters registered in `input.cxx` and documented in `examples/defaults.cfg`:
-- Test under `tests/functional/` or `benchmarks-cores/`:
+- Test under `tests/functional/` or `tests/regression/`:
 
 ## AI disclosure
 

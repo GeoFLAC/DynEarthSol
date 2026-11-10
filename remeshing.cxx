@@ -18,6 +18,7 @@
 #include "brc-interpolation.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
+#include "hydraulics.hpp"
 #include "matprops.hpp"
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
@@ -193,6 +194,74 @@ void flatten_x1(const uint_vec &old_bcflag, double *qcoord,
         else if (! is_x1(flag))
             if (qcoord[i*NDIMS] > (side - min_dist))
                 points_to_delete.push_back(i);
+    }
+}
+
+// Selected normal displacement; two selected faces pin their corner fully.
+#pragma acc routine seq
+template <class Current, class Reference>
+void boundary_reference_delta(const Variables &var, uint active,
+                              Current current, Reference reference, double delta[NDIMS])
+{
+    for (int d = 0; d < NDIMS; ++d) delta[d] = 0;
+    if (!active) return;
+    if (active & (active - 1)) {
+        for (int d = 0; d < NDIMS; ++d) delta[d] = current[d] - reference[d];
+        return;
+    }
+    for (int ib = 0; ib < nbdrytypes; ++ib) {
+        if (!(active & (1U << ib))) continue;
+        if (ib == iboundx0 || ib == iboundx1)
+            delta[0] = current[0] - reference[0];
+#ifdef THREED
+        else if (ib == iboundy0 || ib == iboundy1)
+            delta[1] = current[1] - reference[1];
+#endif
+        else if (ib == iboundz0 || ib == iboundz1)
+            delta[NDIMS-1] = current[NDIMS-1] - reference[NDIMS-1];
+        else {
+            ConstArrayAccessor normal = (*var.bnormals)[ib];
+            double offset = 0;
+            for (int d = 0; d < NDIMS; ++d)
+                offset += (current[d] - reference[d]) * normal[d];
+            for (int d = 0; d < NDIMS; ++d) delta[d] = offset * normal[d];
+        }
+        return;
+    }
+}
+
+void restore_selected_boundary_reference(const Param &param, const Variables &var,
+                                         const uint_vec &flags, double *coordinate)
+{
+    for (std::size_t n = 0; n < flags.size(); ++n) {
+        double delta[NDIMS];
+        boundary_reference_delta(var, flags[n] & param.mesh.remeshing_reset_boundary_mask,
+                                 coordinate + n*NDIMS, (*var.coord0)[n], delta);
+        for (int d = 0; d < NDIMS; ++d) coordinate[n*NDIMS+d] -= delta[d];
+    }
+}
+
+double selected_boundary_reference_distortion(const Param &param, const Variables &var, int n)
+{
+    double delta[NDIMS], distance2 = 0;
+    boundary_reference_delta(var, (*var.bcflag)[n] & param.mesh.remeshing_reset_boundary_mask,
+                             (*var.coord)[n], (*var.coord0)[n], delta);
+    for (int d = 0; d < NDIMS; ++d) distance2 += delta[d]*delta[d];
+    return std::sqrt(distance2);
+}
+
+void reset_selected_boundary_coord0(const Param &param, Variables &var)
+{
+    const uint selected = param.mesh.remeshing_reset_boundary_mask;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var) firstprivate(selected)
+#endif
+    #pragma acc parallel loop gang vector firstprivate(selected) async
+    for (int n = 0; n < var.nnode; ++n) {
+        double delta[NDIMS];
+        boundary_reference_delta(var, (*var.bcflag)[n] & selected,
+                                 (*var.coord0)[n], (*var.coord)[n], delta);
+        for (int d = 0; d < NDIMS; ++d) (*var.coord0)[n][d] -= delta[d];
     }
 }
 
@@ -1239,6 +1308,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 0:
     case 1:
     case 2:
+    case 14:
         // DO NOT change the boundary
         excl_func = &is_boundary;
         break;
@@ -1277,6 +1347,9 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     case 12:
         flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
+    case 14:
+        restore_selected_boundary_reference(param, var, old_bcflag, qcoord);
+        break;
     }
 
     array_t array_t_qcoord(qcoord, old_nnode);
@@ -1309,6 +1382,7 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
     switch (param.mesh.remeshing_option) {
     case 0:
     case 2:
+    case 14:
         // deleting points that are in no segment (see delete_points)
         delete_points(points_to_delete, old_nnode, old_nseg,
                       qcoord, qsegment);
@@ -4608,6 +4682,10 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
         flatten_x1(old_bcflag, qcoord, param.mesh.xlength, points_to_delete, min_dist);
         break;
+    case 14:
+        excl_func = &is_boundary;
+        restore_selected_boundary_reference(param, var, old_bcflag, qcoord);
+        break;
     default:
         std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
         die(EXIT_CONFIG_VALUE);
@@ -5045,6 +5123,20 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
 #endif
             return 2;
         }
+    }
+
+    if (param.mesh.remeshing_option == 14) {
+        #pragma acc wait
+        const double limit = param.mesh.max_boundary_distortion * param.mesh.resolution;
+        for (int n = 0; n < var.nnode; ++n)
+            if (selected_boundary_reference_distortion(param, var, n) > limit) {
+                index = n;
+                std::cout << "    Node #" << n << " exceeds its selected reference-boundary distance.\n";
+#ifdef NPROF
+                nvtxRangePop();
+#endif
+                return 2;
+            }
     }
 
     // check element distortion
@@ -6003,6 +6095,13 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
     int64_t time_tmp = get_nanoseconds();
 
+    if (var.fluid_pressure_consumed) {
+        #pragma acc wait
+        std::fill(var.dppressure->begin(),var.dppressure->end(),0.0);
+        var.fluid_pressure_consumed = false;
+    }
+    ContentRemap fluid_remap(param,var);
+
     std::cout << "  Remeshing starts (#" << var.nremesh_prior + var.nremesh + 1
               << ", step " << var.steps << ", t = " << var.time / YEAR2SEC << " yr)...\n";
 
@@ -6206,6 +6305,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 
         create_boundary_flags(var);
+        validate_hydraulic_boundaries(param, var);
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
         delete var.connectivity_surface;
@@ -6219,6 +6319,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
         {
             Barycentric_transformation bary(old_coord, old_connectivity, *var.volume);
+
+            fluid_remap.transfer(var,old_coord,old_connectivity);
 
             // interpolating fields defined on elements
             nearest_neighbor_interpolation(param, var, bary, old_coord, old_connectivity);
@@ -6343,8 +6445,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // dt -- enough for an explicit CFL runaway to invert elements (then the step-10
     // compute_dt hits negative volumes and dies with "dt <= 0"). compute_mass below
     // consumes var.dt, so the refresh must come first.
+    if (var.fluid_split) fluid_remap.restore(param,var);
     var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+    if (!var.fluid_split) fluid_remap.restore(param,var);
 
 
     #pragma acc wait
@@ -6400,6 +6504,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
+    if (param.mesh.remeshing_option == 14)
+        reset_selected_boundary_coord0(param, var);
     if (param.sim.has_output_during_remeshing) {
         // the following variables need to be re-computed only when we are
         // outputing right after remeshing

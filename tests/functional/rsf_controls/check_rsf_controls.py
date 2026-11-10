@@ -17,7 +17,7 @@ import h5py
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
-BENCHMARK_DIR = REPO_ROOT / "benchmarks" / "simple_shear_rsf"
+BENCHMARK_DIR = REPO_ROOT / "benchmarks" / "faults-friction" / "simple_shear_rsf"
 sys.path.insert(0, str(BENCHMARK_DIR))
 
 from run_simple_shear_benchmark import (  # noqa: E402

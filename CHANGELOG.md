@@ -17,8 +17,132 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- `control.hydraulic_content_model=1` enables saturated finite-density water
+  inventory and retained sensible heat with evolving Biot porosity. Output
+  separates physical water mass from the numerical fixed-stress buffer;
+  remeshing and restart carry water, solid mass and heat capacity explicitly.
+  The default linear model remains unchanged.
+
+- `mat.pore_healing_time` enables recovery of accepted plastic pore dilation,
+  with temperature dependence from `pore_healing_temperature` and
+  `pore_healing_energy`. Recovery changes porosity, permeability and the fluid
+  source; elastic changes and permanent compaction are excluded.
+
+- Monitor CSVs gain a last column, `row`: 0 for the regular `step_interval`
+  series, 1 for the state just before a remesh that falls between monitor
+  steps, and 2 for the remapped state just after it. `monitor.remesh_output`
+  selects `before` (default) or `both`. Filter `row == 0` for an evenly spaced
+  series. A restart keeps a CSV's earlier rows across remeshes.
+
+- `monitor.point_type`: `particle` (default) interpolates nodal values at the
+  monitor point and reads element values from its containing element; `grid`
+  reports the node and element nearest the point, as before.
+  `tests/functional/monitor/check_monitor_tracking.py` checks both through
+  remeshing and restart. Checkpoints preserve the exact element and weights
+  so a restart also preserves the CSV values in 3D; malformed tracer state
+  is rejected before CSV histories change. Older position-only checkpoints
+  remain readable, with relocation round-off.
+
+- `mat.permeability_model=2` uses `k=k0*(phi/phi0)^n`, with positive material
+  exponents from `mat.permeability_exponent` (default `[3]`).
+
+- `mesh.remeshing_option=14` restores selected reference boundaries on 2D
+  unstructured meshes. Select marker bits with
+  `mesh.num_remeshing_reset_boundaries` and `mesh.remeshing_reset_boundaries`.
+
+- Saved frames include the nodal vector `displacement = coordinate - coord0`
+  in native and HDF5 output. It follows the current reference geometry,
+  including reference-boundary resets during remeshing.
+
+- `control.has_shear_heating` integrates the nonelastic heating proposed in
+  [#88](https://github.com/GeoFLAC/DynEarthSol/pull/88), including plastic
+  earthquake deformation and EP-RSF. Accepted energy survives timestep
+  changes, remeshing and restart; the default remains off.
+
+- Same-input slope and rainfall replays check the plastic fluid-source
+  correction against the existing fixed-slip results. An independent
+  saturated content checker detects defects hidden by a small pressure
+  residual and includes the pending PT increment at nonzero restarts.
+
+- Terzaghi load-history superposition and prescribed material-regime
+  studies check consolidation and recovery after partial unloading, with
+  separate mesh/time sequences and explicit hydraulic-substep controls.
+
+- Coupled restart controls verify the manual explicit/GVS transition to
+  physical mixture inertia at scalings 1e4–1e6, preserving physical state
+  and distinguishing artificial kinetic energy from heat.
+
+- Selected hydromechanics review pages for coupled water content, sealed
+  thermal pressurization and fluid conservation through plastic yielding,
+  with shared schematics, derivations and portable every-step tables.
+
+- Heated material-cell references check thermal pressurization and closed
+  heat balance, quantify PT's pressure lag, and isolate the missing retained
+  fluid capacity in the open-system energy budget.
+
+- A coupled inflow/drainage column checks fluid content from pressure and
+  strain, quantifies the PT coupling lag, and verifies water budgets through
+  adaptive GVS timesteps and exact restarts against an analytical reference.
+
+- A rigid frictionless top platen (`bc.vbc_z1=8`) and normal surface stress
+  on arbitrary facets (`bc.stress_bc_*=4`) support Mandel and Cryer
+  consolidation benchmarks.
+- Hydraulic and thermal transport include Boussinesq fluid buoyancy from
+  `mat.fluid_alpha`; `ic.temperature_option=5` initializes linear conduction
+  with a Gaussian perturbation. Zero-flow heat transport preserves ordinary
+  Galerkin conduction, including on obtuse elements.
+- Scheduled fluid and heat point sources support signed rates or total
+  amounts, exact partial-step schedules, mesh-aware distribution and
+  independent volume/heat balance checks. Existing wells retain their
+  extraction-positive convention.
+- Optional groundwater heat advection uses Darcy flux and mixed solid/fluid
+  heat capacity, with prescribed thermal boundaries and stable substeps even
+  for a fixed outer timestep. A schematic and analytical Ogata–Banks comparison
+  document its constant-capacity transport scope.
+- Explicit hydraulic transport supports a rotated SPD permeability tensor,
+  scheduled pressure/flux boundaries and a checkpointed fluid-balance diagnostic.
+  Large fixed timesteps use stable hydraulic substeps.
+- Explicit unsaturated (Richards) transport, selected per material by
+  `mat.retention_model` (van Genuchten-Mualem, Brooks-Corey-Burdine or Gardner),
+  and an initial hydrostatic water table, `ic.water_table_z`. Saturated
+  materials and the default inputs give unchanged results.
+- Optional thermal pressurization couples fluid/solid expansion to accepted
+  physical steps. Optional immobile matrix reservoirs exchange fluid with
+  transport pressure and retain their pressure through checkpoints/remeshing.
+
+- Optional Biot porosity evolution (`mat.porosity_model=1`) and Kozeny-Carman
+  permeability (`mat.permeability_model=1`) follow accepted physical steps,
+  continue through checkpoints/remeshing, and expose current properties in output.
+
+- Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
+  through a screen with a shared rate schedule. Each step applies the exact
+  scheduled volume, so a sealed domain balances its fluid content to round-off.
+
+- A thickness-averaged Biot pumping reference generalizes Bear-Corapcioglu
+  to finite well/domain radii and compressible fluid/grains, with standalone
+  NumPy/SciPy checks. A reproducible thin-slab DES comparison reports pressure
+  and strain errors within its small-strain slab assumptions.
+
+- Standalone unsaturated retention and infiltration references exercise a
+  conservative explicit column update. Production transport is integrated;
+  element-aware Bishop coupling and saturation-dependent density have
+  separate material and coupled-drainage reference checks.
+
+- Reproducible hydromechanics figures compare existing DES 2D/3D Terzaghi
+  runs with analytical pressure and settlement, and show Theis reference
+  curves. See `benchmarks/poromechanics/README.md` for PNG/SVG/PDF exports.
+
+- A separate Terzaghi mesh/timestep study records convergence and replayable
+  figures in 2D/3D. Two-well checks qualify pumping/injection superposition
+  and scheduled-volume closure in the small-strain limit.
+
+- Independent Theis analytical benchmark reference for pumping, injection,
+  rate changes and shut-in, with standalone checks requiring NumPy/SciPy.
+  Executable pumping/recovery and superposition comparisons are described
+  in `benchmarks/poromechanics/README.md`.
+
 - PT save files expose the accepted projected undamped `PT residual force`
-  separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
+  separately from the legacy damped `force`; `examples/fundamentals/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
 
 - Physical-step PT trial/commit mechanics with projected undamped-force
@@ -60,7 +184,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   serpentinizes above wet crust (oceanic crust, sediment or sedimentary rock)
   that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
   a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
-  markers. `examples/subduction.cfg` runs it ([#110]).
+  markers. `examples/tectonics/subduction.cfg` runs it ([#110]).
 
 - The Docker images build `usemmg=1` and `hdf5=1` in the container, offline
   (`--network none`), and `docker run` mounts `./runs` for results, written as
@@ -72,6 +196,24 @@ For a release, the full auto-generated list of merged pull requests is in its
   built from another `Dockerfile` or `ubuntu:22.04` ([#119]).
 
 ### Changed
+
+- **Breaking.** Monitor points follow the material through deformation,
+  remeshing and restart, located like markers by their element and
+  barycentric weights. `monitor.remesh_rebind_mode` is removed; delete it from
+  existing inputs. A restart continues the same material points from the
+  checkpoint; an older checkpoint restarts them from their query coordinates.
+  The CSV columns keep their names: `query_*` is now the point's current
+  position and `matched_elem` the element whose values are reported.
+
+- Physical-inertia hydraulic steps (`is_quasi_static=false`, `has_PT=false`)
+  use strain-driven Biot storage and an undrained-wave timestep limit.
+  Nonzero-step checkpoints from the older physical-inertia ordering require
+  their matching solver; incompatible ordering is rejected with exit code 22.
+  Quasistatic/GVS and PT retain their existing formulation.
+
+- Hydraulic material inputs now require physical finite moduli, viscosity,
+  density and permeability, with `0 <= porosity <= biot_coeff <= 1` and
+  nonzero `biot_coeff` when transport is enabled.
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -96,7 +238,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The code is called DynEarthSol and DES in the docs and comments, as the
   repository, `CITATION.cff` and the v2.0 paper already do; the 3D suffix
   predates the 2D executable ([#96]).
-- `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
+- `examples/tectonics/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
   run instead of 12047 ([#96]).
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
@@ -162,11 +304,97 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- `sim.seismic_moment_calculate_output`: the event moment is now the sum of
+  2 G V times each element's plastic-strain increment, in N m, with no fault
+  geometry. It was the shear modulus times volume times node speed, which had
+  the wrong units and counted rigid motion. In 2D it is per unit length out of
+  the plane and no Mw is written.
+
+- Fixed-property saturated remeshing preserves global linear Biot excess
+  content, its pending pressure buffer and immobile storage separately.
+  Geometric domain transfer and prescribed-pressure reactions have their
+  own report; evolving/retentive mass and thermal energy remain separate work.
+
+- Explicit and GVS restarts execute a quality/remesh stage pending at the
+  checkpoint, preserving continuation when that stage changes the mesh.
+
+- Monitor CSV histories survive restart: matching checkpoint rows are kept
+  once and stale later rows are replaced. Inconsistent point histories fail
+  validation before any existing CSV is changed.
+
+- Large step-output intervals no longer overflow the frame-index product
+  and trigger extra GVS writes. Time-based output keeps its requested cadence
+  through fresh runs and restart.
+
+- Solver help documents hydraulic pressure/flux boundary types, stress
+  signs, fluid-viscosity units and the actual simplex mesh layouts and
+  region/depth conventions used by the manual examples. Option names,
+  defaults and numerical behavior are unchanged.
+
+- Fixed-stress flow in plastic rheologies now uses accepted volumetric
+  strain for the mechanical source. Plastic stress relaxation no longer
+  creates a spurious fluid-content change; the pending-pressure buffer
+  remains consistent across hydraulic substeps and changed timesteps.
+
+- Restarting with changed timestep controls reselects the timestep and
+  matching mass before the next physical step. Unchanged PT and explicit
+  controls retain exact continuation; older PT checkpoints can switch to
+  explicit mechanics without carrying an oversized PT interval.
+
+- The Salençon checker distinguishes completed loading from analytical
+  accuracy and treats saved mixed-stress yield slack as a projection
+  diagnostic. Local return tests remain separate; field and force
+  tolerances are unchanged. The review now records paired mesh/load
+  refinements, reconstructed strain and fixed-load holding, with the
+  selected stress/displacement profile and its numerical limits.
+
+- An elastic trial above the tensile cap can return by shear when that
+  return finishes below the cap. Plane-strain and 3D checks avoid premature
+  tensile corrections in this case, including large affine increments.
+
+- Plane-strain and 3D plastic shear returns handle two active Mohr–Coulomb
+  faces when a single-face correction crosses the principal-stress order.
+  The correction preserves symmetric edge states and their plastic history;
+  general apex and mixed tensile/shear qualification remains separate.
+
+- Imported meshes may prescribe unequal pressures on disjoint tagged
+  boundaries. Conflicting pressures at actual shared nodes are rejected
+  during initialization, restart and remeshing, including when their tags
+  are named as opposite faces of the same nominal axis.
+
+- Coupled explicit and GVS mechanics advance pressure from the current strain
+  increment and bound the undrained wave using actual scaled mass. This avoids
+  the lagged-coupling instability found in sudden-load consolidation tests.
+  Older nonzero-step coupled quasistatic checkpoints need their matching solver.
+
+
+- Heat diffusion uses bounded explicit substeps even with a large fixed
+  physical timestep, preventing a thermal instability from breaking mechanics.
+  Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
+
+- Hydrostatic initialization, Darcy gravity, saturated mixture weight, dynamic
+  mass and foundation loads honor `mat.fluid_rho0` instead of assuming
+  1000 kg/m^3 water. With transport disabled, body force uses the dry solid
+  density even when a nonzero porosity is configured.
+
+- Poroelastic pressure storage and initial excess-pressure loading include
+  grain compressibility from `bulk_modulus_s`. The transport timestep uses
+  the same storage from initialization onward; the dimensionally inconsistent
+  hydraulic mass-scaling rejection is removed.
+
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
 - PT step-based output keeps a finite checkpoint clock when the time-output
   interval is omitted, including fresh and resumed runs with either scheduler.
+
+- Explicit and GVS checkpoints retain the regular output schedule, avoiding
+  extra frames after restart. All methods save the configured cadence; an
+  interval changed on restart begins a new schedule at that step and time.
+
+- Inlet-temperature subcycling bounds the active injection rate, preventing
+  a short source pulse from overshooting its prescribed temperature through
+  a small whole-step average rate.
 
 - PT logs distinguish the selected starting residual (`initial`) from the
   first warm trial (`warm_initial`) used for convergence scaling, and report

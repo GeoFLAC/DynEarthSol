@@ -61,8 +61,8 @@ Low priority:
 
 ## Benchmarks and regression testing
 
-Regression tests live in `benchmarks-cores/`. All targets run from inside that
-directory; see the comment block at the top of `benchmarks-cores/Makefile` for
+Regression tests live in `tests/regression/`. All targets run from inside that
+directory; see the comment block at the top of `tests/regression/Makefile` for
 the full variable and target reference.
 
 ```bash
@@ -127,11 +127,23 @@ repeated here.
 * **Enhancements**: the problem as it stands today, a concrete proposal, the
   alternatives you rejected, and the state that closes the issue.
 * **Pull requests**: one topic per PR, commits that each build and pass
-  `benchmarks-cores`, and a title that stands alone in `git log` -- the area
+  `tests/regression`, and a title that stands alone in `git log` -- the area
   and what changed, never "various fixes". The template's one DES-specific
   question is whether the change altered results -- CI cannot tell -- so run
   the comparison above and report it. Open as a draft until CI is green, then
   request review from at least one other developer.
+
+## Contribution scope
+
+Include reusable implementation, reference solvers, test inputs and the
+documentation needed to use or reproduce them. Keep local work queues,
+handoff notes, experiment archives and machine-specific packaging scripts
+outside the tracked source tree. Generated figures and data belong in their
+intended documentation or dataset package.
+
+Before publishing, compare the complete branch with current master and
+inspect its new commit history as well as its final files. Deleting an
+internal file in a later commit does not remove it from the earlier history.
 
 ## AI-assisted contributions
 

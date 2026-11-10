@@ -659,7 +659,7 @@ void build_serpentinization_grid(const Param& param, Variables& var)
     // No deeper than a mantle marker at the depth cap can look down for wet
     // crust, plus one cell: build_index() leaves out the markers below, so
     // the deep mantle costs no cells. The extra cell is headroom for a marker
-    // that rises between rebuilds (in examples/subduction.cfg about 40 m per
+    // that rises between rebuilds (in examples/tectonics/subduction.cfg about 40 m per
     // quality-check interval, against 3 km cells).
     const double cell_size = param.mesh.resolution * param.mesh.vt_size;
     lo[NDIMS-1] = std::max(lo[NDIMS-1], -(param.mat.serpentinization_max_depth

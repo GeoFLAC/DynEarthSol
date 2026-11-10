@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Figures for Elder's heater problem: DES meshes beside the reference grids.
+
+    plot_elder.py STUDY REFERENCE.npz OUTPUT_PREFIX [--times 0.01 0.02 0.05 0.1]
+
+STUDY is the output folder of tests/functional/hydromechanics/check_elder.py.
+The first figure shows the temperature theta = (T - T0)/dT of every
+reference grid and every DES mesh at the chosen tau, with the 0.2 and 0.6
+isotherms of Voss and Souza (1987). The second shows the heat content of the
+layer against tau. Nothing is fitted or smoothed.
+"""
+import argparse
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+from Dynearthsol import Dynearthsol, scan_frames
+from diagram_style import RC, INK, MUTED
+
+T0, DT, KAPPA = 273.0, 10.0, 1e-6
+LEVELS = np.linspace(0, 1, 11)
+
+
+def des_cases(study):
+    summary = json.loads((study/'summary.json').read_text())
+    out = []
+    for case in summary['cases']:
+        folder = study/f"h{case['spacing_m']:g}"
+        model = Dynearthsol(str(folder/'elder'))
+        rows = {round(r['time']*KAPPA, 9): r for r in scan_frames(str(folder/'elder'))}
+        coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
+        tri = mtri.Triangulation(coord[:, 0], coord[:, 1] + 1, conn)
+        out.append(dict(label=f"DES, h = 1/{round(1/case['spacing_m'])} m", model=model, rows=rows, tri=tri,
+                        series=case['series'], dt=summary['dt_s']))
+    return out
+
+
+def theta_des(case, tau):
+    row = case['rows'][round(tau, 9)]
+    return (case['model'].read_field(row['frame'], 'temperature') - T0)/DT
+
+
+def fields(study, reference, prefix, times):
+    ref = np.load(reference)
+    grids = sorted(int(k.split('_')[1]) for k in ref.files if k.startswith('theta_'))
+    des = des_cases(study)
+    columns = [(f'Reference, {n} x {2*n}', ('ref', n)) for n in grids] + [(c['label'], ('des', c)) for c in des]
+    with plt.rc_context(RC):
+        fig, axes = plt.subplots(len(times), len(columns), figsize=(2.6*len(columns), 1.45*len(times)+.6),
+                                 sharex=True, sharey=True, squeeze=False)
+        for i, tau in enumerate(times):
+            k = int(np.argmin(np.abs(ref['times'] - tau)))
+            assert abs(ref['times'][k] - tau) < 1e-12, tau
+            for j, (title, (kind, item)) in enumerate(columns):
+                ax = axes[i, j]
+                if kind == 'ref':
+                    X, Z = np.meshgrid(ref[f'x_{item}'], ref[f'z_{item}'])
+                    th = ref[f'theta_{item}'][k]
+                    im = ax.contourf(X, Z, th, LEVELS, cmap='inferno', extend='both')
+                    ax.contour(X, Z, th, [.2, .6], colors='white', linewidths=.6)
+                else:
+                    th = theta_des(item, tau)
+                    im = ax.tricontourf(item['tri'], th, LEVELS, cmap='inferno', extend='both')
+                    ax.tricontour(item['tri'], th, [.2, .6], colors='white', linewidths=.6)
+                ax.plot([0, 1], [0, 0], color='#b23a24', lw=3, solid_capstyle='butt', clip_on=False)
+                ax.set_aspect('equal'); ax.set_xlim(0, 2); ax.set_ylim(0, 1)
+                ax.set_xticks([0, 1, 2]); ax.set_yticks([0, 1])
+                if i == 0: ax.set_title(title, fontsize=10, color=INK)
+                if j == 0: ax.set_ylabel(f'$\\tau$ = {tau:g}\n$z/H$', fontsize=10)
+                if i == len(times)-1: ax.set_xlabel('$x/H$', fontsize=10)
+        fig.colorbar(im, ax=axes, shrink=.6, label=r'$\theta = (T - T_0)/\Delta T$', ticks=[0, .2, .4, .6, .8, 1])
+        for ext in ('png', 'svg'):
+            fig.savefig(f'{prefix}-fields.{ext}', dpi=200, bbox_inches='tight')
+        plt.close(fig)
+
+
+def heat(study, reference, prefix):
+    summary = json.loads((Path(reference).with_suffix('.json')).read_text())
+    des = json.loads((study/'summary.json').read_text())
+    with plt.rc_context(RC):
+        fig, ax = plt.subplots(figsize=(5.2, 3.4))
+        shades = plt.cm.Greys(np.linspace(.45, .9, len(summary['cases'])))
+        for (n, case), color in zip(summary['cases'].items(), shades):
+            pts = case['at_times']
+            ax.plot([p['tau'] for p in pts], [p['heat'] for p in pts], '-', color=color, lw=1.2,
+                    label=f'reference, {n} x {2*int(n)}')
+        marks = ['o', 's', '^', 'D']
+        for case, m in zip(des['cases'], marks):
+            s = case['series']
+            ax.plot([p['tau'] for p in s], [p['heat_des'] for p in s], m, mfc='none', color='#24618f', ms=6,
+                    label=f"DES, h = 1/{round(1/case['spacing_m'])} m")
+        ax.set_xlabel(r'$\tau = \kappa t/(\sigma H^2)$'); ax.set_ylabel(r'heat content $\int\theta\,dA\,/H^2$')
+        ax.set_xlim(0, .105); ax.legend(frameon=False, fontsize=9)
+        ax.spines[['top', 'right']].set_visible(False)
+        for ext in ('png', 'svg'):
+            fig.savefig(f'{prefix}-heat.{ext}', dpi=200, bbox_inches='tight')
+        plt.close(fig)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('study', type=Path); p.add_argument('reference', type=Path); p.add_argument('prefix')
+    p.add_argument('--times', type=float, nargs='+', default=[0.01, 0.02, 0.05, 0.1])
+    a = p.parse_args()
+    fields(a.study, a.reference, a.prefix, a.times)
+    heat(a.study, a.reference, a.prefix)

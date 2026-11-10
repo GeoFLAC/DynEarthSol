@@ -7,9 +7,45 @@
 
 #include "options.hpp"
 #include "parameters.hpp"
+#include "fields.hpp"
 #include "matprops.hpp"
 #include "phasechanges.hpp"
 #include "utils.hpp"
+
+
+static void declare_point_source(opt::Registry &cfg, const char *section,
+                                 Injection &source)
+{
+    const auto key = [section](const char *name) {
+        return std::string(section) + "." + name;
+    };
+    cfg.add_options()
+        (key("enabled").c_str(), opt::value<bool>(&source.enabled)->default_value(false),
+         "Enable scheduled point sources.")
+        (key("num_points").c_str(), opt::value<int>(&source.num_points)->default_value(0),
+         "Number of source points.")
+        (key("points_x").c_str(), opt::list()->default_value("[]"),
+         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
+        (key("points_y").c_str(), opt::list()->default_value("[]"),
+         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
+        (key("points_z").c_str(), opt::list()->default_value("[]"),
+         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
+        (key("points_unit").c_str(), opt::value<std::string>(&source.points_unit)->default_value("m"),
+         "Coordinate unit: mm, cm, m or km.")
+        (key("rate_model").c_str(), opt::value<std::string>()->default_value("constant_rate"),
+         "Source schedule: constant_rate or total_amount.")
+        (key("rate").c_str(), opt::list()->default_value("[0]"),
+         "Positive rate supplies fluid volume or heat; negative rate extracts.")
+        (key("total_amount").c_str(), opt::list()->default_value("[0]"),
+         "Total fluid volume or heat over the scheduled interval.")
+        (key("start_time_in_yr").c_str(), opt::list()->default_value("[0]"),
+         "Source start time in years.")
+        (key("end_time_in_yr").c_str(), opt::list()->default_value("[]"),
+         "Finite end times in years; alternative to duration.")
+        (key("duration_in_yr").c_str(), opt::list()->default_value("[]"),
+         "Positive schedule durations in years.")
+        ;
+}
 
 
 static void declare_parameters(opt::Registry &cfg,
@@ -30,6 +66,14 @@ static void declare_parameters(opt::Registry &cfg,
      *
      */
 
+    declare_point_source(cfg, "injection", p.injection);
+    declare_point_source(cfg, "heat_injection", p.heat_injection);
+    cfg.add_options()
+        ("injection.temperature", opt::list()->default_value("[]"),
+         "Temperature (K) of the injected fluid of each point; requires has_fluid_thermal_advection. "
+         "An injecting node gains rho_f*c_f*Q*(T_in - T); extraction leaves at the local temperature. "
+         "Unset: the fluid source carries no enthalpy and a heat source must be given separately.")
+        ;
     cfg.add_options()
         ("sim.modelname", opt::value<std::string>(&p.sim.modelname),
          "Prefix for the output files")
@@ -78,7 +122,9 @@ static void declare_parameters(opt::Registry &cfg,
         ("sim.earthquake_end_factor", opt::value<double>(&p.sim.earthquake_end_factor)->default_value(2.0),
          "Earthquake end threshold factor: vmax < factor * max_vbc_val.")
         ("sim.seismic_moment_calculate_output", opt::value<bool>(&p.sim.seismic_moment_calculate_output)->default_value(false),
-         "If true, seismic moment and magnitude are accumulated during earthquake mode.")
+         "If true, the seismic moment, sum of 2 G V times the plastic-strain increment over\n"
+         "all elements, is accumulated during earthquake mode and written with Mw at its end.\n"
+         "In 2D V is the element area and M0 is per unit length out of the plane, without Mw.")
         ("sim.hdf5_compression_level", opt::value<int>(&p.sim.hdf5_compression_level)->default_value(4),
             "HDF5 compression level (0-9). 0: no compression; 9: max. compression. \n"
             "A higher compression level could slow down the output speed.")
@@ -99,8 +145,13 @@ static void declare_parameters(opt::Registry &cfg,
          "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
         ("monitor.points_unit", opt::value<std::string>(&p.monitor.points_unit)->default_value("m"),
          "Unit of monitor.points_x/z in 2D, or monitor.points_x/y/z in 3D: mm, cm, m, km.")
-        ("monitor.remesh_rebind_mode", opt::value<std::string>()->default_value("pre_remesh_coord"),
-         "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
+        ("monitor.point_type", opt::value<std::string>()->default_value("particle"),
+         "Each point follows the material through deformation, remeshing and restart. particle: values "
+         "interpolated at the point; grid: values of the node and element nearest it.")
+        ("monitor.remesh_output", opt::value<std::string>()->default_value("before"),
+         "Rows at a remesh, marked in the last CSV column, row. before: the state before each remesh "
+         "(row 1) unless that step already has a regular row (row 0); both: also the remapped state "
+         "after it (row 2).")
         ("monitor.output_prefix", opt::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
          "Prefix of monitoring output files.")
         ("monitor.write_header", opt::value<bool>(&p.monitor.write_header)->default_value(true),
@@ -153,7 +204,9 @@ static void declare_parameters(opt::Registry &cfg,
          "95: read the mesh from from a .exo file\n"
          )
         ("mesh.meshing_elem_shape", opt::value<int>(&p.mesh.meshing_elem_shape)->default_value(0),
-         "Element shape for meshing. 0: tetrahedra; 1: hexahedra.; 2: equilateral tetrahedra.")
+         "Mesh layout. 0: unstructured triangles (2D) or tetrahedra (3D); 1: regular rectangular "
+         "cells split into triangles/tetrahedra; 2: equilateral triangles (2D) or a regular "
+         "tetrahedral layout (3D). All solver elements are simplices.")
         ("mesh.meshing_verbosity", opt::value<int>(&p.mesh.meshing_verbosity)->default_value(-1),
          "Screen output of meshing and remeshing. -1: no stage log (default). 0: the stage log "
          "([metric], [collapse], [freeze], [unfreeze], [require], [corner], [mmg], "
@@ -220,17 +273,15 @@ static void declare_parameters(opt::Registry &cfg,
         ("mesh.refined_zoney", opt::list()->default_value("[0.4, 0.6]"),
          "Refining portion of ylength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only, for 3D only")
         ("mesh.refined_zonez", opt::list()->default_value("[0.8, 1]"),
-         "Refining portion of zlength ([d0,d1]; 0<=d0<=d1<=1), for meshing_option=2 only")
+         "Refined depth interval [d0,d1] as fractions of zlength measured downward from the top "
+         "(0 <= d0 <= d1 <= 1); meshing_option=2 only.")
 
         // for meshing_option = 90 only
         ("mesh.poly_filename", opt::value<std::string>(&p.mesh.poly_filename)->default_value("mesh.poly"),
-         "Filename of the input polygon, for meshing_option=90 or 91 only.\n"
-         "The file format is described in\n"
-         "http://www.cs.cmu.edu/~quake/triangle.poly.html (2D) and\n"
-         "http://wias-berlin.de/software/tetgen/fformats.poly.html (3D).\n"
-         "Limitation: no point attributes, no boundary marker for points, no holes, "
-         "and no regional attributes.\n"
-         "Users still need to provide these parameters: mesh.xlength, mesh.ylength, and mesh.zlength.")
+         "Input polygon filename for meshing_option=90 or 91. Triangle .poly format in 2D; "
+         "TetGen .poly format in 3D. Region attributes select materials when "
+         "ic.mattype_option=0. Point attributes, point boundary markers and holes are not "
+         "supported. Also supply mesh.xlength, mesh.ylength and mesh.zlength.")
 
         // for meshing_option = 95 only
         ("mesh.exo_filename", opt::value<std::string>(&p.mesh.exo_filename)->default_value("mesh.exo"),
@@ -284,9 +335,17 @@ static void declare_parameters(opt::Registry &cfg,
          "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
          "every remesh caps the size target at every restored-wall node at resolution (see "
          "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
+         "14: restore selected reference-boundary components (2D unstructured meshes only; "
+         "mesh.remeshing_reset_boundaries).\n"
          "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
          "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
          "of the restored bottom, or below it: the domain has necked through.\n")
+
+        ("mesh.num_remeshing_reset_boundaries", opt::value<int>(&p.mesh.num_remeshing_reset_boundaries)->default_value(0),
+         "Number of selected boundary-marker bits for remeshing_option=14.")
+        ("mesh.remeshing_reset_boundaries", opt::list()->default_value("[]"),
+         "Boundary-marker bits to restore, e.g. [1,16]. Single faces restore normal components; "
+         "two selected faces restore their corner fully.")
 
         ("mesh.mmg_remesh_active_plstrain", opt::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
          "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
@@ -520,7 +579,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.surf_depo_universal", opt::value<double>(&p.control.surf_depo_universal)->default_value(0.),
          "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",opt::value<double>(&p.control.surf_base_level)->default_value(0.e0),
-         "Base level of surface processes.")
+         "Base level of surface processes (m); also the sea level used by bc.has_water_loading.")
         ("control.surface_process_gospl_config_file", opt::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.gospl_coupling_frequency", opt::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
@@ -562,10 +621,22 @@ static void declare_parameters(opt::Registry &cfg,
          "The are of the sediment bring from continent source (=10 m^2/yr) (in m^2/s). "
          "Assuming the width of the channel is 50 km, 5e7 ton/yr ~= 2.e-5 m^2/s")
 
+        ("control.has_thermal_pressurization", opt::value<bool>(&p.control.has_thermal_pressurization)->default_value(false),
+         "Couple thermal expansion to solid stress and fluid content; requires hydraulic and thermal diffusion.")
+        ("control.has_shear_heating", opt::value<bool>(&p.control.has_shear_heating)->default_value(false),
+         "Convert accepted viscous/plastic work to heat. Pending energy is deposited at the next "
+         "physical thermal update, independently of changes in timestep; initial PT equilibration "
+         "does not generate heat. All computed nonelastic work is converted (unit heat fraction).")
+        ("control.has_fluid_thermal_advection", opt::value<bool>(&p.control.has_fluid_thermal_advection)->default_value(false),
+         "Transport heat with Darcy flow using combined rock/water heat capacity; requires hydraulics.")
+        ("control.has_poroelastic_pressure_feedback", opt::value<bool>(&p.control.has_poroelastic_pressure_feedback)->default_value(true),
+         "Include mechanical volumetric/mean-stress changes in the hydraulic source; transport remains active when false.")
         ("control.has_thermal_diffusion", opt::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+        ("control.hydraulic_content_model", opt::value<int>(&p.control.hydraulic_content_model)->default_value(0),
+         "Fluid content: 0 linear Biot/retention, 1 finite-density saturated mass balance with evolving Biot porosity.")
 
         ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -623,6 +694,54 @@ static void declare_parameters(opt::Registry &cfg,
         ;
 
     cfg.add_options()
+        ("bc.tbc_x0", opt::value<int>(&p.bc.tbc[0])->default_value(0),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_x0", opt::value<double>(&p.bc.tbc_value[0])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.tbc_x1", opt::value<int>(&p.bc.tbc[1])->default_value(0),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_x1", opt::value<double>(&p.bc.tbc_value[1])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.tbc_y0", opt::value<int>(&p.bc.tbc[2])->default_value(0),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_y0", opt::value<double>(&p.bc.tbc_value[2])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.tbc_y1", opt::value<int>(&p.bc.tbc[3])->default_value(0),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_y1", opt::value<double>(&p.bc.tbc_value[3])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.tbc_z0", opt::value<int>(&p.bc.tbc[4])->default_value(0),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_z0", opt::value<double>(&p.bc.tbc_value[4])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.tbc_z1", opt::value<int>(&p.bc.tbc[5])->default_value(1),
+         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+        ("bc.tbc_val_z1", opt::value<double>(&p.bc.tbc_value[5])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+        ("bc.hbc_val_x0", opt::value<double>(&p.bc.hbc_legacy_value[0])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+        ("bc.hbc_val_x1", opt::value<double>(&p.bc.hbc_legacy_value[1])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+        ("bc.hbc_val_y0", opt::value<double>(&p.bc.hbc_legacy_value[2])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+        ("bc.hbc_val_y1", opt::value<double>(&p.bc.hbc_legacy_value[3])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+        ("bc.hbc_val_z0", opt::value<double>(&p.bc.hbc_legacy_value[4])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+        ("bc.hbc_val_z1", opt::value<double>(&p.bc.hbc_legacy_value[5])->default_value(std::numeric_limits<double>::quiet_NaN()),
+         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
         ("bc.surface_temperature", opt::value<double>(&p.bc.surface_temperature)->default_value(273),
          "Surface temperature (in Kelvin)")
         ("bc.mantle_temperature", opt::value<double>(&p.bc.mantle_temperature)->default_value(1600),
@@ -646,50 +765,119 @@ static void declare_parameters(opt::Registry &cfg,
 
          // pore pressure boundary condition
         ("bc.hbc_x0", opt::value<int>(&p.bc.hbc_x0)->default_value(0),
-         "Type of boundary condition for the left/western side"
-         "0 indicates no flow boundary condition."
-         "1 indicates initial pore pressure is fixed.")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
         ("bc.hbc_x1", opt::value<int>(&p.bc.hbc_x1)->default_value(0),
-         "Type of boundary condition for the right/eastern side")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
         ("bc.hbc_y0", opt::value<int>(&p.bc.hbc_y0)->default_value(0),
-         "Type of boundary condition for the front/southern side")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
         ("bc.hbc_y1", opt::value<int>(&p.bc.hbc_y1)->default_value(0),
-         "Type of boundary condition for the back/northern side")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
         ("bc.hbc_z0", opt::value<int>(&p.bc.hbc_z0)->default_value(0),
-         "Type of boundary condition for the bottom side")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
         ("bc.hbc_z1", opt::value<int>(&p.bc.hbc_z1)->default_value(0),
-         "Type of boundary condition for the top side")
+         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
+         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
+
+        ("bc.hbc_pressure", opt::list()->default_value("[0,0,0,0,0,0]"),
+         "Pressure in Pa for hbc=2, ordered x0 x1 y0 y1 z0 z1.")
+        ("bc.hbc_flux", opt::list()->default_value("[0,0,0,0,0,0]"),
+         "Outward Darcy flux in m/s for hbc=3, ordered x0 x1 y0 y1 z0 z1.")
+        ("bc.num_hbc_schedule", opt::value<int>(&p.bc.num_hbc_schedule)->default_value(1),
+         "Number of shared boundary schedule points.")
+        ("bc.hbc_schedule_time_in_yr", opt::list()->default_value("[0]"),
+         "Boundary schedule times in years, nondecreasing; repeated times are steps.")
+        ("bc.hbc_schedule_ratio", opt::list()->default_value("[1]"),
+         "Ratios multiplying prescribed pressure and flux.")
+
+         // rate-controlled wells
+        ("bc.num_wells", opt::value<int>(&p.bc.num_wells)->default_value(0),
+         "Number of vertical rate-controlled wells. Requires control.has_hydraulic_diffusion.")
+        ("bc.well_x", opt::list()->default_value("[]"),
+         "x coordinate of each well (in m).")
+        ("bc.well_y", opt::list()->default_value("[]"),
+         "y coordinate of each well (in m, 3D only).")
+        ("bc.well_z_top", opt::list()->default_value("[]"),
+         "Top of each well screen (in m).")
+        ("bc.well_z_bottom", opt::list()->default_value("[]"),
+         "Bottom of each well screen (in m), below its top.")
+        ("bc.well_rate", opt::list()->default_value("[]"),
+         "Fluid volume extracted by each well at schedule ratio 1, spread uniformly over the "
+         "screen: m^3/s in 3D, m^2/s per unit out-of-plane length in 2D. Negative injects.")
+        ("bc.num_well_schedule", opt::value<int>(&p.bc.num_well_schedule)->default_value(1),
+         "Number of points in the well rate schedule.")
+        ("bc.well_schedule_time_in_yr", opt::list()->default_value("[0]"),
+         "Non-decreasing well schedule times (in yr). A repeated time is a step.")
+        ("bc.well_schedule_ratio", opt::list()->default_value("[1]"),
+         "Rate multiplier at each schedule time: linear in between, held outside. Each step "
+         "applies its exact time average, so the volume pumped is independent of dt.")
 
          // General stress (Neumann) boundary conditions 
         ("bc.stress_bc_x0", opt::value<int>(&p.bc.stress_bc_x0)->default_value(0),
-         "Type of boundary condition for the left/western side. "
-         "0: no traction boundary condition, "
-         "1: traction in the x direction, "
-         "2: traction in the y direction, "
-         "3: traction in the z direction.")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
         ("bc.stress_bc_x1", opt::value<int>(&p.bc.stress_bc_x1)->default_value(0),
-         "Type of boundary condition for the right/eastern side")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
         ("bc.stress_bc_y0", opt::value<int>(&p.bc.stress_bc_y0)->default_value(0),
-         "Type of boundary condition for the front/southern side")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
         ("bc.stress_bc_y1", opt::value<int>(&p.bc.stress_bc_y1)->default_value(0),
-         "Type of boundary condition for the back/northern side")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
         ("bc.stress_bc_z0", opt::value<int>(&p.bc.stress_bc_z0)->default_value(0),
-         "Type of boundary condition for the bottom side")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
         ("bc.stress_bc_z1", opt::value<int>(&p.bc.stress_bc_z1)->default_value(0),
-         "Type of boundary condition for the top side")
+         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
+         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
+         "positive and compression negative.")
 
         ("bc.stress_val_x0", opt::value<double>(&p.bc.stress_val_x0)->default_value(0.0),
-         "Magnitude of stress at the left/western side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
         ("bc.stress_val_x1", opt::value<double>(&p.bc.stress_val_x1)->default_value(0.0),
-         "Magnitude of stress at the right/eastern side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
         ("bc.stress_val_y0", opt::value<double>(&p.bc.stress_val_y0)->default_value(0.0),
-         "Magnitude of stress at the front/southern side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
         ("bc.stress_val_y1", opt::value<double>(&p.bc.stress_val_y1)->default_value(0.0),
-         "Magnitude of stress at the back/northern side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
         ("bc.stress_val_z0", opt::value<double>(&p.bc.stress_val_z0)->default_value(0.0),
-         "Magnitude of stress at the bottom side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
         ("bc.stress_val_z1", opt::value<double>(&p.bc.stress_val_z1)->default_value(0.0),
-         "Magnitude of stress at the top side (in Pa).")
+         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
 
         ("bc.vbc_x0", opt::value<int>(&p.bc.vbc_x0)->default_value(1),
          "Type of velocity boundary condition for the left/western side. "
@@ -706,7 +894,8 @@ static void declare_parameters(opt::Registry &cfg,
          "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
          "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n")
         ("bc.vbc_x1", opt::value<int>(&p.bc.vbc_x1)->default_value(1),
-         "Type of boundary condition for the right/eastern side")
+         "Velocity boundary type; see bc.vbc_x0 for the type definitions and dimensional "
+         "restrictions. The prescribed value is bc.vbc_val_x1.")
         ("bc.vbc_val_x0", opt::value<double>(&p.bc.vbc_val_x0)->default_value(-1e-9),
          "Value of boundary condition for left/western side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_x0_l", opt::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
@@ -758,9 +947,11 @@ static void declare_parameters(opt::Registry &cfg,
          "Ratio of the velocity at the bottom of the right boundary width (for option = 1 and 3)")
 
         ("bc.vbc_y0", opt::value<int>(&p.bc.vbc_y0)->default_value(0),
-         "Type of boundary condition for the southern side")
+         "Velocity boundary type; see bc.vbc_x0 for the type definitions and dimensional "
+         "restrictions. The prescribed value is bc.vbc_val_y0.")
         ("bc.vbc_y1", opt::value<int>(&p.bc.vbc_y1)->default_value(0),
-         "Type of boundary condition for the northern side")
+         "Velocity boundary type; see bc.vbc_x0 for the type definitions and dimensional "
+         "restrictions. The prescribed value is bc.vbc_val_y1.")
         ("bc.vbc_val_y0", opt::value<double>(&p.bc.vbc_val_y0)->default_value(0),
          "Value of boundary condition for the southern side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_y0_l", opt::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
@@ -783,9 +974,16 @@ static void declare_parameters(opt::Registry &cfg,
          "Ratio of vbc_val_y1 at each time of the y1 period table (3D only), as for x0")
 
         ("bc.vbc_z0", opt::value<int>(&p.bc.vbc_z0)->default_value(0),
-         "Type of boundary condition for the bottom side")
+         "Bottom velocity boundary type. 0: all components free; 1: prescribed vertical velocity "
+         "bc.vbc_val_z0, horizontal free; 2: vertical free, horizontal zero; 3: prescribed "
+         "vertical velocity, horizontal zero; 4: prescribed x velocity and zero vertical "
+         "velocity (2D only).")
         ("bc.vbc_z1", opt::value<int>(&p.bc.vbc_z1)->default_value(0),
-         "Type of boundary condition for the top side")
+         "Top velocity boundary type. 0: all components free; 1: prescribed vertical velocity "
+         "bc.vbc_val_z1, horizontal free; 2: vertical free, horizontal zero; 3: prescribed "
+         "vertical velocity, horizontal zero; 4: prescribed x velocity and zero vertical "
+         "velocity (2D only); 8: rigid frictionless platen with one shared free vertical "
+         "velocity; load it with bc.stress_bc_z1.")
         ("bc.vbc_val_z0", opt::value<double>(&p.bc.vbc_val_z0)->default_value(0),
          "Value of boundary condition for the bottom side (if velocity, unit is m/s; if stress, unit is Pa)")
         ("bc.vbc_val_z1", opt::value<double>(&p.bc.vbc_val_z1)->default_value(0),
@@ -911,6 +1109,9 @@ static void declare_parameters(opt::Registry &cfg,
          "1: continental thermal gradient.\n"
          "2: equilibrium temperature for crustal radiogenic heating.\n"
          "3: continental thermal gradient with adiabatic mantle.\n"
+         "4: uniform ic.temp_background plus a Gaussian anomaly.\n"
+         "5: linear conduction from bc.surface_temperature at the top to bc.mantle_temperature\n"
+         "   at the bottom (mesh.zlength), plus the same Gaussian anomaly.\n"
          "90: temperature read from an external grid\n")
 
         // for temperature_option = 0
@@ -955,6 +1156,22 @@ static void declare_parameters(opt::Registry &cfg,
         ("ic.radiogenic_heat_dome_azimuth", opt::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
          "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
 
+        ("ic.temp_background", opt::value<double>(&p.ic.temp_background)->default_value(273),
+         "Uniform background temperature in K for temperature_option=4.")
+        ("ic.temp_anomaly_amplitude", opt::value<double>(&p.ic.temp_anomaly_amplitude)->default_value(0),
+         "Gaussian temperature amplitude in K.")
+        ("ic.temp_anomaly_xcenter", opt::value<double>(&p.ic.temp_anomaly_xcenter)->default_value(0),
+         "Gaussian thermal anomaly x coordinate in m.")
+        ("ic.temp_anomaly_ycenter", opt::value<double>(&p.ic.temp_anomaly_ycenter)->default_value(0),
+         "Gaussian thermal anomaly y coordinate in m.")
+        ("ic.temp_anomaly_zcenter", opt::value<double>(&p.ic.temp_anomaly_zcenter)->default_value(0),
+         "Gaussian thermal anomaly z coordinate in m.")
+        ("ic.temp_anomaly_xsemi_axis", opt::value<double>(&p.ic.temp_anomaly_xsemi_axis)->default_value(1),
+         "Positive Gaussian x scale in m.")
+        ("ic.temp_anomaly_ysemi_axis", opt::value<double>(&p.ic.temp_anomaly_ysemi_axis)->default_value(1),
+         "Positive Gaussian y scale in m.")
+        ("ic.temp_anomaly_zsemi_axis", opt::value<double>(&p.ic.temp_anomaly_zsemi_axis)->default_value(1),
+         "Positive Gaussian z scale in m.")
         // for temperature_option = 90
         ("ic.Temp_filename", opt::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
          "Filename of the input thermal field, for temperature_option=90.\n"
@@ -975,6 +1192,13 @@ static void declare_parameters(opt::Registry &cfg,
         
         ("ic.excess_pore_pressure", opt::value<double>(&p.ic.excess_pore_pressure)->default_value(0.0),
          "Initial excess_pore_pressure except for boundary.\n")
+        ("ic.pore_pressure_option", opt::value<int>(&p.ic.pore_pressure_option)->default_value(0),
+         "Initial pressure: 0 hydrostatic/excess, 1 linear x profile between prescribed pressure faces, 2 uniform.")
+        ("ic.pore_pressure_value", opt::value<double>(&p.ic.pore_pressure_value)->default_value(0),
+         "Uniform initial pressure in Pa for pore_pressure_option=2.")
+        ("ic.water_table_z", opt::value<double>(&p.ic.water_table_z)->default_value(0.0),
+         "Height of the initial hydrostatic water table (m): p = -rho_f*g*(z - water_table_z), "
+         "negative (suction) above it. The default 0 is the original surface.\n")
          ("ic.has_body_force_adjustment", opt::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
         ("ic.initial_stress_option", opt::value<int>(&p.ic.initial_stress_option)->default_value(0),
@@ -1114,7 +1338,7 @@ static void declare_parameters(opt::Registry &cfg,
          "In [0, 1). A cell holds markers.markers_per_element times (cell / element measure) markers, nominally "
          "~2.3 in 2D and ~4.2 in 3D at mesh.vt_size 0.5, so at 0.5 a two-marker cell needs both. Default 0.5, "
          "untuned: geoflac's 0.8 (of an element, with no source) leaves out the cell that straddles the slab top "
-         "and cuts the serpentinite band of examples/subduction.cfg by more than half.")
+         "and cuts the serpentinite band of examples/tectonics/subduction.cfg by more than half.")
         ("mat.has_serpentinization", opt::value<bool>(&p.mat.has_serpentinization)->default_value(true),
          "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
          "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "
@@ -1185,22 +1409,56 @@ static void declare_parameters(opt::Registry &cfg,
         ("mat.dilation_angle1", opt::list()->default_value("[0]"),
          "Dilation angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
 
+        ("mat.porosity_model", opt::value<int>(&p.mat.porosity_model)->default_value(0),
+         "Porosity: 0 fixed, 1 Eulerian Biot volume/grain-pressure evolution.")
+        ("mat.permeability_model", opt::value<int>(&p.mat.permeability_model)->default_value(0),
+         "Permeability: 0 fixed, 1 Kozeny-Carman, 2 power law from current porosity.")
+        ("mat.permeability_exponent", opt::list()->default_value("[3]"),
+         "Positive dimensionless exponent n in k=k0*(phi/phi0)^n for permeability_model=2. "
+         "Material exponents are averaged by marker count.")
+        ("mat.pore_healing_time", opt::list()->default_value("[0]"),
+         "Reference recovery time of plastic pore dilation (s); 0 disables recovery. Requires porosity_model=1.")
+        ("mat.pore_healing_temperature", opt::list()->default_value("[293]"),
+         "Reference absolute temperature for pore recovery (K).")
+        ("mat.pore_healing_energy", opt::list()->default_value("[0]"),
+         "Nonnegative activation energy for pore recovery (J/mol); tau=tau0*(T/T0)*exp(E/R*(1/T-1/T0)).")
         ("mat.porosity", opt::list()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
         ("mat.hydraulic_perm", opt::list()->default_value("[1e-14]"),
          "Intrinsic permeability of the materials '[d0, d1, d2, ...]' (m^2)")
+        ("mat.matrix_storage", opt::list()->default_value("[0]"),
+         "Immobile matrix reservoir storage per bulk volume in 1/Pa.")
+        ("mat.matrix_exchange", opt::list()->default_value("[0]"),
+         "Explicit exchange coefficient between transport and matrix pressure in 1/(Pa s).")
+        ("mat.permeability_tensor", opt::list()->default_value("[1,1,1,0,0,0]"),
+         "Dimensionless SPD permeability tensor [xx,yy,zz,xy,xz,yz], multiplying hydraulic_perm.")
         ("mat.fluid_rho0", opt::list()->default_value("[1000]"),
-         "Density of the fluids at 0 Pa and 273 K '[d0, d1, d2, ...]' (in kg/m^3)")
+         "Reference fluid density for Darcy gravity and saturated mixture weight '[d0, d1, d2, ...]' (kg/m^3)")
+        ("mat.fluid_heat_capacity", opt::list()->default_value("[4180]"),
+         "Fluid heat capacity '[d0, d1, ...]' in J/kg/K, for groundwater heat transport.")
+        ("mat.derive_biot_coeff_from_bulk_moduli", opt::value<bool>(&p.mat.derive_biot_coeff_from_bulk_moduli)->default_value(false),
+         "Use biot_coeff=1-bulk_modulus/bulk_modulus_s with finite positive ordered moduli.")
         ("mat.fluid_alpha", opt::list()->default_value("[2.07e-4]"),
          "Thermal expansivity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in K^-1)")
         ("mat.fluid_bulk_modulus", opt::list()->default_value("[2.17e9]"),
          "Bulk modulus of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
         ("mat.fluid_visc", opt::list()->default_value("[1.002e-3]"),
-         "Dynamic viscosity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa)")
+         "Dynamic viscosity of the fluids at 0 Pa and 293 K '[d0, d1, d2, ...]' (in Pa s).")
         ("mat.biot_coeff", opt::list()->default_value("[1.0]"),
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
         ("mat.bulk_modulus_s", opt::list()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
+        ("mat.retention_model", opt::list()->default_value("[0]"),
+         "Retention law of the materials '[m0, m1, ...]': 0 saturated, "
+         "1 van Genuchten-Mualem, 2 Brooks-Corey-Burdine, 3 Gardner exponential.")
+        ("mat.retention_alpha", opt::list()->default_value("[1e-4]"),
+         "Retention alpha of the materials '[d0, d1, ...]' (1/Pa); "
+         "1/alpha is the Brooks-Corey air-entry pressure.")
+        ("mat.retention_n", opt::list()->default_value("[2]"),
+         "Retention exponent '[d0, d1, ...]': van Genuchten n > 1, "
+         "or the Brooks-Corey pore-size index > 0. Unused by Gardner.")
+        ("mat.residual_saturation", opt::list()->default_value("[0]"),
+         "Residual saturation of the materials '[d0, d1, ...]', 0 <= Sr < 1.")
         // for rate-and-state friction
         ("mat.direct_a", opt::list()->default_value("[0.020]"),
          "rate-and-state friction parameter a '[d0, d1, d2, ...]' (-)")
@@ -1332,11 +1590,137 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
+static void parse_point_source(const opt::Registry &vm, const Param &p,
+                               const char *section, Injection &source, bool fluid)
+{
+    const auto key = [section](const char *name) { return std::string(section)+"."+name; };
+    const auto fail = [section](const char *why) {
+        const std::string text = std::string(section)+": "+why;
+        die(EXIT_CONFIG_VALUE,text.c_str());
+    };
+    if (source.num_points < 0 || (source.enabled && source.num_points == 0))
+        fail("enabled sources require a positive num_points.");
+    if (source.enabled && fluid && !p.control.has_hydraulic_diffusion)
+        fail("fluid sources require has_hydraulic_diffusion=true.");
+    if (source.num_points == 0) return;
+    const int n = source.num_points;
+    const std::string group = key("num_points");
+    const auto list = [&](const char *name, double_vec &v, bool broadcast=false) {
+        const std::string name_key = key(name);
+        get_numbers(vm,name_key.c_str(),v,n,group.c_str(),broadcast);
+    };
+    list("points_x",source.points_x);
+#ifdef THREED
+    list("points_y",source.points_y);
+    list("points_z",source.points_z);
+#else
+    const bool y = !vm.defaulted(key("points_y")), z = !vm.defaulted(key("points_z"));
+    if (y == z) fail("supply points_z in 2D; points_y is a mutually exclusive legacy alias.");
+    list(z ? "points_z" : "points_y",source.points_z);
+#endif
+    double scale = 0;
+    if (source.points_unit == "m") scale=1;
+    else if (source.points_unit == "mm") scale=1e-3;
+    else if (source.points_unit == "cm") scale=1e-2;
+    else if (source.points_unit == "km") scale=1e3;
+    else fail("points_unit must be mm, cm, m or km.");
+    const bool box = p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2;
+    const auto coordinate = [&](double &v,double lo,double hi) {
+        v *= scale;
+        if (!std::isfinite(v)) fail("point coordinates must remain finite after unit conversion.");
+        if (box) {
+            const double tol = 5e-11*std::abs(hi-lo);
+            if (v < lo-tol || v > hi+tol) fail("source point lies outside the box mesh.");
+            v = std::max(lo,std::min(v,hi));
+        }
+    };
+    for (int i=0;i<n;++i) {
+        coordinate(source.points_x[i],0,p.mesh.xlength);
+#ifdef THREED
+        coordinate(source.points_y[i],0,p.mesh.ylength);
+#endif
+        coordinate(source.points_z[i],-p.mesh.zlength,0);
+    }
+    const std::string model = vm.str(key("rate_model"));
+    if (model == "constant_rate") source.rate_model=injection_rate_constant;
+    else if (model == "total_amount") source.rate_model=injection_rate_total_amount;
+    else fail("rate_model must be constant_rate or total_amount.");
+    list("rate",source.rate,true);list("total_amount",source.total_amount,true);
+    list("start_time_in_yr",source.start_time,true);
+    const bool end = !vm.defaulted(key("end_time_in_yr"));
+    const bool duration = !vm.defaulted(key("duration_in_yr"));
+    if (end && duration) fail("end_time_in_yr and duration_in_yr are mutually exclusive.");
+    if (source.rate_model == injection_rate_total_amount && !end && !duration)
+        fail("total_amount requires an end time or duration.");
+    if (end) list("end_time_in_yr",source.end_time,true);
+    else if (duration) {
+        double_vec span;list("duration_in_yr",span,true);
+        source.end_time.resize(n);
+        for (int i=0;i<n;++i) {
+            if (!(span[i]>0 && std::isfinite(span[i]))) fail("durations must be finite and positive.");
+            source.end_time[i]=source.start_time[i]+span[i];
+        }
+    } else source.end_time.assign(n,std::numeric_limits<double>::infinity());
+    if (fluid && !vm.defaulted(key("temperature"))) {
+        if (!p.control.has_fluid_thermal_advection)
+            fail("temperature requires control.has_fluid_thermal_advection=true.");
+        list("temperature",source.temperature,true);
+        for (int i=0;i<n;++i)
+            if (!(source.temperature[i] > 0 && std::isfinite(source.temperature[i])))
+                fail("injection temperatures must be finite and positive (K).");
+    }
+    for (int i=0;i<n;++i) {
+        if (!std::isfinite(source.rate[i]) || !std::isfinite(source.total_amount[i]) ||
+            !std::isfinite(source.start_time[i]) ||
+            ((end || duration) && !std::isfinite(source.end_time[i])))
+            fail("source strengths and supplied times must be finite.");
+        source.start_time[i] *= YEAR2SEC;
+        if (end || duration) source.end_time[i] *= YEAR2SEC;
+        if (!std::isfinite(source.start_time[i]) ||
+            ((end || duration) && !std::isfinite(source.end_time[i])) ||
+            !(source.end_time[i]>source.start_time[i])) fail("invalid or overflowing source interval.");
+    }
+}
+
 static void validate_parameters(const opt::Registry &vm, Param &p)
 {
+    parse_point_source(vm,p,"injection",p.injection,true);
+    parse_point_source(vm,p,"heat_injection",p.heat_injection,false);
     std::cout << "Checking consistency of input parameters...\n";
 
+    if (p.mesh.num_remeshing_reset_boundaries < 0)
+        die(EXIT_CONFIG_VALUE, "mesh.num_remeshing_reset_boundaries must be nonnegative.");
+    get_numbers(vm, "mesh.remeshing_reset_boundaries", p.mesh.remeshing_reset_boundaries,
+                p.mesh.num_remeshing_reset_boundaries, "mesh.num_remeshing_reset_boundaries");
+    p.mesh.remeshing_reset_boundary_mask = 0;
+    for (int marker : p.mesh.remeshing_reset_boundaries) {
+        if (marker <= 0 || marker > static_cast<int>(BOUNDN3) || (marker & (marker-1)))
+            die(EXIT_CONFIG_VALUE, "mesh.remeshing_reset_boundaries requires single boundary-marker bits.");
+        p.mesh.remeshing_reset_boundary_mask |= static_cast<uint>(marker);
+    }
+    if (p.mesh.remeshing_option == 14 && !p.mesh.remeshing_reset_boundary_mask)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option=14 requires selected boundary-marker bits.");
+#ifdef THREED
+    if (p.mesh.remeshing_option == 14)
+        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=14 is available only in 2D.");
+#endif
+    if (p.mesh.remeshing_option == 14 && p.mesh.meshing_elem_shape != 0)
+        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option=14 requires an unstructured mesh (meshing_elem_shape=0).");
+
     //
+    // Unspecified thermal side values use bc.surface_temperature and bc.mantle_temperature.
+    {
+        const char *side[6] = {"x0", "x1", "y0", "y1", "z0", "z1"};
+        for (int i = 0; i < 6; ++i) {
+            const std::string type = std::string("bc.tbc_") + side[i];
+            const std::string value = std::string("bc.tbc_val_") + side[i];
+            const bool supplied = !vm.defaulted(value);
+            p.bc.custom_temperature_boundary |= supplied || !vm.defaulted(type);
+            if (p.bc.tbc[i] < 0 || p.bc.tbc[i] > 1 ||
+                (supplied && !std::isfinite(p.bc.tbc_value[i])))
+                die(EXIT_CONFIG_VALUE, "Thermal boundaries require tbc=0/1 and finite supplied temperatures.");
+        }
+    }
     // stopping condition and output interval are based on either model time or step
     //
     if ( ! (vm.count("sim.max_steps") || vm.count("sim.max_time_in_yr")) ) {
@@ -1576,14 +1960,21 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
 #endif
         }
 
-        const std::string rebind_mode = vm.str("monitor.remesh_rebind_mode");
-        if (rebind_mode == "initial_coord")
-            p.monitor.remesh_rebind_mode = monitor_rebind_initial_coord;
-        else if (rebind_mode == "pre_remesh_coord")
-            p.monitor.remesh_rebind_mode = monitor_rebind_pre_remesh_coord;
-        else {
-            die(EXIT_CONFIG_VALUE, "monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.");
-        }
+        const std::string point_type = vm.str("monitor.point_type");
+        if (point_type == "particle")
+            p.monitor.point_type = monitor_point_particle;
+        else if (point_type == "grid")
+            p.monitor.point_type = monitor_point_grid;
+        else
+            die(EXIT_CONFIG_VALUE, "monitor.point_type must be particle or grid.");
+
+        const std::string remesh_output = vm.str("monitor.remesh_output");
+        if (remesh_output == "before")
+            p.monitor.remesh_output = monitor_remesh_before;
+        else if (remesh_output == "both")
+            p.monitor.remesh_output = monitor_remesh_both;
+        else
+            die(EXIT_CONFIG_VALUE, "monitor.remesh_output must be before or both.");
 
         const bool any_monitor_output =
             p.monitor.output_coord ||
@@ -1697,15 +2088,15 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if ( p.bc.vbc_z0 > 3) {
             die(EXIT_CONFIG_VALUE, "bc.vbc_z0 is not 0, 1, 2, or 3.");
         }
-        if ( p.bc.vbc_z1 > 3) {
-            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, or 3.");
+        if ( p.bc.vbc_z1 > 3 && p.bc.vbc_z1 != 8) {
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, 3, or 8.");
         }
 #else
         if ( p.bc.vbc_z0 > 4) {
             die(EXIT_CONFIG_VALUE, "bc.vbc_z0 is not 0, 1, 2, 3, or 4.");
         }
-        if ( p.bc.vbc_z1 > 4) {
-            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, 3, or 4.");
+        if ( p.bc.vbc_z1 > 4 && p.bc.vbc_z1 != 8) {
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z1 is not 0, 1, 2, 3, 4, or 8.");
         }
 #endif
         if ( p.bc.vbc_n0 != 1 && p.bc.vbc_n0 != 3 && p.bc.vbc_n0 != 11 && p.bc.vbc_n0 != 13 ) {
@@ -1792,6 +2183,24 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
         }
 
+        if (!std::isfinite(p.ic.water_table_z))
+            die(EXIT_CONFIG_VALUE, "ic.water_table_z must be finite.");
+        if (p.ic.temperature_option == 4 || p.ic.temperature_option == 5) {
+            if (p.ic.temperature_option == 5 &&
+                !(std::isfinite(p.bc.surface_temperature) && std::isfinite(p.bc.mantle_temperature)))
+                die(EXIT_CONFIG_VALUE, "Linear conduction requires finite top and bottom temperatures.");
+            const double base = p.ic.temperature_option == 4 ? p.ic.temp_background :
+                std::min(p.bc.surface_temperature, p.bc.mantle_temperature);
+            const double values[] = {base,p.ic.temp_anomaly_amplitude,
+                p.ic.temp_anomaly_xcenter,p.ic.temp_anomaly_ycenter,p.ic.temp_anomaly_zcenter,
+                p.ic.temp_anomaly_xsemi_axis,p.ic.temp_anomaly_ysemi_axis,p.ic.temp_anomaly_zsemi_axis};
+            for (double v : values)
+                if (!std::isfinite(v)) die(EXIT_CONFIG_VALUE, "Gaussian temperature parameters must be finite.");
+            if (!(base+std::min(0.0,p.ic.temp_anomaly_amplitude) > 0 &&
+                  p.ic.temp_anomaly_xsemi_axis > 0 && p.ic.temp_anomaly_ysemi_axis > 0 &&
+                  p.ic.temp_anomaly_zsemi_axis > 0))
+                die(EXIT_CONFIG_VALUE, "Gaussian temperature requires positive Kelvin values and scales.");
+        }
         if (p.ic.initial_stress_option != 0 &&
             p.ic.initial_stress_option != 1) {
             die(EXIT_CONFIG_VALUE,
@@ -2055,6 +2464,87 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
         }
 
+        if (p.bc.num_wells < 0) {
+            die(EXIT_CONFIG_VALUE, "bc.num_wells must be >= 0.");
+        }
+        get_numbers(vm, "bc.hbc_pressure", p.bc.hbc_pressure, 6, "six boundaries");
+        {
+            const char *side[6] = {"x0","x1","y0","y1","z0","z1"};
+            int *type[6] = {&p.bc.hbc_x0,&p.bc.hbc_x1,&p.bc.hbc_y0,&p.bc.hbc_y1,&p.bc.hbc_z0,&p.bc.hbc_z1};
+            for (int i = 0; i < 6; ++i) {
+                if (vm.defaulted(std::string("bc.hbc_val_")+side[i])) continue;
+                const double value = p.bc.hbc_legacy_value[i];
+                if (!std::isfinite(value) || !vm.defaulted("bc.hbc_pressure"))
+                    die(EXIT_CONFIG_VALUE, "Use either hbc_val_* compatibility values or hbc_pressure, with finite values.");
+                p.bc.hbc_pressure[i] = value;
+                if (*type[i] == 1) *type[i] = 2;
+            }
+            if (p.ic.pore_pressure_option < 0 || p.ic.pore_pressure_option > 2 ||
+                !std::isfinite(p.ic.pore_pressure_value))
+                die(EXIT_CONFIG_VALUE, "Invalid initial pressure option/value.");
+            if (p.ic.pore_pressure_option == 1 &&
+                !(p.bc.hbc_x0 == 2 && p.bc.hbc_x1 == 2 && p.mesh.xlength > 0))
+                die(EXIT_CONFIG_VALUE, "Linear initial pressure needs prescribed pressures on x0 and x1.");
+        }
+        get_numbers(vm, "bc.hbc_flux", p.bc.hbc_flux, 6, "six boundaries");
+        if (p.bc.num_hbc_schedule < 1)
+            die(EXIT_CONFIG_VALUE, "bc.num_hbc_schedule must be positive.");
+        get_numbers(vm, "bc.hbc_schedule_time_in_yr", p.bc.hbc_schedule_time_in_yr,
+                    p.bc.num_hbc_schedule, "bc.num_hbc_schedule");
+        get_numbers(vm, "bc.hbc_schedule_ratio", p.bc.hbc_schedule_ratio,
+                    p.bc.num_hbc_schedule, "bc.num_hbc_schedule");
+        if (!std::is_sorted(p.bc.hbc_schedule_time_in_yr.begin(), p.bc.hbc_schedule_time_in_yr.end()))
+            die(EXIT_CONFIG_VALUE, "Boundary schedule times must be nondecreasing.");
+        const int hbc[] = {p.bc.hbc_x0,p.bc.hbc_x1,p.bc.hbc_y0,p.bc.hbc_y1,p.bc.hbc_z0,p.bc.hbc_z1};
+        for (int i = 0; i < 6; ++i) {
+            if (hbc[i] < 0 || hbc[i] > 3)
+                die(EXIT_CONFIG_VALUE, "Hydraulic boundary types must be 0, 1, 2 or 3.");
+            for (int j = 0; j < i; ++j)
+                if ((p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2) &&
+                    hbc[i] == 2 && hbc[j] == 2 && i/2 != j/2 &&
+                    p.bc.hbc_pressure[i] != p.bc.hbc_pressure[j])
+                    die(EXIT_CONFIG_VALUE, "Intersecting prescribed-pressure faces must agree at their shared nodes.");
+        }
+        for (const double_vec *v : {&p.bc.hbc_pressure, &p.bc.hbc_flux,
+                                   &p.bc.hbc_schedule_time_in_yr, &p.bc.hbc_schedule_ratio})
+            for (double x : *v)
+                if (!std::isfinite(x)) die(EXIT_CONFIG_VALUE, "Hydraulic boundary data must be finite.");
+        if (p.bc.num_wells > 0) {
+            if (! p.control.has_hydraulic_diffusion) {
+                die(EXIT_CONFIG_VALUE, "bc.num_wells > 0 requires control.has_hydraulic_diffusion.");
+            }
+            const char *nw = "bc.num_wells";
+            get_numbers(vm, "bc.well_x", p.bc.well_x, p.bc.num_wells, nw);
+#ifdef THREED
+            get_numbers(vm, "bc.well_y", p.bc.well_y, p.bc.num_wells, nw);
+#endif
+            get_numbers(vm, "bc.well_z_top", p.bc.well_z_top, p.bc.num_wells, nw);
+            get_numbers(vm, "bc.well_z_bottom", p.bc.well_z_bottom, p.bc.num_wells, nw);
+            get_numbers(vm, "bc.well_rate", p.bc.well_rate, p.bc.num_wells, nw);
+            for (int w = 0; w < p.bc.num_wells; ++w) {
+                if (! (p.bc.well_z_bottom[w] < p.bc.well_z_top[w]) ||
+                    ! std::isfinite(p.bc.well_z_top[w] - p.bc.well_z_bottom[w]) ||
+                    ! std::isfinite(p.bc.well_rate[w])) {
+                    std::cerr << "Error: well " << w << " needs well_z_bottom < well_z_top and a finite well_rate.\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+            }
+            if (p.bc.num_well_schedule < 1) {
+                die(EXIT_CONFIG_VALUE, "bc.num_well_schedule must be positive.");
+            }
+            const char *ns = "bc.num_well_schedule";
+            get_numbers(vm, "bc.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr, p.bc.num_well_schedule, ns);
+            get_numbers(vm, "bc.well_schedule_ratio", p.bc.well_schedule_ratio, p.bc.num_well_schedule, ns);
+            for (const double_vec *v : {&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
+                                       &p.bc.well_z_bottom, &p.bc.well_rate,
+                                       &p.bc.well_schedule_time_in_yr, &p.bc.well_schedule_ratio})
+                for (double x : *v)
+                    if (!std::isfinite(x)) die(EXIT_CONFIG_VALUE, "Well coordinates, rates and schedules must be finite.");
+            if (! std::is_sorted(p.bc.well_schedule_time_in_yr.begin(), p.bc.well_schedule_time_in_yr.end())) {
+                die(EXIT_CONFIG_VALUE, "bc.well_schedule_time_in_yr must be non-decreasing.");
+            }
+        }
+
         if (p.ic.nhlayer < 0) {
             die(EXIT_CONFIG_VALUE, "ic.num_radiogenic_heat_layer must be >= 0.");
         }
@@ -2094,12 +2584,182 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         // Hydraulic parameters
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.permeability_exponent", p.mat.permeability_exponent, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pore_healing_time", p.mat.pore_healing_time, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pore_healing_temperature", p.mat.pore_healing_temperature, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.pore_healing_energy", p.mat.pore_healing_energy, p.mat.nmat, nmat_key, true);
+        for (int m = 0; m < p.mat.nmat; ++m) {
+            const double tau = p.mat.pore_healing_time[m], t0 = p.mat.pore_healing_temperature[m];
+            const double energy = p.mat.pore_healing_energy[m];
+            if (!(tau >= 0 && std::isfinite(tau) && t0 > 0 && std::isfinite(t0) &&
+                  energy >= 0 && std::isfinite(energy)))
+                die(EXIT_CONFIG_VALUE, "Pore recovery requires finite nonnegative time/activation energy and positive reference temperature.");
+            if (tau > 0 && (p.mat.porosity_model != 1 ||
+                            !(p.mat.rheol_type & MatProps::rh_plastic) ||
+                            !p.control.has_poroelastic_pressure_feedback))
+                die(EXIT_CONFIG_VALUE, "Pore recovery requires porosity_model=1, plastic rheology and coupled pressure feedback.");
+        }
+        for (double exponent : p.mat.permeability_exponent)
+            if (!(exponent > 0 && std::isfinite(exponent)))
+                die(EXIT_CONFIG_VALUE, "mat.permeability_exponent must be positive and finite.");
+        get_numbers(vm, "mat.matrix_storage", p.mat.matrix_storage, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.matrix_exchange", p.mat.matrix_exchange, p.mat.nmat, nmat_key, true);
+        for (int m = 0; m < p.mat.nmat; ++m) {
+            const double c = p.mat.matrix_storage[m], h = p.mat.matrix_exchange[m];
+            if (!(std::isfinite(c) && c >= 0 && std::isfinite(h) && h >= 0) ||
+                (h > 0 && !(c > 0 && p.control.has_hydraulic_diffusion)))
+                die(EXIT_CONFIG_VALUE, "Matrix exchange requires positive storage and active hydraulic transport.");
+        }
+        get_numbers(vm, "mat.permeability_tensor", p.mat.permeability_tensor, 6, "six tensor components");
+        {
+            const double_vec &k = p.mat.permeability_tensor;
+            const double det = k[0]*k[1]*k[2] + 2*k[3]*k[4]*k[5]
+                             - k[0]*k[5]*k[5] - k[1]*k[4]*k[4] - k[2]*k[3]*k[3];
+            if (!std::all_of(k.begin(), k.end(), [](double x) { return std::isfinite(x); }) ||
+                !(k[0] > 0 && k[0]*k[1] > k[3]*k[3] && det > 0))
+                die(EXIT_CONFIG_VALUE, "mat.permeability_tensor must be symmetric positive definite.");
+        }
         get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.fluid_heat_capacity", p.mat.fluid_heat_capacity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.biot_coeff", p.mat.biot_coeff, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.bulk_modulus_s", p.mat.bulk_modulus_s, p.mat.nmat, nmat_key, true);
+        if (p.mat.derive_biot_coeff_from_bulk_moduli)
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const double kd = p.mat.bulk_modulus[m], ks = p.mat.bulk_modulus_s[m];
+                if (!(kd > 0 && std::isfinite(kd) && ks > 0 && std::isfinite(ks) && kd <= ks))
+                    die(EXIT_CONFIG_VALUE, "Derived Biot coefficient requires 0 < bulk_modulus <= bulk_modulus_s, both finite.");
+                p.mat.biot_coeff[m] = 1-kd/ks;
+            }
+        for (int m = 0; m < p.mat.nmat; ++m)
+            if (p.control.has_thermal_pressurization &&
+                !(std::isfinite(p.mat.alpha[m]) && std::isfinite(p.mat.fluid_alpha[m])))
+                die(EXIT_CONFIG_VALUE, "Thermal expansivities must be finite.");
+        if (p.control.has_thermal_pressurization && !(p.mat.rheol_type & MatProps::rh_elastic))
+            die(EXIT_CONFIG_VALUE, "Thermal pressurization requires a rheology with elastic bulk response.");
+        if (p.control.has_fluid_thermal_advection) {
+            if (!p.control.has_hydraulic_diffusion)
+                die(EXIT_CONFIG_VALUE, "Fluid thermal advection requires has_hydraulic_diffusion=true.");
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const double phi = p.mat.porosity[m], cs = p.mat.heat_capacity[m];
+                const double cf = p.mat.fluid_heat_capacity[m];
+                const double capacity = (1-phi)*p.mat.rho0[m]*cs + phi*p.mat.fluid_rho0[m]*cf;
+                if (!(cs >= 0 && std::isfinite(cs) && cf > 0 && std::isfinite(cf) &&
+                      capacity > 0 && std::isfinite(capacity) &&
+                      p.mat.therm_cond[m] >= 0 && std::isfinite(p.mat.therm_cond[m])))
+                    die(EXIT_CONFIG_VALUE, "Fluid heat transport requires nonnegative solid capacity/conductivity, positive fluid capacity and bulk storage.");
+            }
+        }
+        // Buoyancy follows the material: rho_f0 is the density at bc.surface_temperature.
+        if (p.control.has_hydraulic_diffusion &&
+            (p.control.has_thermal_diffusion || p.control.has_fluid_thermal_advection))
+            for (int m = 0; m < p.mat.nmat; ++m)
+                if (!std::isfinite(p.mat.fluid_alpha[m]))
+                    die(EXIT_CONFIG_VALUE, "mat.fluid_alpha must be finite with hydraulic and thermal transport.");
+        if (p.heat_injection.enabled && !p.control.has_fluid_thermal_advection)
+            for (int m=0; m<p.mat.nmat; ++m)
+                if (!(p.mat.rho0[m]>0 && std::isfinite(p.mat.rho0[m]) &&
+                      p.mat.heat_capacity[m]>0 && std::isfinite(p.mat.heat_capacity[m]) &&
+                      p.mat.therm_cond[m]>=0 && std::isfinite(p.mat.therm_cond[m])))
+                    die(EXIT_CONFIG_VALUE, "Heat sources require positive finite solid density/capacity and nonnegative conductivity.");
+        if (p.control.has_thermal_pressurization &&
+            !(p.control.has_hydraulic_diffusion && p.control.has_thermal_diffusion))
+            die(EXIT_CONFIG_VALUE, "Thermal pressurization requires hydraulic and thermal diffusion.");
+        if (p.mat.porosity_model < 0 || p.mat.porosity_model > 1 ||
+            p.mat.permeability_model < 0 || p.mat.permeability_model > 2)
+            die(EXIT_CONFIG_VALUE, "mat.porosity_model must be 0 or 1; mat.permeability_model must be 0, 1 or 2.");
+        if (p.control.hydraulic_content_model < 0 || p.control.hydraulic_content_model > 1)
+            die(EXIT_CONFIG_VALUE,"control.hydraulic_content_model must be 0 or 1.");
+        if (p.control.hydraulic_content_model == 1) {
+            if (!(p.control.has_hydraulic_diffusion && p.control.has_poroelastic_pressure_feedback &&
+                  p.control.is_quasi_static && p.mat.porosity_model == 1 &&
+                  (p.mat.rheol_type & MatProps::rh_elastic)))
+                die(EXIT_CONFIG_VALUE,"Finite-density content requires coupled quasistatic hydraulics, porosity_model=1 and elastic bulk response.");
+            if (has_temperature_transport(p) &&
+                !(p.control.has_thermal_pressurization && p.control.has_fluid_thermal_advection))
+                die(EXIT_CONFIG_VALUE,"Finite-density heat transport requires thermal pressurization and fluid thermal advection.");
+            if (p.control.surface_process_option != 0 ||
+                (p.mat.nmat > 1 && p.mat.phase_change_option != 0) ||
+                std::any_of(p.mat.matrix_exchange.begin(),p.mat.matrix_exchange.end(),[](double h) { return h > 0; }))
+                die(EXIT_CONFIG_VALUE,"Finite-density content does not yet support surface processes, phase conversion or matrix exchange.");
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                if (!(p.mat.rho0[m] > 0 && std::isfinite(p.mat.rho0[m]) &&
+                      p.mat.alpha[m] >= 0 && std::isfinite(p.mat.alpha[m]) &&
+                      p.mat.fluid_alpha[m] >= 0 && std::isfinite(p.mat.fluid_alpha[m]) &&
+                      p.mat.heat_capacity[m] >= 0 && std::isfinite(p.mat.heat_capacity[m]) &&
+                      p.mat.fluid_heat_capacity[m] > 0 && std::isfinite(p.mat.fluid_heat_capacity[m])))
+                    die(EXIT_CONFIG_VALUE,"Finite-density content requires positive solid density/fluid heat capacity and nonnegative solid heat capacity.");
+                if (p.mat.fluid_rho0[m] != p.mat.fluid_rho0[0] ||
+                    p.mat.fluid_bulk_modulus[m] != p.mat.fluid_bulk_modulus[0] ||
+                    p.mat.fluid_alpha[m] != p.mat.fluid_alpha[0] ||
+                    p.mat.fluid_heat_capacity[m] != p.mat.fluid_heat_capacity[0] ||
+                    p.mat.fluid_visc[m] != p.mat.fluid_visc[0])
+                    die(EXIT_CONFIG_VALUE,"Finite-density content requires one common fluid across solid materials.");
+            }
+        }
+        if ((p.mat.porosity_model || p.mat.permeability_model) && !p.control.has_hydraulic_diffusion)
+            die(EXIT_CONFIG_VALUE, "Evolving hydraulic properties require has_hydraulic_diffusion=true.");
+        if (p.control.has_hydraulic_diffusion) {
+            const auto positive = [](double x) { return x > 0 && std::isfinite(x); };
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const double phi = p.mat.porosity[m];
+                const double alpha = p.mat.biot_coeff[m];
+                if ((p.mat.porosity_model || p.mat.permeability_model) && !(phi > 0 && phi < 1))
+                    die(EXIT_CONFIG_VALUE, "Evolving hydraulic properties require 0 < mat.porosity < 1.");
+                if (!(phi >= 0 && phi <= alpha && alpha <= 1) ||
+                    !positive(p.mat.bulk_modulus[m]) ||
+                    !(p.mat.shear_modulus[m] >= 0 && std::isfinite(p.mat.shear_modulus[m])) ||
+                    !positive(p.mat.bulk_modulus_s[m]) ||
+                    !positive(p.mat.fluid_bulk_modulus[m]) ||
+                    !positive(p.mat.fluid_visc[m]) ||
+                    !positive(p.mat.fluid_rho0[m]) ||
+                    !(p.mat.hydraulic_perm[m] >= 0 && std::isfinite(p.mat.hydraulic_perm[m])) ||
+                    alpha == 0) {
+                    std::cerr << "Invalid hydraulic properties for material " << m << ".\n";
+                    die(EXIT_CONFIG_VALUE,
+                        "Hydraulics requires 0 <= porosity <= biot_coeff <= 1, nonzero "
+                        "biot_coeff, positive finite bulk moduli, fluid_visc and fluid_rho0, "
+                        "and nonnegative finite shear_modulus and hydraulic_perm.");
+                }
+            }
+        }
+        get_numbers(vm, "mat.retention_model", p.mat.retention_model, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.retention_alpha", p.mat.retention_alpha, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.retention_n", p.mat.retention_n, p.mat.nmat, nmat_key, true);
+        get_numbers(vm, "mat.residual_saturation", p.mat.residual_saturation, p.mat.nmat, nmat_key, true);
+        {
+            bool active = false;
+            for (int m = 0; m < p.mat.nmat; ++m) {
+                const int model = p.mat.retention_model[m];
+                if (model < 0 || model > 3)
+                    die(EXIT_CONFIG_VALUE, "mat.retention_model must be 0, 1, 2 or 3.");
+                if (model == 0) continue;
+                active = true;
+                const double a = p.mat.retention_alpha[m], n = p.mat.retention_n[m];
+                const double sr = p.mat.residual_saturation[m];
+                if (!(a > 0 && std::isfinite(a)) || !(sr >= 0 && sr < 1) ||
+                    (model == 1 && !(n > 1 && std::isfinite(n))) ||
+                    (model == 2 && !(n > 0 && std::isfinite(n))) ||
+                    !(p.mat.porosity[m] > 0)) {
+                    std::cerr << "Invalid retention properties for material " << m << ".\n";
+                    die(EXIT_CONFIG_VALUE,
+                        "Retention laws require finite alpha > 0, 0 <= residual_saturation < 1, "
+                        "porosity > 0, and retention_n > 1 (van Genuchten) or > 0 (Brooks-Corey).");
+                }
+            }
+            if (active && !p.control.has_hydraulic_diffusion)
+                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 requires has_hydraulic_diffusion=true.");
+            // Each of these changes the pore volume or exchanges fluid outside
+            // the unsaturated content balance, which is not accounted yet.
+            const bool exchange = std::any_of(p.mat.matrix_exchange.begin(), p.mat.matrix_exchange.end(),
+                                              [](double h) { return h > 0; });
+            if (active && (p.mat.porosity_model || p.mat.permeability_model ||
+                           p.control.has_thermal_pressurization || p.control.has_fluid_thermal_advection || exchange))
+                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 does not yet support evolving "
+                    "porosity/permeability, thermal coupling or matrix exchange.");
+        }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.evolution_b", p.mat.evolution_b, p.mat.nmat, nmat_key, true);

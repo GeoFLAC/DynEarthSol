@@ -80,9 +80,9 @@ jobs:
         working-directory: ./tests/functional
         run: |
           OMP_NUM_THREADS=4 ../../dynearthsol2d 2d-ep-irregular.cfg
-          cd ../../benchmarks-cores
-          python compare.py ../tests/functional/ref-omp1/functional-test \
-                            ../tests/functional/functional-test 4
+          cd ../../tests/regression
+          python compare.py ../functional/ref-omp1/functional-test \
+                            ../functional/functional-test 4
 
       # Second multithreaded run: races are schedule-dependent and one
       # clean pass is weak evidence.
@@ -91,6 +91,6 @@ jobs:
         run: |
           rm -f functional-test.*
           OMP_NUM_THREADS=4 ../../dynearthsol2d 2d-ep-irregular.cfg
-          cd ../../benchmarks-cores
-          python compare.py ../tests/functional/ref-omp1/functional-test \
-                            ../tests/functional/functional-test 4
+          cd ../../tests/regression
+          python compare.py ../functional/ref-omp1/functional-test \
+                            ../functional/functional-test 4
