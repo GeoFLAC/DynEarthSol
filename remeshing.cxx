@@ -8,6 +8,7 @@
 #include <numeric>
 #include <limits>
 #include <map>
+#include <memory>
 #include <unordered_map>
 
 #include "constants.hpp"
@@ -40,6 +41,29 @@
 #endif
 
 namespace { // anonymous namespace
+
+
+// The arrays points_to_new_mesh and points_to_new_surface return, owned here so that every path
+// frees them. TetGen allocates them with new[], and the vendored Triangle's trimalloc
+// (triangle/triangle.c) was changed to operator new[], so delete[] releases both.
+struct GeneratedMesh {
+    int nnode = 0, nelem = 0, nseg = 0;
+    std::unique_ptr<double[]> coord, regattr;
+    std::unique_ptr<int[]> connectivity, segment, segflag;
+
+    // Take a mesher's output, freeing the arrays held so far.
+    void adopt(int nn, int ne, int ns, double *c, int *conn, int *seg, int *flag, double *attr)
+    {
+        nnode = nn;
+        nelem = ne;
+        nseg = ns;
+        coord.reset(c);
+        connectivity.reset(conn);
+        segment.reset(seg);
+        segflag.reset(flag);
+        regattr.reset(attr);
+    }
+};
 
 
 // equilateral triangle area = 0.433*s^2, equilateral tetrahedron volume = 0.118*s^3
@@ -817,18 +841,23 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
                 if (d != major_direction) coord2d[2*j + dd++] = points[inv[j]*NDIMS + d];
 
         // re-triangulate the cavity (connect only, not adding new points)
-        int new_nnode, new_nelem, new_nseg;
-        double *pcoord, *pregattr;
-        int *pconnectivity, *psegment, *psegflag;
-        Mesh mesh;
-        mesh.min_angle = 0;
-        mesh.meshing_verbosity = 0;
-        points_to_new_surface(mesh, inv.size(), coord2d.data(),
-                              nsurfseg, surf_segment.data(), surf_segflag.data(),
-                              0, NULL,
-                              0, 3,
-                              new_nnode, new_nelem, new_nseg,
-                              pcoord, pconnectivity, psegment, psegflag, pregattr);
+        GeneratedMesh cavity;
+        {
+            int nn, ne, ns;
+            double *c = nullptr, *attr = nullptr;
+            int *conn = nullptr, *seg = nullptr, *segflag = nullptr;
+            Mesh mesh;
+            mesh.min_angle = 0;
+            mesh.meshing_verbosity = 0;
+            points_to_new_surface(mesh, inv.size(), coord2d.data(),
+                                  nsurfseg, surf_segment.data(), surf_segflag.data(),
+                                  0, NULL,
+                                  0, 3,
+                                  nn, ne, ns, c, conn, seg, segflag, attr);
+            cavity.adopt(nn, ne, ns, c, conn, seg, segflag, attr);
+        }
+        const int new_nnode = cavity.nnode, new_nelem = cavity.nelem, new_nseg = cavity.nseg;
+        const int *pconnectivity = cavity.connectivity.get();
         if (static_cast<std::size_t>(new_nnode) != inv.size())
             die(EXIT_MESH_QUALITY, "delete_points_and_merge_facets: the cavity triangulation "
                 "added or dropped points");
@@ -875,11 +904,6 @@ void delete_points_and_merge_facets(const int_vec &points_to_delete,
         flip_boundary_facets(bnew, points, major_direction, max_change);
         new_facets.insert(new_facets.end(), bnew.begin(), bnew.end());
         new_flags.insert(new_flags.end(), bnew.size() / NODES_PER_FACET, flag);
-        delete [] pcoord;
-        delete [] pconnectivity;
-        delete [] psegment;
-        delete [] psegflag;
-        delete [] pregattr;
     }
 
     // kept facets first, then the cavities' new ones; the rest marked deleted. Internal facets
@@ -1339,16 +1363,17 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
 #ifdef THREED
     // todo
 #else
+    // qcoord with room for the nodes refine_surface_elem adds
+    double_vec qcoord_sediment;
     if (param.mesh.meshing_sediment) {
-        double *nqcoord = new double[(old_nnode + var.surfinfo.top_nodes->size() * 2 ) * NDIMS];
-        std::memcpy(nqcoord, qcoord, sizeof(double) * old_nnode * NDIMS);
-        qcoord = nqcoord;
+        qcoord_sediment.resize((old_nnode + var.surfinfo.top_nodes->size() * 2) * NDIMS);
+        std::copy(qcoord, qcoord + old_nnode * NDIMS, qcoord_sediment.begin());
+        qcoord = qcoord_sediment.data();
         refine_surface_elem(param, var, old_coord, old_connectivity, old_volume, old_nnode, qcoord);
     }
 #endif
     int new_nnode, new_nelem, new_nseg;
-    double *pcoord, *pregattr;
-    int *pconnectivity, *psegment, *psegflag;
+    GeneratedMesh gen;   // the last attempt's mesh; each new attempt frees the one before
 
     int nloops = 0;
     Mesh mesh = param.mesh;  // temporary copy
@@ -1369,8 +1394,6 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
             mesh.tetgen_optlevel = 3;
         }
 #endif
-        pregattr = NULL;
-
         //
         // new mesh
         //
@@ -1379,15 +1402,20 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
         // so using negative size as the max area
         const double max_elem_size = -1;
         const int vertex_per_polygon = 3;
-        points_to_new_mesh(mesh, old_nnode, qcoord,
-                           old_nseg, qsegment, qsegflag,
-                           0, pregattr,
-                           max_elem_size, vertex_per_polygon,
-                           new_nnode, new_nelem, new_nseg,
-                           pcoord, pconnectivity, psegment, psegflag, pregattr);
+        {
+            double *c = nullptr, *attr = nullptr;
+            int *conn = nullptr, *seg = nullptr, *segflag = nullptr;
+            points_to_new_mesh(mesh, old_nnode, qcoord,
+                               old_nseg, qsegment, qsegflag,
+                               0, nullptr,
+                               max_elem_size, vertex_per_polygon,
+                               new_nnode, new_nelem, new_nseg,
+                               c, conn, seg, segflag, attr);
+            gen.adopt(new_nnode, new_nelem, new_nseg, c, conn, seg, segflag, attr);
+        }
 
-        array_t new_coord(pcoord, new_nnode);
-        conn_t new_connectivity(pconnectivity, new_nelem);
+        array_t new_coord(gen.coord.get(), new_nnode);
+        conn_t new_connectivity(gen.connectivity.get(), new_nelem);
 
         // deleting (non-boundary) nodes to avoid having tiny elements
         double_vec new_volume(new_nelem);
@@ -1423,29 +1451,15 @@ void new_mesh(const Param &param, Variables &var, int bad_quality,
             std::cout << "Warning: exceeding loop limit in remeshing. Proceeding with risks.\n";
             break;
         }
-
-        delete [] pcoord;
-        delete [] pconnectivity;
-        delete [] psegment;
-        delete [] psegflag;
-        delete [] pregattr;
     }
 
     var.nnode = new_nnode;
     var.nelem = new_nelem;
     var.nseg = new_nseg;
-    var.coord->load_from_buffer(pcoord, new_nnode);
-    var.connectivity->load_from_buffer(pconnectivity, new_nelem);
-    var.segment->load_from_buffer(psegment, var.nseg);
-    var.segflag->load_from_buffer(psegflag, var.nseg);
-
-    delete [] pcoord;
-    delete [] pconnectivity;
-    delete [] psegment;
-    delete [] psegflag;
-
-    if (param.mesh.meshing_sediment)
-        delete [] qcoord;
+    var.coord->load_from_buffer(gen.coord.get(), new_nnode);
+    var.connectivity->load_from_buffer(gen.connectivity.get(), new_nelem);
+    var.segment->load_from_buffer(gen.segment.get(), var.nseg);
+    var.segflag->load_from_buffer(gen.segflag.get(), var.nseg);
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -1632,15 +1646,13 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
 
     new_equilateral_info(param, var, xlength, &nx_new, &nz_new, &nnode_new, &nelem_new, &nseg_new);
 
-    double *qcoord = new double[nnode_new* NDIMS];
-
     array_t inz(var.nz);
     array_t outz(nz_new);
 
     double dx = param.mesh.resolution;
     double dz = -param.mesh.resolution * std::sqrt(3.0) / 2.;
 
-    var.coord->reset(qcoord, nnode_new);
+    *var.coord = array_t(nnode_new);
 
     int istart_n2 = nx_new * (int(nz_new/2)+nz_new%2);
 
@@ -1830,17 +1842,13 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     var.nelem = nelem_new;
     var.nseg = nseg_new;
 
-    int *qconn, *qsegment, *qsegflag;
-
+    int_vec qconn, qsegment, qsegflag;
     create_equilateral_elem(var, qconn);
     create_equilateral_segments(var, qsegment, qsegflag);
 
-    var.connectivity->load_from_buffer(qconn, nelem_new);
-    var.segment->load_from_buffer(qsegment, nseg_new);
-    delete [] qconn;
-    delete [] qsegment;
-
-    var.segflag->reset(qsegflag, nseg_new);
+    var.connectivity->load_from_buffer(qconn.data(), nelem_new);
+    var.segment->load_from_buffer(qsegment.data(), nseg_new);
+    var.segflag->load_from_buffer(qsegflag.data(), nseg_new);
 }
 
 
@@ -1852,15 +1860,10 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    double *qcoord = new double[var.nnode * NDIMS];
-    int *qconn = new int[var.nelem * NODES_PER_ELEM];
-    int *qsegment = new int[var.nseg * NODES_PER_FACET];
-    int *qsegflag = new int[var.nseg];
-
-    var.coord->reset(qcoord, var.nnode);
-    var.connectivity->reset(qconn, var.nelem);
-    var.segment->reset(qsegment, var.nseg);
-    var.segflag->reset(qsegflag, var.nseg);
+    *var.coord = array_t(var.nnode);
+    *var.connectivity = conn_t(var.nelem);
+    *var.segment = segment_t(var.nseg);
+    *var.segflag = segflag_t(var.nseg);
 
     #pragma omp parallel for default(none) shared(var,old_conn)
     for (int i = 0; i < var.nelem; ++i) {
@@ -2366,7 +2369,7 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
      * stays coarse, at coeff > 0 the element count ratchets), and do not scale the edge by the
      * volume ratio itself (~NDIMS times too aggressive).
      * old_coord / old_connectivity must be the PRE-remesh mesh: *var.coord and *var.connectivity
-     * are empty (steal_ref'd) here, so never read them (nor pass them to side_inflow_state).
+     * are empty (moved out) here, so never read them (nor pass them to side_inflow_state).
      */
     // Not const-qualified on purpose: a const scalar is predetermined-shared in OpenMP and
     // may not appear in a shared() clause on some toolchains -- a plain local sidesteps that.
@@ -4440,10 +4443,10 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
     new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
     new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
     new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
-    var.coord->steal_ref( new_coord );
-    var.connectivity->steal_ref( new_connectivity );
-    var.segment->steal_ref( new_segment );
-    var.segflag->steal_ref( new_segflag );
+    *var.coord = std::move(new_coord);
+    *var.connectivity = std::move(new_connectivity);
+    *var.segment = std::move(new_segment);
+    *var.segflag = std::move(new_segflag);
 }
 
 #else
@@ -4825,10 +4828,10 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     new_connectivity.load_from_buffer(mmg_out.conn.data(), var.nelem);
     new_segment.load_from_buffer(mmg_out.seg.data(), var.nseg);
     new_segflag.load_from_buffer(mmg_out.segflag.data(), var.nseg);
-    var.coord->steal_ref( new_coord );
-    var.connectivity->steal_ref( new_connectivity );
-    var.segment->steal_ref( new_segment );
-    var.segflag->steal_ref( new_segflag );
+    *var.coord = std::move(new_coord);
+    *var.connectivity = std::move(new_connectivity);
+    *var.segment = std::move(new_segment);
+    *var.segflag = std::move(new_segflag);
 }
 #endif  // end of if THREED
 #endif // end of if USEMMG
@@ -6100,17 +6103,12 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     SideInflowState side_inflow;
 
     {
-        // creating a "copy" of mesh pointer so that they are not deleted
-        array_t old_coord;
-        conn_t old_connectivity;
-        conn_t old_connectivity_surface;
-        segment_t old_segment;
-        segflag_t old_segflag;
-        old_coord.steal_ref(*var.coord);
-        old_connectivity.steal_ref(*var.connectivity);
-        old_connectivity_surface.steal_ref(*var.connectivity_surface);
-        old_segment.steal_ref(*var.segment);
-        old_segflag.steal_ref(*var.segflag);
+        // the old mesh, moved out of var: var's arrays are empty until the meshing fills them
+        array_t old_coord(std::move(*var.coord));
+        conn_t old_connectivity(std::move(*var.connectivity));
+        conn_t old_connectivity_surface(std::move(*var.connectivity_surface));
+        segment_t old_segment(std::move(*var.segment));
+        segflag_t old_segflag(std::move(*var.segflag));
 
         const int old_nnode = old_coord.size();
         const int old_nelem = old_connectivity.size();
