@@ -378,6 +378,7 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
                            tensor_t& stress_avg, double_vec& delta_plstrain_avg)
 {
     if (interval <= 1) return;
+    const int coord_components = NDIMS, tensor_components = NSTR;
     // In the first time step of each interval, some old fields are
     // stored for later use.
     // It is guaranteed that remeshing won't occur within the interval.
@@ -389,16 +390,16 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
         coord0.resize(nn, false);strain0.resize(ne, false);stress_avg.resize(ne, false);
         delta_plstrain_avg.resize(ne);
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, coord0) firstprivate(nn) collapse(2)
+        #pragma omp parallel for default(none) shared(var, coord0) firstprivate(nn, coord_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(nn) collapse(2)
-        for (int c=0; c<NDIMS; ++c)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(nn, coord_components) collapse(2)
+        for (int c=0; c<coord_components; ++c)
             for (int n=0; n<nn; ++n) coord0[n][c] = (*var.coord)[n][c];
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, strain0, stress_avg) firstprivate(ne) collapse(2)
+        #pragma omp parallel for default(none) shared(var, strain0, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne) collapse(2)
-        for (int c=0; c<NSTR; ++c)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        for (int c=0; c<tensor_components; ++c)
             for (int e=0; e<ne; ++e) {
                 strain0[e][c] = (*var.strain)[e][c];
                 stress_avg[e][c] = (*var.stress)[e][c];
@@ -421,10 +422,10 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
         // (PS: dt-weighted average would be better, but difficult to do)
         const int ne = stress_avg.size();
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, stress_avg) firstprivate(ne) collapse(2)
+        #pragma omp parallel for default(none) shared(var, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne) collapse(2)
-        for (int c=0; c<NSTR; ++c)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        for (int c=0; c<tensor_components; ++c)
             for (int e=0; e<ne; ++e) stress_avg[e][c] += (*var.stress)[e][c];
 
         double *dp_avg = delta_plstrain_avg.data();
