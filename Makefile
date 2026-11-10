@@ -316,9 +316,14 @@ ifeq ($(usegospl), 1)
 	PYTHON_LIB_DIR     ?= $(CONDA_ENV_PATH)/lib
 
 	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
-	GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
 	ifneq ($(OSNAME), Darwin)
+		GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
+	else
+		# Full path, as for libomp: -L on a conda env would also pick its libc++.
+		# The rpath, for @rpath/libpython, is added after the link.
+		GOSPL_LDFLAGS += $(PYTHON_LIB_DIR)/libpython$(PYTHON_VERSION).dylib
+		GOSPL_RPATH = $(abspath $(PYTHON_LIB_DIR))
 	endif
 endif
 
@@ -388,12 +393,16 @@ ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 		## this project's build-from-source instructions put LLVM OpenMP.
 		## Header and library are searched separately because Homebrew's llvm
 		## keeps omp.h under lib/clang/<ver>/include, not beside the library.
-		OPENMP_INC_DIRS = external/openmp-install/include \
+		## usegospl=1 takes the gospl env's libomp first: GoSPL's Python loads
+		## it into the DES process, and a second libomp there aborts the run.
+		OPENMP_INC_DIRS = $(if $(filter 1,$(usegospl)),$(CONDA_ENV_PATH)/include) \
+			external/openmp-install/include \
 			$(BREW_PREFIX)/opt/libomp/include \
 			$(BREW_PREFIX)/opt/llvm/lib/clang/*/include \
 			$(MACPORTS_PREFIX)/include/libomp \
 			$(call under,$(CONDA_PREFIX),/include)
-		OPENMP_LIB_DIRS = external/openmp-install/lib \
+		OPENMP_LIB_DIRS = $(if $(filter 1,$(usegospl)),$(CONDA_ENV_PATH)/lib) \
+			external/openmp-install/lib \
 			$(BREW_PREFIX)/opt/libomp/lib \
 			$(BREW_PREFIX)/opt/llvm/lib \
 			$(MACPORTS_PREFIX)/lib/libomp \
@@ -1004,9 +1013,10 @@ ifeq ($(usemmg), 1)
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
 	@# from the environment on the FIRST configure, so an exported one is baked in.
+	@# USE_VTK=OFF: DES needs no VTK, and the gospl env's VTK breaks MMG's configure.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ ..; \
+		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DUSE_VTK=OFF ..; \
 	fi
 	@# The revision IN the archive, stamped only when it is built: the archive is reused
 	@# while the checkout drifts, and one built without a stamp claims no revision.
@@ -1044,12 +1054,16 @@ ifeq ($(usegospl), 1)
 endif
 ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# Record each dependency's directory as an rpath, skipping any that is
-		@# already there: install_name_tool fails outright on a duplicate. An
-		@# empty OPENMP_RPATH -- openmp=0, or a runtime that was not found --
-		@# drops out of the loop.
-		@for d in $(OPENMP_RPATH); do \
+		@# already there: install_name_tool fails outright on a duplicate, and
+		@# with usegospl=1 OPENMP_RPATH and GOSPL_RPATH are both the env's lib.
+		@# An empty one (openmp=0, or no runtime found) drops out of the loop.
+		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
+ifeq ($(usegospl), 1)
+		@# gospl_extensions records a bare install name; point it at the file.
+		install_name_tool -change libgospl_extensions.so $(abspath $(GOSPL_LIB_DIR))/libgospl_extensions.so $@
+endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
 		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
 endif

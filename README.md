@@ -152,22 +152,21 @@ defaults are not what you want.
   GoSPL handles erosion, deposition and hillslope diffusion; DES handles
   tectonics. At each coupling event DES surface velocities are passed to GoSPL,
   which returns the erosion/deposition increment applied to DES surface nodes.
-  * Requires a GoSPL conda environment, following
-    [the GoSPL installation procedure](https://gospl.readthedocs.io/en/latest/getting_started/installConda.html),
-    and the [gospl_extensions](https://github.com/GeoFLAC/gospl_extensions) C++
-    interface library:
+  * Requires a GoSPL conda (or mamba) environment and the
+    [gospl_extensions](https://github.com/GeoFLAC/gospl_extensions) C++
+    interface library, built in it:
     ```bash
+    conda create -n gospl -c geodels -c conda-forge "gospl>=2026.6.30" python=3.11
+    conda activate gospl
     git clone https://github.com/GeoFLAC/gospl_extensions.git ~/opt/gospl_extensions
     cd ~/opt/gospl_extensions/cpp_interface
-    conda activate gospl
-    make install-local
+    make install-local      # macOS: add PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib"
     ```
-  * `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` override the defaults
-    (`~/opt/gospl_extensions` and `~/miniforge3/envs/gospl`). `make usegospl=1`
-    also generates the `dynearthsol-gospl` wrapper script.
-  * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
-    conda environment does not matter unless it has its own compilers;
-    `make config` shows what was picked.
+  * Coupling is 3D only. With the environment active, build with
+    `make ndims=3 usegospl=1 usemmg=1 CONDA_ENV_PATH=$CONDA_PREFIX`.
+    `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
+    and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
+    `dynearthsol-gospl` wrapper script.
   * `usempi=1 usegospl=1` connects DES CPU/GPU ranks to an independent persistent
     GoSPL MPI world, with separate rank counts. Use the
     [MPI coupling launcher](doc/gospl-mpi-coupling.md) and reserve resources for
