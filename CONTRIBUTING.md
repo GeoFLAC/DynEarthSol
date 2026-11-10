@@ -6,22 +6,6 @@ The main repository is on:
 To get the most timely progress, using Github:
   git clone https://github.com/GeoFLAC/DynEarthSol.git
 
-## To-do list:
-
-High priority:
-* Simple benchmarks for rheology
-* Local remeshing
-* Different init_marker_spacing in regions
-
-Low priority:
-* Save output as vtk format directly
-* Stress BC, esp no-stress sidewall
-* Heatflux BC
-* Frictional heating
-* Adiabatic cooling (adiabatic temperature profile)
-* Internal heating
-* Volume changed induced stress
-
 ## Design notes:
 
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
