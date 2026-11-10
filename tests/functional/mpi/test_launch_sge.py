@@ -35,19 +35,19 @@ class SchedulerGuards(unittest.TestCase):
     def test_requires_qsub_context(self):
         env = {key:value for key, value in self.env.items()
                if key not in ('JOB_ID', 'NSLOTS', 'PE_HOSTFILE')}
-        self.reject(['-n', '2', '/bin/true'], 'Submit through qsub', env)
+        self.reject(['-n', '2', sys.executable], 'Submit through qsub', env)
 
     def test_rejects_inconsistent_slot_accounting(self):
         self.env['NSLOTS'] = '8'
-        self.reject(['-n', '2', '/bin/true'], 'slot total does not match NSLOTS')
+        self.reject(['-n', '2', sys.executable], 'slot total does not match NSLOTS')
 
     def test_rejects_hybrid_oversubscription_before_mpi(self):
         self.env['OMP_NUM_THREADS'] = '2'
-        self.reject(['--mpiexec', '/missing-mpiexec', '-n', '2', '/bin/true'],
+        self.reject(['--mpiexec', '/missing-mpiexec', '-n', '2', sys.executable],
                     'exceed the allocated slot capacity')
 
     def test_rejects_unallocated_node_count(self):
-        self.reject(['--min-nodes', '2', '-n', '2', '/bin/true'],
+        self.reject(['--min-nodes', '2', '-n', '2', sys.executable],
                     'too few distinct hosts')
 
     def worker(self, context, expected):
@@ -55,7 +55,7 @@ class SchedulerGuards(unittest.TestCase):
         path.write_text(json.dumps(context))
         self.env.update(OMPI_COMM_WORLD_RANK='0', OMPI_COMM_WORLD_LOCAL_RANK='0',
                         OMPI_COMM_WORLD_LOCAL_SIZE='1')
-        self.reject(['--rank', str(path), '/bin/true'], expected)
+        self.reject(['--rank', str(path), sys.executable], expected)
 
     def test_rejects_worker_on_unallocated_host(self):
         self.worker(dict(job_id='123', host_slots={'unallocated-host.invalid':2}),
@@ -70,7 +70,7 @@ class SchedulerGuards(unittest.TestCase):
 
     def test_rejects_per_host_oversubscription(self):
         self.worker(dict(job_id='123', host_slots={self.host:1}, threads=2,
-                         executable_sha256=hashlib.sha256(Path('/bin/true').read_bytes()).hexdigest()),
+                         executable_sha256=hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest()),
                     'exceed allocated slots')
 
 
