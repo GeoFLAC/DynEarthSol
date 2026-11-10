@@ -526,6 +526,10 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
         $(warning No GPU detected via nvidia-smi -- targeting cc$(GPU_CC). Pass GPU_CC=<cc> to override.)
 		endif
 
+		## TODO: stop openacc=1 when nvc++ uses GCC 8 headers (_GLIBCXX_RELEASE < 9),
+		## once our RHEL 8 hosts have a newer GCC. There, C++17 compiles std::string
+		## into our objects, mem:managed allocates it, and std::getline in
+		## libstdc++.so frees it with glibc (see Registry::scan_lines in options.hpp).
 		CXXFLAGS += -acc=gpu -cuda -DACC
 		ifeq ($(usempi), 1)
 			CXXFLAGS += -Kieee
