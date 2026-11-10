@@ -113,7 +113,7 @@ def build(study, output, record_source, times, space):
         ax.set_xticks(hs, [f'{x:g}' for x in hs]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', f"Mesh convergence, {summary['steps']} steps", xlabel='mesh spacing $h$ (m)', ylabel='largest relative error')
         ax.set_ylim(1e-5, None)    # a clear strip for the legend below every series
-        ax.legend(fontsize=7.5, loc='lower center', ncol=2)
+        ax.legend(fontsize=9.5, loc='lower center', ncol=2)
         pf.save_figure(fig, output/'figures', KEY)
 
     orders = {name: float(np.polyfit(np.log(hs), np.log([c[name] for c in mesh]), 1)[0]) for name, *_ in METRICS}

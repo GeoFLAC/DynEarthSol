@@ -219,7 +219,7 @@ void thermal_transport_operator(const Param &param, const Variables &var, int e,
     const double *g[NDIMS] = {dx, dz};
 #endif
     double q[NDIMS];
-    hydraulic_element_flux(param, var, e, q);
+    hydraulic_element_flux(param, var, e, q, g);
     const double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
     const double cv = var.mat->rho_fluid_reference(e)*var.mat->cp_fluid(e)*
         (*var.volume)[e]/NODES_PER_ELEM;
@@ -289,15 +289,14 @@ static void assemble_inflow(const Param &param, const Variables &var, double sta
                             bool peak_rate = false)
 {
     const Injection &source = param.injection;
-    double_vec injecting(source.num_points), weighted(source.num_points);
+    double_vec injecting(source.num_points);
     for (int p = 0; p < source.num_points; ++p) {
         const double strength = source.rate_model == injection_rate_total_amount ?
             source.total_amount[p] : source.rate[p];
         injecting[p] = strength > 0 ? 1.0 : 0.0;
-        weighted[p] = injecting[p] * source.temperature[p];
     }
-    assemble_point_sources(source, var, start, stop, *var.inflow_rate, &injecting, peak_rate);
-    assemble_point_sources(source, var, start, stop, *var.inflow_heat, &weighted, peak_rate);
+    assemble_point_sources(source, var, start, stop, *var.inflow_rate, &injecting, peak_rate,
+                           var.inflow_heat, &source.temperature);
 }
 
 static double temperature_step_limit(const Param &param, const Variables &var, elem_cache &work)
@@ -408,10 +407,12 @@ static void temperature_step(const Param &param, const Variables &var,
                 thermal_transport_operator(param, var, e, transport);
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+            if (!param.control.has_fluid_thermal_advection)
+                get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
 #else
             double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-            get_local_shape_fn(var, e, shpdx, shpdz);
+            if (!param.control.has_fluid_thermal_advection)
+                get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
             for (int i=0; i<NODES_PER_ELEM; ++i) {
                 if (param.control.has_fluid_thermal_advection) {

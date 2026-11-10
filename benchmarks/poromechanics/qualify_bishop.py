@@ -64,7 +64,7 @@ def build(study, output, record_source, space):
         for table, name in ((cb.TABLE0, 'start'), (cb.TABLE1, 'end')):
             ax.axhline(table, color=ds.WATER, lw=.8, ls=':')
             ax.text(.98, table + .12, f'water table, {name}', transform=ax.get_yaxis_transform(),
-                    ha='right', va='bottom', color=ds.WATER, fontsize=8.5)
+                    ha='right', va='bottom', color=ds.WATER, fontsize=10.5)
         ds.panel(ax, 'a', 'Settlement after drainage', xlabel='$u_z$ (mm)', ylabel='$z$ (m)')
         ds.key(ax)
         ax = axes[1]
@@ -100,7 +100,7 @@ def build(study, output, record_source, space):
         handles += [Line2D([], [], color=ds.INK, marker='o', mfc='white', ms=3.5, ls='-'),
                     Line2D([], [], color=ds.INK, marker='s', mfc='none', ms=7, ls='none')]
         labels += [f"{summary['ndims']}D", f"{other['ndims']}D"]
-        ax.legend(handles, labels, fontsize=8, loc='upper left')
+        ax.legend(handles, labels, fontsize=10, loc='upper left')
         pf.save_figure(fig, output/'figures', KEY)
 
     finest3 = {law: min((c for c in other['cases'] if c['law'] == law), key=lambda c: c['spacing_m'])

@@ -64,10 +64,10 @@ def build(study, output, record):
             ds.analytical(ax, slip, series[:, exact]*scale, label='MC / Jaumann reference')
             ds.des(ax, slip[chosen], series[chosen, actual]*scale, size=3, label='DES, physical mass')
             ds.panel(ax, letter, title, xlabel='slip $\delta$ (mm)', ylabel=ylabel)
-            ax.legend(fontsize=7.5)
+            ax.legend(fontsize=9.5)
         control = fault.reference(series[:, 0]/fault.HEIGHT, expansion=False)
         axes[0].plot(slip, control[1]/1e6, '--', color=ds.MUTED, lw=1., label='zero-expansion reference')
-        axes[0].legend(fontsize=7.5, loc='lower left')
+        axes[0].legend(fontsize=9.5, loc='lower left')
         pf.save_figure(fig, output/'figures', KEY)
     reduction = 1-summary['final_shear_Pa']/fault.TAU0
     return dict(key=KEY, theme='heat', title='Fault-zone heating at fixed normal traction',

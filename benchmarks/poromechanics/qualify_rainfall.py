@@ -76,10 +76,11 @@ def build(study, output, record_source, pressure_driven):
         art = ax.tripcolor(tri, p/1e3, cmap='RdBu_r', vmin=-12, vmax=12, shading='gouraud')
         ax.tricontour(tri, p, levels=[0.0], colors=ds.INK, linewidths=1.2)
         ax.set_aspect('equal'); ax.set_xlim(14, 26); ax.set_ylim(-26*t - sa.D - .5, -14*t + .5)
-        fig.colorbar(art, ax=ax, shrink=.7, label='pore pressure (kPa)')
-        ds.panel(ax, 'a', f"Perched water table at the last PT equilibrium ({rows[-1]['time']/hour:.1f} h)",
+        fig.colorbar(art, ax=ax, location='bottom', shrink=.7, pad=.18,
+                     label='pore pressure (kPa)')
+        ds.panel(ax, 'a', f"Perched water table just before sliding ({rows[-1]['time']/hour:.1f} h)",
                  xlabel='$x$ (m)', ylabel='$z$ (m)')
-        ax.text(.03, .05, 'black line: $p=0$', transform=ax.transAxes, fontsize=8, color=ds.INK)
+        ax.text(.03, .05, 'black line: $p=0$', transform=ax.transAxes, fontsize=10, color=ds.INK)
 
         ax = axes[1]
         for color, case in zip((ds.SERIES[1], ds.HOT), cases):
@@ -95,8 +96,8 @@ def build(study, output, record_source, pressure_driven):
         ax.axhline(SLIP, color=ds.MUTED, lw=.6)
         ax.set_xlim(6, 16); ax.set_ylim(1e-6, 3e-2)
         ds.panel(ax, 'b', 'Basal slip: rain against bedrock pressure', xlabel='base pore pressure (kPa)',
-                 ylabel='mean plastic strain, basal 0.6 m')
-        ax.legend(fontsize=7.5, loc='lower right')
+                 ylabel='mean basal plastic strain')
+        ax.legend(fontsize=11, loc='upper left', bbox_to_anchor=(0, -.25)).set_in_layout(False)
 
         ax = axes[2]
         picks = np.linspace(1, len(rows) - 1, 5).astype(int)
@@ -105,9 +106,9 @@ def build(study, output, record_source, pressure_driven):
             ax.plot(x[base, 0][order], pp, '-', color=color, lw=1.1, label=f"{rows[i]['time']/hour:.1f} h")
         ax.axhline(0, color=ds.MUTED, lw=.6); ax.axvspan(0, sa.END, color='#eef1f3', zorder=0)
         ax.axvspan(sa.L - sa.END, sa.L, color='#eef1f3', zorder=0)
-        ax.text(sa.END/2, .97, 'strong', transform=ax.get_xaxis_transform(), ha='center', va='top', fontsize=7.5, color=ds.MUTED)
+        ax.text(sa.END/2, .97, 'strong', transform=ax.get_xaxis_transform(), ha='center', va='top', fontsize=9.5, color=ds.MUTED)
         ds.panel(ax, 'c', 'Base pressure along the slope', xlabel='$x$ (m)', ylabel='base pore pressure (kPa)')
-        ax.legend(fontsize=8, loc='center', bbox_to_anchor=(.5, .3), ncol=3)
+        ax.legend(fontsize=11, loc='upper left', bbox_to_anchor=(0, -.25), ncol=2).set_in_layout(False)
         pf.save_figure(fig, output/'figures', KEY)
 
     on = _onset(finest)

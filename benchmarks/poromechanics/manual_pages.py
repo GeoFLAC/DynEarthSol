@@ -1835,6 +1835,25 @@ MANUAL['salencon'] = dict(
            '--dilation 30 --mixed --refined --load-steps 16',
            'python3 benchmarks/poromechanics/qualify_salencon.py OUT FIGURES'])
 
+MANUAL['elder'] = dict(
+    run=[('dynearthsol2d input.cfg', 'Runs the selected 2D half box for 100,000 s in 2,000 steps of 50 s. elder.poly separates the hot and insulated base segments.')],
+    keys=[('control.has_hydraulic_diffusion', 'enables Darcy pressure transport'),
+          ('control.has_fluid_thermal_advection', 'carries heat with the Darcy flux'),
+          ('control.has_poroelastic_pressure_feedback', 'off: the matrix is rigid for the flow comparison'),
+          ('control.fixed_dt', '50 s physical interval; stable transport subcycles are internal'),
+          ('mat.fluid_bulk_modulus', '100 Pa: deliberately scaled finite pressure storage'),
+          ('mat.hydraulic_perm', 'sets Ra = 400'),
+          ('mat.fluid_alpha', 'Boussinesq fluid expansion gives buoyancy'),
+          ('mesh.poly_filename', 'splits the base into a hot z0 segment and an insulated slant segment'),
+          ('bc.tbc_z0', 'heater temperature T0 + 10 K; tbc_z1 fixes the cold top'),
+          ('bc.vbc_n0', 'zero normal velocity on the insulated base segment')],
+    fields=[('temperature', 'scaled temperature and the retained six-time heat-content comparison'),
+            ('coordinate', 'positions for bilinear reference interpolation and the selected final field'),
+            ('connectivity', 'triangle areas for lumped integration of heat content')],
+    caption='(a) Independent 256 × 512 reference and (b) selected DES mesh at dimensionless time 0.1, with the same temperature scale and white 0.2 and 0.6 contours. The red bar marks the heater. (c) Heat content at every comparison time, including the early discrepancy. Complete field errors and reference grid checks are in the tables.',
+    study=['python3 benchmarks/poromechanics/elder_reference.py reference.npz --grids 32 64 128 256',
+           'python3 tests/functional/hydromechanics/check_elder.py dynearthsol2d reference.npz OUT --spacings .0625 .03125 .015625 --dt 50 --fluid-bulk 100 --threads 8'])
+
 MANUAL['convection_3d'] = dict(
     run=[('dynearthsol3d input.cfg', 'Runs the selected cube for 200,000 s in 400 explicit physical steps. DES subcycles transport within those intervals.')],
     keys=[('control.has_hydraulic_diffusion', 'enables Darcy pressure transport'),

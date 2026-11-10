@@ -111,7 +111,7 @@ def plastic_result(csv, target):
     with pf.plt.rc_context(ds.FIGURE_RC):
         fig, axes = ds.result_figure(2)
         ds.analytical(axes[0], a[:, 0], 4*a[:, 0], label='continuous undrained reference')
-        ds.des(axes[0], a[::5, 0], a[::5, 4]/1000, label='corrected PT')
+        ds.des(axes[0], a[::5, 0], a[::5, 4]/1000, label='PT')
         ds.panel(axes[0], 'a', 'Pressure through plastic yield', xlabel='time (s)', ylabel='mean pressure (kPa)')
         ds.analytical(axes[1], a[:, 0], -a[:, 6]*1e6, label='imposed pore-volume loss')
         ds.des(axes[1], a[::5, 0], (a[::5, 1]-a[::5, 6]+a[::5, 2])*1e6,

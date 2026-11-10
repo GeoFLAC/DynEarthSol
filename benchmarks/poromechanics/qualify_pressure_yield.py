@@ -96,7 +96,7 @@ def build(study, output, record_source, steps, extra=(), slabs=()):
             ax.plot(front[ok, 0]/1e3, front[ok, 1], drawstyle='steps-post', color=color, lw=1.1, label=label)
         ax.invert_yaxis(); ax.set_xlim(on[0]/1e3 - 1, dp_max/1e3 + .5)
         ds.panel(ax, 'a', 'Depth of the yield front', xlabel=r'pressure rise $\Delta p$ (kPa)', ylabel='depth (m)')
-        ax.legend(fontsize=8, loc='lower left')
+        ax.legend(fontsize=10, loc='lower left')
 
         ax = axes[1]
         apex = ref.c/math.tan(ref.phi)/1e3
@@ -116,7 +116,7 @@ def build(study, output, record_source, steps, extra=(), slabs=()):
         ax.set_xlim(-apex - 2, 30); ax.set_ylim(0, 16)
         ds.panel(ax, 'b', 'Effective stress paths to yield', xlabel=r"$-(\sigma'_1+\sigma'_3)/2$ (kPa)",
                  ylabel=r"$(\sigma'_1-\sigma'_3)/2$ (kPa)")
-        ax.legend(fontsize=8, loc='upper left')
+        ax.legend(fontsize=10, loc='upper left')
 
         ax = axes[2]
         by_mesh = {}
@@ -133,7 +133,7 @@ def build(study, output, record_source, steps, extra=(), slabs=()):
         ax.set_xticks(steps_all, [f'{v:g}' for v in steps_all]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', 'Late yield by step count and mesh', xlabel='steps over the loading',
                  ylabel=r'$(\Delta p-\Delta p^*)/\Delta p^*$ (%)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
 
     b = best[0]

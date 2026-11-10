@@ -19,7 +19,6 @@ interpolated bilinearly. The heat content of the layer is compared too.
                    [--dt 50] [--fluid-bulk 100] [--threads 8]
 """
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -36,10 +35,6 @@ from convection_reference import rayleigh
 
 RA, WIDTH, HEIGHT = 400.0, 2.0, 1.0
 KAPPA = cc.LAMBDA/(cc.RHO*cc.CF)
-
-
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 
 def poly(h):
@@ -79,18 +74,10 @@ def config(h, dt, fluid_bulk, outputs):
     return cfg, interval
 
 
-def lumped_area(coord, conn):
-    w = np.zeros(len(coord))
-    x, z = coord[conn][:, :, 0], coord[conn][:, :, 1]
-    area = np.abs((x[:, 1]-x[:, 0])*(z[:, 2]-z[:, 0]) - (x[:, 2]-x[:, 0])*(z[:, 1]-z[:, 0]))/2
-    np.add.at(w, conn, np.broadcast_to((area/3)[:, None], conn.shape))
-    return w
-
-
 def compare(folder, reference, interval, dt):
     model = cc.Dynearthsol(str(folder/'elder')); rows = cc.scan_frames(str(folder/'elder'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
-    w = lumped_area(coord, conn)
+    w = cc.lumped_area(coord, conn)
     n = max(int(k.split('_')[1]) for k in reference.files if k.startswith('theta_'))
     xr, zr, snaps = reference[f'x_{n}'], reference[f'z_{n}'], reference[f'theta_{n}']
     points = np.column_stack((coord[:, 1] + HEIGHT, coord[:, 0]))
@@ -115,8 +102,8 @@ def study(exe, reference_file, out, spacings, dt, fluid_bulk, threads):
     out.mkdir(parents=True, exist_ok=False)
     reference = np.load(reference_file)
     env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  reference_sha256=digest(reference_file), ra=RA, dt_s=dt, fluid_bulk_Pa=fluid_bulk,
+    result = dict(executable=str(exe), executable_sha256=cc.digest(exe), runner_sha256=cc.digest(Path(__file__)),
+                  reference_sha256=cc.digest(reference_file), ra=RA, dt_s=dt, fluid_bulk_Pa=fluid_bulk,
                   kappa_m2_s=KAPPA, threads=threads, cases=[])
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()

@@ -78,11 +78,13 @@ std::vector<double> compute_seismic_moment_increment_by_material(const Variables
     return moment_by_mat;
 }
 
+#ifdef THREED
 // Moment magnitude of Hanks and Kanamori (1979), M0 in N m.
 double moment_magnitude(double moment)
 {
     return (2.0 / 3.0) * (std::log10(moment) - 9.1);
 }
+#endif
 
 } // namespace
 

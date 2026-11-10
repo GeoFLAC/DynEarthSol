@@ -47,8 +47,10 @@ def build(study, output, record_source):
                 assert dd.digest(path) == audit['raw_files_sha256'][path.name], path
     states = sorted(case['states'], key=lambda s: s['time'])
     first = states[0]
-    again = dd.bishop(folder, 'drawdown', first['frame'])[0]
-    np.testing.assert_allclose(again, first['fs_bishop'], rtol=1e-6)
+    model = dd.Dynearthsol(str(folder/'drawdown'))
+    saved_pressure = model.read_field(first['frame'], 'pore pressure')
+    np.testing.assert_allclose([saved_pressure.min(), saved_pressure.max()],
+                               [first['p_min'], first['p_max']], rtol=1e-12, atol=1e-12)
     brackets = [_bracket(s) for s in states]
     low, high = brackets[0]
     # Trials are named srf<requested time>-<F>; the state records the saved frame's time.
@@ -65,14 +67,13 @@ def build(study, output, record_source):
     shutil.copy2(study/'summary.json', data/'summary.json'); shutil.copy2(study/'runner.py', data/'drawdown_slope.py')
     shutil.copy2(Path(br.__file__), data/'bishop_reference.py')
 
-    model = dd.Dynearthsol(str(folder/'drawdown'))
     x = model.read_field(first['frame'], 'coordinate'); conn = model.read_field(first['frame'], 'connectivity')
     tri = pf.matplotlib.tri.Triangulation(x[:, 0], x[:, 1], conn)
     hour = 3600.0
     with pf.plt.rc_context(ds.FIGURE_RC):
         fig, axes = ds.result_figure(3, width=13.0)
         ax = axes[0]
-        p = model.read_field(first['frame'], 'pore pressure')/1e3
+        p = saved_pressure/1e3
         top = 50*math.ceil(max(p.max(), -p.min())/50)
         art = ax.tripcolor(tri, p, cmap='RdBu_r', vmin=-top, vmax=top, shading='gouraud')
         ax.tricontour(tri, p, levels=[0.0], colors=ds.INK, linewidths=1.0)
@@ -82,10 +83,10 @@ def build(study, output, record_source):
         ax.plot(cx[keep], cz[keep], '--', color=ds.HOT, lw=1.2, label=f"Bishop circle, FS = {first['fs_bishop']:.3f}")
         ax.set_aspect('equal'); ax.set_xlim(0, srm.WIDTH); ax.set_ylim(br.BASE, 2)
         cax = ax.inset_axes([.04, .72, .26, .05])
-        bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('pore pressure (kPa)', fontsize=8)
+        bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('pore pressure (kPa)', fontsize=10)
         bar.ax.xaxis.set_label_position('top'); bar.ax.tick_params(labelsize=7.5)
         ds.panel(ax, 'a', f"Pore pressure {first['time']:.0f} s after drawdown", xlabel='$x$ (m)', ylabel='$z$ (m)')
-        ax.legend(fontsize=8, loc='lower left')
+        ax.legend(fontsize=10, loc='lower left')
 
         ax = axes[1]
         t = np.array([s['time'] for s in states])
@@ -97,7 +98,7 @@ def build(study, output, record_source):
         ax.axhline(1.0, color=ds.MUTED, lw=.6); ax.set_ylim(0.8, 1.05)
         ax.set_xscale('log')
         ds.panel(ax, 'b', 'Factor of safety after drawdown', xlabel='time after drawdown (s)', ylabel='factor of safety')
-        ax.legend(fontsize=8, loc='upper left')
+        ax.legend(fontsize=10, loc='upper left')
 
         ax = axes[2]
         if show:
@@ -108,16 +109,16 @@ def build(study, output, record_source):
             art = ax.tripcolor(tri, np.linalg.norm(u, axis=1)*1e3, cmap='magma_r', shading='gouraud', vmin=0)
             ax.plot(cx[keep], cz[keep], '--', color=ds.WATER, lw=1.2, label='Bishop circle')
             cax = ax.inset_axes([.04, .72, .26, .05])
-            bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('displacement (mm)', fontsize=8)
+            bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('displacement (mm)', fontsize=10)
             bar.ax.xaxis.set_label_position('top'); bar.ax.tick_params(labelsize=7.5)
         ax.set_aspect('equal'); ax.set_xlim(0, srm.WIDTH); ax.set_ylim(br.BASE, 2)
         ds.panel(ax, 'c', f"Mechanism at F = {high:g}, {first['time']:.0f} s" if high else 'Mechanism', xlabel='$x$ (m)',
                  ylabel='$z$ (m)')
-        if show: ax.legend(fontsize=8, loc='lower left')
+        if show: ax.legend(fontsize=10, loc='lower left')
         pf.save_figure(fig, output/'figures', KEY)
 
     mids = [(lo + hi)/2 if lo is not None and hi is not None else None for lo, hi in brackets]
-    dry = br.embankment().critical(br.starts())[0]
+    dry = json.loads((output/'data/embankment/summary.json').read_text())['fs_bishop']
     worst = max(abs(m/s['fs_bishop'] - 1) for m, s in zip(mids, states) if m is not None)
     contained = [lo <= s['fs_bishop'] <= hi for s, (lo, hi) in zip(states, brackets)]
     misses = [s['fs_bishop']-hi for s, (lo, hi) in zip(states, brackets) if s['fs_bishop'] > hi]

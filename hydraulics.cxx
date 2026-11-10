@@ -159,7 +159,7 @@ void reset_hydraulic_assembly(const Param &param, Variables &var)
 namespace {
 #pragma acc routine seq
 inline void hydraulic_flux(const Param &param, const Variables &var, int e,
-                           const double *g[NDIMS], double mobility, double density, double *q)
+                           const double *const g[NDIMS], double mobility, double density, double *q)
 {
     for (int d = 0; d < NDIMS; ++d) q[d] = 0;
     const auto conn = (*var.connectivity)[e];
@@ -184,7 +184,8 @@ inline void hydraulic_flux(const Param &param, const Variables &var, int e,
 } // namespace
 
 #pragma acc routine seq
-void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q)
+void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
+                            const double *const gradient[NDIMS])
 {
     if (!param.control.has_hydraulic_diffusion) {
         for (int d = 0; d < NDIMS; ++d) q[d] = 0;
@@ -192,13 +193,14 @@ void hydraulic_element_flux(const Param &param, const Variables &var, int e, dou
     }
 #ifdef THREED
     double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    get_local_shape_fn(var, e, dx, dy, dz);
+    if (!gradient) get_local_shape_fn(var, e, dx, dy, dz);
     const double *g[NDIMS] = {dx, dy, dz};
 #else
     double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    get_local_shape_fn(var, e, dx, dz);
+    if (!gradient) get_local_shape_fn(var, e, dx, dz);
     const double *g[NDIMS] = {dx, dz};
 #endif
+    if (!gradient) gradient = g;
     double density = 0;
     if (param.control.hydraulic_content_model == 1) {
         const auto conn = (*var.connectivity)[e];
@@ -207,7 +209,7 @@ void hydraulic_element_flux(const Param &param, const Variables &var, int e, dou
             density += fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature)/NODES_PER_ELEM;
         }
     }
-    hydraulic_flux(param,var,e,g,var.mat->perm(e)/var.mat->mu_fluid(e),density,q);
+    hydraulic_flux(param,var,e,gradient,var.mat->perm(e)/var.mat->mu_fluid(e),density,q);
 }
 
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)

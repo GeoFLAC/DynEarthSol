@@ -92,7 +92,7 @@ def build(study, output, record_source, space, times=()):
         old = ax.get_legend()
         ax.set_ylim(-.42, None)                          # a clear strip below p = 0 for the key
         ax.set_yticks(np.arange(0, 1.51, .25))
-        ax.legend(old.legend_handles, [t.get_text() for t in old.texts], ncol=3, fontsize=8, loc='lower center')
+        ax.legend(old.legend_handles, [t.get_text() for t in old.texts], ncol=3, fontsize=10, loc='lower center')
         ax = axes[2]
         counts = sorted({e['steps'] for e in table})
         for k, n in enumerate(counts):

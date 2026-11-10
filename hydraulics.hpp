@@ -80,7 +80,7 @@ inline bool hydraulic_buoyancy(const Param &param)
 // its temperature departure, keeping conduction at rest. T0 is surface_temperature.
 #pragma acc routine seq
 inline void hydraulic_drive(const Param &param, const Variables &var, const double_vec &pressure,
-                            int e, const double *grad[NDIMS], double drive[NDIMS])
+                            int e, const double *const grad[NDIMS], double drive[NDIMS])
 {
     const double weight = var.mat->rho_fluid_reference(e) * param.control.gravity;
     const bool buoyant = hydraulic_buoyancy(param) && weight != 0 && var.mat->alpha_fluid(e) != 0;
@@ -255,9 +255,10 @@ void reset_hydraulic_assembly(const Param &param, Variables &var);
 // changes. The pressure update also refreshes this bound from current properties.
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
 // Physical Darcy volume flux (m/s); tensor, retention and gravity conventions
-// match pressure assembly. Caller supplies NDIMS output entries.
+// match pressure assembly. Reuse caller-owned gradients when supplied.
 #pragma acc routine seq
-void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q);
+void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
+                            const double *const gradient[NDIMS] = nullptr);
 // Nodal well extraction at schedule ratio 1, var.fluid_source: each screen's
 // rate integrated exactly against the linear shape functions. Mesh-derived,
 // so it is rebuilt with the mass and needs no checkpoint.

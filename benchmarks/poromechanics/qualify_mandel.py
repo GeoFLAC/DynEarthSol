@@ -78,7 +78,7 @@ def build(study, output, record_source, space, times):
         ax.set(xlabel='$x/a$', ylabel='$p/p_0$', title='(b) Profiles across the strip')
         ds.key(ax)
         old = ax.get_legend()                            # two columns keep the key below the profiles
-        ax.legend(old.legend_handles, [t.get_text() for t in old.texts], ncol=2, fontsize=8.5, loc='lower left')
+        ax.legend(old.legend_handles, [t.get_text() for t in old.texts], ncol=2, fontsize=10.5, loc='lower left')
         ax = axes[2]
         seq = sorted([(s['steps'], s['cases'][0]['max_error_over_p0'], s['cases'][0]['max_settlement_error']) for s, _ in steps]
                      + [(summary['steps'], case['max_error_over_p0'], case['max_settlement_error'])])

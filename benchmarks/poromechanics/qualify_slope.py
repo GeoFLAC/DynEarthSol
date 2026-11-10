@@ -79,8 +79,9 @@ def build(study, output, record_source, steps):
         tri = pf.matplotlib.tri.Triangulation(x[:, 0], x[:, 1], conn)
         art = ax.tripcolor(tri, facecolors=np.log10(np.maximum(pls, 1e-6)), cmap='magma_r', vmin=-6, vmax=-1)
         ax.set_aspect('equal'); ax.set_xlim(14, 26); ax.set_ylim(-26*math.tan(sa.BETA) - sa.D - .5, -14*math.tan(sa.BETA) + .5)
-        fig.colorbar(art, ax=ax, shrink=.7, label=r'$\log_{10}$ plastic strain')
-        ds.panel(ax, 'a', f"Plastic strain at the last PT equilibrium ({finest['spacing_m']:g} m)", xlabel='$x$ (m)', ylabel='$z$ (m)')
+        fig.colorbar(art, ax=ax, location='bottom', shrink=.7, pad=.18,
+                     label=r'$\log_{10}$ plastic strain')
+        ds.panel(ax, 'a', f"Plastic strain just before sliding ({finest['spacing_m']:g} m)", xlabel='$x$ (m)', ylabel='$z$ (m)')
 
         ax = axes[1]
         for color, (case, n) in zip(ds.SERIES, runs):
@@ -94,8 +95,8 @@ def build(study, output, record_source, steps):
         ax.plot([], [], 'X', color=ds.INK, ms=6, label='last PT equilibrium')
         ax.set_xlim(12, 22); ax.set_ylim(1e-6, 3e-2)
         ds.panel(ax, 'b', 'Basal slip as the pressure rises', xlabel='base pore pressure $u$ (kPa)',
-                 ylabel='mean plastic strain, basal 0.6 m')
-        ax.legend(fontsize=7.5, loc='lower right')
+                 ylabel='mean basal plastic strain')
+        ax.legend(fontsize=11, loc='upper left', bbox_to_anchor=(0, -.25)).set_in_layout(False)
 
         ax = axes[2]
         h = np.array([c['spacing_m'] for c in cases])
@@ -109,11 +110,11 @@ def build(study, output, record_source, steps):
         ax.plot([], [], 'o', color=ds.MUTED, ms=5, label=f"filled: {fine['steps']} steps")
         for u, label, color, ls in estimates:
             ax.axhline(u/1e3, color=color, ls=ls, lw=1.0)
-            ax.text(.75, u/1e3 - .12, label, transform=ax.get_yaxis_transform(), ha='center', va='top', fontsize=8, color=color)
+            ax.text(.75, u/1e3 - .12, label, transform=ax.get_yaxis_transform(), ha='center', va='top', fontsize=10, color=color)
         ax.set_xscale('log'); ax.set_xticks(h, [f'{v:g}' for v in h]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ax.set_ylim(12, 22)
         ds.panel(ax, 'c', 'Pressure at fixed slip, by mesh', xlabel='mesh spacing (m)', ylabel='base pore pressure (kPa)')
-        ax.legend(fontsize=7.5, loc='upper left', bbox_to_anchor=(0, .8))
+        ax.legend(fontsize=11, loc='upper left', bbox_to_anchor=(0, -.25)).set_in_layout(False)
         pf.save_figure(fig, output/'figures', KEY)
 
     onset = [_onset(c) for c in cases]

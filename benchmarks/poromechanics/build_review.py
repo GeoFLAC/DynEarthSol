@@ -23,7 +23,7 @@ import diagram_style as ds
 from unsaturated_reference import Retention, srivastava_yeh, steady_pressure
 from qualify_wave import load_case as load_wave_case
 from qualify_heat import load_case as load_heat_case
-from qualify_convection import build as build_convection, build_3d as build_convection_3d, sci
+from qualify_convection import build as build_convection, build_3d as build_convection_3d, build_elder, sci
 import qualify_theis, qualify_mandel, qualify_cryer, qualify_aquifer, qualify_rudnicki
 import qualify_salencon
 import qualify_hantush, qualify_bishop, qualify_mctigue, qualify_bishop_cell, qualify_nusselt, qualify_regional, qualify_pressure_yield, qualify_drainage, qualify_injection_temperature, qualify_borehole, qualify_rsf, qualify_slope, qualify_rainfall, qualify_embankment, qualify_drawdown
@@ -530,6 +530,9 @@ def build(data, output, refresh=False):
     convection_3d = data/'runs/convection-3d-20261110/study'
     if (convection_3d/'qualification.json').exists():
         records.append(build_convection_3d(convection_3d, output, record))
+    elder = data/'runs/elder-20261110'
+    if (elder/'qualification.json').exists():
+        records.append(build_elder(elder, output, record))
     for name in ('incoming-source.json', 'review-validation.json', 'fine-replay.json',
                  'qualification.json'):
         record(buoyancy/name)
@@ -669,7 +672,7 @@ def build(data, output, refresh=False):
         dependency_sha256={name: cr.digest(Path(__file__).with_name(name)) for name in
                            ('prepare_figures.py', 'consolidation_refinement.py',
                             'terzaghi_reference.py', 'unsaturated_reference.py', 'qualify_wave.py',
-                            'qualify_heat.py', 'qualify_convection.py', 'convection_reference.py',
+                            'qualify_heat.py', 'qualify_convection.py', 'convection_reference.py', 'elder_reference.py', 'plot_elder.py',
                             'qualify_theis.py', 'theis_reference.py', 'qualify_mandel.py', 'mandel_reference.py',
                             'qualify_cryer.py', 'cryer_reference.py', 'qualify_aquifer.py', 'pumping_slab.py',
                             'slab_refinement.py', 'averaged_aquifer_reference.py',

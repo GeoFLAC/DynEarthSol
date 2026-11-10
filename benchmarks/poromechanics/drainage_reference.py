@@ -15,8 +15,8 @@ chi = Se, the equations solved are the DES strain-form rate equations:
     sigma_t(z) = -g rho_f phi (1 - Sr) int_z^H dSe/dp p_t dz'.
 
 The last two make the storage nonlocal: drying above a point unloads it.
-Vertex-centred finite volumes in z (half cells at the ends), the dense
-coupled storage matrix inverted at each evaluation, and an implicit BDF
+Vertex-centred finite volumes in z (half cells at the ends), the upper-
+triangular coupled storage system solved at each evaluation, and an implicit BDF
 integrator with tight tolerances; three grids give an observed order and a
 Richardson-extrapolated reference. This is an independent solution of the
 same continuum, not of DES's discretization.
@@ -25,9 +25,12 @@ import math
 
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.linalg import solve_triangular
 
 
 class Drainage:
+    pressure_atol_ratio = 1e-6  # BDF absolute tolerance / initial hydrostatic pressure
+
     def __init__(self, *, height, bulk, shear, biot, porosity, fluid_bulk, grain_bulk, permeability, viscosity,
                  vg_alpha, vg_n, sr, rho=1000.0, g=9.81):
         self.H, self.alpha, self.phi, self.sr = height, biot, porosity, sr
@@ -91,10 +94,13 @@ class Drainage:
             div[:-1] -= q; div[1:] += q                       # net inflow into each control volume
             M = storage(p)
             # Node 0 is fixed: solve for the free nodes with the coupling to node 0 dropped (its rate is 0).
-            return np.linalg.solve(M[free, free]*w[free, None], div[free])
+            # Gravity couples each layer only to layers above it: M is upper
+            # triangular. Use that structure without changing the rate equation.
+            return solve_triangular(M[free, free]*w[free, None], div[free])
 
         y0 = p0[free].copy()
-        sol = solve_ivp(rate, (0.0, max(times)), y0, method='BDF', t_eval=sorted(times), rtol=rtol, atol=1e-6*p0.max(),
+        sol = solve_ivp(rate, (0.0, max(times)), y0, method='BDF', t_eval=sorted(times), rtol=rtol,
+                        atol=self.pressure_atol_ratio*p0.max(),
                         dense_output=False)
         if not sol.success:
             raise RuntimeError(sol.message)

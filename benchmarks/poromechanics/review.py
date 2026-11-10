@@ -869,10 +869,27 @@ SPECS['mixing'] = dict(
     reference='Independent integral solution and constant-density exponential limit in mass_reference.py.',
     limit='Uniform well-mixed sensible heat at zero pressure and zero strain. This control does not resolve a local well singularity, a thermal front or a buoyant plume.')
 
-ORDER = ('theis', 'hantush', 'theis_wells', 'open_flow', 'anisotropic_time', 'point_sources', 'van_genuchten', 'brooks_corey', 'gardner', 'bishop', 'bishop_cell', 'drainage', 'content', 'mass', 'terzaghi', 'mandel',
-         'cryer', 'averaged_aquifer', 'regional', 'embankment', 'drawdown', 'slope', 'rainfall', 'rudnicki', 'undrained_wave', 'strength', 'rsf', 'plastic_heat', 'fault_heat', 'plastic_content', 'pressure_yield', 'kirsch', 'salencon', 'borehole', 'ogata_banks', 'thermal_cell', 'drained_heat', 'mixing', 'mctigue', 'convection', 'convection_3d', 'nusselt', 'injection_temperature')
+SPECS['elder'] = dict(
+    numerical_reference=True,
+    title="Elder's transient heater problem",
+    labels=[('Geometry', 'Symmetric half of a 4H-wide porous layer: 0 ≤ x ≤ 2H, 0 ≤ z ≤ H, H = 1 m. The matrix is rigid; all walls are impermeable.'),
+            ('Temperature', 'Initially T = T0 = 273 K. At t = 0 the base segment 0 ≤ x ≤ H is heated to T0 + 10 K; the top stays at T0. The rest of the base and both sidewalls are insulated.'),
+            ('Numerics', 'Ra = 400, fixed 50 s physical steps, 0 ≤ τ ≤ 0.1. The displayed DES mesh has h = H/64. An independent incompressible reference uses 256 × 512 cells; DES retains finite pressure storage with fluid bulk modulus 100 Pa.')],
+    equations=[r'\theta=(T-T_0)/\Delta T,\quad \tau=\kappa t/(\sigma H^2)',
+               r'\nabla^2\psi=-Ra\,\partial_x\theta,\quad u=\partial_z\psi,\quad w=-\partial_x\psi',
+               r'\partial_\tau\theta+u\partial_x\theta+w\partial_z\theta=\nabla^2\theta',
+               r'\mathcal{H}(\tau)=\int_0^1\int_0^2\theta(x,z,\tau)\,dx\,dz'],
+    definitions=r'Coordinates, velocity and stream function in the reference are dimensionless. $\kappa=10^{-6}$ m²/s, $\sigma=1$ and $Ra=400$. $\psi=0$ on the walls imposes no normal flow. $\mathcal{H}$ is scaled heat content, not the complete dimensional energy ledger.',
+    derivation=[('Take the curl of incompressible Boussinesq Darcy flow to eliminate pressure. Introduce a stream function to satisfy continuity exactly, giving the Poisson equation above.', None),
+                ('Scale heat transport by H, ΔT and σH²/κ. Conduction, advection and the heater boundary condition then give the displayed temperature equation. There is no closed-form solution for this transient.', None),
+                ('elder_reference.py solves the stream-function Poisson equation by sparse LU and advances heat with third-order SSP Runge–Kutta and independent stable steps. Central spatial differences are checked on four grids. The 128 and 256 grids approach the same plume branch; coarser grids do not.', None)],
+    reference='Elder (1967), Journal of Fluid Mechanics 27, 609–623; Voss and Souza (1987), Water Resources Research 23, 1851–1866; van Reeuwijk et al. (2009), Water Resources Research 45, W04416. Independent reference: elder_reference.py.',
+    limit='Symmetric thermal half box through τ = 0.1. Early plume errors reach about 14% in heat content and 0.56 in scaled pointwise temperature. DES uses deliberately scaled finite storage; the reference is incompressible. This comparison does not establish grid-independent nonlinear DES plumes, an exact energy budget, saline transport or later asymmetric branches.')
 
-SLUGS = dict(mass='mass', drained_heat='drained-heat', mixing='mixing', fault_heat='fault-heat', plastic_heat='plastic-heat', content='content', thermal_cell='thermal-cell', plastic_content='plastic-content', terzaghi='terzaghi', gardner='gardner', van_genuchten='vg',
+ORDER = ('theis', 'hantush', 'theis_wells', 'open_flow', 'anisotropic_time', 'point_sources', 'van_genuchten', 'brooks_corey', 'gardner', 'bishop', 'bishop_cell', 'drainage', 'content', 'mass', 'terzaghi', 'mandel',
+         'cryer', 'averaged_aquifer', 'regional', 'embankment', 'drawdown', 'slope', 'rainfall', 'rudnicki', 'undrained_wave', 'strength', 'rsf', 'plastic_heat', 'fault_heat', 'plastic_content', 'pressure_yield', 'kirsch', 'salencon', 'borehole', 'ogata_banks', 'thermal_cell', 'drained_heat', 'mixing', 'mctigue', 'convection', 'convection_3d', 'nusselt', 'elder', 'injection_temperature')
+
+SLUGS = dict(elder='elder', mass='mass', drained_heat='drained-heat', mixing='mixing', fault_heat='fault-heat', plastic_heat='plastic-heat', content='content', thermal_cell='thermal-cell', plastic_content='plastic-content', terzaghi='terzaghi', gardner='gardner', van_genuchten='vg',
              theis_wells='theis-wells', open_flow='open-flow', anisotropic_time='anisotropic-time', strength='strength', kirsch='kirsch',
              brooks_corey='bc', undrained_wave='wave', ogata_banks='heat',
              point_sources='sources', theis='theis', averaged_aquifer='aquifer', convection='convection', convection_3d='convection-3d', mandel='mandel', cryer='cryer', rudnicki='rudnicki', bishop='bishop', hantush='hantush', mctigue='mctigue', bishop_cell='bishop-cell', nusselt='nusselt', regional='regional', pressure_yield='pressure-yield', drainage='drainage', injection_temperature='injection-temperature', borehole='borehole', rsf='rsf', embankment='embankment', salencon='salencon', drawdown='drawdown', slope='slope', rainfall='rainfall')

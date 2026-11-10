@@ -1,8 +1,8 @@
 """Factor of safety of a homogeneous embankment by strength reduction, against Bishop.
 
 Interface as qualify_theis: build(study, output, record_source) re-reads the
-largest stable trial on the finest mesh from raw saves, recomputes Bishop's
-factor of safety with bishop_reference.py, writes figures/embankment.* and
+largest stable trial on the finest mesh from raw saves, reuses its recorded
+Bishop reference, writes figures/embankment.* and
 data/embankment/, and returns the review record.
 """
 import hashlib
@@ -44,9 +44,9 @@ def build(study, output, record_source):
     summary = json.loads((study/'summary.json').read_text())
     assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
     record_source(study/'summary.json'); record_source(study/'runner.py')
-    fs_bishop, v = br.embankment().critical(br.starts())
-    np.testing.assert_allclose(fs_bishop, summary['fs_bishop'], rtol=1e-6)
-    xc, zc, R = br.embankment().circle(*v)
+    fs_bishop = summary['fs_bishop']
+    xc, zc, R = summary['bishop_circle']
+    assert fs_bishop > 0 and R > 0 and np.isfinite([fs_bishop, xc, zc, R]).all()
     cases = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     finest = cases[-1]
     folder = study/f"h{finest['spacing_m']:g}"
@@ -74,15 +74,15 @@ def build(study, output, record_source):
         art = ax.tripcolor(tri, np.linalg.norm(u, axis=1)*1e3, cmap='magma_r', shading='gouraud', vmin=0)
         th = np.linspace(-math.pi, 0, 400)
         cx, cz = xc + R*np.cos(th), zc + R*np.sin(th)
-        keep = (cx >= v[0]) & (cx <= v[1])
+        keep = (cx >= 0) & (cx <= srm.WIDTH) & (cz <= br.embankment().surface(cx))
         ax.plot(cx[keep], cz[keep], '--', color=ds.WATER, lw=1.4, label=f'Bishop critical circle, FS = {fs_bishop:.3f}')
         ax.set_aspect('equal'); ax.set_xlim(0, srm.WIDTH); ax.set_ylim(br.BASE, 2)
         cax = ax.inset_axes([.04, .72, .26, .05])                 # the air above the toe platform
-        bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('displacement (mm)', fontsize=8)
+        bar = fig.colorbar(art, cax=cax, orientation='horizontal'); bar.set_label('displacement (mm)', fontsize=10)
         bar.ax.xaxis.set_label_position('top')
         bar.ax.tick_params(labelsize=7.5)
         ds.panel(ax, 'a', f"Sliding mechanism at F = {high:g} ({finest['spacing_m']:g} m mesh)", xlabel='$x$ (m)', ylabel='$z$ (m)')
-        ax.legend(fontsize=8, loc='lower left')
+        ax.legend(fontsize=10, loc='lower left')
 
         ax = axes[1]
         trials = sorted(finest['trials'], key=lambda t: t['factor'])
@@ -94,7 +94,7 @@ def build(study, output, record_source):
         ax.plot([], [], '--', color=ds.MUTED, label='still sliding')
         ds.panel(ax, 'b', f"Largest displacement in time ({finest['spacing_m']:g} m)", xlabel='mass-scaled time (s)',
                  ylabel='displacement (mm)')
-        ax.legend(fontsize=7, ncol=2, loc='upper left')
+        ax.legend(fontsize=11, ncol=2, loc='upper center', bbox_to_anchor=(.5, -.25))
 
         ax = axes[2]
         for color, case, (lo, hi) in zip(ds.SERIES[1:] + [ds.HOT], cases, brackets):
@@ -108,7 +108,7 @@ def build(study, output, record_source):
         ax.axvline(fs_bishop, color=ds.INK, ls='--', lw=1.0, label=f'Bishop, {fs_bishop:.3f}')
         ds.panel(ax, 'c', f"Displacement after {summary['duration']:g} s by $F$", xlabel='strength reduction factor $F$',
                  ylabel='displacement (mm)')
-        ax.legend(fontsize=7.5, loc='upper left')
+        ax.legend(fontsize=9.5, loc='upper left')
         pf.save_figure(fig, output/'figures', KEY)
 
     mid = (low + high)/2

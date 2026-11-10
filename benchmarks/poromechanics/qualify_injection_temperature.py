@@ -121,7 +121,7 @@ def build(avdonin, output, record_source, coarse, steps, doublet, sanity=()):
         ax2.set_ylim(0, hot.TIN - hot.T0); ax2.grid(False)
         handles = ax.get_legend_handles_labels(); more = ax2.get_legend_handles_labels()
         ds.panel(ax, 'b', 'Closed-box heat ledger, hot doublet', xlabel='$t$ (d)', ylabel='heat gained (GJ per m)')
-        ax.legend(handles[0] + more[0], handles[1] + more[1], loc='upper left', fontsize=8)
+        ax.legend(handles[0] + more[0], handles[1] + more[1], loc='upper left', fontsize=10)
 
         ax = axes[2]
         h = np.array([c['spacing_m'] for c in cases])
@@ -135,7 +135,7 @@ def build(avdonin, output, record_source, coarse, steps, doublet, sanity=()):
         ax.set_xticks(sorted(set(h) | set(hd)), [f'{x:g}' for x in sorted(set(h) | set(hd))])
         ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', 'Errors by mesh', xlabel='mesh spacing $h$ (m)', ylabel=r'% of $T_{in}-T_0$ or of injected heat')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
 
     last = lambda c, k: c['frames'][-1][k]

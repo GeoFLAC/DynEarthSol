@@ -96,7 +96,7 @@ def build(study, output, record_source, times, final):
         ax.set_xticks(hs, [f'{x:g}' for x in hs]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', 'Mesh and time step', xlabel='mesh spacing $h$ (m)',
                  ylabel='largest error after the first frame')
-        ax.legend(fontsize=8.5)
+        ax.legend(fontsize=10.5)
         pf.save_figure(fig, output/'figures', KEY)
 
     peak = max(f['peak_subsidence_ref'] for f in finest['frames'])

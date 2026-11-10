@@ -926,6 +926,8 @@ def drawdown(folder):
         ds.label(ax, *P(30, -17), r'saturated, $k=10^{-13}$ m$^2$; Gardner $S_e(p)$, Bishop $\chi=S_e$', size=9)
         ds.label(ax, *P(30, 6.5), r'$c=10$ kPa, $\phi=20^\circ$, $\psi=0$; base fixed, sides on rollers', ds.MUTED, 8.5)
         ds.gravity(ax, *P(54, -12))
+        ax.set_ylim(.4, 3.8)
+        fig.set_size_inches(7.8, 3.4)
         ds.check_labels(fig, ax)
         pf.save_figure(fig, folder, 'setup')
 
@@ -1034,7 +1036,7 @@ def plastic_heat(folder):
         ds.label(ax, 5.9, 2.25, 'on every face', ds.WATER, size=10.5)
         ds.label(ax, 5.9, 1.4, r'$\sigma_0=-30$ MPa $\mathbf{I}$', size=10)
         ds.label(ax, 5.9, .9, r'$T_0=300$ K, $p_0=0$', size=10)
-        ds.label(ax, 2.9, 2.9, 'Porous EP-RSF', size=10.5)
+        ds.label(ax, 2.9, 2.9, 'frictional porous solid', size=10.5)
         ds.label(ax, 2.9, 2.35, r'$\dot\varepsilon_v=0$', size=11)
         ds.label(ax, .6, 4.65, r'$v_x=0$', size=10.5)
         ds.axes(ax, (6.65, 4.3), length=.4)
@@ -1056,8 +1058,8 @@ def plastic_content(folder):
         ds.label(ax,3.,4.48,r'$v_z=-10^{-3}$ m/s',ds.HOT,size=11)
         ds.dimension(ax,(2.5,1.3),(2.5,3.5),'$H=1$ m',.8)
         ds.label(ax,3.,2.4,'Porous\nplastic\nskeleton',size=10)
-        ds.leader(ax,(3.7,3.15),(4.65,3.65),'Side-normal motion fixed',size=10.5)
-        ds.label(ax,5.95,3.18,'All water boundaries sealed',ds.WATER,size=10.5)
+        ds.leader(ax,(3.7,3.15),(4.65,3.65),'side-normal motion fixed',size=10.5)
+        ds.label(ax,5.95,3.18,'all water boundaries sealed',ds.WATER,size=10.5)
         ds.leader(ax,(3.5,1.3),(4.65,1.6),'Fixed base',size=10.5)
         ds.label(ax,5.65,1.15,'$u_z=0$',size=11)
         ds.label(ax,3.,.55,'$g=0$',size=11)
@@ -1193,7 +1195,30 @@ def convection_cube(folder):
         pf.save_figure(fig, folder, 'setup')
 
 
+def elder(folder):
+    with ds.canvas(6.5, 3.6) as (fig, ax):
+        x, y, w, h = 1.0, .9, 4.0, 2.0
+        ax.add_patch(Rectangle((x, y), w, h, fc=SOLID, ec=ds.INK, lw=ds.BODY))
+        ax.plot([x, x+w], [y+h, y+h], color=ds.COLD, lw=ds.THICK+1)
+        ax.plot([x, x+w/2], [y, y], color=ds.HOT, lw=ds.THICK+1)
+        ds.label(ax, x+w/2, 1.3, r'all walls impermeable: $q_n=0$', ds.WATER, 9)
+        ds.label(ax, x+w/2, 3.16, r'top: $T=T_0$', ds.COLD, 11)
+        ds.label(ax, x+w/2, y+h/2+.35, 'initially cold, rigid porous layer', ds.MUTED, 9)
+        ds.label(ax, x+w/2, y+h/2-.1, r'$Ra=400$, $H=1$ m', ds.MUTED, 10)
+        ds.label(ax, x+w/4, .62, r'$T=T_0+\Delta T$', ds.HOT, 10)
+        ds.label(ax, x+3*w/4, .62, 'insulated base', ds.MUTED, 10)
+        ds.dimension(ax, (x, y), (x, y+h), '$H$', .45, 'left')
+        ds.dimension(ax, (x, .38), (x+w, .38), '$2H$', .15, 'below')
+        ds.label(ax, 1.17, y+h/2, 'symmetry, insulated', ds.MUTED, 8, rotation=90)
+        ds.label(ax, 5.2, y+h/2, 'insulated\nfar wall', ds.MUTED, 9, ha='left')
+        ds.gravity(ax, 6.15, 3.2, length=.4)
+        ds.axes(ax, (5.55, .33), length=.4, names=('x', 'z'))
+        ds.check_labels(fig, ax)
+        pf.save_figure(fig, folder, 'setup')
+
+
 DRAW['convection_3d'] = convection_cube
+DRAW['elder'] = elder
 
 for _key in ('mass', 'drained_heat', 'mixing'):
     DRAW[_key] = lambda folder, key=_key: inventory_cell(folder, key)

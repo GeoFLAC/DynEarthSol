@@ -64,7 +64,7 @@ def build(study, output, record):
             ds.analytical(ax, series[:, 0], series[:, reference]*factor, label='continuum reference')
             ds.des(ax, series[selected, 0], series[selected, actual]*factor, label='DES', size=3)
             ds.panel(ax, letter, title, xlabel='$t$ (s)', ylabel=label)
-            ax.legend(loc='best', fontsize=8)
+            ax.legend(loc='best', fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
     return dict(key=KEY, theme='heat', title='Plastic shear heating and sealed pressurization',
         problem='A porous cell deforms at a prescribed pure-shear rate. Plastic work in aging rate-and-state plasticity heats the cell and expands the sealed fluid.',

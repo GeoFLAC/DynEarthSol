@@ -52,7 +52,10 @@ struct Fixture {
     elem_cache tmp_result;
     double_vec volume;
     double_vec temperature, pressure, pressure_increment, lookup;
-    tensor_t strain_rate;
+    double_vec thermal_mass, heat_source, old_temperature, hydraulic_mass;
+    double_vec volume_rate, balance, matrix_pressure;
+    uint_vec boundary_flags;
+    tensor_t strain_rate, strain;
     int_vec2D markers;
     int_vec etmp_int;
 
@@ -293,8 +296,9 @@ static void test_platen() {
     std::printf("[Rigid platen momentum, resultant and virtual work]\n");
     auto* m=new Fixture();build_mesh(*m);
     const int nn=m->var.nnode,last=nn-1;
-    double_vec mass(nn,1);
-    uint_vec flags(nn,0);
+    auto& mass=m->hydraulic_mass;
+    auto& flags=m->boundary_flags;
+    mass.assign(nn,1); flags.assign(nn,0);
     mass[0]=2;mass[last]=5;
     flags[0]=flags[last]=BOUNDZ1;
     m->var.mass=&mass;m->var.bcflag=&flags;m->param.bc.vbc_z1=8;
@@ -752,7 +756,8 @@ static void test_material_trials() {
             if (model==MatProps::rh_elastic && alpha==0.6) {
                 p.alpha={3e-5};
                 delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
-                double_vec old_temperature(nn,290);
+                auto& old_temperature=m->old_temperature;
+                old_temperature.assign(nn,290);
                 m->var.old_temperature=&old_temperature;
                 m->pressure_increment.assign(nn,0);
                 for(int trial=0;trial<3;++trial) {
@@ -1113,7 +1118,8 @@ static void test_darcy_gravity_limit() {
     {
         p.alpha={3e-5}; p.fluid_alpha={2e-4}; p.biot_coeff={0.6};
         delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
-        double_vec old_temperature(nn,273);
+        auto& old_temperature=m->old_temperature;
+        old_temperature.assign(nn,273);
         m->var.old_temperature=&old_temperature;
         m->temperature.assign(nn,283); m->pressure.assign(nn,0);
         std::fill(mass->begin(),mass->end(),0.0);
@@ -1128,7 +1134,7 @@ static void test_darcy_gravity_limit() {
         const double thermal=beta-0.6e9*3e-5*hydraulic_mean_stress_compliance(*m->var.mat,0);
         for(int n=0;n<nn;++n)
             check("sealed fixed-stress thermal pressure",m->pressure[n],thermal*10/storage);
-        double_vec balance(5,0); m->var.fluid_balance=&balance;
+        auto& balance=m->balance; balance.assign(5,0); m->var.fluid_balance=&balance;
         m->pressure.assign(nn,0);
         std::fill(flags->begin(),flags->end(),BOUNDZ1); m->var.hbc_types[iboundz1]=1;
         update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
@@ -1174,7 +1180,7 @@ static void test_darcy_gravity_limit() {
     {
         p.hydraulic_perm={0}; p.matrix_storage={1}; p.matrix_exchange={0.1};
         delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
-        double_vec matrix(ne,0); m->var.matrix_pressure=&matrix;
+        auto& matrix=m->matrix_pressure; matrix.assign(ne,0); m->var.matrix_pressure=&matrix;
         std::fill(mass->begin(),mass->end(),0.0);
         for(int e=0;e<ne;++e) for(int j=0;j<NODES_PER_ELEM;++j)
             (*mass)[m->connectivity[e][j]]+=0.5*m->volume[e]/NODES_PER_ELEM;
@@ -1206,8 +1212,8 @@ static void test_darcy_gravity_limit() {
         const bool feedback=m->param.control.has_poroelastic_pressure_feedback;
         m->param.control.has_poroelastic_pressure_feedback=true;
         p.biot_coeff={.6}; p.matrix_storage={1e-9};
-        tensor_t strain(ne,0);
-        double_vec matrix(ne,2e5);
+        auto& strain=m->strain; strain.resize(ne,0.0);
+        auto& matrix=m->matrix_pressure; matrix.assign(ne,2e5);
         m->var.strain=&strain; m->var.matrix_pressure=&matrix;
         m->pressure.assign(nn,1e5); m->pressure_increment.assign(nn,-100);
         for(int e=0;e<ne;++e) strain[e][0]=.001;
@@ -1318,8 +1324,12 @@ static void test_thermal_subcycling() {
     m->var.ppressure = &m->pressure;
     m->var.elemmarkers = &m->markers;
     m->var.log_table = m->var.tan_table = m->var.sin_table = &m->lookup;
-    double_vec source(ne, 0), capacity(nn), old_temperature(nn, 273);
-    uint_vec flags(nn, 0);
+    auto& source = m->heat_source;
+    auto& capacity = m->thermal_mass;
+    auto& old_temperature = m->old_temperature;
+    auto& flags = m->boundary_flags;
+    source.assign(ne, 0); capacity.resize(nn);
+    old_temperature.assign(nn, 273); flags.assign(nn, 0);
     m->var.radiogenic_source = &source;
     m->var.tmass = &capacity;
     m->var.bcflag = &flags;
@@ -1478,9 +1488,14 @@ static void test_strain_pressure(bool scaled = false) {
     p.visc_min=1e30;
     if (scaled) p.bulk_modulus={2e9};
     m->var.mat=new MatProps(m->param,m->var);
-    double_vec mass(nn),volume_n(nn),tmass(nn),hmass(nn),ymass(nn),rate(nn),
-               old_mean(ne,-2e5),old_temperature(nn,273),vol_rate(ne),balance(5);
-    uint_vec flags(nn,0);
+    double_vec mass(nn),volume_n(nn),tmass(nn),ymass(nn),rate(nn),old_mean(ne,-2e5);
+    auto& hmass=m->hydraulic_mass;
+    auto& old_temperature=m->old_temperature;
+    auto& vol_rate=m->volume_rate;
+    auto& balance=m->balance;
+    auto& flags=m->boundary_flags;
+    hmass.resize(nn); old_temperature.assign(nn,273);
+    vol_rate.resize(ne); balance.resize(5); flags.assign(nn,0);
     m->var.hmass=&hmass; m->var.bcflag=&flags; m->var.dt=2;
     m->var.edvoldt=&vol_rate; m->var.old_temperature=&old_temperature;
     m->var.fluid_balance=&balance;
@@ -1531,8 +1546,11 @@ static void test_fluid_heat_transport() {
     m->var.temperature=&m->temperature; m->var.ppressure=&m->pressure;
     m->var.elemmarkers=&m->markers;
     m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
-    double_vec capacity(nn),volume_n(nn),mass(nn),hmass(nn),ymass(nn),sources(ne,0);
-    uint_vec flags(nn,0);
+    auto& capacity=m->thermal_mass;
+    auto& sources=m->heat_source;
+    auto& flags=m->boundary_flags;
+    capacity.resize(nn); sources.assign(ne,0); flags.assign(nn,0);
+    double_vec volume_n(nn),mass(nn),hmass(nn),ymass(nn);
     m->var.tmass=&capacity; m->var.bcflag=&flags; m->var.radiogenic_source=&sources;
     auto& p=m->param.mat;
     p.nmat=1; p.rheol_type=MatProps::rh_elastic;
@@ -1674,6 +1692,17 @@ static void test_point_sources() {
     for(int n=0;n<m->var.nnode;++n)
         check("temperature-weighted active inlet rate",rate[n],
               n==0 ? 1500*c+2800 : n<=NDIMS ? 1500*c : 0);
+    source.temperature={300,273,400};
+    double_vec heat(m->var.nnode,0),separate_rate(m->var.nnode,0),separate_heat(m->var.nnode,0);
+    for (bool peak : {false,true}) {
+        assemble_point_sources(source,m->var,0,1,separate_rate,&inflow,peak);
+        assemble_point_sources(source,m->var,0,1,separate_heat,&temperature,peak);
+        assemble_point_sources(source,m->var,0,1,rate,&inflow,peak,&heat,&source.temperature);
+        for(int n=0;n<m->var.nnode;++n) {
+            check("shared point map preserves inlet volume",rate[n],separate_rate[n]);
+            check("shared point map preserves weighted inlet",heat[n],separate_heat[n]);
+        }
+    }
     assemble_point_sources(source,m->var,.81,1.4,rate,&inflow,true);
     for(double v:rate) check("inactive inlets do not constrain heat steps",v,0);
     const double breaks[]={0,.13,.47,.81,1.4};

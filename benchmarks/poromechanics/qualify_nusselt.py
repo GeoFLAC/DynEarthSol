@@ -70,7 +70,7 @@ def build(study, output, record_source):
         # The volume form measures steady transport; early storage-driven flow sends it far off scale.
         ax.set_ylim(0, 1.3*max(finest[ra]['nu_ref'] for ra in ras))
         ds.panel(ax, 'b', 'Approach to steady transport', xlabel=r'$t$ (Ms)', ylabel='Nu (volume form)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         ax = axes[2]
         for color, ra in zip((ds.WATER, ds.HOT), ras):
             cs = sorted((c for c in summary['cases'] if c['ra'] == ra), key=lambda c: -c['spacing_m'])
@@ -80,7 +80,7 @@ def build(study, output, record_source):
         ax.loglog(h, cs[0]['error']*(h/h[0])**2, '--', color=ds.MUTED, lw=.8, label='slope 2')
         ax.set_xticks(h, [f'{x:g}' for x in h]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', 'Mesh convergence', xlabel='mesh spacing $h/H$', ylabel='|Nu error| / Nu')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
 
     h = min(c['spacing_m'] for c in finest.values())

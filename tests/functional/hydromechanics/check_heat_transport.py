@@ -87,7 +87,7 @@ def study(exe,out,spacings,steps,porosity,restart):
                 assert t.min()>=-1e-10 and t.max()<=1+1e-10
                 errors.append(float(np.max(np.abs(t-exact(x,row['time'],velocity,diffusivity)))))
                 prange.append(float(np.max(np.abs(p-(2-x)))))
-            item=dict(spacing_m=h,steps=count,dimension=model.ndims,nodes=len(x),
+            item=dict(spacing_m=h,steps=count,dimension=int(model.ndims),nodes=len(x),
                 elements=len(model.read_field(0,'connectivity')),max_error=errors,
                 max_steady_pressure_error=max(prange),input_sha256=digest(folder/'fresh.cfg'))
             assert max(prange)<1e-10,prange

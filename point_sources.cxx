@@ -174,44 +174,66 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
 }
 
 namespace {
-void add_point_source(int, int node, double rate, void *context)
+struct PointSourceAssembly {
+    double_vec &source;
+    double_vec *weighted;
+    const double_vec *point_weight;
+};
+
+void add_point_source(int point, int node, double rate, void *context)
 {
-    auto &source = *static_cast<double_vec *>(context);
-    source[node] += rate;
-    if (!std::isfinite(source[node]))
+    auto &assembly = *static_cast<PointSourceAssembly *>(context);
+    assembly.source[node] += rate;
+    if (!std::isfinite(assembly.source[node]))
         die(EXIT_RUNTIME_NAN,"Point source overflowed a nodal source value.");
+    if (assembly.weighted) {
+        auto &value = (*assembly.weighted)[node];
+        value += rate * (*assembly.point_weight)[point];
+        if (!std::isfinite(value))
+            die(EXIT_RUNTIME_NAN,"Point source overflowed a weighted nodal source value.");
+    }
 }
 } // namespace
 
 void assemble_point_sources(const Injection &injection, const Variables &var,
                            double start, double stop, double_vec &source,
-                           const double_vec *scale, bool peak_rate)
+                           const double_vec *scale, bool peak_rate,
+                           double_vec *weighted, const double_vec *point_weight)
 {
     #pragma acc wait
+    if ((weighted == nullptr) != (point_weight == nullptr) || weighted == &source ||
+        (weighted && (weighted->size() != source.size() ||
+                      point_weight->size() != static_cast<std::size_t>(injection.num_points))))
+        die(EXIT_INTERNAL_ASSERT,"Weighted point source requires distinct matching output and point-weight arrays.");
     std::fill(source.begin(),source.end(),0.0);
+    if (weighted) std::fill(weighted->begin(),weighted->end(),0.0);
     if (!injection.enabled) return;
     if (source.size() != static_cast<std::size_t>(var.nnode))
         die(EXIT_INTERNAL_ASSERT,"Point-source vector size does not match the current mesh node count.");
-    deposit_point_sources(injection,var,start,stop,add_point_source,&source,scale,peak_rate);
-    long double assembled_total = 0, requested_total = 0, absolute_rate_total = 0;
-    std::size_t active_contributions = 0;
-    for (int p = 0; p < injection.num_points; ++p) {
-        const double rate = (scale ? (*scale)[p] : 1.0)*
-            injection_rate_for_step(injection,start,stop,p,peak_rate);
-        requested_total += rate;
-        absolute_rate_total += std::abs(rate);
-        if (rate != 0) active_contributions += NODES_PER_ELEM;
-    }
-    for (double nodal_source : source) {
-        if (!std::isfinite(nodal_source)) {
-            die(EXIT_RUNTIME_NAN,
-                "Point-source assembly produced a non-finite nodal value.");
+    PointSourceAssembly assembly{source,weighted,point_weight};
+    deposit_point_sources(injection,var,start,stop,add_point_source,&assembly,scale,peak_rate);
+    for (int field = 0; field < (weighted ? 2 : 1); ++field) {
+        long double assembled_total = 0, requested_total = 0, absolute_rate_total = 0;
+        std::size_t active_contributions = 0;
+        for (int p = 0; p < injection.num_points; ++p) {
+            double rate = (scale ? (*scale)[p] : 1.0)*
+                injection_rate_for_step(injection,start,stop,p,peak_rate);
+            if (field) rate *= (*point_weight)[p];
+            requested_total += rate;
+            absolute_rate_total += std::abs(rate);
+            if (rate != 0) active_contributions += NODES_PER_ELEM;
         }
-        assembled_total += static_cast<long double>(nodal_source);
-    }
-    if (!source_totals_match(assembled_total, requested_total,
-                             absolute_rate_total, active_contributions)) {
-        die(EXIT_INTERNAL_ASSERT,
-            "Point-source nodal total does not equal the requested active rate.");
+        for (double nodal_source : (field ? *weighted : source)) {
+            if (!std::isfinite(nodal_source)) {
+                die(EXIT_RUNTIME_NAN,
+                    "Point-source assembly produced a non-finite nodal value.");
+            }
+            assembled_total += static_cast<long double>(nodal_source);
+        }
+        if (!source_totals_match(assembled_total, requested_total,
+                                 absolute_rate_total, active_contributions)) {
+            die(EXIT_INTERNAL_ASSERT,
+                "Point-source nodal total does not equal the requested active rate.");
+        }
     }
 }

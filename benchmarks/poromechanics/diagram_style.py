@@ -125,15 +125,15 @@ def check_labels(fig, ax, strict=True):
 # ----------------------------------------------------------------- result figures
 # Every result figure uses the same face, colours and marks: the analytical
 # solution as a dark solid line, DES as open markers, lettered panel titles.
-FIGURE_RC = {**RC, 'axes.edgecolor': INK, 'axes.linewidth': .8, 'axes.labelcolor': INK,
-             'xtick.color': INK, 'ytick.color': INK, 'axes.titlesize': 11.5, 'legend.frameon': False,
-             'legend.fontsize': 9, 'axes.grid': True, 'grid.alpha': .15, 'grid.linewidth': .6}
+FIGURE_RC = {**RC, 'font.size': 13, 'axes.edgecolor': INK, 'axes.linewidth': .8, 'axes.labelcolor': INK,
+             'xtick.color': INK, 'ytick.color': INK, 'axes.titlesize': 13, 'legend.frameon': False,
+             'legend.fontsize': 11, 'axes.grid': True, 'grid.alpha': .15, 'grid.linewidth': .6}
 SERIES = ['#1f4e79', '#5b8cbf', '#b8432a', '#7a1f12']   # cool to warm, for times or cases
 
 
 def result_figure(panels, width=None):
     """Figure and axes in the shared style; call inside plt.rc_context(FIGURE_RC)."""
-    width = width or {1: 6.4, 2: 10.0, 3: 12.0}[panels]
+    width = width or {1: 6.4, 2: 9.0, 3: 11.0}[panels]
     fig, axes = plt.subplots(1, panels, figsize=(width, 3.9), constrained_layout=True)
     return fig, np.atleast_1d(axes)
 
@@ -158,7 +158,7 @@ def band(ax, a, b, text='compared band', x=None, y=.97, rotation=0, ha='left', v
     ax.axvspan(a, b, color='#eef1f3', zorder=0)
     if text:
         ax.text(a + .02*(b - a) if x is None else x, y, text, transform=ax.get_xaxis_transform(), ha=ha, va=va,
-                fontsize=7.5, color=MUTED, rotation=rotation, zorder=1)
+                fontsize=9.5, color=MUTED, rotation=rotation, zorder=1)
 
 
 def key(ax, dashed=False, loc=None):

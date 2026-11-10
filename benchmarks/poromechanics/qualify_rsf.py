@@ -66,7 +66,7 @@ def build(study, output, record_source):
             ax.set_xlim(-16, rs.T2)
             if key == 'stress':
                 ax.set_ylim(np.min(exact) - .6, np.max(exact) + .9)
-            ax.legend(fontsize=8, loc='upper right')
+            ax.legend(fontsize=10, loc='upper right')
         ds.panel(axes[0], 'a', 'Friction across a tenfold rate step', xlabel='$t-t_1$ (s)', ylabel=r'$\mu$')
         ds.panel(axes[1], 'b', 'Shear stress at yield', xlabel='$t-t_1$ (s)', ylabel='principal shear $t$ (kPa)')
         ax = axes[2]
@@ -77,7 +77,7 @@ def build(study, output, record_source):
         ticks = [1e-4, 2e-4, 5e-4, 1e-3]
         ax.set_yticks(ticks, [f'{v:.0e}'.replace('e-0', 'e-') for v in ticks]); ax.yaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', 'Friction error by time step', xlabel=r'$\Delta t$ (s)', ylabel=r'max $|\mu-\mu_{\rm exact}|$ after the step')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
 
     worst = max(max(c['theta_vs_discrete'], c['mu_vs_discrete']) for c in cases)

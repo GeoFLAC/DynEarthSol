@@ -105,7 +105,7 @@ def build(study, output, record_source, steps):
                   label=f"{fine['steps']} steps")
         ax.set_xticks(h, [f'{v:g}' for v in h]); ax.xaxis.set_minor_locator(pf.matplotlib.ticker.NullLocator())
         ds.panel(ax, 'c', f'Errors at $t={t:g}$ s by mesh', xlabel='mesh spacing $h/a$', ylabel='error (% of $p_w$)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         pf.save_figure(fig, output/'figures', KEY)
 
     worst = lambda c, k: max(f[k] for f in c['frames'])

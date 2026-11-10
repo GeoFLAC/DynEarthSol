@@ -34,8 +34,17 @@ COLORS = ['#0072B2', '#D55E00', '#009E73', '#CC79A7']
 
 
 def save_figure(fig, output, name):
+    # Keep dense fields compact in SVG/PDF while preserving vector labels.
+    for ax in fig.axes:
+        for artist in ax.collections:
+            values = artist.get_array()
+            if values is not None and values.size > 1000:
+                artist.set_rasterized(True)
+    outside = [ax.get_legend() for ax in fig.axes
+               if ax.get_legend() is not None and not ax.get_legend().get_in_layout()]
     for suffix in ('png', 'svg', 'pdf'):
-        fig.savefig(output / f'{name}.{suffix}', dpi=180, bbox_inches='tight')
+        fig.savefig(output / f'{name}.{suffix}', dpi=180, bbox_inches='tight',
+                    bbox_extra_artists=outside or None)
     plt.close(fig)
 
 

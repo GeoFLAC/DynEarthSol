@@ -204,7 +204,7 @@ def build_3d(study, output, record_source):
                         label=f"$Ra/Ra_c={c['rayleigh']/rac:g}$")
             ax.semilogy(t/TAU, np.exp(c['reference_rate_s_inv']*(t-t[0])), '-', color=color, lw=1)
         ds.panel(ax, 'b', 'Late exponential growth or decay', xlabel=r'$t\kappa_T/H^2$', ylabel=r'$A(t)/A(0.1)$')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=10)
         ax = axes[2]
         level = float(abs(theta[cut]).max()*1000)
         m = ax.tricontourf(x[cut, 0], x[cut, 2]+1, theta[cut]*1000,
@@ -230,3 +230,61 @@ def build_3d(study, output, record_source):
         evidence=json.dumps(dict(source_commit=selected['source_commit'], executable_sha256=selected['executable_sha256'],
                                  reference_sha256=q['reference_sha256'], temporal_rate_change=temporal,
                                  selected=q['selected'], finite_storage=True), indent=2))
+
+
+def build_elder(study, output, record_source):
+    """Replay the selected Elder fields against the final independent grid."""
+    import check_elder as ce
+
+    q = json.loads((study/'qualification.json').read_text())
+    assert q['raw_replay_passed']
+    record_source(study/'qualification.json')
+    for name, digest in q['files_sha256'].items():
+        path = study/name
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, path
+        record_source(path)
+    folder = study/q['selected']
+    required = {study/'ref-full.npz', study/'ref-full.json', folder.parent/'summary.json',
+                folder/'elder.cfg', folder/'elder.poly', folder/'elder.info',
+                *folder.glob('elder.save.*')}
+    assert {str(p.relative_to(study)) for p in required} <= set(q['files_sha256']), 'unsealed Elder input'
+    archived = json.loads((folder.parent/'summary.json').read_text())
+    case = min(archived['cases'], key=lambda c: c['spacing_m'])
+    assert folder.name == f"h{case['spacing_m']:g}"
+    reference_file = study/'ref-full.npz'
+    ref = np.load(reference_file)
+    n = max(int(k.split('_')[1]) for k in ref.files if k.startswith('theta_'))
+    assert n == 256 and 'theta_128' in ref.files
+    series, nodes, elements = ce.compare(folder, ref, 1, archived['dt_s'])
+    # The archived study used an earlier reference grid. Its DES heat is
+    # invariant; field errors below are recomputed against the final grid.
+    np.testing.assert_allclose([s['heat_des'] for s in series],
+                               [s['heat_des'] for s in case['series']], rtol=1e-12, atol=1e-14)
+    for item in series:
+        assert np.isfinite(list(item.values())).all()
+    assert series == q['series'] and nodes == case['nodes'] and elements == case['elements']
+    key = 'elder'; data = output/'data'/key; data.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(folder/'elder.cfg', data/'input.cfg')
+    shutil.copy2(study/'ref-full.json', data/'reference.json')
+    (data/'summary.json').write_text(json.dumps(dict(qualification=q, archived_case=case,
+        reference_grid=n, series=series), indent=2)+'\n')
+    columns = ('tau', 'max_abs_difference', 'rms_difference', 'heat_des', 'heat_reference')
+    np.savetxt(data/'history.csv', [[s[k] for k in columns] for s in series], delimiter=',',
+               header=','.join(columns), comments='')
+    from plot_elder import fields
+    fields(folder.parent, reference_file, output/'figures'/key, [.1], include_heat=True)
+    late = series[-1]
+    heat_error = abs(late['heat_des']/late['heat_reference']-1)
+    early = max(abs(s['heat_des']/s['heat_reference']-1) for s in series)
+    return dict(key=key, theme='heat', title="Elder's transient heater problem",
+        problem='Heating half the base of a sealed porous layer creates plumes that rise and merge. There is no closed-form solution; an independent stream-function solver provides the reference.',
+        result=f"At dimensionless time 0.1, the selected DES mesh differs by {100*heat_error:.2f}% in heat content and {late['max_abs_difference']:.2f} in temperature scaled by the 10 K heater contrast. The early heat discrepancy reaches {100*early:.1f}%.",
+        scope=f"2D symmetric half box, Ra = 400, {nodes:,} nodes and {elements:,} triangles, 50 s physical steps. Panels (a,b) show the final time; panel (c) retains all six comparison times. The 128 × 256 and 256 × 512 references differ by up to 0.12 in scaled temperature and less than 0.5% in heat content.",
+        meaning='This is a measured nonlinear application limit: early DES plumes differ, and coarse reference grids follow another branch. The incompressible reference and DES with deliberately scaled finite storage are distinct approximations. No material or timestep fitting is used.',
+        metric=heat_error, metric_label='final heat-content difference', dimension=2,
+        spacing_m=case['spacing_m'], status='preliminary',
+        tables=[('Six comparison times', 'history.csv'), ('Field replay and source hashes', 'summary.json'),
+                ('Reference grid convergence', 'reference.json')],
+        evidence=json.dumps(dict(executable_sha256=archived['executable_sha256'],
+            source_commit=q['source_commit'], reference_sha256=hashlib.sha256(reference_file.read_bytes()).hexdigest(),
+            archived_reference_sha256=archived['reference_sha256'], limits='Early plume and finite-storage discrepancies retained.'), indent=2))

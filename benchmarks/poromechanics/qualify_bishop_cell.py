@@ -63,7 +63,7 @@ def build(study, output, record_source, space, before, restart):
             ax.plot([-1e3*f['strain'] for f in x['frames']], [f['pressure_mean'] - p0 for f in x['frames']], 's',
                     ms=3, color=ds.WATER, label='explicit strain form')
             ds.panel(ax, letter, NAMES[state], xlabel=r'compression $-\varepsilon_{zz}$ ($10^{-3}$)', ylabel=r'$p-p_0$ (Pa)')
-            ax.legend(fontsize=8)
+            ax.legend(fontsize=10)
         ax = axes[2]
         for color, state in ((ds.HOT, 'moderate'), (ds.WATER, 'strong')):
             for s, style, label in ((summary, dict(marker='o', ls='-'), '2D'), (other, dict(marker='s', ls=':'), '3D'),
@@ -74,7 +74,7 @@ def build(study, output, record_source, space, before, restart):
         n = np.array([10, 320])
         ax.loglog(n, .5*(10/n), '--', color=ds.MUTED, lw=.8, label='slope $-1$')
         ds.panel(ax, 'c', 'Step convergence', xlabel='PT steps over the loading', ylabel='max error / pressure change')
-        ax.legend(fontsize=7, ncol=2, loc='lower left')
+        ax.legend(fontsize=9, ncol=2, loc='lower left')
         pf.save_figure(fig, output/'figures', KEY)
 
     fine = {state: _cases(summary, state)[-1] for state in cc.STATES}
