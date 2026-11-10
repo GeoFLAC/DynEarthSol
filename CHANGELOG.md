@@ -119,9 +119,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
 - **Breaking.** `mmg_hmin_factor` and `mmg_hmax_factor` are retired: MMG takes
-  its size band from `smallest_size` and `largest_size`, and
-  `examples/defaults.cfg` gives the conversion. With `use_mmg_init`, a `.poly`
-  region without a size constraint is no longer refined to `resolution` ([#95]).
+  its size band from `smallest_size` and `largest_size`; [#95] gives the
+  conversion. With `use_mmg_init`, a `.poly` region without a size constraint
+  is no longer refined to `resolution` ([#95]).
 - **Breaking.** `meshing_option = 2` meshes are finer; multiplying
   `largest_size` by 3.46 (2D) or 5.93 (3D) keeps the old initial mesh ([#95]).
 - **Breaking.** Checkpoints written before this change do not restart ([#95]).
