@@ -6102,6 +6102,14 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // relocate_wall_division_nodes, correct_inflow_band_marker_mattype and restore_side_fields.
     SideInflowState side_inflow;
 
+    // var.mat binds var's fields by reference (MatProps), and from here they are moved out, swapped
+    // for the new mesh's (nearest_neighbor_interpolation, barycentric_node_interpolation) or
+    // recreated (remap_markers, reallocate_variables). reallocate_variables rebuilds it once they
+    // are all new; until then it is null, so a use fails at once instead of reading freed memory.
+    #pragma acc wait   // the kernels above that read var.mat's device copies
+    delete var.mat;
+    var.mat = nullptr;
+
     {
         // the old mesh, moved out of var: var's arrays are empty until the meshing fills them
         array_t old_coord(std::move(*var.coord));
