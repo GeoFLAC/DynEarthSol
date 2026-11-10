@@ -67,6 +67,22 @@ Fixes #
 - Added:
 - Renamed or retired:
 
+## Future work
+
+<!-- Only when the change leaves related work open or you found a bug that
+     needs its own PR; delete the section otherwise. What follows from this
+     change but is not in it: existing code a new rule does not yet cover, a
+     case the fix does not reach, a decision left for later. For a bug found
+     while working on this PR (one this PR fixes goes under What): how it
+     shows (the cfg, test or CI job, and what goes wrong), where it is, and
+     the issue that tracks it, if any. Not unrelated wishes, and not steps to
+     finish this PR. Group it into a few items, one bullet each: a bold lead
+     that names the work, then the files, functions or issues it covers and
+     why it matters. Say which part is a decision, and what an item that must
+     wait waits for. -->
+
+-
+
 ## Checklist
 
 <!-- Answer with yes or a short note. No task-list checkboxes: GitHub lets
