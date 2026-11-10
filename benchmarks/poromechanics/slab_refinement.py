@@ -11,17 +11,16 @@ model is then the slab-model error O((B/r)^2), not the mesh.
     slab_refinement.py EXECUTABLE OUTPUT [--resolutions 20 10 5]
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 
 import pumping_slab as ps
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, run_solver
 
 
 def main():
@@ -38,9 +37,7 @@ def main():
         cfg = ps.config(h)
         cfg['mesh']['meshing_elem_shape'] = '1'
         with (case/'input.cfg').open('w') as f: cfg.write(f)
-        with (case/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'input.cfg'], cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'),
-                           stdout=f, stderr=subprocess.STDOUT, timeout=14400)
+        run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'), timeout=14400)
         aq, rows = ps.compare(case)
         ps.figure(aq, rows, folder)
         model = ps.Dynearthsol(str(case/'slab'))

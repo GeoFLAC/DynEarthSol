@@ -5,7 +5,6 @@ Usage: check_reference_density.py EXECUTABLE OUTPUT_DIRECTORY
 The output directory is new; retain its inputs, logs and physical output.
 """
 
-import configparser
 import hashlib
 import json
 import os
@@ -20,15 +19,15 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol
 
 
+from des_case import read_config
+
 def main():
     exe, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     output.mkdir(parents=True, exist_ok=False)
     summary = dict(executable=str(exe),
                    executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), cases={})
     for density in (800, 1200):
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
         cfg['mat']['fluid_rho0'] = f'[{density}]'
         cfg['control']['gravity'] = '10'
         source = output / f'rho-{density}.cfg'

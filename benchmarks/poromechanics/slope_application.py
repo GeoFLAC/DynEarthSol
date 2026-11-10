@@ -10,8 +10,6 @@ with the infinite-slope factor of safety and Davis's non-associated estimate.
     slope_application.py EXECUTABLE OUTPUT [--spacings 0.5 0.25] [--steps 404] [--cohesion PA] [--friction DEG]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
@@ -41,6 +39,9 @@ NU = (3*MAT['bulk'] - 2*MAT['shear'])/(2*(3*MAT['bulk'] + MAT['shear']))
 K0 = NU/(1 - NU)
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, reset_boundaries, source_revision
+
 def _pointwise_yield():
     from scipy.optimize import brentq
     f = lambda s: (math.hypot((1 - K0)/2*s, TAU) - (1 + K0)/2*s*math.sin(FRICTION) - COHESION*math.cos(FRICTION))
@@ -67,10 +68,6 @@ P_MAX = 1.5*U_STAR
 
 def factor_of_safety(u):
     return (COHESION + (SIGMA_N - u)*math.tan(FRICTION))/TAU
-
-
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 
 END = 4.0                                 # m of strong material at each end (no corner yielding)
@@ -110,8 +107,7 @@ def polygon(path, h):
 
 
 def config(h, steps, loaded, dilation=0.0, cohesion=COHESION, friction=FRICTION):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     duration = SETTLE + RAMP
     cfg['sim'].update(modelname='slope' if loaded else 'seed', max_steps=str(steps if loaded else 0),
                       max_time_in_yr=repr(2*duration/YEAR2SEC), output_step_interval='1', output_time_interval_in_yr='1e9',
@@ -125,8 +121,7 @@ def config(h, steps, loaded, dilation=0.0, cohesion=COHESION, friction=FRICTION)
                           has_moving_mesh='false', is_using_mixed_stress='false', has_poroelastic_pressure_feedback='true',
                           PT_option='1', PT_max_iter='200000', PT_relative_tolerance='1e-9', PT_absolute_tolerance='1e-8')
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc.update({f'vbc_{side}': '0', f'vbc_val_{side}': '0', f'stress_bc_{side}': '0', f'hbc_{side}': '0'})
+    reset_boundaries(bc, vbc='0', vbc_val='0', stress_bc='0', hbc='0')
     bc.update(vbc_x0='1', vbc_x1='1', vbc_z0='3', hbc_z0='2', hbc_z1='2',
               hbc_pressure=f'[0,0,0,0,{P_MAX!r},0]', num_hbc_schedule='3',
               hbc_schedule_time_in_yr=f'[0, {SETTLE/YEAR2SEC!r}, {(SETTLE + RAMP)/YEAR2SEC!r}]',
@@ -181,7 +176,7 @@ def study(exe, out, spacings, steps, dilation=0.0, cohesion=COHESION, friction=F
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   beta_deg=math.degrees(BETA), thickness=D, length=L, cohesion=COHESION, friction_deg=math.degrees(FRICTION),
                   gamma=GAMMA, sigma_n=SIGMA_N, tau=TAU, u_star=U_STAR, u_point=estimates(cohesion, friction)[0], u_davis=estimates(cohesion, friction)[1], k0=K0, p_max=P_MAX, steps=steps,
                   dilation_deg=dilation, cohesion_Pa=cohesion, friction_deg_used=math.degrees(friction),

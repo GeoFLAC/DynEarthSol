@@ -9,12 +9,10 @@ known defect explicitly; it is not an energy qualification of open flow.
 """
 
 import argparse
-import configparser
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -31,6 +29,9 @@ BETA = PHI*EXPANSION
 FLUID = 1000.*4180.
 CAPACITY = (1-PHI)*2650.*1000.+PHI*FLUID
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import run_solver
 
 def configuration(method, boundary, dt):
     cfg = water.configuration(.5, dt, END, method, 1e5, water.INFLOW)
@@ -60,9 +61,7 @@ def run(exe, folder, cfg, name, env):
     cfg['sim']['modelname'] = name
     with (folder/f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=stream,
-                       stderr=subprocess.STDOUT, check=True, timeout=600)
+    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=600)
     return Dynearthsol(str(folder/name))
 
 
@@ -162,10 +161,6 @@ def analyze(folder, method, boundary, modelname='heated'):
         np.testing.assert_allclose(report['retained_enthalpy_residual_J'], report['drained_defect_reference_J'], rtol=1e-7)
     water.write_json(folder/'analysis.json', report)
     return report
-
-
-
-
 
 
 def main():

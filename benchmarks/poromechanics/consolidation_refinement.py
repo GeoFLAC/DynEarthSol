@@ -7,14 +7,11 @@ reconstructs the report from recorded configurations and raw saves.
 """
 
 import argparse
-import configparser
 import csv
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import time
 
 import numpy as np
@@ -22,8 +19,9 @@ import numpy as np
 import consolidation as pf
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, run_solver, source_revision
 
 
 def write_json(path, value):
@@ -85,8 +83,7 @@ def plan(settings):
 
 
 def simulate(output, settings):
-    provenance = dict(source_commit=subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD'], cwd=pf.ROOT, text=True).strip(),
+    provenance = dict(source_commit=source_revision(pf.ROOT),
         analysis_sha256={name: digest(Path(__file__).with_name(name)) for name in
                          ('consolidation_refinement.py', 'consolidation.py', 'terzaghi_reference.py')},
         reader_sha256=digest(pf.ROOT / 'Dynearthsol.py'), runs=plan(settings))
@@ -106,10 +103,7 @@ def simulate(output, settings):
         print(f'Running {key} ({", ".join(run["roles"])})', flush=True)
         start = time.monotonic()
         try:
-            with (folder / 'run.log').open('w') as stream:
-                subprocess.run([str(exe), 'input.cfg'], cwd=folder, env=env,
-                               stdout=stream, stderr=subprocess.STDOUT,
-                               timeout=settings['timeout_s'], check=True)
+            run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, timeout=settings['timeout_s'], check=True)
             if digest(exe) != run['executable_sha256']:
                 raise RuntimeError('Executable changed during the run')
         except Exception as error:
@@ -141,9 +135,7 @@ def analyze(output, settings):
                 raise RuntimeError(f'{key}: changed raw output {name}')
         case = pf.load_case(output / key, dim)
         np.testing.assert_allclose(case['times'], samples, rtol=0, atol=1e-8)
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(folder / 'input.cfg')
+        cfg = read_config(folder / 'input.cfg')
         bound = row_bound(case, cfg, dim)
         if run['dt_s'] > bound * (1 + 1e-12):
             raise RuntimeError(f'{key}: dt={run["dt_s"]} exceeds the one-substep bound {bound}')

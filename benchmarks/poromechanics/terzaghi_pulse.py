@@ -9,9 +9,7 @@ import argparse
 import copy
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 
 import numpy as np
 
@@ -29,16 +27,12 @@ REGIMES = {
 }
 
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import run_model
+
 def run(exe, folder, cfg, name):
-    cfg = copy.deepcopy(cfg)
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=600,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
-    return Dynearthsol(str(folder/name))
+    return run_model(exe, folder, cfg, name, timeout=600)
 
 
 def configuration(regime, spacing, count):

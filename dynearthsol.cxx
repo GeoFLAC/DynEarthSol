@@ -541,14 +541,6 @@ void restart(const Param& param, Variables& var)
                 *var.pending_heat = pending;
                 *var.shear_heat = power;
             }
-        } else if (bin_save.has_array("shear heating")) {
-            // The old rate alone does not identify its generating interval;
-            // using the saved next dt would invent a pending mechanical energy.
-            double_vec legacy_power(var.nelem);
-            bin_save.read_array(legacy_power, "shear heating");
-            if (std::any_of(legacy_power.begin(), legacy_power.end(),
-                            [](double q) { return q != 0; }))
-                die(EXIT_IO_RESTART, "Legacy shear-heating power has no recoverable pending energy; continue with its matching solver.");
         }
         bin_save.read_array(*var.ppressure, "pore pressure");
         if (param.control.has_hydraulic_diffusion) {

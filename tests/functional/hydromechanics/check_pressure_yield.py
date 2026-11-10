@@ -16,12 +16,9 @@ step bounds the measurement to one pressure increment.
     check_pressure_yield.py EXECUTABLE OUTPUT [--ndims 2] [--spacings 1 0.5 0.25] [--steps 1000]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -40,13 +37,11 @@ REF = PressureYield(bulk=MAT['bulk'], shear=MAT['shear'], biot=MAT['biot'], cohe
 DP = 0.95*float(REF.apex(0.0))                     # final pressure rise (Pa)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def config(ndims, h, steps, mode='pt', scaling=1e5, pt_option=None):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='layer', max_steps=str(steps), max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       output_step_interval='1', output_time_interval_in_yr='1e9',
                       checkpoint_frame_interval='100000', has_initial_checkpoint='no')
@@ -109,15 +104,13 @@ def study(exe, out, ndims, spacings, steps, mode='pt', scaling=1e5, pt_option=No
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   ndims=ndims, steps=steps, mode=mode, scaling=scaling, pt_option=pt_option, material=MAT, rho_bulk=RHO_BULK, kappa=REF.kappa, surcharge=Q, dp_max=DP, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'layer.cfg').open('w') as f: config(ndims, h, steps, mode, scaling, pt_option).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'layer.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'layer.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         item = dict(spacing_m=h, **compare(folder), input_sha256=digest(folder/'layer.cfg'))
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))

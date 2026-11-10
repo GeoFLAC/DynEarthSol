@@ -11,11 +11,14 @@ import json
 import math
 import os
 from pathlib import Path
-import subprocess
 
 import consolidation as pf
 import numpy as np
 
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import run_solver
 
 def run(output, binaries, biot, timeout, fixed_dt):
     provenance = {}
@@ -44,11 +47,7 @@ def run(output, binaries, biot, timeout, fixed_dt):
             # run to a binary that was rebuilt in the meantime.
             (output / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
             print(f'Running {label} {dim}D, alpha={biot}', flush=True)
-            with (case / 'run.log').open('w') as stream:
-                subprocess.run([str(exe), 'input.cfg'], cwd=case,
-                               env=dict(os.environ, OMP_NUM_THREADS='1'),
-                               stdout=stream, stderr=subprocess.STDOUT,
-                               check=True, timeout=timeout)
+            run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=timeout)
             if hashlib.sha256(exe.read_bytes()).hexdigest() != provenance[label][str(dim)]['executable_sha256']:
                 raise RuntimeError('Executable changed during the run; rebuild before benchmarking')
 

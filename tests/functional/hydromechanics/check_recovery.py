@@ -27,6 +27,8 @@ ALPHA, PHI, GRAIN, FLUID = .8, .25, 1e8, 1e8
 T0, TAU = 293., .25
 
 
+from des_case import reset_boundaries
+
 def configuration(method, psi, *, sealed=False, temperature=T0, energy=0.):
     cfg = plastic.configuration(method, psi)
     cfg['sim'].update(max_steps='100', has_marker_output='true')
@@ -40,8 +42,7 @@ def configuration(method, psi, *, sealed=False, temperature=T0, energy=0.):
     cfg['ic'].update(temperature_option='4', temp_background=repr(temperature),
                      temp_anomaly_amplitude='0')
     if not sealed:
-        for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-            cfg['bc'][f'hbc_{side}'] = '2'
+        reset_boundaries(cfg['bc'], hbc='2')
     return cfg
 
 

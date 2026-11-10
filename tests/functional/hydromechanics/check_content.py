@@ -7,7 +7,6 @@ PT increment comes from the run or its source checkpoint; it is not assumed
 zero at a nonzero restart. --measure retains a failing parent diagnostic.
 """
 import argparse
-import configparser
 import json
 import math
 from pathlib import Path
@@ -21,10 +20,11 @@ from Dynearthsol import Dynearthsol, scan_frames
 import fluid_content as water
 
 
+from des_case import read_config
+
 def analyze(config, until=None):
     config = config.resolve()
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(config)
+    cfg = read_config(config)
     assert cfg.getboolean('control', 'has_hydraulic_diffusion', fallback=False)
     assert cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=False)
     assert not cfg.getboolean('control', 'has_moving_mesh', fallback=False)

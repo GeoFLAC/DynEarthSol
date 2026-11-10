@@ -7,7 +7,6 @@ finest-grid case only. No material, phase or amplitude fit is performed.
 
 import argparse
 import configparser
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -17,8 +16,9 @@ import numpy as np
 import consolidation as pf
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest
 
 
 def load_case(study, count, consumed=None):

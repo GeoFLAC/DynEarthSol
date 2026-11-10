@@ -15,6 +15,23 @@
 
 namespace {
 
+// Keep the owning element: density at a shared boundary node can differ
+// between adjoining materials. Only the facet geometry is common.
+template <class Apply>
+void flux_facets(const Variables &var, Apply apply)
+{
+    for (int side = 0; side < nbdrytypes_hydro; ++side) {
+        if (var.hbc_types[side] != 3) continue;
+        for (const auto &face : *var.bfacets[side]) {
+            const int e = face.first, f = face.second;
+            int nodes[NODES_PER_FACET];
+            for (int j = 0; j < NODES_PER_FACET; ++j)
+                nodes[j] = (*var.connectivity)[e][NODE_OF_FACET[f][j]];
+            apply(side,e,f,nodes,compute_facet_measure(var.coord->view_const(nodes)));
+        }
+    }
+}
+
 // Dirichlet side, or -1 for a free pressure node.
 #pragma acc routine seq
 inline int pressure_boundary(const int n, const Variables &var)
@@ -85,28 +102,14 @@ inline bool has_plastic_source(const Param &param)
 void pressure_increments(const Variables &var, const double_vec &ppressure, const double_vec &dppressure,
                          elem_cache &work)
 {
-    const bool has_retention = var.mat->has_retention;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, ppressure, dppressure, work) firstprivate(has_retention)
+    #pragma omp parallel for default(none) shared(var, ppressure, dppressure, work)
 #endif
-    #pragma acc parallel loop gang vector firstprivate(has_retention)
+    #pragma acc parallel loop gang vector
     for (int e = 0; e < var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        const int_vec &markers = (*var.elemmarkers)[e];
-        double d = 0, pi = 0;
-        bool saturated = true;
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            d -= dppressure[conn[j]] / NODES_PER_ELEM;
-            if (!has_retention) continue;
-            const double p = ppressure[conn[j]];
-            const double old = p + dppressure[conn[j]];
-            const double se = element_se(*var.mat, markers, p);
-            const double se_old = element_se(*var.mat, markers, old);
-            if (se != 1 || se_old != 1) saturated = false;
-            pi += (se * p - se_old * old) / NODES_PER_ELEM;
-        }
-        work[e][pressure_d_slot] = d;
-        work[e][bishop_e_slot] = saturated ? d : pi;
+        const auto value = element_pressure<true>(var,e,ppressure,dppressure,true,false);
+        work[e][pressure_d_slot] = value.raw;
+        work[e][bishop_e_slot] = value.bishop;
     }
 }
 
@@ -672,20 +675,12 @@ static void pressure_step(const Param &param, const Variables &var,
                       time, time) : 1.0;
     #pragma acc wait
     double prescribed_flux = 0;
-    for (int side = 0; side < nbdrytypes_hydro; ++side) {
-        if (var.hbc_types[side] != 3) continue;
-        for (const auto &face : *var.bfacets[side]) {
-            const int e = face.first, f = face.second;
-            int nodes[NODES_PER_FACET];
-            for (int k = 0; k < NODES_PER_FACET; ++k)
-                nodes[k] = (*var.connectivity)[e][NODE_OF_FACET[f][k]];
-            const double area = compute_facet_measure(var.coord->view_const(nodes));
-            const double q = boundary_ratio * param.bc.hbc_flux[side] * area;
-            prescribed_flux += q * dt;
-            for (int k = 0; k < NODES_PER_FACET; ++k)
-                tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
-        }
-    }
+    flux_facets(var,[&](int side, int e, int f, const int *, double area) {
+        const double q = boundary_ratio * param.bc.hbc_flux[side] * area;
+        prescribed_flux += q * dt;
+        for (int k = 0; k < NODES_PER_FACET; ++k)
+            tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
+    });
     double stored = exchanged, wells = 0, boundary = -prescribed_flux;
     int invalid = 0;
 
@@ -841,6 +836,14 @@ bool valid_fluid(const MatProps &mat, int e, const FluidState &state)
     return state.porosity > 0 && state.porosity < 1 && state.porosity <= mat.alpha_biot(e) &&
            state.density > 0 && std::isfinite(state.density) && state.pressure_slope >= 0 &&
            std::isfinite(state.pressure_slope) && std::isfinite(state.temperature_slope);
+}
+
+FluidState remap_fluid_state(const Variables &var, int e, int n, double p, double t)
+{
+    const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
+                                  var.fluid_reference_temperature,var.mat->phi(e),p,t);
+    if (!valid_fluid(*var.mat,e,state)) die(EXIT_RUNTIME_NAN,"Invalid fluid remap state.");
+    return state;
 }
 
 void fluid_means(const Variables &var, int e, double &p, double &t)
@@ -1278,24 +1281,17 @@ void HydraulicStep::advance(const Param &param, Variables &var)
         }
         // Natural boundary fluxes use the same receiving/outgoing fluid density
         // as the mass reaction. Their peak bounds also cover schedule steps.
-        for (int side = 0; side < nbdrytypes_hydro; ++side) {
-            if (var.hbc_types[side] != 3) continue;
-            for (const auto &face : *var.bfacets[side]) {
-                const int e = face.first, f = face.second;
-                int nodes[NODES_PER_FACET];
-                for (int j = 0; j < NODES_PER_FACET; ++j) nodes[j] = (*var.connectivity)[e][NODE_OF_FACET[f][j]];
-                const double volume_rate = std::fabs(param.bc.hbc_flux[side])*boundary_peak*
-                    compute_facet_measure(var.coord->view_const(nodes))/NODES_PER_FACET;
-                for (int j = 0; j < NODES_PER_FACET; ++j) {
-                    const int n = nodes[j];
-                    const double flux = volume_rate*fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
-                    if (flux > 0) {
-                        double slope; content(param,var,n,(*var.ppressure)[n],(*var.temperature)[n],fraction,slope);
-                        limit = std::min({limit,.5*mass[n]/flux,.5*(slope+lag[n])/(var.mat->beta_fluid(e)*flux)});
-                    }
+        flux_facets(var,[&](int side, int e, int, const int *nodes, double area) {
+            const double volume_rate = std::fabs(param.bc.hbc_flux[side])*boundary_peak*area/NODES_PER_FACET;
+            for (int j = 0; j < NODES_PER_FACET; ++j) {
+                const int n = nodes[j];
+                const double flux = volume_rate*fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
+                if (flux > 0) {
+                    double slope; content(param,var,n,(*var.ppressure)[n],(*var.temperature)[n],fraction,slope);
+                    limit = std::min({limit,.5*mass[n]/flux,.5*(slope+lag[n])/(var.mat->beta_fluid(e)*flux)});
                 }
             }
-        }
+        });
         double dt = std::min(limit,interval-elapsed), next_fraction = 0;
         bool accepted = false;
         for (int attempt = 0; attempt < 50 && !accepted; ++attempt) {
@@ -1329,23 +1325,16 @@ void HydraulicStep::advance(const Param &param, Variables &var)
             }
             std::fill(boundary_rate.begin(),boundary_rate.end(),0.0);
             std::fill(boundary_heat.begin(),boundary_heat.end(),0.0);
-            for (int side = 0; side < nbdrytypes_hydro; ++side) {
-                if (var.hbc_types[side] != 3) continue;
-                for (const auto &face : *var.bfacets[side]) {
-                    const int e = face.first, f = face.second;
-                    int nodes[NODES_PER_FACET];
-                    for (int j = 0; j < NODES_PER_FACET; ++j) nodes[j] = (*var.connectivity)[e][NODE_OF_FACET[f][j]];
-                    const double q = boundary_ratio*param.bc.hbc_flux[side]*
-                        compute_facet_measure(var.coord->view_const(nodes))/NODES_PER_FACET;
-                    for (int j = 0; j < NODES_PER_FACET; ++j) {
-                        const int n = nodes[j];
-                        const double t = (*var.temperature)[n];
-                        const double flow = -q*fluid_density(*var.mat,e,(*var.ppressure)[n],t,var.fluid_reference_temperature);
-                        boundary_rate[n] += flow;
-                        boundary_heat[n] += cf*t*flow;
-                    }
+            flux_facets(var,[&](int side, int e, int, const int *nodes, double area) {
+                const double q = boundary_ratio*param.bc.hbc_flux[side]*area/NODES_PER_FACET;
+                for (int j = 0; j < NODES_PER_FACET; ++j) {
+                    const int n = nodes[j];
+                    const double t = (*var.temperature)[n];
+                    const double flow = -q*fluid_density(*var.mat,e,(*var.ppressure)[n],t,var.fluid_reference_temperature);
+                    boundary_rate[n] += flow;
+                    boundary_heat[n] += cf*t*flow;
                 }
-            }
+            });
             accepted = true;
             auto *const step = this;
 #ifndef ACC
@@ -1556,9 +1545,7 @@ ContentRemap::ContentRemap(const Param &param, const Variables &var) :
             const double ratio = effective_fluid_volume(param,var,e)/(*var.volume)[e];
             for (int j = 0; j < NODES_PER_ELEM; ++j) {
                 const int n = (*var.connectivity)[e][j];
-                const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                    var.fluid_reference_temperature,var.mat->phi(e),p,t);
-                if (!valid_fluid(*var.mat,e,state)) die(EXIT_RUNTIME_NAN,"Invalid fluid remap donor.");
+                const auto state = remap_fluid_state(var,e,n,p,t);
                 const double mass = ratio*state.density*state.porosity;
                 const double solid = (*var.solid_mass)[n]/volume[n], capacity = (*var.solid_capacity)[n]/volume[n];
                 const double values[6] = {mass,(*var.fluid_split)[n]/volume[n],solid,capacity,
@@ -1750,9 +1737,7 @@ void ContentRemap::restore_inventory(const Param &param, Variables &var) const
         const double ratio = effective_fluid_volume(param,var,e)/(*var.volume)[e];
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
             const int n = (*var.connectivity)[e][j];
-            const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                var.fluid_reference_temperature,var.mat->phi(e),p,t);
-            if (!valid_fluid(*var.mat,e,state)) die(EXIT_RUNTIME_NAN,"Invalid provisional fluid remap state.");
+            const auto state = remap_fluid_state(var,e,n,p,t);
             const double fluid = ratio*state.density*state.porosity;
             const double solid = ratio*(1-state.porosity)*var.mat->rho(e);
             const double capacity = solid*var.mat->cp(e);

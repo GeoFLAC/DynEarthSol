@@ -24,12 +24,9 @@ measured after it, and the total error includes it.
     check_injection_energy.py EXECUTABLE OUTPUT [--spacings 0.2 0.1] [--steps 400]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -42,6 +39,8 @@ import check_injection_temperature as hot
 L, Q, DURATION = 8.0, 1e-4, 6e5
 WELLS = ((L/4, -L/2), (3*L/4, -L/2))
 
+
+from des_case import reset_boundaries, run_solver, source_diff, source_revision
 
 def config(h, steps):
     cfg = hot.config(h, steps)
@@ -101,15 +100,13 @@ def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=hot.digest(exe), runner_sha256=hot.digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   steps=steps, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'hot.cfg').open('w') as f: config(h, steps).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'hot.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'hot.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         item = dict(spacing_m=h, input_sha256=hot.digest(folder/'hot.cfg'), **ledger(folder))
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
@@ -131,8 +128,7 @@ def pulse_study(executable, output, ndims):
     cfg['sim'].update(has_initial_checkpoint='true', checkpoint_frame_interval='1')
     cfg['control']['has_thermal_diffusion'] = 'false'
     cfg['mat'].update(hydraulic_perm='[0]', fluid_bulk_modulus='[1e3]')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'].update({f'vbc_{side}': '3', f'hbc_{side}': '0'})
+    reset_boundaries(cfg['bc'], vbc='3', hbc='0')
     if ndims == 3:
         cfg['injection']['points_y'] = '[0]'
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -142,9 +138,7 @@ def pulse_study(executable, output, ndims):
         cfg['control']['fixed_dt'] = repr(1/steps)
         with (output/f'{name}.cfg').open('w') as stream:
             cfg.write(stream)
-        with (output/f'{name}.log').open('w') as stream:
-            subprocess.run([str(executable), f'{name}.cfg'], cwd=output, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+        run_solver([str(executable), f'{name}.cfg'], log=output / f'{name}.log', cwd=output, env=env, check=True, timeout=120)
         return Dynearthsol(str(output/name))
 
     cfg['injection']['enabled'] = 'false'

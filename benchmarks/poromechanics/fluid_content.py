@@ -10,12 +10,10 @@ Every accepted step must be saved. --replay verifies and reanalyses hashes.
 
 import argparse
 import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -35,8 +33,8 @@ MOBILITY = PROPS['permeability']/PROPS['viscosity']
 PRESSURE = INFLOW*PROPS['height']/MOBILITY
 
 
-def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, run_solver, source_revision
 
 
 def write_json(path, value):
@@ -87,8 +85,7 @@ def reference_checks():
 
 
 def configuration(h, dt, duration, method, scaling, inflow):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='column', max_steps=str(round(duration/dt) if method == 'pt' else 10**8),
                       max_time_in_yr=repr(duration/YEAR2SEC), output_step_interval='1',
                       output_time_interval_in_yr='1e9', checkpoint_frame_interval='1',
@@ -226,10 +223,6 @@ def analyze(folder, method):
     return report
 
 
-
-
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path); parser.add_argument('output', type=Path)
@@ -253,7 +246,7 @@ def main():
     else:
         out.mkdir(parents=True, exist_ok=False)
         manifest = dict(command=sys.argv, executable=str(exe), executable_sha256=digest(exe),
-                        source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                        source_commit=source_revision(ROOT),
                         sources_sha256={str(p.relative_to(ROOT)): digest(p) for p in
                                        (Path(__file__), Path(__file__).with_name('terzaghi_reference.py'), ROOT/'Dynearthsol.py')},
                         method=args.method, settings=vars(args) | dict(executable=str(exe), output=str(out)),
@@ -263,9 +256,7 @@ def main():
             case = out/f'h{h:g}'; case.mkdir()
             with (case/'input.cfg').open('w') as stream:
                 configuration(h, args.dt, args.duration, args.method, args.scaling, args.inflow).write(stream)
-            with (case/'run.log').open('w') as stream:
-                subprocess.run([str(exe), 'input.cfg'], cwd=case, env=env, check=True,
-                               stdout=stream, stderr=subprocess.STDOUT, timeout=3600)
+            run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=env, check=True, timeout=3600)
             assert digest(exe) == manifest['executable_sha256']
             manifest['cases'].append(case.name)
             manifest['artifacts_sha256'] = {str(p.relative_to(out)): digest(p) for p in sorted(out.glob('h*/*')) if p.is_file()}

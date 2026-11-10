@@ -27,6 +27,8 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.linalg import solve_triangular
 
+from unsaturated_reference import Retention
+
 
 class Drainage:
     pressure_atol_ratio = 1e-6  # BDF absolute tolerance / initial hydrostatic pressure
@@ -37,23 +39,16 @@ class Drainage:
         self.Hm = bulk + 4*shear/3
         self.S0 = porosity/fluid_bulk + (biot - porosity)/grain_bulk
         self.k, self.mu, self.rho, self.g = permeability, viscosity, rho, g
-        self.a, self.n = vg_alpha, vg_n
-        self.m = 1 - 1/vg_n
+        self.law = Retention('van_genuchten', vg_alpha, vg_n, sr)
 
-    # van Genuchten-Mualem, saturated for p >= 0
     def se(self, p):
-        s = np.maximum(-p, 0.0)
-        return (1 + (self.a*s)**self.n)**(-self.m)
+        return self.law.se(p)
 
     def dse(self, p):
-        s = np.maximum(-p, 0.0)
-        x = (self.a*s)**self.n
-        d = self.m*self.n*self.a*(self.a*s)**(self.n - 1)*(1 + x)**(-self.m - 1)
-        return np.where(p < 0, d, 0.0)
+        return self.law.dse(p)
 
     def kr(self, p):
-        se = self.se(p)
-        return np.sqrt(se)*(1 - (1 - se**(1/self.m))**self.m)**2
+        return self.law.kr(p)
 
     def _grid(self, n):
         z = np.linspace(0, self.H, n + 1)

@@ -9,13 +9,10 @@ The analytical modes have different horizontal wave numbers, so exchanging
 the directional diffusivities cannot masquerade as the correct decay.
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -32,8 +29,7 @@ TENSORS = ([4, 1, 1, 0, 0, 0], [1, 1, 9, 0, 0, 0])
 INITIAL = np.array([1., .35])
 
 
-def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_revision
 
 
 def basis(x):
@@ -50,8 +46,7 @@ def amplitudes(time, switch):
 
 
 def configuration(h, dt, dim):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='seed', max_steps='1', output_step_interval='1',
                       max_time_in_yr='1', output_time_interval_in_yr='1',
                       has_initial_checkpoint='yes', checkpoint_frame_interval='1')
@@ -78,10 +73,7 @@ def run(executable, folder, cfg, name):
     cfg['sim']['modelname'] = name
     with (folder/f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=180,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+    run_solver([str(executable), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=180, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
     return Dynearthsol(str(folder/name))
 
 
@@ -160,7 +152,7 @@ def main():
     executable, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     report = dict(executable_sha256=digest(executable), runner_sha256=digest(__file__), dimension=args.dimension,
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), cases=[])
+                  source_commit=source_revision(ROOT), cases=[])
     if args.binary_manifest:
         q = json.loads(args.binary_manifest.read_text()); assert report['executable_sha256'] in q['binaries'].values()
         report.update(solver_commit=q['implementation_commit'], binary_manifest_sha256=digest(args.binary_manifest))

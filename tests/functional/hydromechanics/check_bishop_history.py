@@ -15,7 +15,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import numpy as np
@@ -29,6 +28,8 @@ DT, RATE, STEPS = .1, 1e-4, 24
 PHI, RESIDUAL, ALPHA = .3, .999, 1.
 S0 = PHI/2.2e9+(1-PHI)/37e9
 
+
+from des_case import run_solver
 
 def macro_reference(pressure, previous_increment, stabilizer):
     """Integrate (SB+phi*S') p_dot = -chi*eps_dot + L*D/dt."""
@@ -88,9 +89,7 @@ def study(executable, output, ndims):
                           residual_saturation=f'[{RESIDUAL}]', hydraulic_perm=f'[{permeability}]',
                           is_plane_strain=str(ndims == 2).lower())
         with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        with (folder/'run.log').open('w') as stream:
-            subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env, check=True,
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=120)
+        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
         model = cell.Dynearthsol(str(folder/'cell'))
         assert model.ndims == ndims and model.nnode_list[0] == 2**ndims
         pressures, history = [], []
@@ -112,9 +111,7 @@ def study(executable, output, ndims):
         cfg['sim'].update(modelname='resumed', is_restarting='true', restarting_from_modelname=str(folder/'cell'),
                           restarting_from_frame=str(before['frame']))
         with (folder/'restart.cfg').open('w') as stream: cfg.write(stream)
-        with (folder/'restart.log').open('w') as stream:
-            subprocess.run([str(executable), 'restart.cfg'], cwd=folder, env=env, check=True,
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=120)
+        run_solver([str(executable), 'restart.cfg'], log=folder / 'restart.log', cwd=folder, env=env, check=True, timeout=120)
         fresh = {r['steps']:r for r in cell.scan_frames(str(folder/'cell'))}
         checked = 0
         for row in cell.scan_frames(str(folder/'resumed')):

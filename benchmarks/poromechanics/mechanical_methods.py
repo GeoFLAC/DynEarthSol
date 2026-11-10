@@ -23,6 +23,10 @@ import consolidation_refinement as cr
 import consolidation as pf
 
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import run_solver, source_revision
+
 def cases(settings):
     methods = settings.get('methods', ['pt0', 'pt1', 'explicit', 'gvs-shear', 'gvs-bulk'])
     for option in (0, 1):
@@ -50,8 +54,7 @@ def run(output, settings):
     if solver:
         assert cr.digest(executable) in solver['binaries'].values(), 'Executable does not match its qualification'
         (output/'solver-qualification.json').write_bytes(Path(manifest).read_bytes())
-    provenance = dict(source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'],
-                                                           cwd=pf.ROOT, text=True).strip(),
+    provenance = dict(source_commit=source_revision(pf.ROOT),
                       solver_commit=solver.get('implementation_commit') if solver else None,
                       binary_manifest_sha256=cr.digest(Path(manifest)) if manifest else None,
                       source_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
@@ -81,10 +84,7 @@ def run(output, settings):
         cr.write_json(output / 'provenance.json', provenance)
         start = time.monotonic()
         try:
-            with (folder / 'run.log').open('w') as stream:
-                subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env,
-                               stdout=stream, stderr=subprocess.STDOUT, check=True,
-                               timeout=settings['timeout_s'])
+            run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=settings['timeout_s'])
             if cr.digest(executable) != provenance['executable_sha256']:
                 raise RuntimeError('Executable changed during comparison')
             record['status'] = 'complete'

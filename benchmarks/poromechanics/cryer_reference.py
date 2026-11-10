@@ -24,6 +24,8 @@ import math
 import numpy as np
 from scipy.optimize import brentq
 
+from laplace import stehfest
+
 
 class Cryer:
     def __init__(self, bulk, shear, biot, porosity, fluid_bulk, grain_bulk, permeability, viscosity,
@@ -64,16 +66,6 @@ class Cryer:
         ratio = lambda y: math.exp(y-x)*(1-math.exp(-2*y))/(1-math.exp(-2*x))
         shape = 2*x*math.exp(-x)/(1-math.exp(-2*x)) if r == 0 else self.R*ratio(q*r)/r
         return (1+self.beta)*(1-shape)/(s*(1+self.beta*(1-g)))
-
-
-def stehfest(F, t, n=14):
-    """Gaver-Stehfest inversion of a smooth, non-oscillating transform."""
-    total, half = 0.0, n//2
-    for k in range(1, n+1):
-        v = sum(j**half*math.factorial(2*j)/(math.factorial(half-j)*math.factorial(j)*math.factorial(j-1)
-                * math.factorial(k-j)*math.factorial(2*j-k)) for j in range((k+1)//2, min(k, half)+1))
-        total += (-1)**(k+half)*v*F(k*math.log(2)/t)
-    return total*math.log(2)/t
 
 
 if __name__ == '__main__':

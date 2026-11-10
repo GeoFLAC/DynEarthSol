@@ -6,7 +6,6 @@ Reuses the existing DES hydraulic PT fixtures and restart comparator.
 """
 
 import argparse
-import configparser
 import json
 import os
 from pathlib import Path
@@ -20,6 +19,8 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol
 
 
+from des_case import read_config
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
@@ -31,9 +32,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     summary = {}
     for mode in ('fixed', 'remesh', 'thermal-matrix'):
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_remesh_restart.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
         cfg['mat'].update(porosity_model='1', permeability_model=str(args.permeability_model))
         if args.permeability_model == 2:
             cfg['mat']['permeability_exponent'] = repr([args.exponent])

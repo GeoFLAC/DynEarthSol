@@ -15,11 +15,9 @@ steady solution in benchmarks/poromechanics/convection_steady.py.
     check_convection_nusselt.py EXECUTABLE OUTPUT [--ra 100 200] [--spacings 0.05 0.025]
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -33,8 +31,7 @@ FLUID_BULK = 1e1                     # Pa; storage only sets the transient
 DURATION, OUTPUTS = 1.6e6, 32        # s: steady by about 0.5e6 s at h = 0.05 m
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, run_solver, source_diff, source_revision
 
 
 def config(h, ra, dt):
@@ -78,18 +75,17 @@ def study(exe, out, ras, spacings, dt):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cc.ROOT, text=True).strip(),
+                  source_commit=source_revision(cc.ROOT),
                   dt=dt, duration_s=DURATION, fluid_bulk_Pa=FLUID_BULK,
-                  reference={f'{ra:g}': nusselt(ra) for ra in ras}, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=cc.ROOT))
+                  reference={f'{ra:g}': nusselt(ra, cache=out/f'reference-ra{ra:g}.npz') for ra in ras}, cases=[])
+    result['reference_sha256'] = {f'{ra:g}': digest(out/f'reference-ra{ra:g}.npz') for ra in ras}
+    (out/'source.diff').write_bytes(source_diff(cc.ROOT))
     for ra in ras:
         ref = result['reference'][f'{ra:g}']['nu_extrapolated']
         for h in spacings:
             folder = out/f'ra{ra:g}-h{h:g}'; folder.mkdir()
             with (folder/'box.cfg').open('w') as f: config(h, ra, dt).write(f)
-            with (folder/'run.log').open('w') as f:
-                subprocess.run([str(exe), 'box.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                               check=True, timeout=40000)
+            run_solver([str(exe), 'box.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
             series = nusselt_des(folder, ra)
             last = series[-1]
             item = dict(ra=ra, spacing_m=h, series=series, nu=last['nu'], nu_wall=last['nu_wall'], nu_ref=ref,

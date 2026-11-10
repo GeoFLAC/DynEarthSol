@@ -29,7 +29,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import numpy as np
@@ -47,6 +46,8 @@ WIDTH = 1/math.sqrt(2)                              # minimum altitude of the ce
 V1 = 2*WIDTH*RATE1                                  # eps_II = e for normal rates +e, -e
 T1, T2 = 64.0, 64.0                                 # seconds before and after the step
 
+
+from des_case import run_solver, source_revision
 
 def configs(refine):
     dt = 1.0/refine
@@ -107,16 +108,14 @@ def study(exe, out, refinements):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=cell.digest(exe), runner_sha256=cell.digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cell.ROOT, text=True).strip(),
+                  source_commit=source_revision(cell.ROOT),
                   a=A, b=B, dc=DC, v1=V1, ratio=RATIO, confinement=C, pressure=P, cases=[])
     for refine in refinements:
         folder = out/f'r{refine:g}'; folder.mkdir()
         base, step, dt, n1, n2 = configs(refine)
         for name, cfg in (('cell', base), ('step', step)):
             with (folder/f'{name}.cfg').open('w') as f: cfg.write(f)
-            with (folder/f'{name}.log').open('w') as f:
-                subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                               check=True, timeout=3600)
+            run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=3600)
         des = np.concatenate([read(folder, 'cell'), read(folder, 'step', T1)])
         ref = discrete(dt, n1, n2)
         assert len(des) == len(ref) and np.allclose(des[:, 0], ref[:, 0], rtol=0, atol=1e-9), (len(des), len(ref))

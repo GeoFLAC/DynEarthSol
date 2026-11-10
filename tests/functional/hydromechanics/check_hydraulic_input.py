@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Check invalid active hydraulic material properties at the executable boundary."""
 
-import configparser
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 
+
+from des_case import read_config
 
 def main():
     exe = Path(sys.argv[1]).resolve()
@@ -18,9 +19,7 @@ def main():
              ('fluid_visc', 0), ('fluid_rho0', -1), ('hydraulic_perm', -1)]
     with tempfile.TemporaryDirectory(prefix='des-hydraulic-input-') as tmp:
         for key, value in cases:
-            cfg = configparser.ConfigParser()
-            cfg.optionxform = str
-            cfg.read(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+            cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
             cfg['mat'][key] = f'[{value}]'
             path = Path(tmp) / 'invalid.cfg'
             with path.open('w') as stream:
@@ -67,9 +66,7 @@ def main():
             ('mat', {'retention_model': '[3]', 'matrix_storage': '[1e-9]', 'matrix_exchange': '[1e-6]'}),
         ]
         for section, updates in extra:
-            cfg = configparser.ConfigParser()
-            cfg.optionxform = str
-            cfg.read(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+            cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
             cfg[section].update(updates)
             with path.open('w') as stream:
                 cfg.write(stream)

@@ -15,12 +15,9 @@ explicit strain form.
                                   [--steps 480] [--explicit]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -37,13 +34,11 @@ DURATION, G, RHO = 7200.0, 9.81, 1000.0
 RAMP = 1e-3                                          # s, base pressure ramp to zero
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def config(ndims, h, steps):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     explicit = steps == 0
     cfg['sim'].update(modelname='drain', max_time_in_yr=repr(DURATION/YEAR2SEC), max_steps=str(10**9 if explicit else steps),
                       output_step_interval=str(10**9 if explicit else steps//24),
@@ -110,19 +105,22 @@ def study(exe, out, ndims, spacings, steps, explicit):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     reference = REF.solve(200, TIMES)
+    np.savez_compressed(out/'reference.npz', time=[r['time'] for r in reference],
+                        z=reference[0]['z'], p=[r['p'] for r in reference],
+                        saturation=[r['saturation'] for r in reference],
+                        settlement=[r['settlement'] for r in reference])
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   ndims=ndims, steps=steps, properties=PROPS, reference_grid=200,
+                  reference_sha256=digest(out/'reference.npz'),
                   reference=[dict(time=r['time'], settlement=r['settlement'], p_top=float(r['p'][-1]),
                                   saturation_top=float(r['saturation'][-1])) for r in reference], cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     runs = [(h, steps) for h in spacings] + ([(spacings[0], 0)] if explicit else [])
     for h, n in runs:
         folder = out/(f'h{h:g}' + ('-explicit' if n == 0 else '')); folder.mkdir()
         with (folder/'drain.cfg').open('w') as f: config(ndims, h, n).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'drain.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'drain.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         frames = compare(folder, h, reference)
         item = dict(spacing_m=h, mode='explicit' if n == 0 else 'PT', steps=n, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),

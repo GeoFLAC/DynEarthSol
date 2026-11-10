@@ -20,13 +20,10 @@ Drawdown is compared with benchmarks/poromechanics/hantush_reference.py.
     check_hantush.py EXECUTABLE OUTPUT [--spacings 2.5 1.25 0.625]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -47,6 +44,8 @@ AQUITARD = dict(porosity=1e-4, biot=.3)
 SOLID = dict(bulk=1e12, shear=1e12, fluid_bulk=2.2e9, grain_bulk=1e20, visc=1e-3)
 
 
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+
 def storage(layer):
     return (layer['porosity']/SOLID['fluid_bulk'] + (layer['biot']-layer['porosity'])/SOLID['grain_bulk']
             + layer['biot']**2/SOLID['bulk'])
@@ -61,18 +60,13 @@ SCALE = Q/(4*math.pi*T)
 SCHEDULE = [(0.0, Q), (PUMP, 0.0)]
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
-
-
 def aquitard_perm(h):
     """Scalar k' of an aquitard h thick whose vertical leakance is ANISOTROPY*k'/h = k B/lambda^2."""
     return PERM*B*h/LAMBDA**2/ANISOTROPY
 
 
 def config(h):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     steps = int(round(END/DT))
     cfg['sim'].update(modelname='hantush', max_steps=str(steps), output_step_interval=str(steps//8),
                       max_time_in_yr=repr(2*END/YEAR2SEC), output_time_interval_in_yr='1e9',
@@ -84,8 +78,7 @@ def config(h):
                           fixed_dt=repr(DT), has_poroelastic_pressure_feedback='false',
                           has_thermal_diffusion='false')
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
+    reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0')
     bc['hbc_z1'] = '2'
     t = [0.0, PUMP, PUMP]
     bc.update(hbc_pressure='[0,0,0,0,0,0]', stress_bc_z1='0', stress_val_z1='0', num_wells='1',
@@ -132,18 +125,16 @@ def study(exe, out, spacings):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   reference=dict(L=L, B=B, Q=Q, leakage_factor=LAMBDA, anisotropy=ANISOTROPY, pump_until_s=PUMP, end_s=END, dt_s=DT,
                                  storage_per_Pa=STORAGE, aquitard_storage_per_Pa=STORAGE_AQUITARD,
                                  diffusivity=DIFFUSIVITY, permeability=PERM, transmissivity=T, storativity=S,
                                  pressure_scale_Pa=SCALE, window=WINDOW), cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'hantush.cfg').open('w') as f: config(h).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'hantush.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=20000)
+        run_solver([str(exe), 'hantush.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
         model, frames, nodes = compare(folder, h)
         strain = max(float(np.abs(model.read_field(f, 'strain')).max()) for f in model.frames)
         item = dict(spacing_m=h, nodes=nodes, frames=frames,

@@ -11,9 +11,7 @@ import argparse
 import copy
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -31,24 +29,18 @@ STORAGE = PHI/KF+(ALPHA-PHI)/KS
 UNDRAINED = K+4*G/3+ALPHA**2/STORAGE
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import reset_boundaries, run_model
+
 def run(exe, folder, cfg, name):
-    cfg = copy.deepcopy(cfg)
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=120,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
-    return Dynearthsol(str(folder/name))
+    return run_model(exe, folder, cfg, name, timeout=120)
 
 
 def configuration(method, scaling):
     cfg = water.configuration(.5, .01, 1., method, scaling, water.INFLOW)
     cfg['sim'].update(max_steps='32', max_time_in_yr='1e6')
     cfg['control'].update(fixed_dt='0', damping_option='0', is_using_mixed_stress='false')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'][f'hbc_{side}'] = '0'
+    reset_boundaries(cfg['bc'], hbc='0')
     cfg['bc'].update(hbc_flux='[0,0,0,0,0,0]', stress_val_z1='-1000')
     return cfg
 

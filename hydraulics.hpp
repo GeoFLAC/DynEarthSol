@@ -245,6 +245,44 @@ inline double element_se(const MatProps &mat, const int_vec &markers, double p, 
     return se / total;
 }
 
+struct ElementPressure {
+    double raw, bishop, strength;
+};
+
+// The hydraulic residual and constitutive increment use opposite signs.
+// Keep each subtraction order, including the saturated raw-pressure path.
+#pragma acc routine seq
+template <bool residual>
+inline ElementPressure element_pressure(const Variables &var, int e,
+                                        const double_vec &p, const double_vec &dp,
+                                        bool increment, bool strength)
+{
+    ConstConnAccessor conn = (*var.connectivity)[e];
+    const int_vec &markers = (*var.elemmarkers)[e];
+    const bool retention = increment && var.mat->has_retention;
+    ElementPressure value = {0, 0, 0};
+    bool saturated = true;
+    #pragma acc loop seq
+    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        const int n = conn[j];
+        if (increment) {
+            if constexpr (residual) value.raw -= dp[n] / NODES_PER_ELEM;
+            else value.raw += dp[n] / double(NODES_PER_ELEM);
+        }
+        if (!retention && !strength) continue;
+        const double se = element_se(*var.mat, markers, p[n]);
+        if (strength) value.strength += se * p[n] / NODES_PER_ELEM;
+        if (!retention) continue;
+        const double old = p[n] + dp[n];
+        const double se_old = element_se(*var.mat, markers, old);
+        if (se != 1 || se_old != 1) saturated = false;
+        if constexpr (residual) value.bishop += (se * p[n] - se_old * old) / NODES_PER_ELEM;
+        else value.bishop += (se_old * old - se * p[n]) / double(NODES_PER_ELEM);
+    }
+    if (saturated) value.bishop = value.raw;
+    return value;
+}
+
 // Pressure fields remain allocated for advection/output when transport is off.
 void allocate_hydraulic_state(Variables &var);
 void validate_hydraulic_boundaries(const Param &param, const Variables &var);

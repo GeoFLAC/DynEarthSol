@@ -8,15 +8,12 @@ remapping and continuation separately from conservative remesh transfer.
 """
 
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import shutil
 import struct
-import subprocess
 import sys
 
 import numpy as np
@@ -27,13 +24,11 @@ from Dynearthsol import Dynearthsol,scan_frames,YEAR2SEC
 from pt_initial_checkpoint import fields
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver
 
 
 def config():
-    cfg=configparser.ConfigParser();cfg.optionxform=str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='fresh',max_steps='4',output_step_interval='1',
         max_time_in_yr=str(100/YEAR2SEC),output_time_interval_in_yr='1')
     cfg['mesh'].update(resolution='.25',largest_size='.25',smallest_size='.25')
@@ -42,8 +37,7 @@ def config():
         has_poroelastic_pressure_feedback='false',has_fluid_thermal_advection='false')
     cfg['ic'].update(temperature_option='4',temp_background='300',temp_anomaly_amplitude='0',
                      has_body_force_adjustment='false',pore_pressure_option='2',pore_pressure_value='0')
-    for side in ('x0','x1','y0','y1','z0','z1'):
-        cfg['bc'][f'vbc_{side}']='1';cfg['bc'][f'hbc_{side}']='0';cfg['bc'][f'tbc_{side}']='0'
+    reset_boundaries(cfg['bc'], vbc='1', hbc='0', tbc='0')
     cfg['bc'].update(stress_bc_z1='0',stress_val_z1='0')
     cfg['mat'].update(rho0='[2500]',alpha='[0]',heat_capacity='[1000]',therm_cond='[0]',
                      hydraulic_perm='[0]',fluid_heat_capacity='[4000]',fluid_alpha='[0]')
@@ -91,8 +85,7 @@ def check_balance(folder,cfg):
 def run(exe,folder,cfg,env,expect=0):
     folder.mkdir()
     with (folder/'fresh.cfg').open('w') as f:cfg.write(f)
-    with (folder/'fresh.log').open('w') as f:
-        p=subprocess.run([str(exe),'fresh.cfg'],cwd=folder,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=180)
+    p = run_solver([str(exe), 'fresh.cfg'], log=folder / 'fresh.log', cwd=folder, env=env, timeout=180)
     if p.returncode!=expect:
         raise AssertionError((folder,p.returncode,expect,(folder/'fresh.log').read_text()[-2500:]))
 
@@ -101,8 +94,7 @@ def restart(exe,folder,cfg,env):
     cfg['sim'].update(modelname='resumed',is_restarting='true',
         restarting_from_modelname=str(folder/'fresh'),restarting_from_frame='1')
     with (folder/'restart.cfg').open('w') as f:cfg.write(f)
-    with (folder/'restart.log').open('w') as f:
-        subprocess.run([str(exe),'restart.cfg'],cwd=folder,env=env,stdout=f,stderr=subprocess.STDOUT,check=True,timeout=180)
+    run_solver([str(exe), 'restart.cfg'], log=folder / 'restart.log', cwd=folder, env=env, check=True, timeout=180)
     count=0;clock_rounding=[]
     for suffix in ('save','chkpt'):
         for p in sorted(folder.glob(f'resumed.{suffix}.*')):
@@ -203,17 +195,13 @@ def main():
         result['checks'][source+'-fixed-node']=True
     # Remeshing changes shape weights; the source is located on the current
     # mesh after each change. This checks continuation, not remap conservation.
-    cfg=configparser.ConfigParser();cfg.optionxform=str
-    cfg.read(ROOT/'tests/functional/pt_remesh_restart.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
     cfg['control'].update(fixed_dt='.1',has_thermal_diffusion='true',gravity='0',PT_absolute_tolerance='1e-8')
     for group,rate in (('injection','[1e-10]'),('heat_injection','[100]')):
         cfg[group]=dict(enabled='true',num_points='1',points_x='[0.4]',points_z='[-5]',rate=rate,rate_model='constant_rate')
         if dim==3:cfg[group]['points_y']='[0.4]'
     with (out/'remesh.cfg').open('w') as f:cfg.write(f)
-    with (out/'remesh.log').open('w') as f:
-        subprocess.run([sys.executable,str(ROOT/'tests/functional/pt_initial_checkpoint.py'),str(exe),
-            str(out/'remesh.cfg'),str(out/'remesh'),'--steps','4','--restart-frame','1','--require-remesh'],
-            env=env,stdout=f,stderr=subprocess.STDOUT,check=True,timeout=240)
+    run_solver([sys.executable, str(ROOT / 'tests/functional/pt_initial_checkpoint.py'), str(exe), str(out / 'remesh.cfg'), str(out / 'remesh'), '--steps', '4', '--restart-frame', '1', '--require-remesh'], log=out / 'remesh.log', env=env, check=True, timeout=240)
     result['checks']['remesh']=dict(actual_mesh_change=True,all_continuation_payloads_exact=True)
     assert digest(exe)==result['executable_sha256']
     (out/'summary.json').write_text(json.dumps(result,indent=2)+'\n')

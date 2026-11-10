@@ -11,13 +11,10 @@ Constant properties and disabled mechanical feedback isolate transport.
 """
 
 import argparse
-import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import shutil
-import subprocess
 
 import numpy as np
 
@@ -27,17 +24,7 @@ L, WIDTH, P, END, DT = 10., 1., 1000., 10., .05
 RATE = ct.DIFFUSIVITY*math.pi**2/L**2
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def execute(executable, folder, cfg, name):
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=600,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+from des_case import digest, execute
 
 
 def run(executable, folder, spacing):

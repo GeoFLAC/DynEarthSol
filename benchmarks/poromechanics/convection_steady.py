@@ -73,9 +73,15 @@ def solve(Ra, n, tol=1e-11, relax=0.7, iterations=5000):
     return trap(top), trap(base), theta, psi
 
 
-def nusselt(Ra, grids=(32, 64, 128)):
+def nusselt(Ra, grids=(32, 64, 128), *, cache=None):
     """Richardson-extrapolated Nu and the finest-grid estimate of its error."""
-    nu = [solve(Ra, n)[0] for n in grids]
+    nu = []
+    for n in grids:
+        top, base, theta, psi = solve(Ra, n)
+        nu.append(top)
+        if cache is not None and n == grids[-1]:
+            np.savez_compressed(cache, ra=Ra, grid=n, temperature=theta,
+                                streamfunction=psi, nu_top=top, nu_base=base)
     order = math.log(abs(nu[0] - nu[1])/abs(nu[1] - nu[2]), 2)
     extrapolated = nu[2] + (nu[2] - nu[1])/(2**2 - 1)
     return dict(Ra=Ra, grids=list(grids), nu=nu, observed_order=order, nu_extrapolated=extrapolated,

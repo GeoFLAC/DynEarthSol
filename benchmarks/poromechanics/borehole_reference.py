@@ -34,15 +34,7 @@ from scipy.linalg import solve_banded
 from scipy.special import i0e, i1e, k0e, k1e
 
 
-def _stehfest(n):
-    v = np.zeros(n)
-    for k in range(1, n + 1):
-        total = 0.0
-        for j in range((k + 1)//2, min(k, n//2) + 1):
-            total += (j**(n//2)*math.factorial(2*j)/(math.factorial(n//2 - j)*math.factorial(j)
-                      * math.factorial(j - 1)*math.factorial(k - j)*math.factorial(2*j - k)))
-        v[k - 1] = (-1)**(k + n//2)*total
-    return v
+from laplace import stehfest_weights as _stehfest
 
 
 def _trapezoid_weights(grid):

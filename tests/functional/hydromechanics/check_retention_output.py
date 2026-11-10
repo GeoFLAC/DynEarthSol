@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -25,6 +24,8 @@ FIELDS = ('saturation', 'effective saturation', 'relative permeability', 'bulk d
 LAWS = (Retention('van_genuchten', .001, 1.6, .1),
         Retention('brooks_corey', .001, .8, .05), Retention('gardner', .002, sr=.2))
 
+
+from des_case import reset_boundaries, run_solver
 
 def polygon(ndims):
     if ndims == 2:
@@ -46,7 +47,7 @@ def config(ndims, pressure, active=True):
                        remeshing_option='0', max_steiner_factor='0', min_angle='10')
     cfg['control'].update(fixed_dt='.1', has_moving_mesh='false', has_PT='true', PT_option='1')
     cfg['markers'] = dict(init_marker_option='1', markers_per_element='64')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'): cfg['bc'][f'vbc_val_{side}'] = '0'
+    reset_boundaries(cfg['bc'], vbc_val='0')
     cfg['ic'].update(pore_pressure_value=str(pressure), weakzone_option='0', mattype_option='1',
                       num_mattype_layers='3', layer_mattypes='[0,1,2]', mattype_layer_depths='[.3,.6]')
     for key, text in list(cfg['mat'].items()):
@@ -101,9 +102,7 @@ def compare(folder, active, convert):
                 if active: np.testing.assert_array_equal(stream['/'+name][...], cells[name][...])
     elif convert:
         env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
-        with (folder/'vtk.log').open('w') as log:
-            subprocess.run([sys.executable, str(cell.ROOT/'2vtk.py'), '-a', str(folder/'cell'), '0', '1'],
-                           cwd=folder, env=env, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=90)
+        run_solver([sys.executable, str(cell.ROOT / '2vtk.py'), '-a', str(folder / 'cell'), '0', '1'], log=folder / 'vtk.log', cwd=folder, env=env, check=True, timeout=90)
         vtk = ET.parse(folder/f'cell.{frame:06d}.vtu')
         arrays = {a.get('Name'):a for a in vtk.findall('.//CellData/DataArray')}
         for name in FIELDS:
@@ -129,9 +128,7 @@ def study(executable, output, ndims):
             cfg['ic']['pore_pressure_option'] = '1'
             cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[-2000,1000,0,0,0,0]')
         with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        with (folder/'run.log').open('w') as stream:
-            subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env, stdout=stream,
-                           stderr=subprocess.STDOUT, check=True, timeout=120)
+        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
         case = compare(folder, active, convert=True)
         case['files_sha256'] = {p.name:cell.digest(p) for p in sorted(folder.iterdir())
                                 if p.suffix in ('.cfg', '.poly', '.info', '.vtu') or '.save.' in p.name or '.chkpt.' in p.name}

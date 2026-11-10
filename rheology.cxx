@@ -1048,45 +1048,20 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // 2 + NDIMS nodal gathers per element per step in every run. Absolute pressure
         // is needed by Bishop increments and the effective-stress strength criterion.
         double dpp = 0.0;
-        if (has_hydraulic_diffusion && !var.fluid_pressure_consumed) {
-            #pragma acc loop seq
-            for (int j = 0; j < NODES_PER_ELEM; ++j)
-                dpp += dppressure[conn[j]] / double(NODES_PER_ELEM);
-            if (var.mat->has_retention) {
-                // Bishop increment -mean_j [Se(p)*p - Se(p_old)*p_old] with this element's
-                // own law, p_old = p + dppressure. Where the law
-                // is saturated at both pressures of every node, the raw mean above is kept.
-                const int_vec &markers = (*var.elemmarkers)[e];
-                double bishop = 0.0;
-                bool saturated = true;
-                #pragma acc loop seq
-                for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                    const double p = ppressure[conn[j]];
-                    const double old = p + dppressure[conn[j]];
-                    const double se = element_se(*var.mat, markers, p);
-                    const double se_old = element_se(*var.mat, markers, old);
-                    if (se != 1 || se_old != 1) saturated = false;
-                    bishop += (se_old * old - se * p) / double(NODES_PER_ELEM);
-                }
-                if (!saturated) dpp = bishop;
-            }
+        double pore_strength_pressure = 0;
+        const bool increment = has_hydraulic_diffusion && !var.fluid_pressure_consumed;
+        const bool strength = param.control.has_hydraulic_diffusion &&
+                              (var.mat->rheol_type & MatProps::rh_plastic);
+        if (increment || strength) {
+            const auto pressure = element_pressure<false>(var,e,ppressure,dppressure,increment,strength);
             // Biot-weighted pore-pressure INCREMENT, not a rate: update_pore_pressure()
             // folded dt in, and stores dppressure with the sign OPPOSITE to its change
             // to ppressure. elastic_effective() adds this to the diagonal components.
-            dpp *= var.mat->alpha_biot(e);
-        }
-
-        double pore_strength_pressure = 0;
-        if (param.control.has_hydraulic_diffusion && (var.mat->rheol_type & MatProps::rh_plastic)) {
             // Initial equilibrium must test skeleton strength too; it only
-            // suppresses consumption of pending pressure increments above.
-            const int_vec &markers = (*var.elemmarkers)[e];
-            #pragma acc loop seq
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                const double p = ppressure[conn[j]];
-                pore_strength_pressure += element_se(*var.mat, markers, p) * p / NODES_PER_ELEM;
-            }
-            pore_strength_pressure *= var.mat->alpha_biot(e);
+            // suppresses consumption of pending pressure increments.
+            const double alpha = var.mat->alpha_biot(e);
+            if (increment) dpp = pressure.bishop * alpha;
+            if (strength) pore_strength_pressure = pressure.strength * alpha;
         }
 
         // No vz in 2D: compute_slip_rate2 takes the vertical component as its second

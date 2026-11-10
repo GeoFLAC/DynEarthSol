@@ -5,7 +5,7 @@ benchmark comparisons, application figures and figure scripts live in the
 [DES manual](https://geoflac.github.io/des3d/). Figure sources are in des3d's
 `docs/benchmarks/poromechanics/img/_src/` and
 `docs/tutorial/groundwater-slopes/img/_src/`; set `DES_DIR` to this checkout.
-The [implementation notes](../../doc/hydro/index.md) describe the solver.
+The [implementation notes](https://geoflac.github.io/des3d/docs/theory/poromechanics) describe the solver.
 Generated study results are ignored by Git. Run and check them on a compute host.
 
 Build both CPU executables from the repository root, then run:
@@ -34,15 +34,15 @@ python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechan
 
 Each study saves its configurations, logs, raw fields, metrics and provenance.
 
-The [implementation guide](../../doc/hydro/design.md) describes physical-step
+The [implementation guide](https://geoflac.github.io/des3d/docs/developer/source-layout) describes physical-step
 ownership and restart boundaries. `check_poroperm.py`
 checks evolving properties and exact restart on fixed and remeshed domains.
 It does not qualify conservative fluid-content transfer across remeshing.
 `check_boundaries.py` verifies scheduled top/side flux and pressure, balance
-and checkpoint continuation. The [explicit formulation](../../doc/hydro/transport.md)
+and checkpoint continuation. The [explicit formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics)
 describes the component tests and diagnostic fields.
 
-The [refinement and multi-well qualification](../../doc/hydro/refinement.md)
+The [refinement and multi-well qualification](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi)
 records separate mesh/time trends, the small-strain superposition limits,
 acceptance budgets and measured results. Run the cases sequentially:
 
@@ -69,7 +69,7 @@ For a behavior-preserving production refactor, keep the parent output and
 compare every save/checkpoint physical payload, for each dimension:
 
 ```sh
-python3 benchmarks/poromechanics/compare_runs.py benchmarks/poromechanics/results/baseline/terzaghi-2d benchmarks/poromechanics/results/hydraulic-module/terzaghi-2d --report benchmarks/poromechanics/results/hydraulic-module/comparison-2d.json
+python3 tests/functional/compare_runs.py benchmarks/poromechanics/results/baseline/terzaghi-2d benchmarks/poromechanics/results/hydraulic-module/terzaghi-2d --report benchmarks/poromechanics/results/hydraulic-module/comparison-2d.json
 ```
 
 The comparison requires identical output-file sets and exact payload equality;
@@ -118,12 +118,12 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
 - `averaged_aquifer_reference.py`: a thickness-averaged Biot pumping reference
   for an infinite aquifer or finite annulus, with numerical Laplace inversion
   for the finite case. Bear-Corapcioglu is a limiting case. See the
-  [derivation and storage convention](../../doc/hydro/aquifer.md).
+  [derivation and storage convention](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer).
   `pumping_slab.py` supplies a DES pressure/strain comparison within its
   small-strain slab and finite-domain assumptions.
 - `unsaturated_reference.py`: retention laws, conservative explicit column
   updates and transient/steady infiltration references. The
-  [unsaturated formulation](../../doc/hydro/unsaturated.md) describes
+  [unsaturated formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics#partly-saturated-flow) describes
   retention, element-aware Bishop coupling and their separate reference
   checks, including the U0-U9 levels.
   `check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY` runs transient,
@@ -141,7 +141,7 @@ K/G=2 to distinguish the GVS ceilings, zero gravity, a fixed mesh and no
 heat diffusion. Comparisons use actual saved physical times. This is an
 exploration, not an acceptance test: a `complete` execution may have large
 analytical or force errors. Failures and incomplete time coverage remain
-in the report. See [method qualification and limits](../../doc/hydro/mechanics.md).
+in the report. See [method qualification and limits](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi#coupled-gvs-and-pt-in-3d).
 
 ```sh
 ulimit -v 6291456

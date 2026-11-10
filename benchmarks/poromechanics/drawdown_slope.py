@@ -11,14 +11,11 @@ fluid). Reference: Bishop's method on DES's pore pressure and unit weight.
     drawdown_slope.py EXECUTABLE OUTPUT [--spacings 1] [--times 250 1000 ...] [--factors 0.8 0.9 ...]
 """
 import argparse
-import configparser
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -42,8 +39,8 @@ TIMES = [250.0, 1000.0, 3000.0, 6000.0, 12000.0, 20000.0]  # s after drawdown
 FACTORS = [0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.1, 1.2, 1.3, 1.4]
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, reset_boundaries, source_revision
 
 
 def polygon(path, h):
@@ -78,8 +75,7 @@ def config(h, name, stage, restart=None, factor=None, folder=None):
     ctl.update(has_PT='false', fixed_dt=repr(SEED_DT*h) if stage == 'seed' else '0', inertial_scaling=repr(srm.SCALING),
                characteristic_speed='1e-5', dt_fraction='0.5', damping_factor=repr(srm.DAMPING),
                has_hydraulic_diffusion='true', has_poroelastic_pressure_feedback='true')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc[f'hbc_{side}'] = '0'
+    reset_boundaries(bc, hbc='0')
     loaded = stage in ('seed', 'reservoir')
     # Reservoir: fill from p = 0 through the crest (p = 0) and the base (hydrostatic); face and toe loaded, sealed.
     # Drawdown: crest and base sealed; face and toe platform drain at p = 0.
@@ -140,7 +136,7 @@ def study(exe, out, spacings, times, factors, workers, flow_threads=1, resume=No
     out.mkdir(parents=True, exist_ok=False)
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
                   reference_sha256=digest(br.__file__), srm_sha256=digest(srm.__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   rho_s=RHO_S, porosity=PHI_N, frozen=FROZEN, free_fluid=FREE_FLUID, alpha=ALPHA_G, sr=SR, permeability=PERMEABILITY,
                   fill_time=FILL_TIME, drain_time=DRAIN_TIME, frame=FRAME, duration=srm.DURATION, scaling=srm.SCALING,
                   damping=srm.DAMPING, flow_threads=flow_threads, trial_workers=workers, cases=[])

@@ -9,12 +9,10 @@ domain edge, which several elements share, follow a schedule that pumps, shuts
 in and injects, with events between time steps. The output directory is new.
 """
 
-import configparser
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -30,10 +28,10 @@ MAT = dict(bulk=1e8, shear=1e8, biot=0.8, porosity=0.25, fluid_bulk=2.2e9,
 MAT['grain_bulk'] = MAT['bulk'] / (1 - MAT['biot'])
 
 
+from des_case import read_config, run_solver
+
 def config(dim, edge):
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
+    cfg = read_config(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
     L, H, Q = 100.0, 10.0, (1e-3 if dim == 3 else 1e-4)
     t = [0, EVENTS[0], EVENTS[0], EVENTS[1], EVENTS[1]]
     cfg['sim'].update(modelname='wells', max_time_in_yr=repr(DURATION / YEAR2SEC),
@@ -104,9 +102,7 @@ def main():
         cfg, Q = config(dim, edge)
         with (case / 'input.cfg').open('w') as stream:
             cfg.write(stream)
-        with (case / 'run.log').open('w') as stream:
-            subprocess.run([str(exe), 'input.cfg'], cwd=case, env=env, check=True,
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=900)
+        run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=env, check=True, timeout=900)
         worst, frames = balance(case, dim, Q)
         summary[name] = dict(frames=frames, max_balance_error_over_pumped=worst)
         ok &= worst < 1e-4

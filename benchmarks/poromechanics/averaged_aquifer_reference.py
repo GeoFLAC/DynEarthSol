@@ -12,7 +12,7 @@ This generalises the regional subsidence model of Bear and Corapcioglu
 Their closed forms are the limit of ``line_well`` with alpha=1,
 K_f=K_s=inf and no well radius; ``bear_corapcioglu_1981b`` evaluates the
 printed equations directly. The derivation and the list of approximations
-are in doc/hydro/aquifer.md.
+are in https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer.
 
 Conventions: tension-positive stress and strain; excess pore pressure p is
 positive in compression, so extraction (rate > 0) makes p negative. Rates are

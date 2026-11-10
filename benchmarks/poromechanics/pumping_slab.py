@@ -10,13 +10,11 @@ areal/vertical strains are compared with AveragedAquifer.line_well.
 """
 
 import argparse
-import configparser
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -34,10 +32,11 @@ BAND = (15.0, 120.0)                      # compared radii, m
 DURATION = 1.0e4                          # s: sqrt(4 D t) stays below 0.3 L
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import read_config, run_solver
+
 def config(resolution=20.0):
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     cfg['sim'].update(modelname='slab', max_time_in_yr=repr(DURATION / YEAR2SEC),
                       output_time_interval_in_yr=repr(DURATION / 4 / YEAR2SEC))
     cfg['mesh'] = dict(meshing_option='1', xlength=repr(L), ylength=repr(L), zlength=repr(B),
@@ -91,8 +90,6 @@ def compare(case):
     return aq, rows
 
 
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
@@ -113,10 +110,7 @@ def main():
                           config_sha256=hashlib.sha256((case/'input.cfg').read_bytes()).hexdigest(),
                           resolution_m=args.resolution, omp_threads=1)
         (output/'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
-        with (case / 'run.log').open('w') as stream:
-            subprocess.run([str(ROOT / 'dynearthsol3d'), 'input.cfg'], cwd=case, check=True,
-                           env=dict(os.environ, OMP_NUM_THREADS='1'),
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=3600)
+        run_solver([str(ROOT / 'dynearthsol3d'), 'input.cfg'], log=case / 'run.log', cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'), timeout=3600)
     aq, rows = compare(case)
     summary = [{k: v for k, v in row.items() if k != 'plot'} for row in rows]
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')

@@ -15,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 
 import numpy as np
 
@@ -31,6 +30,8 @@ CASES = (
     ('suction', 2e5, -2e5, 1., 3),
 )
 
+
+from des_case import run_solver
 
 def config(ndims, rheology, confinement, pressure, biot, retention):
     cfg = cell.config(ndims, STEPS, 'moderate', 1)
@@ -95,9 +96,7 @@ def study(executable, output, ndims, show_failure):
             folder = output/f'{rheology}-{name}'; folder.mkdir()
             cfg = config(ndims, rheology, confinement, pressure, biot, retention)
             with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-            with (folder/'run.log').open('w') as stream:
-                subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env,
-                               stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+            run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
             case = compare(folder, ndims, confinement, pressure, biot, retention)
             report['cases'][folder.name] = case
             print(folder.name, json.dumps(case), flush=True)

@@ -19,6 +19,7 @@ import subprocess
 import numpy as np
 
 import slope_application as sa
+from unsaturated_reference import Retention
 
 RAIN, SUCTION, ALPHA_G, SR = 1e-5, 5e3, 2.4e-4, .05      # m/s, Pa, 1/Pa (Gardner), residual saturation
 COHESION, FRICTION = 1e3, math.radians(30.0)             # weaker than the pressure-driven slope: fails before saturating
@@ -26,8 +27,11 @@ U_POINT, U_DAVIS, U_STAR = sa.estimates(COHESION, FRICTION)
 DURATION = 1.2e5                                            # s
 
 
-def se(p):
-    return np.minimum(1.0, np.exp(ALPHA_G*np.minimum(p, 0)))
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import source_revision
+
+se = Retention('gardner', ALPHA_G, sr=SR).se
 
 
 def config(h, steps, loaded):
@@ -63,7 +67,7 @@ def study(exe, out, spacings, steps):
     # the pressure-driven collapse value; no water leaves.
     result = dict(executable=str(exe), executable_sha256=sa.digest(exe), runner_sha256=sa.digest(__file__),
                   slope_runner_sha256=sa.digest(sa.__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=sa.ROOT, text=True).strip(),
+                  source_commit=source_revision(sa.ROOT),
                   rain=RAIN, suction=SUCTION, alpha=ALPHA_G, sr=SR, se0=se0, s0=s0, bishop0=-se0*SUCTION,
                   cohesion=COHESION, friction_deg=math.degrees(FRICTION),
                   u_point=U_POINT, u_davis=U_DAVIS, u_star=U_STAR, steps=steps, cases=[])

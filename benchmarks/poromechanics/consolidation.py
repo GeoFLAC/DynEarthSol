@@ -7,7 +7,6 @@ import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 import numpy as np
 from terzaghi_reference import TerzaghiReference
@@ -15,6 +14,9 @@ from terzaghi_reference import TerzaghiReference
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import read_config, run_solver, source_revision
 
 def load_study(study, record_source, active_runner=None):
     """Verify the archived and optional active runner before recording a study."""
@@ -26,14 +28,10 @@ def load_study(study, record_source, active_runner=None):
     return summary
 
 
-
 def make_config(dim):
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
+    cfg = read_config(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
     cfg['control'].update(PT_option='1', PT_absolute_tolerance='1e-6', gravity='10')
     return cfg
-
 
 
 def run_cases(output, timeout):
@@ -49,16 +47,13 @@ def run_cases(output, timeout):
         command = [str(executable), 'input.cfg']
         executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
         print(f'Running {dim}D Terzaghi in {case}', flush=True)
-        with (case / 'run.log').open('w') as stream:
-            subprocess.run(command, cwd=case, env=environment, check=True,
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
+        run_solver(command, log=case / 'run.log', cwd=case, env=environment, check=True, timeout=timeout)
         if hashlib.sha256(executable.read_bytes()).hexdigest() != executable_sha256:
             raise RuntimeError('Executable changed during the run; rebuild before benchmarking')
         runs[str(dim)] = dict(command=command, omp_threads=1,
                              executable_sha256=executable_sha256,
                              input_sha256=hashlib.sha256((case / 'input.cfg').read_bytes()).hexdigest())
     return runs
-
 
 
 def reference_from_config(cfg):
@@ -70,7 +65,6 @@ def reference_from_config(cfg):
                             porosity=material('porosity'), fluid_bulk=material('fluid_bulk_modulus'),
                             grain_bulk=material('bulk_modulus_s'), biot=material('biot_coeff'),
                             permeability=material('hydraulic_perm'), viscosity=material('fluid_visc'))
-
 
 
 def load_case(output, dim):
@@ -151,7 +145,7 @@ def main():
     else:
         output.mkdir(parents=True, exist_ok=False)
         runs = run_cases(output, args.timeout)
-    summary = dict(source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+    summary = dict(source_commit=source_revision(ROOT),
                    runs=runs, terzaghi={str(d): load_case(output, d)['metrics'] for d in (2, 3)})
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     print(json.dumps(summary['terzaghi'], indent=2))

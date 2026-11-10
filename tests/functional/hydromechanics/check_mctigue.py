@@ -21,12 +21,9 @@ element layers and the surface heave from the integrated layer strain.
     check_mctigue.py EXECUTABLE OUTPUT [--ndims 2] [--spacings 0.1 0.05 0.025] [--steps 200]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -44,14 +41,12 @@ REF = McTigue(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['flui
               MAT['permeability'], MAT['viscosity'], MAT['alpha_solid'], MAT['alpha_fluid'], KAPPA, DT)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def config(ndims, h, steps, start=None):
     """The heated run; with start=None, the zero-step run at T0 that it restarts from."""
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='mctigue' if start else 'start', max_steps=str(steps if start else 0),
                       max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       output_step_interval=str(max(1, steps//8)), output_time_interval_in_yr='1e9',
@@ -118,18 +113,16 @@ def study(exe, out, ndims, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   ndims=ndims, steps=steps, duration_s=DURATION, material=MAT,
                   reference=dict(kappa=KAPPA, c=REF.c, gamma=REF.gamma, S=REF.S, dT=DT), cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'start.cfg').open('w') as f: config(ndims, h, steps).write(f)
         with (folder/'mctigue.cfg').open('w') as f: config(ndims, h, steps, folder/'start').write(f)
         for name in ('start', 'mctigue'):
-            with (folder/f'{name}.log').open('w') as f:
-                subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                               check=True, timeout=20000)
+            run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=20000)
         frames, nodes = compare(folder, h)
         item = dict(spacing_m=h, nodes=nodes, frames=frames, input_sha256=digest(folder/'mctigue.cfg'),
                     **{k: max(f[k] for f in frames) for k in

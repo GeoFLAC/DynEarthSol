@@ -8,12 +8,10 @@ volume projection measures its growth independently of the other linear
 modes. This tests linear 3D cells, not nonlinear steady planform selection.
 """
 import argparse
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -22,6 +20,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 import check_convection as cc
 from convection_reference import critical_rayleigh,growth_rate,storage_growth_rate
 
+
+from des_case import run_solver, source_revision
 
 def series(folder):
     model=cc.Dynearthsol(str(folder/'box'))
@@ -53,15 +53,13 @@ def study(exe,out,spacing,ratio,steps,dt,seed,threads,fluid_bulk=1000.):
     cfg['sim'].update(has_marker_output='false',has_initial_checkpoint='false',checkpoint_frame_interval='100000')
     with (out/'box.cfg').open('w') as stream:cfg.write(stream)
     env=dict(os.environ,OMP_NUM_THREADS=str(threads),OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
-    with (out/'run.log').open('w') as stream:
-        subprocess.run([str(exe),'box.cfg'],cwd=out,env=env,stdout=stream,stderr=subprocess.STDOUT,
-                       check=True,timeout=14400)
+    run_solver([str(exe), 'box.cfg'], log=out / 'run.log', cwd=out, env=env, check=True, timeout=14400)
     measured,nodes,elements=series(out)
     result=dict(dimension=3,spacing_m=spacing,nodes=nodes,elements=elements,
         rayleigh=ra,critical_rayleigh=critical,mode=[1,1,1],seed_K=seed,steps=steps,dt_s=dt,threads=threads,fluid_bulk_Pa=fluid_bulk,
         series=measured,executable_sha256=cc.digest(exe),runner_sha256=cc.digest(Path(__file__)),
         shared_runner_sha256=cc.digest(Path(cc.__file__)),reference_sha256=cc.digest(Path(cc.ROOT/'benchmarks/poromechanics/convection_reference.py')),
-        input_sha256=cc.digest(out/'box.cfg'),source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=cc.ROOT,text=True).strip(),
+        input_sha256=cc.digest(out/'box.cfg'),source_commit=source_revision(cc.ROOT),
         scope='Rigid saturated Darcy-Boussinesq matrix; linear 3D mode with exact finite-storage reference; no nonlinear steady-cell claim')
     if seed:
         values=np.array(measured);late=values[len(values)//2:]

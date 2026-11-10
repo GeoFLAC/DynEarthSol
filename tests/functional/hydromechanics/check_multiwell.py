@@ -10,11 +10,9 @@ constitutive model. This checks the small-strain coupled/source limit, not
 infinite-domain Theis accuracy or nonlinear/evolving-property superposition.
 """
 
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -27,8 +25,7 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 RATE_SCALE = 1e-3
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+from des_case import digest, run_solver
 
 
 def main():
@@ -64,9 +61,7 @@ def main():
                               net_rate=sum(rates[w] for w in wells), status='running')
         (output / 'provenance.json').write_text(json.dumps(records, indent=2) + '\n')
         print(f'Running {dim}D {label}', flush=True)
-        with (folder / 'run.log').open('w') as stream:
-            subprocess.run([str(exe), 'input.cfg'], cwd=folder, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=180)
+        run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=180)
         if digest(exe) != original_hash:
             raise RuntimeError('Executable changed during multi-well verification')
         model = Dynearthsol(str(folder / 'wells'))

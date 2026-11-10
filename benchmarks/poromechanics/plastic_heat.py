@@ -15,7 +15,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 
 import numpy as np
 
@@ -25,6 +24,10 @@ from Dynearthsol import Dynearthsol, scan_frames
 RATE, BULK, SHEAR = .5, 2e10, 1e9
 YIELD, CONFINING, CAPACITY, T0 = 1e7, 3e7, 2700*1000., 300.
 
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import reset_boundaries, run_solver
 
 def work(time, elastic=False):
     gamma = 2*RATE*np.asarray(time)
@@ -67,10 +70,7 @@ def configuration(dim, method, dt, steps, elastic=False):
                           has_thermal_diffusion='false', has_shear_heating='true',
                           has_fluid_thermal_advection='false', is_using_mixed_stress='false',
                           PT_option=method[-1] if method.startswith('pt') else '1')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'].update({f'vbc_{side}': '1', f'vbc_val_{side}': '0',
-                          f'hbc_{side}': '0', f'tbc_{side}': '0',
-                          f'stress_bc_{side}': '0'})
+    reset_boundaries(cfg['bc'], vbc='1', vbc_val='0', hbc='0', tbc='0', stress_bc='0')
     cfg['bc'].update(vbc_val_x1=repr(RATE), vbc_val_z0=repr(RATE),
                      hbc_flux='[0,0,0,0,0,0]', surface_temperature=repr(T0),
                      mantle_temperature=repr(T0))
@@ -92,10 +92,7 @@ def run(exe, folder, cfg, name='cell', timeout=180):
     cfg['sim']['modelname'] = name
     with (folder/f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, stdout=stream,
-                       stderr=subprocess.STDOUT, timeout=timeout, check=True,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, timeout=timeout, check=True, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
     return Dynearthsol(str(folder/name))
 
 

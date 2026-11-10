@@ -4,7 +4,6 @@
 Usage: check_boundaries.py EXECUTABLE OUTPUT_DIRECTORY
 """
 import argparse
-import configparser
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
+
+from des_case import read_config, run_solver
 
 def mesh_tags(exe, output):
     """Imported tag names do not determine which pressure faces intersect."""
@@ -43,8 +44,7 @@ def mesh_tags(exe, output):
 1
 0 .5 -.5 0 1
 ''')
-        cfg = configparser.ConfigParser(); cfg.optionxform = str
-        cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
         cfg['sim'].update(modelname='tags', max_steps='2', output_step_interval='1',
                           has_initial_checkpoint='yes', checkpoint_frame_interval='1')
         cfg['mesh'].update(meshing_option='90', poly_filename=str(poly), xlength='1',
@@ -61,10 +61,7 @@ def mesh_tags(exe, output):
         cfg['ic'].update(pore_pressure_option='2', pore_pressure_value='0',
                          has_body_force_adjustment='false', weakzone_option='0')
         with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        with (folder/'run.log').open('w') as stream:
-            done = subprocess.run([str(exe), 'input.cfg'], cwd=folder, stdout=stream,
-                                  stderr=subprocess.STDOUT, timeout=60,
-                                  env=dict(os.environ, OMP_NUM_THREADS='1'))
+        done = run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, timeout=60, env=dict(os.environ, OMP_NUM_THREADS='1'))
         result[name] = dict(returncode=done.returncode, expected=expected)
         if done.returncode == 0:
             model = Dynearthsol(str(folder/'tags')); x = model.read_field(0, 'coordinate')
@@ -82,9 +79,7 @@ def mesh_tags(exe, output):
                       restarting_from_modelname=str(output/'disjoint/tags'), restarting_from_frame='1', max_steps='3')
     cfg['bc']['hbc_x0'] = '2'
     with (output/'restart.cfg').open('w') as stream: cfg.write(stream)
-    with (output/'restart.log').open('w') as stream:
-        done = subprocess.run([str(exe), 'restart.cfg'], cwd=output, stdout=stream,
-                              stderr=subprocess.STDOUT, timeout=60, env=dict(os.environ, OMP_NUM_THREADS='1'))
+    done = run_solver([str(exe), 'restart.cfg'], log=output / 'restart.log', cwd=output, timeout=60, env=dict(os.environ, OMP_NUM_THREADS='1'))
     result['restart-shared'] = dict(returncode=done.returncode, expected=11,
                                     actual_node_diagnostic='Node ' in (output/'restart.log').read_text())
     (output/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
@@ -105,9 +100,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     result = {}
     for mode in ('flux', 'flux-side', 'pressure'):
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_remesh_restart.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
         cfg['control'].update(gravity='0', has_moving_mesh='false', fixed_dt='0.01',
                               PT_absolute_tolerance='1e-8')
         cfg['bc'].update(stress_val_z1='0', hbc_z1='2' if mode == 'pressure' else '3',

@@ -9,13 +9,11 @@ optional finite-density model with a declared constant fictitious mass.
 """
 
 import argparse
-import configparser
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -25,17 +23,14 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def run(executable, folder, cfg, name, timeout=120):
     with (folder / f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder / f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=timeout,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+    run_solver([str(executable), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=timeout, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
 
 
 def study(executable, output, spacing, steps, amplitude, samples=4, restart_check=False,
@@ -58,20 +53,19 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
     period = 2/speed
     summary = dict(executable=str(executable), executable_sha256=digest(executable),
                    analyzer_sha256=digest(Path(__file__)),
-                   source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                   source_commit=source_revision(ROOT),
                    content_model=content_model, scaling=scaling if content_model else None,
                    gvs=gvs, cycles=cycles, moving_mesh=moving_mesh,
                    reference=dict(storage_Pa_inv=storage, undrained_modulus_Pa=modulus,
                                   density_kg_m3=density, wave_speed_m_s=speed, period_s=period), cases={})
-    patch = subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT)
+    patch = source_diff(ROOT)
     (output / 'source.diff').write_bytes(patch)
     summary['source_diff_sha256'] = hashlib.sha256(patch).hexdigest()
     snapshots = {}
     for count in steps:
         folder = output / f'steps-{count}'
         folder.mkdir()
-        cfg = configparser.ConfigParser(); cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
         cfg['sim'].update(modelname='seed', max_steps='1', output_step_interval='1',
                           output_time_interval_in_yr='1', checkpoint_frame_interval='1',
                           has_initial_checkpoint='true', max_time_in_yr='1')
@@ -89,8 +83,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
             cfg['mat']['porosity_model'] = '1'
             if gvs: cfg['control']['fixed_dt'] = '0'
         cfg['bc'].update(vbc_x1='1', vbc_z1='1', stress_bc_z1='0', stress_val_z1='0')
-        for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-            cfg['bc'][f'hbc_{side}'] = '0'
+        reset_boundaries(cfg['bc'], hbc='0')
         cfg['ic']['has_body_force_adjustment'] = 'false'
         cfg['mat'].update(bulk_modulus=f'[{bulk}]', shear_modulus=f'[{shear}]', porosity=f'[{phi}]',
                           biot_coeff=f'[{alpha}]', fluid_bulk_modulus=f'[{fluid_bulk}]',
@@ -182,9 +175,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
                 cfg['control']['is_quasi_static']='true'
                 cfg['control']['has_poroelastic_pressure_feedback']='false'
             with (folder/'wrong-order.cfg').open('w') as stream:cfg.write(stream)
-            with (folder/'wrong-order.log').open('w') as stream:
-                rejected=subprocess.run([str(executable),'wrong-order.cfg'],cwd=folder,
-                    stdout=stream,stderr=subprocess.STDOUT,timeout=60)
+            rejected = run_solver([str(executable), 'wrong-order.cfg'], log=folder / 'wrong-order.log', cwd=folder, timeout=60)
             assert rejected.returncode == 22
             assert ('finite-density' if content_model else 'hydraulic step ordering differs') in (folder/'wrong-order.log').read_text().lower()
             summary['cases'][str(count)].update(restart_physical_fields_exact=True,

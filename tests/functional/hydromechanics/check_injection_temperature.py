@@ -23,13 +23,10 @@ which acts as a line source of q/4 per unit thickness: a sanity check.
     check_injection_temperature.py EXECUTABLE OUTPUT [--spacings 0.2 0.1 0.05] [--steps 500] [--ndims 2]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -49,13 +46,11 @@ REF = Avdonin(rate=Q, conductivity=MAT['conductivity'], capacity=CAPACITY, fluid
 TIMES = (1.25e5, 2.5e5, 3.75e5, 5e5)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def config(h, steps, ndims=2):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='hot', max_steps=str(steps), max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       output_step_interval=str(steps//4), output_time_interval_in_yr='1e9',
                       checkpoint_frame_interval='100000', has_initial_checkpoint='no')
@@ -66,8 +61,7 @@ def config(h, steps, ndims=2):
                           fixed_dt=repr(DURATION/steps), has_poroelastic_pressure_feedback='false',
                           has_thermal_diffusion='true', has_fluid_thermal_advection='true')
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'], bc[f'tbc_{side}'] = '1', '0', '0', '0'
+    reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0', tbc='0')
     bc.update(hbc_x1='2', hbc_z0='2', hbc_pressure='[0,0,0,0,0,0]', stress_bc_z1='0',
               surface_temperature=repr(T0), mantle_temperature=repr(T0))
     cfg['ic'].update(temperature_option='4', temp_background=repr(T0), temp_anomaly_amplitude='0',
@@ -120,15 +114,13 @@ def study(exe, out, spacings, steps, ndims=2):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   steps=steps, ndims=ndims, material=MAT, capacity=CAPACITY, nu=REF.nu, front_m=REF.front(DURATION), cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'hot.cfg').open('w') as f: config(h, steps, ndims).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'hot.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'hot.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         frames, nodes = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, frames=frames, input_sha256=digest(folder/'hot.cfg'),
                     temperature_error=max(f['temperature_error'] for f in frames),

@@ -10,9 +10,7 @@ that three quarters through. Reference: Bishop's method (bishop_reference.py).
     strength_reduction_slope.py EXECUTABLE OUTPUT [--spacings 1 0.5] [--factors 1.0 1.2 ...]
 """
 import argparse
-import configparser
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import json
 import math
 import os
@@ -38,8 +36,8 @@ SCALING, DAMPING = 1e5, 0.8               # inertial scaling; DES's default loca
 FACTORS = [1.0, 1.2, 1.3, 1.33, 1.34, 1.35, 1.36, 1.37, 1.38, 1.39, 1.40, 1.45]
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, reset_boundaries, source_revision
 
 
 def polygon(path, h):
@@ -63,8 +61,7 @@ def polygon(path, h):
 
 def config(h, name, factor=None):
     """seed: no gravity, zero stress, zero steps; gravity: two elastic PT steps; otherwise the explicit reduced-strength run."""
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname=name, output_step_interval='1', output_time_interval_in_yr='1e9',
                       checkpoint_frame_interval='1' if name == 'gravity' else '100000', has_initial_checkpoint='yes',
                       max_steps={'seed': '0', 'gravity': '2'}.get(name, '1000000000'),
@@ -83,8 +80,7 @@ def config(h, name, factor=None):
         cfg['control'].update(has_PT='false', fixed_dt='0', inertial_scaling=repr(SCALING), characteristic_speed='1e-5',
                               dt_fraction='0.5', damping_factor=repr(DAMPING))
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc.update({f'vbc_{side}': '0', f'vbc_val_{side}': '0', f'stress_bc_{side}': '0', f'hbc_{side}': '0'})
+    reset_boundaries(bc, vbc='0', vbc_val='0', stress_bc='0', hbc='0')
     bc.update(vbc_x0='1', vbc_x1='1', vbc_z0='3')
     cfg['ic'].update(initial_stress_option='1' if name == 'seed' else '0', initial_stress='[0,0,0]', pore_pressure_option='0',
                      has_body_force_adjustment='false', weakzone_option='0', mattype_option='0')
@@ -140,7 +136,7 @@ def study(exe, out, spacings, factors, workers):
     fs_bishop, circle = br.embankment().critical(br.starts())
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
                   reference_sha256=digest(br.__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   height=br.H, run=br.RUN, toe=br.TOE, crest=br.CREST, base=br.BASE, gamma=br.GAMMA, cohesion=br.COHESION,
                   friction_deg=math.degrees(br.FRICTION), young=E, poisson=NU, duration=DURATION, frames=FRAMES,
                   scaling=SCALING, damping=DAMPING, fs_bishop=fs_bishop, bishop_circle=list(br.embankment().circle(*circle)), cases=[])

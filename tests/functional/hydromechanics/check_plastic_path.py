@@ -12,12 +12,13 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 
 import numpy as np
 
 import check_salencon as cs
 
+
+from des_case import run_solver
 
 def patch_config(poly):
     poly.write_text('4 2 0 0\n0 0 0\n1 1 0\n2 1 -1\n3 0 -1\n'
@@ -34,9 +35,7 @@ def patch_config(poly):
 def run(executable, cfg, folder, name):
     with (folder/f'{name}.cfg').open('w') as stream: cfg.write(stream)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder, env=env,
-                       stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=90)
+    run_solver([str(executable), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=90)
 
 
 def study(executable, output, manifest):

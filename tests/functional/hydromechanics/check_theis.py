@@ -13,13 +13,10 @@ is wide enough that the drawdown at its far sides stays negligible.
     check_theis.py EXECUTABLE OUTPUT [--spacings 5 2.5 1.25]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -43,13 +40,11 @@ SCALE = Q/(4*math.pi*T)                 # pressure scale of the Theis solution, 
 SCHEDULE = [(0.0, Q), (PUMP, 0.0)]
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def config(h):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     steps = int(round(END/DT))
     cfg['sim'].update(modelname='theis', max_steps=str(steps), output_step_interval=str(steps//8),
                       max_time_in_yr=repr(2*END/YEAR2SEC), output_time_interval_in_yr='1e9',
@@ -61,8 +56,7 @@ def config(h):
                           fixed_dt=repr(DT), has_poroelastic_pressure_feedback='false',
                           has_thermal_diffusion='false')
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
+    reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0')
     t = [0.0, PUMP, PUMP]
     bc.update(stress_bc_z1='0', stress_val_z1='0', num_wells='1', well_x='[0.0]', well_y='[0.0]',
               well_z_top='[0]', well_z_bottom=f'[{-B}]', well_rate=f'[{Q/4!r}]',
@@ -80,17 +74,15 @@ def study(exe, out, spacings):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   reference=dict(L=L, B=B, Q=Q, pump_until_s=PUMP, end_s=END, dt_s=DT, storage_per_Pa=STORAGE,
                                  diffusivity=DIFFUSIVITY, permeability=PERM, transmissivity=T, storativity=S,
                                  pressure_scale_Pa=SCALE), cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'theis.cfg').open('w') as f: config(h).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'theis.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=3600)
+        run_solver([str(exe), 'theis.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=3600)
         model = Dynearthsol(str(folder/'theis')); rows = scan_frames(str(folder/'theis'))
         coord = model.read_field(0, 'coordinate')
         r = np.hypot(coord[:, 0], coord[:, 1])

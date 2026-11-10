@@ -19,8 +19,6 @@ along each run's own vertical strain.
     check_bishop_cell.py EXECUTABLE OUTPUT [--ndims 2] [--steps 10 20 40 80] [--explicit]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,8 +40,7 @@ STRAIN, DURATION = -1e-3, 1000.0                   # final vertical strain, end 
 S0 = MAT['porosity']/MAT['fluid_bulk'] + (MAT['biot'] - MAT['porosity'])/MAT['grain_bulk']
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def exact(state, strain):
@@ -59,8 +56,7 @@ def exact(state, strain):
 
 
 def config(ndims, steps, state, pt_option=0):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     explicit = steps == 0
     cfg['sim'].update(modelname='cell', max_time_in_yr=repr(DURATION/YEAR2SEC),
                       max_steps=str(10**8 if explicit else steps), output_step_interval=str(10**8 if explicit else max(1, steps//10)),
@@ -76,8 +72,7 @@ def config(ndims, steps, state, pt_option=0):
         control.update(fixed_dt=repr(DURATION/steps), PT_option=str(pt_option))
     cfg['control'].update(control)
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
+    reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0')
     bc['vbc_val_z1'] = repr(STRAIN/DURATION)              # the cell is 1 m high
     bc.update(stress_bc_z1='0', hbc_pressure='[0,0,0,0,0,0]')
     p0, alpha = STATES[state]
@@ -111,15 +106,13 @@ def study(exe, out, ndims, steps, explicit, states, pt_option=0):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   ndims=ndims, material=MAT, states=STATES, pt_option=pt_option, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for state, n in [(s, n) for s in states for n in list(steps) + ([0] if explicit else [])]:
         folder = out/f"{state}-{f'pt-{n}' if n else 'explicit'}"; folder.mkdir()
         with (folder/'cell.cfg').open('w') as f: config(ndims, n, state, pt_option).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'cell.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=20000)
+        run_solver([str(exe), 'cell.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
         item = dict(state=state, mode='explicit' if n == 0 else 'PT', steps=n, **compare(folder, state))
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))

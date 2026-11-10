@@ -16,12 +16,9 @@ p_w.
     check_borehole.py EXECUTABLE OUTPUT [--spacings 0.2 0.1 0.05] [--steps 144]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -43,13 +40,11 @@ REF = Borehole(radius=A, outer=R, bulk=MAT['bulk'], shear=MAT['shear'], biot=MAT
 BAND = (1.05*A, 4*A)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def config(h, steps):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='hole', max_steps=str(steps), max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       output_step_interval=str(steps//4), output_time_interval_in_yr='1e9',
                       checkpoint_frame_interval='100000', has_initial_checkpoint='no')
@@ -60,9 +55,7 @@ def config(h, steps):
                           is_using_mixed_stress='false', PT_option='1', PT_max_iter='200000',
                           PT_relative_tolerance='1e-9', PT_absolute_tolerance='1e-8')
     bc = cfg['bc']
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        bc.update({f'vbc_{side}': '0', f'vbc_val_{side}': '0', f'stress_bc_{side}': '0', f'stress_val_{side}': '0',
-                   f'hbc_{side}': '0'})
+    reset_boundaries(bc, vbc='0', vbc_val='0', stress_bc='0', stress_val='0', hbc='0')
     bc.update(vbc_x0='1', vbc_z0='1', stress_bc_x1='4', stress_val_x1=repr(-PW), hbc_x1='2',
               hbc_pressure=f'[0,{PW!r},0,0,0,0]', num_hbc_schedule='2',
               hbc_schedule_time_in_yr=f'[0, {RAMP/YEAR2SEC!r}]', hbc_schedule_ratio='[0, 1]')
@@ -103,16 +96,14 @@ def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   steps=steps, material=MAT, wall_pressure=PW, diffusivity=REF.c, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         ck.polygon(folder/'annulus.poly', h, refined_radius=RING)
         with (folder/'hole.cfg').open('w') as f: config(h, steps).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'hole.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'hole.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         frames, nodes, elements = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, frames=frames, input_sha256=digest(folder/'hole.cfg'),
                     mesh_sha256=digest(folder/'annulus.poly'),

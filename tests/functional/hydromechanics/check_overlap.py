@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 
@@ -14,6 +13,8 @@ from scipy.spatial import ConvexHull, HalfspaceIntersection
 
 ROOT = Path(__file__).resolve().parents[3]
 
+
+from des_case import run_solver
 
 def calculate(exe, pairs):
     data = ''.join(' '.join(format(v, '.17g') for a in pair for v in a.ravel())+'\n'
@@ -55,8 +56,7 @@ def main():
         command.extend([str(ROOT/'tests/functional/hydromechanics/overlap_driver.cxx'),
                         str(ROOT/'geometry.cxx'), str(ROOT/'utils.cxx'),
                         '-Wl,--gc-sections', '-o', str(exe)])
-        with (output/f'build-{dimension}d.log').open('w') as log:
-            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=120)
+        run_solver(command, log=output / f'build-{dimension}d.log', check=True, timeout=120)
         unit = np.r_[np.zeros((1, dimension)), np.eye(dimension)]
         pairs = [(unit, unit), (unit, unit+2), (unit, unit*.5),
                  (unit, unit+np.eye(dimension)[0])]

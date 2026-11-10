@@ -20,13 +20,10 @@ and the compared band stay inside the diffusion front of the far sides.
     regional_subsidence.py EXECUTABLE OUTPUT [--spacings 100 50 25] [--steps 104]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -47,8 +44,8 @@ WELLS = (250.0, 500.0, 1000.0)                # observation radii (m)
 REF = AveragedAquifer(**PROPS)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 OUTER = 2*L/math.sqrt(math.pi)                # radius of the circle with the quarter square's area (m)
@@ -71,8 +68,7 @@ def reference(radius, t):
 
 
 def config(h, steps):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     cfg['sim'].update(modelname='basin', max_steps=str(steps), output_step_interval=str(steps//16),
                       max_time_in_yr=repr(2*DURATION/YEAR2SEC), output_time_interval_in_yr='1e9',
                       checkpoint_frame_interval='4')
@@ -134,17 +130,15 @@ def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   steps=steps, duration_s=DURATION, schedule=SCHEDULE, properties=PROPS,
                   reference=dict(diffusivity=REF.diffusivity, specific_storage=REF.specific_storage,
                                  front_m=math.sqrt(4*REF.diffusivity*DURATION)), cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'basin.cfg').open('w') as f: config(h, steps).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'basin.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=40000)
+        run_solver([str(exe), 'basin.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
         frames, nodes = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),

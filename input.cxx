@@ -693,55 +693,35 @@ static void declare_parameters(opt::Registry &cfg,
          "f must be in [0, 2); 0 (default) disables this state-update limit.\n")
         ;
 
+    const char *thermal_boundary_help = "Thermal boundary: 0 insulated, 1 fixed temperature.";
+    const char *thermal_value_help = "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
+         "It is applied at initialization, so a value that differs from the initial temperature is part "
+         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.";
     cfg.add_options()
         ("bc.tbc_x0", opt::value<int>(&p.bc.tbc[0])->default_value(0),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_x0", opt::value<double>(&p.bc.tbc_value[0])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+         thermal_value_help)
         ("bc.tbc_x1", opt::value<int>(&p.bc.tbc[1])->default_value(0),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_x1", opt::value<double>(&p.bc.tbc_value[1])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+         thermal_value_help)
         ("bc.tbc_y0", opt::value<int>(&p.bc.tbc[2])->default_value(0),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_y0", opt::value<double>(&p.bc.tbc_value[2])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+         thermal_value_help)
         ("bc.tbc_y1", opt::value<int>(&p.bc.tbc[3])->default_value(0),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_y1", opt::value<double>(&p.bc.tbc_value[3])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+         thermal_value_help)
         ("bc.tbc_z0", opt::value<int>(&p.bc.tbc[4])->default_value(0),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_z0", opt::value<double>(&p.bc.tbc_value[4])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
+         thermal_value_help)
         ("bc.tbc_z1", opt::value<int>(&p.bc.tbc[5])->default_value(1),
-         "Thermal boundary: 0 insulated, 1 fixed temperature.")
+         thermal_boundary_help)
         ("bc.tbc_val_z1", opt::value<double>(&p.bc.tbc_value[5])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.")
-        ("bc.hbc_val_x0", opt::value<double>(&p.bc.hbc_legacy_value[0])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
-        ("bc.hbc_val_x1", opt::value<double>(&p.bc.hbc_legacy_value[1])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
-        ("bc.hbc_val_y0", opt::value<double>(&p.bc.hbc_legacy_value[2])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
-        ("bc.hbc_val_y1", opt::value<double>(&p.bc.hbc_legacy_value[3])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
-        ("bc.hbc_val_z0", opt::value<double>(&p.bc.hbc_legacy_value[4])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
-        ("bc.hbc_val_z1", opt::value<double>(&p.bc.hbc_legacy_value[5])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         "Research-input compatibility: finite value with hbc=1 maps to prescribed pressure (hbc=2).")
+         thermal_value_help)
         ("bc.surface_temperature", opt::value<double>(&p.bc.surface_temperature)->default_value(273),
          "Surface temperature (in Kelvin)")
         ("bc.mantle_temperature", opt::value<double>(&p.bc.mantle_temperature)->default_value(1600),
@@ -2469,16 +2449,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
         get_numbers(vm, "bc.hbc_pressure", p.bc.hbc_pressure, 6, "six boundaries");
         {
-            const char *side[6] = {"x0","x1","y0","y1","z0","z1"};
-            int *type[6] = {&p.bc.hbc_x0,&p.bc.hbc_x1,&p.bc.hbc_y0,&p.bc.hbc_y1,&p.bc.hbc_z0,&p.bc.hbc_z1};
-            for (int i = 0; i < 6; ++i) {
-                if (vm.defaulted(std::string("bc.hbc_val_")+side[i])) continue;
-                const double value = p.bc.hbc_legacy_value[i];
-                if (!std::isfinite(value) || !vm.defaulted("bc.hbc_pressure"))
-                    die(EXIT_CONFIG_VALUE, "Use either hbc_val_* compatibility values or hbc_pressure, with finite values.");
-                p.bc.hbc_pressure[i] = value;
-                if (*type[i] == 1) *type[i] = 2;
-            }
             if (p.ic.pore_pressure_option < 0 || p.ic.pore_pressure_option > 2 ||
                 !std::isfinite(p.ic.pore_pressure_value))
                 die(EXIT_CONFIG_VALUE, "Invalid initial pressure option/value.");

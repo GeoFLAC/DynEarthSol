@@ -9,13 +9,11 @@ closed budget and discrete superposition as well as the analytical error.
 """
 
 import argparse
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import numpy as np
@@ -28,8 +26,7 @@ WELLS = ((60., 80., ct.Q), (100., 80., .6*ct.Q), (80., 100., -.25*ct.Q))
 SCALE = sum(abs(q) for _, _, q in WELLS)/(4*math.pi*ct.T)
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+from des_case import digest, run_solver, source_revision
 
 
 def reference(xy, time, wells):
@@ -62,10 +59,7 @@ def run(executable, folder, spacing, dt, wells):
     folder.mkdir()
     with (folder/'input.cfg').open('w') as stream:
         config(spacing, dt, wells).write(stream)
-    with (folder/'run.log').open('w') as stream:
-        subprocess.run([str(executable), 'input.cfg'], cwd=folder, check=True,
-                       stdout=stream, stderr=subprocess.STDOUT, timeout=600,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+    run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, check=True, timeout=600, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
     model = ct.Dynearthsol(str(folder/'multiwell'))
     rows = ct.scan_frames(str(folder/'multiwell'))
     assert len(rows) == 9
@@ -118,7 +112,7 @@ def study(executable, output, spacings, manifest):
     summary = dict(executable=str(executable), executable_sha256=binary_hash,
                    solver_commit=solver['implementation_commit'] if solver else None,
                    binary_manifest_sha256=digest(manifest) if manifest else None,
-                   analyzer_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ct.ROOT, text=True).strip(),
+                   analyzer_commit=source_revision(ct.ROOT),
                    runner_sha256=digest(Path(__file__)),
                    reference=dict(box_side_m=L, thickness_m=ct.B, pump_until_s=PUMP,
                                   end_s=END, pressure_scale_Pa=SCALE, storage_per_Pa=ct.STORAGE,

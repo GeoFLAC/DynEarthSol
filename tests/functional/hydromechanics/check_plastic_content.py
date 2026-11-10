@@ -14,7 +14,6 @@ import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -31,12 +30,13 @@ BULK, SHEAR, ALPHA, PHI, FLUID, GRAIN = 2e7, 1e7, 1., .25, 1e6, 1e20
 STORAGE = PHI/FLUID+(ALPHA-PHI)/GRAIN
 
 
+from des_case import reset_boundaries, run_solver
+
 def configuration(method, psi, elastic=False, flowing=False):
     cfg = water.configuration(.5, DT, DURATION, method, 1e5, water.INFLOW)
     cfg['sim'].update(max_steps='100', max_time_in_yr='1e9')
     cfg['control']['fixed_dt'] = repr(DT)
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'].update({f'vbc_{side}': '1', f'hbc_{side}': '0'})
+    reset_boundaries(cfg['bc'], vbc='1', hbc='0')
     cfg['bc'].update(hbc_flux='[0,0,0,0,0,0]', vbc_val_z1=repr(-SPEED), stress_bc_z1='0')
     cfg['mat'].update(rheology_type='elastic' if elastic else 'elasto-plastic', is_plane_strain='true',
                       biot_coeff=f'[{ALPHA}]', porosity=f'[{PHI}]', bulk_modulus=f'[{BULK}]',
@@ -52,10 +52,7 @@ def run(exe, folder, cfg, name='column', timeout=600):
     cfg['sim']['modelname'] = name
     with (folder/f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'),
-                       stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'), check=True, timeout=timeout)
     return Dynearthsol(str(folder/name))
 
 
@@ -273,8 +270,7 @@ def thermal_check(exe, folder, ndims, replay=False):
     alpha_s, alpha_f = 1e-5, 2e-4
     cfg['mat'].update(alpha=f'[{alpha_s}]', fluid_alpha=f'[{alpha_f}]', heat_capacity='[1000]',
                       fluid_heat_capacity='[4180]', therm_cond='[0]')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'][f'tbc_{side}'] = '0'
+    reset_boundaries(cfg['bc'], tbc='0')
     cfg['ic'].update(temperature_option='4', temp_background='273', temp_anomaly_amplitude='0')
     if replay:
         model = Dynearthsol(str(folder/'column'))

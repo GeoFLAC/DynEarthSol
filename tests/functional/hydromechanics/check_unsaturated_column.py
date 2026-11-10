@@ -16,7 +16,6 @@ Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY
 - restart: exact checkpoint continuation of a partly unsaturated column, on a
   fixed and on a remeshed mesh, with the existing restart comparator.
 """
-import configparser
 import json
 import os
 from pathlib import Path
@@ -37,12 +36,12 @@ KS, ALPHA_HEAD = 1 / 3.6e5, 10.0  # Srivastava and Yeh example: 1 cm/h, 0.1/cm
 PERM = KS * MU / GAMMA
 
 
+from des_case import read_config, run_solver
+
 def column(ndims, res, tend, dt, *, retention, table=-1.0, flux=0.9 * KS, fluid_bulk=2.17e9, frames=4):
     """A laterally confined column, z in [-1, 0], water table at `table`,
     fixed p = 0 at the base and an inward flux at the top."""
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='column', max_time_in_yr=repr(tend / YEAR),
                       output_time_interval_in_yr=repr(tend / frames / YEAR),
                       max_steps='100000000', output_step_interval='100000000',
@@ -66,9 +65,7 @@ def run(exe, cfg, case):
     case.mkdir(parents=True)
     with (case / 'column.cfg').open('w') as stream:
         cfg.write(stream)
-    with (case / 'run.log').open('w') as log:
-        subprocess.run([str(exe), 'column.cfg'], cwd=case, stdout=log, stderr=subprocess.STDOUT,
-                       env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=1800)
+    run_solver([str(exe), 'column.cfg'], log=case / 'run.log', cwd=case, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=1800)
     return Dynearthsol(str(case / 'column'))
 
 
@@ -182,9 +179,7 @@ def restart(exe, out):
     """Exact continuation of a partly unsaturated column, fixed and remeshed."""
     result = {}
     for mode in ('fixed', 'remesh'):
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_remesh_restart.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
         cfg['control']['PT_absolute_tolerance'] = '1e-8'
         if mode == 'fixed':
             cfg['control']['has_moving_mesh'] = 'false'

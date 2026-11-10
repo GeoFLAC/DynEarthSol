@@ -6,12 +6,10 @@ translation, for which added/removed excess content follows the swept volume.
 This does not check total retained mass or energy.
 """
 import argparse
-import configparser
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -22,10 +20,10 @@ from Dynearthsol import Dynearthsol, scan_frames
 from pt_initial_checkpoint import fields
 
 
+from des_case import read_config, reset_boundaries, run_solver
+
 def configuration(case):
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_remesh_restart.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
     cfg['sim'].update(modelname='flow', max_steps='3', has_marker_output='true',
                       has_output_during_remeshing='true')
     cfg['control']['PT_absolute_tolerance'] = '1e-8'
@@ -54,9 +52,7 @@ def configuration(case):
         cfg['control'].update(gravity='0', fixed_dt='.001', has_thermal_diffusion='false')
         cfg['ic'].update(weakzone_option='0', has_body_force_adjustment='false',
                          pore_pressure_option='2', pore_pressure_value='100000')
-        for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-            cfg['bc'].update({f'vbc_{side}':'1', f'vbc_val_{side}':'0',
-                              f'hbc_{side}':'0', f'stress_bc_{side}':'0'})
+        reset_boundaries(cfg['bc'], vbc='1', vbc_val='0', hbc='0', stress_bc='0')
         velocity = '.1' if case == 'domain-add' else '-.1'
         cfg['bc'].update(vbc_val_z0=velocity, vbc_val_z1=velocity)
     return cfg
@@ -65,10 +61,7 @@ def configuration(case):
 def run(exe, folder, cfg, name, timeout=120):
     with (folder/f'{name}.cfg').open('w') as stream:
         cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, stdout=stream,
-                       stderr=subprocess.STDOUT, check=True, timeout=timeout,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
+    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=timeout, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
 
 
 def inventories(model, frame, cfg):

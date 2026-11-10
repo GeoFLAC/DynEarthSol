@@ -11,7 +11,6 @@ import json
 import math
 from pathlib import Path
 import shutil
-import subprocess
 
 import numpy as np
 from scipy.integrate import solve_ivp
@@ -25,6 +24,10 @@ STORAGE, CAPACITY = .2/2.2e9+.6/1e11, 2996000.
 LAME = BULK-2*SHEAR/3
 TAU0 = NORMAL*math.sin(ANGLE)+COHESION*math.cos(ANGLE)
 
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
+from des_case import source_revision
 
 def reference(gamma, heating=True, expansion=True, rtol=1e-10):
     """Integrate in shear strain, starting at yield under normal stress -N.
@@ -277,7 +280,7 @@ def main():
             model, args.velocity, args.scaling, args.transition_strain)
     report.update(passed=True, mode=args.mode, heating=not args.no_heating, expansion=not args.no_expansion,
         executable_sha256=heat.water.digest(args.exe), runner_sha256=heat.water.digest(Path(__file__)),
-        working_source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=heat.water.ROOT, text=True).strip(),
+        working_source_commit=source_revision(heat.water.ROOT),
         scope='2D homogeneous direct shear with one normal platen degree of freedom; fixed capacity and zero flux; no rupture front.')
     heat.water.write_json(args.output/'summary.json', report)
     print(json.dumps(report, indent=2))

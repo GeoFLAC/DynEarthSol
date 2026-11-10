@@ -298,10 +298,7 @@ struct BC {
         std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
         std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
     bool custom_temperature_boundary = false;
-    double hbc_legacy_value[6] = {
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
+
 
     double winkler_delta_rho;
     bool has_winkler_foundation;

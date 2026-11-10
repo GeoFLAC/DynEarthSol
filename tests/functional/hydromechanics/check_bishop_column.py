@@ -20,12 +20,9 @@ starting frame; element-layer strains are integrated from the fixed base.
     check_bishop_column.py EXECUTABLE OUTPUT [--ndims 2] [--spacings 1 0.5 0.25]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -50,8 +47,7 @@ INTERFACE = 7.0                                  # between TABLE1 and TABLE0
 DURATION = 4e5                                   # end time (s)
 
 
-def digest(p):
-    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def retention_lists(laws):
@@ -86,8 +82,7 @@ def reference(law, z):
 
 def config(ndims, h, law, steps):
     laws = LAYERED if law == 'layered' else (law,)
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     dt, hold = DURATION/steps, max(1, steps//10)    # first output frame is the drained start
     cfg['sim'].update(modelname='bishop', max_steps=str(steps), max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       output_step_interval=str(hold), output_time_interval_in_yr='1e9',
@@ -153,16 +148,14 @@ def study(exe, out, ndims, spacings, steps, laws):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   ndims=ndims, steps=steps, duration_s=DURATION, column=COLUMN, tables=[TABLE0, TABLE1], cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for law in laws:
         for h in spacings:
             folder = out/f'{law}-h{h:g}'; folder.mkdir()
             with (folder/'bishop.cfg').open('w') as f: config(ndims, h, law, steps).write(f)
-            with (folder/'run.log').open('w') as f:
-                subprocess.run([str(exe), 'bishop.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                               check=True, timeout=20000)
+            run_solver([str(exe), 'bishop.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
             item = compare(folder, h, law)
             item['input_sha256'] = digest(folder/'bishop.cfg')
             result['cases'].append(item)

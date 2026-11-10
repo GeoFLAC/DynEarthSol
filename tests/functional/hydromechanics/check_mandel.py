@@ -14,12 +14,9 @@ same material values.
     check_mandel.py EXECUTABLE OUTPUT [--spacings 0.1 0.05 0.025]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -38,13 +35,11 @@ REF = Mandel(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['fluid
 TC = A**2/REF.c                      # consolidation time a^2/c
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def config(h, steps, duration):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='mandel', max_steps=str(steps), output_step_interval=str(max(1, steps//40)),
                       output_time_interval_in_yr='1e9', max_time_in_yr=repr(2*duration/YEAR2SEC),
                       checkpoint_frame_interval='10')
@@ -94,16 +89,14 @@ def study(exe, out, spacings, steps, duration):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   reference=dict(c=REF.c, p0=REF.p0, B=REF.B, nu=REF.nu, nu_u=REF.nu_u, tc=TC, F=P*A,
                                  half_width=A, half_height=HEIGHT), steps=steps, duration_s=duration, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'mandel.cfg').open('w') as f: config(h, steps, duration).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'mandel.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=7200)
+        run_solver([str(exe), 'mandel.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=7200)
         _, rows, frames = compare(folder)
         settle = max(abs(f['settlement_m']-f['settlement_ref_m'])/f['settlement_ref_m'] for f in frames)
         item = dict(spacing_m=h, frames=frames, max_error_over_p0=max(f['max_error_over_p0'] for f in frames),

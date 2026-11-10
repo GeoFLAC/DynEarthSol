@@ -13,12 +13,9 @@ for 2.5 <= r <= 8 m while the diffusion front stays well inside the box.
     check_rudnicki.py EXECUTABLE OUTPUT [--spacings 1 0.7 0.5] [--steps 120]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -37,13 +34,11 @@ REF = Rudnicki(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['flu
                MAT['grain_bulk'], MAT['permeability'], MAT['viscosity'], Q)
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def config(h, steps):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     cfg['sim'].update(modelname='rudnicki', max_steps=str(steps), output_step_interval=str(max(1, steps//12)),
                       output_time_interval_in_yr='1e9', max_time_in_yr=repr(2*DURATION/YEAR2SEC),
                       checkpoint_frame_interval='6')
@@ -107,16 +102,14 @@ def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   reference=dict(c=REF.c, S=REF.S, A=REF.A, rate=Q, box=L, refined_zone=ZONE, band=BAND),
                   steps=steps, duration_s=DURATION, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'rudnicki.cfg').open('w') as f: config(h, steps).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'rudnicki.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=20000)
+        run_solver([str(exe), 'rudnicki.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
         frames, nodes, elements = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),

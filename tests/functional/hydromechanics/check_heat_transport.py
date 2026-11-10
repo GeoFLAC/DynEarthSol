@@ -6,13 +6,10 @@ keeps the explicit hydraulic solve cheap without changing q or the thermal
 reference. These scaled coefficients isolate transport, not an application.
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -23,6 +20,8 @@ sys.path.insert(0,str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames, YEAR2SEC
 
 
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+
 def exact(x,t,v,d):
     if t == 0:
         return np.where(x == 0,1.,0.)
@@ -31,16 +30,12 @@ def exact(x,t,v,d):
     return .5*(erfc(a)+np.exp(-a*a)*erfcx(b))
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
-
-
 def study(exe,out,spacings,steps,porosity,restart):
     out.mkdir(parents=True,exist_ok=False)
     (out/'runner.py').write_bytes(Path(__file__).read_bytes())
     result=dict(executable=str(exe),executable_sha256=digest(exe),runner_sha256=digest(Path(__file__)),
-        source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git','diff','HEAD','--binary'],cwd=ROOT))
+        source_commit=source_revision(ROOT),cases=[])
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     rho_s,cs,rho_f,cf,q,conductivity=2500.,2000.,1000.,4000.,1.,23500.
     capacity=(1-porosity)*rho_s*cs+porosity*rho_f*cf
     velocity=rho_f*cf*q/capacity
@@ -51,14 +46,11 @@ def study(exe,out,spacings,steps,porosity,restart):
     env=dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
     def run(folder,cfg,name):
         with (folder/f'{name}.cfg').open('w') as f:cfg.write(f)
-        with (folder/f'{name}.log').open('w') as f:
-            subprocess.run([str(exe),f'{name}.cfg'],cwd=folder,env=env,stdout=f,
-                           stderr=subprocess.STDOUT,check=True,timeout=180)
+        run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=180)
     for h in spacings:
         for count in steps:
             folder=out/f'h{h:g}-n{count}';folder.mkdir()
-            cfg=configparser.ConfigParser();cfg.optionxform=str
-            cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+            cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
             cfg['sim'].update(modelname='column',max_steps=str(count),output_step_interval=str(count//4),
                 output_time_interval_in_yr='1',max_time_in_yr=str(10*duration/YEAR2SEC))
             cfg['mesh'].update(xlength='1',ylength=str(2*h),zlength=str(2*h),resolution=str(h),meshing_elem_shape='1')
@@ -68,8 +60,7 @@ def study(exe,out,spacings,steps,porosity,restart):
                 has_poroelastic_pressure_feedback='false')
             cfg['ic'].update(has_body_force_adjustment='false',temperature_option='4',temp_background='273.15',
                              temp_anomaly_amplitude='0',pore_pressure_option='1')
-            for side in ('x0','x1','y0','y1','z0','z1'):
-                cfg['bc'][f'vbc_{side}']='1';cfg['bc'][f'hbc_{side}']='0';cfg['bc'][f'tbc_{side}']='0'
+            reset_boundaries(cfg['bc'], vbc='1', hbc='0', tbc='0')
             cfg['bc'].update(hbc_x0='2',hbc_x1='2',hbc_pressure='[2,1,0,0,0,0]',
                 tbc_x0='1',tbc_val_x0='274.15',stress_bc_z1='0',stress_val_z1='0')
             cfg['mat'].update(rho0=f'[{rho_s}]',alpha='[0]',heat_capacity=f'[{cs}]',therm_cond=f'[{conductivity}]',

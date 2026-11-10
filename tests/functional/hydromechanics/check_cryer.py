@@ -11,13 +11,10 @@ benchmarks/poromechanics/cryer_reference.py, which uses the same material.
     check_cryer.py EXECUTABLE OUTPUT [--spacings 0.2 0.1 0.07]
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -37,8 +34,7 @@ TC = R**2/REF.c
 BOUNDX0, BOUNDY0, BOUNDZ0, BOUNDZ1 = 1, 4, 16, 32
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+from des_case import digest, read_config, run_solver, source_diff, source_revision
 
 
 def write_octant_poly(path, h):
@@ -74,8 +70,7 @@ def write_octant_poly(path, h):
 
 
 def config(h, steps, duration):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
+    cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
     cfg['sim'].update(modelname='cryer', max_steps=str(steps), output_step_interval=str(max(1, steps//40)),
                       output_time_interval_in_yr='1e9', max_time_in_yr=repr(2*duration/YEAR2SEC),
                       checkpoint_frame_interval='10')
@@ -120,17 +115,15 @@ def study(exe, out, spacings, steps, duration):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   reference=dict(c=REF.c, p0=REF.p0, beta=REF.beta, tc=TC, radius=R, pressure=P),
                   steps=steps, duration_s=duration, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         n = write_octant_poly(folder/'octant.poly', h)
         with (folder/'cryer.cfg').open('w') as f: config(h, steps, duration).write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'cryer.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=14400)
+        run_solver([str(exe), 'cryer.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=14400)
         frames, nodes, r0 = compare(folder)
         item = dict(spacing_m=h, surface_subdivision=n, nodes=nodes, centre_node_radius=r0, frames=frames,
                     max_error_over_p0=max(f['max_error_over_p0'] for f in frames),

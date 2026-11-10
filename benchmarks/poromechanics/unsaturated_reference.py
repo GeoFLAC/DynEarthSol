@@ -21,7 +21,7 @@ Conventions follow DES: z upward, pore pressure p positive in compression
 (p = rho*g*psi for pressure head psi), suction is -p, and pressure enters
 Darcy as q = -(k*kr/mu)*(grad p + rho*g*e_z). Retention ``alpha`` is in 1/Pa.
 Infiltration flux is positive into the domain. The derivation and the
-explicit stability argument are in doc/hydro/unsaturated.md.
+explicit stability argument are in https://geoflac.github.io/des3d/docs/theory/poromechanics#partly-saturated-flow.
 
 Requires NumPy and SciPy for benchmark evaluation only.
 """

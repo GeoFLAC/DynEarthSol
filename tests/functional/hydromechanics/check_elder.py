@@ -23,7 +23,6 @@ import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -36,6 +35,8 @@ from convection_reference import rayleigh
 RA, WIDTH, HEIGHT = 400.0, 2.0, 1.0
 KAPPA = cc.LAMBDA/(cc.RHO*cc.CF)
 
+
+from des_case import run_solver
 
 def poly(h):
     """Half box with the heater and the insulated base on separate boundary flags."""
@@ -110,9 +111,7 @@ def study(exe, reference_file, out, spacings, dt, fluid_bulk, threads):
         (folder/'elder.poly').write_text(poly(h))
         cfg, interval = config(h, dt, fluid_bulk, reference['times'])
         with (folder/'elder.cfg').open('w') as f: cfg.write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'elder.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=200000)
+        run_solver([str(exe), 'elder.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=200000)
         series, nodes, elements = compare(folder, reference, interval, dt)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, series=series)
         result['cases'].append(item)

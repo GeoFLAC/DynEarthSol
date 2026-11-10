@@ -11,13 +11,10 @@ the discrete rest state. Storage is chosen so that pressure diffusion is
 reference. Mechanics is stiff and does not feed back on the pressure.
 """
 import argparse
-import configparser
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -33,14 +30,12 @@ T_TOP = 273.
 CAPACITY = RHO_S*CS  # equals RHO*CF, so independent of porosity
 
 
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
 
 
 def config(h, ratio, seed, steps, dt, outputs):
     k = ratio*critical_rayleigh(1, 1)/rayleigh(RHO, G, ALPHA, DT, 1, 1, CF, MU, LAMBDA)
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='box', max_steps=str(steps), output_step_interval=str(steps//outputs),
                       output_time_interval_in_yr='1e9', max_time_in_yr='1e9', checkpoint_frame_interval='10')
     cfg['mesh'].update(xlength='1', ylength='1', zlength='1', resolution=str(h),
@@ -52,8 +47,7 @@ def config(h, ratio, seed, steps, dt, outputs):
     cfg['ic'].update(has_body_force_adjustment='false', temperature_option='5',
         temp_anomaly_amplitude=repr(seed), temp_anomaly_xcenter='0.25', temp_anomaly_zcenter='-0.5',
         temp_anomaly_xsemi_axis='0.25', temp_anomaly_ysemi_axis='0.25', temp_anomaly_zsemi_axis='0.25')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'][f'vbc_{side}'] = '1'; cfg['bc'][f'hbc_{side}'] = '0'; cfg['bc'][f'tbc_{side}'] = '0'
+    reset_boundaries(cfg['bc'], vbc='1', hbc='0', tbc='0')
     cfg['bc'].update(surface_temperature=repr(T_TOP), mantle_temperature=repr(T_TOP+DT),
                      tbc_z0='1', tbc_val_z0=repr(T_TOP+DT), tbc_z1='1', tbc_val_z1=repr(T_TOP),
                      stress_bc_z1='0', stress_val_z1='0')
@@ -90,16 +84,14 @@ def study(exe, out, h, ratios, steps, dt, seed):
     out.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  source_commit=source_revision(ROOT),
                   spacing=h, steps=steps, dt=dt, seed_K=seed, cases=[])
-    (out/'source.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT))
+    (out/'source.diff').write_bytes(source_diff(ROOT))
     for ratio, amp in [(r, seed) for r in ratios] + [(ratios[-1], 0.0)]:
         folder = out/f'ra{ratio:g}-seed{amp:g}'; folder.mkdir()
         cfg = config(h, ratio, amp, steps, dt, 40)
         with (folder/'box.cfg').open('w') as f: cfg.write(f)
-        with (folder/'run.log').open('w') as f:
-            subprocess.run([str(exe), 'box.cfg'], cwd=folder, env=env, stdout=f, stderr=subprocess.STDOUT,
-                           check=True, timeout=3600)
+        run_solver([str(exe), 'box.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=3600)
         series = amplitudes(folder)
         item = dict(ra_over_critical=ratio, seed_K=amp, series=series)
         if amp:

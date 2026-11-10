@@ -15,7 +15,6 @@ import math
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 
 import numpy as np
@@ -30,6 +29,8 @@ from mass_reference import Cell, Transport
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
+from des_case import reset_boundaries, run_solver
+
 def write_summary(output, result):
     (output/'summary.json').write_text(json.dumps(result,indent=2,allow_nan=False)+'\n')
     return result
@@ -42,8 +43,7 @@ def configuration():
     cfg['control'].update(hydraulic_content_model='1',has_thermal_diffusion='false',
                           has_fluid_thermal_advection='false',is_using_mixed_stress='false',inertial_scaling='1e5')
     cfg['bc'].update(vbc_val_z1='0',surface_temperature='273',mantle_temperature='273')
-    for side in ('x0','x1','y0','y1','z0','z1'):
-        cfg['bc'][f'tbc_{side}'] = '0'
+    reset_boundaries(cfg['bc'], tbc='0')
     cfg['ic'].update(temperature_option='4',temp_background='273',temp_anomaly_amplitude='0',
                      weakzone_option='0',has_body_force_adjustment='false')
     cfg['mat'].update(porosity_model='1',porosity='[.25]',biot_coeff='[.98]',rho0='[2650]',
@@ -202,7 +202,7 @@ def mass_checks(exe, out, timeout=600):
         cfg['control'].update(hydraulic_content_model='1',fixed_dt='.01',is_using_mixed_stress='false',use_global_velocity_scaling=str(method=='gvs'))
         cfg['bc'].update(vbc_val_z1='-.01',surface_temperature='273',mantle_temperature='273')
         if drained:
-            for s in ('x0','x1','y0','y1','z0','z1'):cfg['bc'][f'hbc_{s}']='2'
+            reset_boundaries(cfg['bc'], hbc='2')
         cfg['mat'].update(porosity_model='1',biot_coeff='[.98]',bulk_modulus_s='[1e9]',fluid_bulk_modulus='[1e8]')
         cfg['ic'].update(temperature_option='4',temp_background='273',temp_anomaly_amplitude='0')
         return cfg
@@ -249,7 +249,7 @@ def heat_checks(exe, out, timeout=600):
     cfg['control'].update(hydraulic_content_model='1',fixed_dt='.05',is_using_mixed_stress='false',
         has_thermal_diffusion='true',has_fluid_thermal_advection='true',has_thermal_pressurization='true')
     cfg['bc'].update(vbc_val_z1='0',surface_temperature='273',mantle_temperature='273')
-    for s in ('x0','x1','y0','y1','z0','z1'):cfg['bc'][f'tbc_{s}']='0'
+    reset_boundaries(cfg['bc'], tbc='0')
     cfg['mat'].update(porosity_model='1',biot_coeff='[.98]',bulk_modulus_s='[1e9]',fluid_bulk_modulus='[1e8]',
         rho0='[2650]',alpha='[0]',fluid_alpha='[.0002]',heat_capacity='[1000]',fluid_heat_capacity='[4180]',therm_cond='[0]')
     cfg['ic'].update(temperature_option='4',temp_background='273',temp_anomaly_amplitude='0')
@@ -270,7 +270,7 @@ def heat_checks(exe, out, timeout=600):
             path=out/(kind+'-'+str(steps));path.mkdir();case=copy.deepcopy(cfg)
             case['sim']['max_steps']=str(steps);case['control']['fixed_dt']=repr(duration/steps)
             if kind!='sealed':
-                for s in ('x0','x1','y0','y1','z0','z1'):case['bc'][f'hbc_{s}']='2'
+                reset_boundaries(case['bc'], hbc='2')
             if 'mixing' in kind:
                 case['injection']=point_sources(volume_rate)
                 case['injection']['temperature']=f'[{inlet}]'
@@ -323,8 +323,7 @@ def heat_checks(exe, out, timeout=600):
             incompatible=copy.deepcopy(resume);incompatible['sim']['modelname']='bad-law'
             incompatible['mat']['fluid_bulk_modulus']='[2e8]'
             with (path/'bad-law.cfg').open('w') as stream:incompatible.write(stream)
-            with (path/'bad-law.log').open('w') as stream:
-                failed=subprocess.run([str(exe),'bad-law.cfg'],cwd=path,env=dict(os.environ,OMP_NUM_THREADS='1'),stdout=stream,stderr=subprocess.STDOUT)
+            failed = run_solver([str(exe), 'bad-law.cfg'], log=path / 'bad-law.log', cwd=path, env=dict(os.environ, OMP_NUM_THREADS='1'))
             assert failed.returncode==22,(path/'bad-law.log').read_text()
             np.savetxt(path/'history.csv',history,delimiter=',',comments='',header='time_s,p_Pa,T_K,M_kg,R_kg,Q_J,well_heat_J,boundary_heat_J,thermal_reaction_J,E_J')
             reports.append(dict(kind=kind,steps=steps,reference_error=worst,exact_restart_payloads=count))
@@ -341,7 +340,7 @@ def remap_checks(exe, out, timeout=600):
         folder=out/kind;folder.mkdir();cfg=c.configuration(kind)
         cfg['control'].update(hydraulic_content_model='1',inertial_scaling='1e5',surface_process_option='0',has_thermal_diffusion='false',has_fluid_thermal_advection='false')
         cfg['mat']['porosity_model']='1'
-        for side in ('x0','x1','y0','y1','z0','z1'):cfg['bc'][f'tbc_{side}']='0'
+        reset_boundaries(cfg['bc'], tbc='0')
         if kind=='thermal':cfg['control'].update(has_thermal_diffusion='true',has_fluid_thermal_advection='true')
         c.run(exe,folder,cfg,'input',timeout=timeout)
         model=Dynearthsol(str(folder/'flow'));rows=scan_frames(model.modelname)

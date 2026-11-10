@@ -8,15 +8,12 @@ elastic first step of the tunnel ladder, not the plastic/poroelastic case.
 """
 
 import argparse
-import configparser
-import hashlib
 import json
 import itertools
 import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import numpy as np
@@ -32,8 +29,7 @@ from pt_initial_checkpoint import fields
 A, R, P = 1., 20., 1e5
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+from des_case import digest, read_config, reset_boundaries, run_solver
 
 
 def check_binary(solver, binary_hash):
@@ -82,8 +78,7 @@ def polygon(path, spacing, refined_radius=None):
 
 
 def config(spacing):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='kirsch', max_steps='1', output_step_interval='1',
                       has_initial_checkpoint='true', checkpoint_frame_interval='1')
     cfg['mesh'] = dict(meshing_option='90', poly_filename='annulus.poly',
@@ -93,9 +88,7 @@ def config(spacing):
                           has_PT='true', PT_option='1', PT_max_iter='200000',
                           PT_relative_tolerance='1e-9', PT_absolute_tolerance='1e-8',
                           fixed_dt='1', has_moving_mesh='false', is_using_mixed_stress='false')
-    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-        cfg['bc'].update({f'vbc_{side}':'0', f'vbc_val_{side}':'0',
-                          f'stress_bc_{side}':'0', f'stress_val_{side}':'0'})
+    reset_boundaries(cfg['bc'], vbc='0', vbc_val='0', stress_bc='0', stress_val='0')
     cfg['bc'].update(vbc_x0='1', vbc_z0='1', stress_bc_z1='4', stress_val_z1=str(-P))
     cfg['ic']['has_body_force_adjustment'] = 'false'
     cfg['mat'].update(rheology_type='elastic', bulk_modulus='[1e9]', shear_modulus='[1e9]',
@@ -195,9 +188,7 @@ def study(executable, output, spacings, manifest):
         folder = output/f'h{h:g}'; folder.mkdir()
         polygon(folder/'annulus.poly', h)
         with (folder/'input.cfg').open('w') as stream: config(h).write(stream)
-        with (folder/'run.log').open('w') as stream:
-            subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env, check=True,
-                           stdout=stream, stderr=subprocess.STDOUT, timeout=600)
+        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=600)
         case = dict(spacing_m=h, folder=folder.name, **compare(folder), input_sha256=digest(folder/'input.cfg'),
                     mesh_input_sha256=digest(folder/'annulus.poly'),
                     outputs_sha256={p.name:digest(p) for p in sorted(folder.glob('kirsch.*'))
