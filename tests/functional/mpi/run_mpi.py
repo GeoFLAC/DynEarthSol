@@ -24,6 +24,11 @@ import time
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def command_text(command):
+    # Offline CentOS compute hosts may provide Python 3.6 (before shlex.join).
+    return ' '.join(shlex.quote(str(word)) for word in command)
+
+
 def configure(ndims, moving, resolution, steps=196, output_interval=49):
     # Checkpoints fall between mesh checks: outputs precede same-step remeshing in DES.
     cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
@@ -40,13 +45,13 @@ def configure(ndims, moving, resolution, steps=196, output_interval=49):
     return cfg
 
 
-def execute(command, directory, env, logname="run.log", expected_failure=False):
+def execute(command, directory, env, logname="run.log", expected_failure=False, timeout=180):
     start = time.perf_counter()
     with (directory / logname).open("w") as log:
         process = subprocess.Popen(command, cwd=directory, env=env, stdout=log,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            returncode = process.wait(timeout=180)
+            returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -54,11 +59,11 @@ def execute(command, directory, env, logname="run.log", expected_failure=False):
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-            raise RuntimeError(f"Timed out: {shlex.join(command)}; log: {directory / logname}")
+            raise RuntimeError(f"Timed out: {command_text(command)}; log: {directory / logname}")
     elapsed = time.perf_counter() - start
     log = (directory / logname).read_text()
     if bool(returncode) != expected_failure:
-        raise RuntimeError(f"Command returned {returncode}: {shlex.join(command)}\n"
+        raise RuntimeError(f"Command returned {returncode}: {command_text(command)}\n"
                            f"{log[-5000:]}")
     return log, elapsed
 

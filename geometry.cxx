@@ -197,7 +197,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -236,7 +236,7 @@ void compute_volume(const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, volume) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -279,7 +279,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var, etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee;e++) {
         ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
@@ -294,7 +294,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
@@ -333,7 +333,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dj = 0;
@@ -369,7 +369,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee;e++) {
         etmp[e] = (*var.dpressure)[e] * (*var.volume)[e];
     }
@@ -379,7 +379,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
@@ -395,7 +395,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
@@ -474,7 +474,9 @@ static bool spr_solve_centered(const double A[3][3], const double b[3],
 // centroid values in the patch.  Uses Gaussian elimination with partial pivoting
 // on the 4×4 normal system.  Returns true on success; false if the patch is
 // degenerate (fewer than 4 independent directions → fallback).
+#if !defined(ACC) || !defined(USEMPI)
 #pragma acc routine seq
+#endif
 static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
                                    const double dxi, const double dyi, const double dzi,
                                    double &result)
@@ -559,6 +561,10 @@ static void spr_fused_fields(const Variables &var,
                              double* const out_ptrs[], const int out_strides[], 
                              int num_fields)
 {
+    // SPR is centralized mesh-management work in the MPI backend. Complete
+    // global GPU producers before the CPU fit; compact timestep arrays remain
+    // on their devices until the collect/remesh/repartition transition.
+    #pragma acc wait
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -567,8 +573,10 @@ static void spr_fused_fields(const Variables &var,
     #pragma omp parallel for default(none) shared(var, in_ptrs, in_strides, out_ptrs, \
                 out_strides, num_fields)
 #endif
-    #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
+#if !defined(ACC) || !defined(USEMPI)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
+#endif
     for (int i = 0; i < var.nnode; ++i) {
         const int npatch = var.support.size(i);
 
@@ -576,7 +584,9 @@ static void spr_fused_fields(const Variables &var,
         const int* patch = var.support.patch(i);
         const int e0 = patch[0];
         
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int f = 0; f < num_fields; ++f) {
             smin[f] = smax[f] = in_ptrs[f][e0 * in_strides[f]];
         }
@@ -587,7 +597,9 @@ static void spr_fused_fields(const Variables &var,
 #endif
 
         // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
@@ -595,7 +607,9 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-            #pragma acc loop seq
+    #if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 cx += ck[k][0];
                 cy += ck[k][1];
@@ -612,7 +626,9 @@ static void spr_fused_fields(const Variables &var,
             z0 += cz;
 #endif
 
-            #pragma acc loop seq
+    #if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int f = 0; f < num_fields; ++f) {
                 double s = in_ptrs[f][e * in_strides[f]]; // use Stride
                 if (s < smin[f]) smin[f] = s;
@@ -628,7 +644,9 @@ static void spr_fused_fields(const Variables &var,
 
         // build A and b_vec for all fields in the patch, 
         // with shared loops and Stride-aware access
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
@@ -636,7 +654,9 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-            #pragma acc loop seq
+    #if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 cx += ck[k][0];
                 cy += ck[k][1];
@@ -669,7 +689,9 @@ static void spr_fused_fields(const Variables &var,
             A[3][3] += dz*dz;
 #endif
 
-            #pragma acc loop seq
+    #if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int f = 0; f < num_fields; ++f) {
                 double s = in_ptrs[f][e * in_strides[f]]; // use Stride
                 b_vec[f][0] += s;
@@ -689,7 +711,9 @@ static void spr_fused_fields(const Variables &var,
 #endif
 
         // solve A for all fields in the patch, with fallback and clamping
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int f = 0; f < num_fields; ++f) {
             double temp_val;
 
@@ -1309,7 +1333,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, topo)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double c[NDIMS] = {0.0};
@@ -1414,7 +1438,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(param, var, topo) \
             firstprivate(sea_level, rho_w_g)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
         int n = (*var.surfinfo.top_nodes)[i];
         double z = (*var.coord)[n][NDIMS-1];
@@ -1440,7 +1464,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstTensorAccessor s = (*stress)[e];
         TensorAccessor s_nn = stress_nn[e];
@@ -1470,7 +1494,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i = 0; i < var.ntop_elems; ++i) {
         int e = (*var.top_elems)[i];
         TensorAccessor s = (*stress)[e];
@@ -1500,7 +1524,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = (*stress)[e];
         ConstTensorAccessor s_nn = stress_nn[e];
@@ -1544,7 +1568,7 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         double p_ref;
         if ((*var.remesh_is_changed)[e] == 0) {
@@ -1623,7 +1647,7 @@ double compute_dt(const Param& param, Variables& var,
         default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 
@@ -1866,7 +1890,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
@@ -1918,27 +1942,38 @@ void compute_mass(const Param &param, const Variables &var,
         }
 
 #ifdef USEMPI
+#ifndef ACC
         #pragma omp master
+#endif
         {
             mpi_begin_gather(var,tmp_result,5);
         }
+#ifndef ACC
         #pragma omp barrier
+#endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
+#ifndef ACC
                 #pragma omp master
+#endif
                 { var.mpi->finish_exchange(); }
+#ifndef ACC
                 #pragma omp barrier
+#endif
             }
             const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+#ifndef ACC
             #pragma omp for
+#endif
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
 #else
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
 #endif
             volume_n[n]=0;
@@ -2022,7 +2057,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(coord, connectivity, volume, n) reduction(min:q)
 #endif
-    #pragma acc parallel loop gang vector reduction(min:q) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:q) async
     for (int e=0; e<n; e++) {
         double quality = elem_quality(coord, connectivity, volume, e);
         if (quality < q) q = quality;
@@ -2033,7 +2068,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(coord, connectivity, volume, n, q) reduction(min:w)
 #endif
-        #pragma acc parallel loop gang vector reduction(min:w) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:w) async
         for (int e=0; e<n; e++) {
             if (e < w && elem_quality(coord, connectivity, volume, e) == q) w = e;
         }

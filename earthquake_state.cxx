@@ -21,7 +21,7 @@ double compute_max_plastic_strain_rate(const Variables& var)
     const int owned = mpi_element_end(var);
 
 #ifdef ACC
-    #pragma acc parallel loop reduction(max:max_depls) firstprivate(owned)
+    #pragma acc parallel loop if(des_acc_offload()) reduction(max:max_depls) firstprivate(owned)
 #else
     #pragma omp parallel for reduction(max:max_depls) default(none) shared(var) firstprivate(owned)
 #endif
@@ -38,7 +38,7 @@ double compute_max_global_velocity_magnitude(const Variables& var)
     const int owned = mpi_node_end(var);
 
 #ifdef ACC
-    #pragma acc parallel loop reduction(max:vmax) firstprivate(owned)
+    #pragma acc parallel loop if(des_acc_offload()) reduction(max:vmax) firstprivate(owned)
 #else
     #pragma omp parallel for reduction(max:vmax) default(none) shared(var) firstprivate(owned)
 #endif

@@ -21,4 +21,19 @@ inline void mpi_unpack_columns(double* field,int stride,int columns,
     for(int c=0;c<columns;++c)for(int i=0;i<nrows;++i)
         field[std::size_t(c)*stride+rows[i]]=packed[std::size_t(c)*nrows+i];
 }
+
+// Explicit device variants let production management keep using host packers.
+// Field/row pointers may be CUDA managed addresses; packed is a device allocation.
+inline void mpi_pack_device_columns(const double* field,int stride,int columns,
+                                    const int* rows,int nrows,double* packed) {
+    #pragma acc parallel loop collapse(2) deviceptr(field,rows,packed)
+    for(int c=0;c<columns;++c)for(int i=0;i<nrows;++i)
+        packed[std::size_t(c)*nrows+i]=field[std::size_t(c)*stride+rows[i]];
+}
+inline void mpi_unpack_device_columns(double* field,int stride,int columns,
+                                      const int* rows,int nrows,const double* packed) {
+    #pragma acc parallel loop collapse(2) deviceptr(field,rows,packed)
+    for(int c=0;c<columns;++c)for(int i=0;i<nrows;++i)
+        field[std::size_t(c)*stride+rows[i]]=packed[std::size_t(c)*nrows+i];
+}
 #endif

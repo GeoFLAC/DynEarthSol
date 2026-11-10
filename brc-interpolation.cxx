@@ -26,7 +26,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         ConstConnAccessor conn = connectivity[e];
@@ -53,7 +53,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma omp parallel for default(none)          \
         shared(brc, el, connectivity, source, target,ntarget)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<ntarget; i++) {
         int e = el[i];
         ConstConnAccessor conn = connectivity[e];
@@ -82,7 +82,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
     #pragma omp parallel for default(none) \
         shared(brc, el, connectivity, source, target, ntarget)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i = 0; i < ntarget; i++) {
         int e = el[i];
         ConstConnAccessor conn = connectivity[e];
@@ -116,7 +116,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     nvtxRangePush("create kdtree for coord");
 #endif
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
     array_t point_tmp(1);
     PointCloud cloud(point_tmp);
 #else

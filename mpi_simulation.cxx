@@ -5,6 +5,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -19,6 +20,10 @@
 #include "mpi_local_fields.hpp"
 #include "mpi_transport.hpp"
 #include "mpi_halo_kernels.hpp"
+#include "mpi_gpu_buffer.hpp"
+#ifdef ACC
+#include <openacc.h>
+#endif
 #include "bc.hpp"
 #include "earthquake_state.hpp"
 #include "fields.hpp"
@@ -30,8 +35,22 @@
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "pseudo_transient.hpp"
+#ifdef HAS_GOSPL_CPP_INTERFACE
+#include "gospl_driver/gospl-driver.hpp"
+#endif
 
 namespace {
+#ifdef ACC
+int selected_device=-1;
+void prefetch_managed(void* pointer,std::size_t bytes) {
+    if(!pointer || !bytes)return;
+    cudaPointerAttributes info{};
+    const cudaError_t status=cudaPointerGetAttributes(&info,pointer);
+    if(status!=cudaSuccess){cudaGetLastError();return;}
+    if(info.type==cudaMemoryTypeManaged)
+        mpi_cuda_check(cudaMemPrefetchAsync(pointer,bytes,selected_device,0));
+}
+#endif
 struct Fields {
     struct Field { double* data; int stride, columns; };
     std::array<Field,64> fields;
@@ -73,6 +92,27 @@ void unpack(const Fields& f,const int_vec& rows,const double* in) {
         k+=std::size_t(rows.size())*f.fields[i].columns;
     }
 }
+#ifdef ACC
+void pack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& out) {
+    out.resize(std::size_t(rows.size())*f.columns);std::size_t offset=0;
+    if(rows.empty())return;
+    for(int i=0;i<f.n;++i) {
+        mpi_pack_device_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
+                                rows.data(),rows.size(),out.device()+offset);
+        offset+=std::size_t(rows.size())*f.fields[i].columns;
+    }
+    out.download();
+}
+void unpack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& in) {
+    if(rows.empty())return;
+    in.upload();std::size_t offset=0;
+    for(int i=0;i<f.n;++i) {
+        mpi_unpack_device_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
+                                  rows.data(),rows.size(),in.device()+offset);
+        offset+=std::size_t(rows.size())*f.fields[i].columns;
+    }
+}
+#endif
 int count(std::size_t n) {
     if(n>INT_MAX) die(EXIT_RUNTIME_RESOURCE,"MPI message exceeds INT_MAX entries");
     return n;
@@ -100,6 +140,7 @@ void local_archive(MpiState& a,Variables& v) {
     MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
     MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
     F(connectivity) F(elemmarkers) F(markers_in_elem) F(hydrous_elemmarkers)
+    F(top_elems) F(ntop_elems) F(surfinfo.top_nodes) F(surfinfo.ntop)
     F(log_table) F(tan_table) F(sin_table)
 #undef F
     a.value(v.support.arr_data);a.value(v.support.idx_data);a.value(v.support.lidx_data);v.support.rebind();
@@ -126,6 +167,7 @@ void release(Variables& v) {
     MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
     F(connectivity) F(elemmarkers) F(markers_in_elem) F(hydrous_elemmarkers)
     F(log_table) F(tan_table) F(sin_table) F(bnormals) F(bcflag)
+    F(top_elems) F(surfinfo.top_nodes)
     F(ntmp) F(etmp) F(etmp_int) F(tmp_result)
 #undef F
     for(int i=0;i<nbdrytypes;++i) {delete v.bnodes[i];delete v.bfacets[i];v.bnodes[i]=nullptr;v.bfacets[i]=nullptr;}
@@ -201,6 +243,20 @@ void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
         v.support.idx_data[n+1]=v.support.arr_data.size();
     }
     v.support.rebind();copy(g.log_table,v.log_table);copy(g.tan_table,v.tan_table);copy(g.sin_table,v.sin_table);
+    if(!v.top_elems)v.top_elems=new int_vec;
+    v.top_elems->clear();
+    if(g.top_elems)for(int id:*g.top_elems) {
+        auto at=p.element_local.find(id);
+        if(at!=p.element_local.end())v.top_elems->push_back(at->second);
+    }
+    v.ntop_elems=v.top_elems->size();
+    if(!v.surfinfo.top_nodes)v.surfinfo.top_nodes=new int_vec;
+    v.surfinfo.top_nodes->clear();
+    if(g.surfinfo.top_nodes)for(int id:*g.surfinfo.top_nodes) {
+        auto at=p.node_local.find(id);
+        if(at!=p.node_local.end())v.surfinfo.top_nodes->push_back(at->second);
+    }
+    v.surfinfo.ntop=v.surfinfo.top_nodes->size();
     if(!v.markers_in_elem) v.markers_in_elem=new int_vec2D;
     v.markers_in_elem->assign(v.nelem,int_vec{});
     while(v.markersets.size()>g.markersets.size()) {delete v.markersets.back();v.markersets.pop_back();}
@@ -221,7 +277,7 @@ const char* op_name(MpiOp op) {
 #define F(x) case MpiOp::x:return #x
         F(State);F(Temperature);F(PorePressure);F(StrainRate);F(Stress);F(Force);F(Velocity);
         F(Coordinate);F(Rotation);F(Volume);F(Dvoldt);F(Edvoldt);F(Nmd);F(Mass);F(TimeStep);
-        F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SwapVolume);
+        F(OldMeanStress);F(Friction);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SurfaceIdle);F(SwapVolume);
         F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Geometry);F(Boundary);F(Sample);F(Average);F(Metrics);
         F(Report);F(Stop);F(Count);
 #undef F
@@ -238,6 +294,21 @@ struct Command {
 };
 }
 
+void mpi_select_device() {
+#ifdef ACC
+    if(selected_device>=0)return;
+    const char* local=std::getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+    if(!local)local=std::getenv("MPI_LOCALRANKID");
+    if(!local)local=std::getenv("PMI_LOCAL_RANK");
+    const int index=local?std::atoi(local):0;
+    const int devices=acc_get_num_devices(acc_device_nvidia);
+    if(index<0 || index>=devices)
+        die(EXIT_RUNTIME_RESOURCE,"GPU MPI requires one visible NVIDIA device per local rank");
+    acc_set_device_num(index,acc_device_nvidia);
+    acc_init(acc_device_nvidia);selected_device=index;
+#endif
+}
+
 struct MpiSimulation::Impl {
     explicit Impl(Param& p):param(p) {local.func_time={};packing.func_time={};}
     ~Impl() { release(local);release(packing); }
@@ -246,7 +317,12 @@ struct MpiSimulation::Impl {
     Variables local{},packing{};
     MpiPartition part;
     std::vector<MpiPartition> parts; // only rank zero retains global partition maps
-    struct Buffers {double_vec send,recv;};
+    struct Buffers {
+        double_vec send,recv;
+#ifdef ACC
+        MpiGpuBuffer gpu_send,gpu_recv;
+#endif
+    };
     std::vector<Buffers> peer;
     std::vector<MPI_Request> requests;
     std::vector<MpiPeerBuffer> transfers;
@@ -320,6 +396,7 @@ struct MpiSimulation::Impl {
         }
     }
     void distribute(bool rebalance) {
+        #pragma acc wait
         const double start=MPI_Wtime();
         if(rank==0) {
             // Serial remeshing leaves this inactive hydraulic scratch array at
@@ -347,10 +424,24 @@ struct MpiSimulation::Impl {
         double hydro=rank==0?master->mat->hydro_diff_max:0;
         MPI_Bcast(&hydro,1,MPI_DOUBLE,0,MPI_COMM_WORLD);local.mat->hydro_diff_max=hydro;
         peer.resize(part.halos.size());requests.resize(2*part.halos.size());transfers.resize(part.halos.size());
+#ifdef ACC
+        // Host MMG/management may resize every array. Rebind the compact state
+        // first, then place managed payloads on this rank's GPU before timesteps.
+        Fields nf=node_fields(local),ef=element_fields(local);
+        for(const Fields* f:{&nf,&ef})for(int i=0;i<f->n;++i)
+            prefetch_managed(f->fields[i].data,std::size_t(f->fields[i].stride)*f->fields[i].columns*sizeof(double));
+        prefetch_managed(local.connectivity->data(),local.connectivity->num_elements()*sizeof(int));
+        prefetch_managed(local.bcflag->data(),local.bcflag->size()*sizeof(uint));
+        for(const int_vec* ids:{&local.support.arr_data,&local.support.idx_data,&local.support.lidx_data,
+                               &part.interior_nodes,&part.interface_nodes,local.top_elems,local.surfinfo.top_nodes})
+            prefetch_managed(const_cast<int*>(ids->data()),ids->size()*sizeof(int));
+        mpi_cuda_check(cudaDeviceSynchronize());
+#endif
         last_step=-1;root_version=version;surface_version=geometry_version=~std::uint64_t(0);
         communication_s+=MPI_Wtime()-start;
     }
     void gather_rows(bool nodes,const Fields& from,const Fields& to,bool surface=false,const int_vec* query=nullptr) {
+        #pragma acc wait
         int_vec rows,global_rows;
         const int_vec* local_rows=nodes?&part.node_rows:&part.element_rows;
         if(surface) local_rows=nodes?&part.surface_owned_nodes:&part.surface_owned_elements;
@@ -388,6 +479,7 @@ struct MpiSimulation::Impl {
         }
     }
     void scatter_surface(bool nodes,const Fields& from,const Fields& to) {
+        #pragma acc wait
         const auto& own=nodes?part.surface_nodes:part.surface_elements;
         if(rank==0) {
             counts.assign(size,0);offsets.assign(size,0);scatter.clear();
@@ -414,7 +506,11 @@ struct MpiSimulation::Impl {
         if(rank==0){gn.add(master->coord);ge.add(master->volume);}
         gather_rows(true,ln,gn);gather_rows(false,le,ge);geometry_version=version;
     }
-    Fields surface_n(Variables& v) {Fields f;f.add(v.coord);f.add(v.volume_n);return f;}
+    Fields surface_n(Variables& v) {
+        Fields f;f.add(v.coord);f.add(v.volume_n);
+        if(param.control.surface_process_option==11)f.add(v.vel);
+        return f;
+    }
     Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
     void boundary() {
         if(surface_version==version)return;
@@ -434,10 +530,26 @@ struct MpiSimulation::Impl {
         const int interval=param.mesh.quality_check_step_interval;
         if(interval<=1)return;
         if(local.steps%interval==1) {
+#ifdef ACC
+            average_time=local.time;
+            average_coord.resize(local.nnode,false);average_strain.resize(local.nelem,false);
+            average_stress.resize(local.nelem,false);average_plastic.resize(local.nelem);
+            #pragma acc parallel loop collapse(2)
+            for(int c=0;c<NDIMS;++c)for(int n=0;n<local.nnode;++n)average_coord[n][c]=(*local.coord)[n][c];
+            #pragma acc parallel loop collapse(2)
+            for(int c=0;c<NSTR;++c)for(int e=0;e<local.nelem;++e) {
+                average_strain[e][c]=(*local.strain)[e][c];average_stress[e][c]=(*local.stress)[e][c];
+            }
+            #pragma acc parallel loop
+            for(int e=0;e<local.nelem;++e)average_plastic[e]=0.0;
+#else
             average_time=local.time;assign(average_coord,*local.coord);assign(average_strain,*local.strain);
             assign(average_stress,*local.stress);average_plastic.assign(local.nelem,0.0);
+#endif
         } else {
+            #pragma acc parallel loop collapse(2)
             for(int c=0;c<NSTR;++c) for(int e=0;e<part.owned_elements;++e) average_stress[e][c]+=(*local.stress)[e][c];
+            #pragma acc parallel loop
             for(int e=0;e<part.owned_elements;++e) average_plastic[e]+=(*local.delta_plstrain)[e];
         }
     }
@@ -453,6 +565,7 @@ struct MpiSimulation::Impl {
     }
     void execute(MpiOp op,double arg) {
         current=op;inside=true;double started=MPI_Wtime(),comm_before=communication_s;Variables& v=local;
+        MpiAccScope offload(!management(op));
         if(!management(op) && last_step!=v.steps) {v.mat->refresh_elem_cache();last_step=v.steps;}
         switch(op) {
         case MpiOp::State:distribute(true);break;
@@ -488,8 +601,19 @@ struct MpiSimulation::Impl {
             }
             break;
         case MpiOp::SwapVolume:std::swap(v.volume,v.volume_old);if(rank==0)std::swap(master->volume,master->volume_old);break;
+        case MpiOp::SurfaceIdle:
+            // Even without erosion, the original surface path corrects stress
+            // for the volume change since the preceding coordinate update.
+            correct_surface_element(v,*v.volume,*v.volume_n,*v.stress,*v.strain,*v.strain_rate,*v.plstrain);
+            exchange(MpiEntity::Element,{{v.volume->data(),1},{v.plstrain->data(),1},
+                {v.stress->data(),NSTR},{v.strain->data(),NSTR},{v.strain_rate->data(),NSTR}});
+            exchange(MpiEntity::Node,{{v.volume_n->data(),1}});
+            v.surfinfo.max_surf_vel=0;
+            break;
         case MpiOp::Surface: {
-            bool whole=v.steps%param.mesh.quality_check_step_interval==0 || (param.control.surface_process_option!=0 && param.control.surface_process_option!=1);
+            bool whole=v.steps%param.mesh.quality_check_step_interval==0 ||
+                (param.control.surface_process_option!=0 && param.control.surface_process_option!=1 &&
+                 param.control.surface_process_option!=11);
             if(whole)full();else boundary();
             if(rank==0) surface_processes(param,*master,*master->coord,*master->stress,*master->strain,*master->strain_rate,
                 *master->plstrain,*master->volume,*master->volume_n,master->surfinfo,master->markersets,*master->elemmarkers,*master->markers_in_elem);
@@ -519,6 +643,9 @@ struct MpiSimulation::Impl {
         }
         default:die(EXIT_INTERNAL_ASSERT,"unknown MPI operation");
         }
+        // Every command boundary permits host-side scalar/cache changes, output
+        // or state redistribution. No outstanding GPU producer may cross it.
+        #pragma acc wait
         if(op!=MpiOp::Collect && op!=MpiOp::Geometry && op!=MpiOp::Boundary && op!=MpiOp::Sample && op!=MpiOp::Average && op!=MpiOp::Metrics) ++version;
         ++calls[int(op)];elapsed[int(op)]+=MPI_Wtime()-started;
         operation_comm[int(op)]+=communication_s-comm_before;inside=false;
@@ -527,13 +654,22 @@ struct MpiSimulation::Impl {
         if(pending_active)die(EXIT_INTERNAL_ASSERT,"overlapping halo buffers reused before completion");
         const bool nodes=entity==MpiEntity::Node;Fields f;
         for(auto a:arrays) f.add(a.first,nodes?local.nnode:local.nelem,a.second);
+        #pragma acc wait
         double start=MPI_Wtime();
         for(int i=0;i<int(part.halos.size());++i) {
             const auto& h=part.halos[i];const auto& receiving=nodes?h.recv_nodes:h.recv_elements;
+#ifdef ACC
+            const auto& sending=nodes?h.send_nodes:h.send_elements;
+            const int ns=count(std::size_t(sending.size())*f.columns),nr=count(std::size_t(receiving.size())*f.columns);
+            peer[i].gpu_recv.resize(nr);pack_device(f,sending,peer[i].gpu_send);
+            transfers[i]={h.rank,peer[i].gpu_send.host(),peer[i].gpu_recv.host(),ns,nr};
+            payload_bytes+=std::uint64_t(ns)*sizeof(double);
+#else
             peer[i].recv.resize(std::size_t(receiving.size())*f.columns);
             pack(f,nodes?h.send_nodes:h.send_elements,peer[i].send);
             transfers[i]={h.rank,peer[i].send.data(),peer[i].recv.data(),count(peer[i].send.size()),count(peer[i].recv.size())};
             payload_bytes+=peer[i].send.size()*sizeof(double);
+#endif
         }
         pending=mpi_post_buffers(transfers.data(),transfers.size(),nodes?30:31,requests.data());
         pending_nodes=nodes;pending_fields=f;pending_active=true;posted_at=MPI_Wtime();
@@ -543,8 +679,13 @@ struct MpiSimulation::Impl {
         if(!pending_active)die(EXIT_INTERNAL_ASSERT,"halo completion without a posted exchange");
         const double started=MPI_Wtime();interior_window_s+=started-posted_at;
         mpi_finish_buffers(pending,requests.data());wait_s+=MPI_Wtime()-started;
-        for(int i=0;i<int(part.halos.size());++i)
+        for(int i=0;i<int(part.halos.size());++i) {
+#ifdef ACC
+            unpack_device(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].gpu_recv);
+#else
             unpack(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].recv.data());
+#endif
+        }
         communication_s+=MPI_Wtime()-started;pending_active=false;
     }
     void exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
@@ -556,6 +697,27 @@ MpiSimulation::MpiSimulation(Param& p):impl_(new Impl(p)) {
     int provided;MPI_Init_thread(nullptr,nullptr,MPI_THREAD_FUNNELED,&provided);
     if(provided<MPI_THREAD_FUNNELED)die(EXIT_RUNTIME_RESOURCE,"MPI_THREAD_FUNNELED required");
     MPI_Comm_rank(MPI_COMM_WORLD,&impl_->rank);MPI_Comm_size(MPI_COMM_WORLD,&impl_->size);
+#ifdef ACC
+    MPI_Comm local;MPI_Comm_split_type(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,impl_->rank,MPI_INFO_NULL,&local);
+    int local_rank,local_size;MPI_Comm_rank(local,&local_rank);MPI_Comm_size(local,&local_size);
+    if(selected_device!=local_rank)die(EXIT_CONFIG_VALUE,"GPU device selection differs from MPI's local rank");
+    int current=-1;mpi_cuda_check(cudaGetDevice(&current));
+    if(current!=selected_device)die(EXIT_INTERNAL_ASSERT,"CUDA/OpenACC device selection differs");
+    cudaDeviceProp device{};mpi_cuda_check(cudaGetDeviceProperties(&device,current));
+    std::vector<char> ids(16*local_size);
+    MPI_Allgather(device.uuid.bytes,16,MPI_BYTE,ids.data(),16,MPI_BYTE,local);
+    for(int i=0;i<local_size;++i)for(int j=i+1;j<local_size;++j)
+        if(std::memcmp(ids.data()+16*i,ids.data()+16*j,16)==0)
+            die(EXIT_CONFIG_VALUE,"GPU MPI ranks selected the same physical GPU");
+    MPI_Comm_free(&local);
+    char hostname[MPI_MAX_PROCESSOR_NAME];int length;MPI_Get_processor_name(hostname,&length);
+    const char* hex="0123456789abcdef";char uuid[33]={};
+    for(int i=0;i<16;++i){unsigned char b=static_cast<unsigned char>(device.uuid.bytes[i]);uuid[2*i]=hex[b>>4];uuid[2*i+1]=hex[b&15];}
+    std::ostringstream identity;identity<<"[mpi][device] rank="<<impl_->rank<<" host="<<hostname
+        <<" local_rank="<<local_rank<<" device="<<current<<" uuid="<<uuid
+        <<" fields=managed halo_transport=host_staged\n";
+    std::cout<<identity.str()<<std::flush;
+#endif
     if(is_root()) {
         const char* option=std::getenv("DES_MPI_OVERLAP");
         if(option && std::string(option)!="0" && std::string(option)!="1")die(EXIT_CONFIG_VALUE,"DES_MPI_OVERLAP must be 0 or 1");
@@ -570,7 +732,13 @@ MpiSimulation::~MpiSimulation() {
     MPI_Finalize();
 }
 bool MpiSimulation::is_root()const{return impl_->rank==0;}
-bool MpiSimulation::distributed()const{return impl_->size>1;}
+bool MpiSimulation::distributed()const{
+#ifdef ACC
+    return true; // A single GPU exercises the same compact backend without halos.
+#else
+    return impl_->size>1;
+#endif
+}
 bool MpiSimulation::in_kernel()const{return impl_->inside && !management(impl_->current);}
 int MpiSimulation::owned_nodes()const{return impl_->part.owned_nodes;}
 int MpiSimulation::owned_elements()const{return impl_->part.owned_elements;}
@@ -581,6 +749,17 @@ void MpiSimulation::attach(Variables& v){impl_->master=&v;impl_->active=true;syn
 void MpiSimulation::synchronize(Variables& v){dispatch(MpiOp::State,v);}
 bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
     auto& m=*impl_;if(!distributed() || !m.active || m.inside || m.master!=&v)return false;
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    // Preserve marker maintenance at mesh checks. Idle GoSPL steps retain local
+    // mechanical surface correction, without root state transfers or worker RPC.
+    if(op==MpiOp::Surface && m.param.control.surface_process_option==11 && v.gospl_driver &&
+       v.steps%m.param.mesh.quality_check_step_interval!=0 &&
+       !v.gospl_driver->coupling_due(v.dt/YEAR2SEC)) {
+        v.gospl_driver->advance_clock(v.dt/YEAR2SEC);
+        m.master->surfinfo.max_surf_vel=0;
+        op=MpiOp::SurfaceIdle;
+    }
+#endif
     Command c{};c.operation=int(op);c.steps=v.steps;c.time=v.time;c.dt=v.dt;c.max_vbc=v.max_vbc_val;
     c.max_vel=v.max_global_vel_mag;c.global_dt=v.global_dt_min;c.surface_vel=v.surfinfo.max_surf_vel;c.argument=arg;
     c.hydraulic=m.param.control.has_hydraulic_diffusion;c.body_adjustment=m.param.ic.has_body_force_adjustment;

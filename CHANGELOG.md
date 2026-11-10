@@ -17,6 +17,14 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- DES MPI/GoSPL coupling with independent rank counts and a persistent GoSPL
+  worker world. CPU and GPU DES ranks exchange surface data at coupling events;
+  idle steps retain mechanical surface corrections on compact partitions.
+  Owned/ghost PETSc surface mappings and end-to-end coupling checks cover the
+  existing MPI-enabled GoSPL; see `doc/gospl-mpi-coupling.md`.
+- Coupled continuation checkpoints preserve GoSPL's distributed state and DES's
+  pending exchange/velocity reference. Restarts may change DES rank count while
+  retaining the GoSPL partition; damaged or incompatible surface state is rejected.
 - Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
   `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
   geometry, mass and timestep bounds use compact spatial partitions with neighbor
@@ -26,13 +34,18 @@ For a release, the full auto-generated list of merged pull requests is in its
   Both PT relaxation methods, including initial equilibrium and failure rollback,
   use the distributed compute meshes and collective convergence checks.
   CPU transport checks and pinned OpenMP/MPI scaling drivers accompany the backend;
-  see `doc/mpi.md`. GPU execution is not yet integrated.
+  see `doc/mpi.md`.
+- Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
+  timestep fields with one device per rank and pinned host staging for halos.
+  Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
+  checkpoint and restart checks accompany separate CPU/GPU scaling tools;
+  scientific equivalence and speedup must be verified for each workload.
 - MPI interior-node/halo overlap for thermal, force and mass assembly, selectable
   with `DES_MPI_OVERLAP=0/1`. Mesh checks collect geometry only, and inactive
   serpentinization/monitor paths avoid unused collections. Per-rank operation and
   communication profiles accompany controlled before/after timing figures.
   Shared SoA halo packers have explicit OpenACC host/device test modes; host
-  checks do not verify the unintegrated GPU solver or NVLink transport.
+  checks alone do not verify full GPU solver behavior or NVLink transport.
 - Optional METIS partitioning (`usempi=1 usemetis=1`, runtime
   `DES_MPI_PARTITIONER=metis`), using shared-node connectivity and a communication
   volume objective. RCB remains the default. Resized inactive hydraulic scratch
@@ -180,6 +193,10 @@ For a release, the full auto-generated list of merged pull requests is in its
   boundary assembly reuses its temporary buffer, avoiding partition-dependent
   thresholds.
 
+- GoSPL coupling now uses DES's year length for elapsed time and surface
+  velocity conversion, and waits for GPU work before exchanging surface data.
+- GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
+  initial checkpoint, avoiding indeterminate metadata in managed root state.
 - The benchmark comparator resolves the requested frame through the frame list
   when printing its step, allowing sparse restart outputs beginning above frame 0.
 

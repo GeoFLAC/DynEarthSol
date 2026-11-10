@@ -15,6 +15,9 @@
 #include "mpi_simulation.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
+#ifdef HAS_GOSPL_CPP_INTERFACE
+#include "gospl_driver/gospl-driver.hpp"
+#endif
 
 namespace {
 
@@ -393,7 +396,7 @@ void Output::average_fields(Variables& var)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(c0, c, n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<n; ++i) {
             c0[i] = c[i];
         }
@@ -406,7 +409,7 @@ void Output::average_fields(Variables& var)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(e0, s_avg, e, s, n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<n; ++i) {
             e0[i] = e[i];
             s_avg[i] = s[i];
@@ -419,7 +422,7 @@ void Output::average_fields(Variables& var)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(dp_avg, n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<n; ++i) {
             dp_avg[i] = 0.0;
         }
@@ -433,7 +436,7 @@ void Output::average_fields(Variables& var)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(s_avg, s, n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<n; ++i) {
             s_avg[i] += s[i];
         }
@@ -444,7 +447,7 @@ void Output::average_fields(Variables& var)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(dp_avg, dp, n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<n; ++i) {
             dp_avg[i] += dp[i];
         }
@@ -499,6 +502,19 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_scalar(var.output_next_regular_frame, "PT next regular frame");
     }
     bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");
+
+#ifdef HAS_GOSPL_CPP_INTERFACE
+    if(var.gospl_driver && var.gospl_driver->remote_backend()) {
+        auto state=var.gospl_driver->checkpoint_state();
+        auto token=var.gospl_driver->save_checkpoint(std::string(filename)+".gospl");
+        if(token.empty())die(EXIT_RUNTIME_GOSPL,"failed to checkpoint GoSPL worker");
+        bin.write_aux_array(state,"gospl coupling state",state.size());
+        const auto& coords=var.gospl_driver->surface_coords_start;
+        bin.write_scalar(int(coords.size()),"gospl surface reference size");
+        if(!coords.empty())bin.write_aux_array(coords,"gospl surface reference",coords.size());
+        bin.write_checkpoint_reference("gospl_generation",token);
+    }
+#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());

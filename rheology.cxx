@@ -868,7 +868,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
                      needs_projected_velocity) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 
@@ -1236,7 +1236,7 @@ void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& 
     #pragma omp parallel for default(none)                           \
         shared(param, var, stress, old_mean_stress) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstTensorAccessor s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;

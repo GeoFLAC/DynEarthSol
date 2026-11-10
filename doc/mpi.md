@@ -1,11 +1,11 @@
-# Experimental CPU MPI backend
+# Experimental MPI backends
 
 `usempi=1` builds separate `dynearthsol2d.mpi` / `dynearthsol3d.mpi` executables.
 Regular timestep kernels advance compact spatial partitions and exchange neighbor
 halos. The project defaults to C++17 and also supports C++20, matching upstream.
-This is a CPU backend. Temperature, force and mass assembly can overlap
-element halo transfers with computation on interior nodes. GPU timesteps are not
-yet integrated.
+Temperature, force and mass assembly can overlap element halo transfers with
+computation on interior nodes. `usempi=1 openacc=1` additionally builds
+`dynearthsol2d.mpi.gpu` / `dynearthsol3d.mpi.gpu` for NVIDIA devices.
 
 ## Build and run
 
@@ -16,11 +16,69 @@ cd benchmarks-cores
 OMP_NUM_THREADS=1 mpiexec -n 4 ../dynearthsol2d.mpi test-tiny.cfg
 ```
 
-`MPI_CXX=/path/to/mpicxx` selects the wrapper. Configuration parsing uses the
-vendored CLI11 header; Boost is no longer required. Existing cfg files apply
-without new simulation parameters. One rank uses
-the ordinary full-range kernels. OpenACC, NVHPC profiling and GoSPL cannot currently
-be combined with `usempi=1`. Serial/OpenMP and OpenACC executables remain separate.
+`MPI_CXX=/path/to/mpicxx` selects the wrapper. Configuration parsing uses
+the vendored CLI11 header; Boost is no longer required. Existing cfg files
+apply without new simulation parameters. One CPU rank uses the ordinary
+full-range kernels. A one-rank GPU run uses the same compact
+backend as multi-GPU runs. NVHPC profiling cannot currently be combined with
+`usempi=1`. `usempi=1 usegospl=1` couples to an independent persistent GoSPL
+MPI worker world; see [MPI coupling](gospl-mpi-coupling.md) for the launcher and
+separate DES/GoSPL rank counts. Serial/OpenMP and non-MPI OpenACC executables
+remain separate.
+
+## NVIDIA GPU MPI
+
+The completed intranet validation, measured overheads and remaining limitations
+are recorded in [the November 2026 report](validation-2026-11-09.md).
+
+Build with an NVHPC-backed MPI wrapper; submit builds and runs through `qsub` on
+godo/godo-s/earthsim-01. The compute hosts have no internet access: stage complete
+dependencies and runtimes first. On earthsim-01, nemex-gpu and kersti, model files,
+checkpoints and results belong on mounted `/data/slee91/` storage.
+
+```sh
+export OMPI_CXX=/path/to/nvc++
+make -j8 ndims=2 usempi=1 openacc=1 openmp=0 nofma=1 GPU_CC=80 \
+  MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
+make -j8 ndims=3 usempi=1 openacc=1 openmp=0 nofma=1 GPU_CC=80 \
+  MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
+```
+
+Use one rank per visible physical GPU. Device selection precedes managed
+allocations; local ranks must have distinct physical UUIDs. The implementation
+packs compact SoA halo rows on devices, copies contiguous buffers through pinned
+host memory, and supplies **host pointers** to MPI. GPU producers finish before
+packing; receives finish before upload/unpack and buffer reuse. This path needs
+ordinary MPI transport, and makes no claim about NVLink, CUDA IPC or GPUDirect.
+
+Compact timestep fields use managed allocation and are prefetched after
+distribution. Initialization, MMG, double-precision nearest-neighbor remapping,
+global marker/surface management and output run on the root CPU. Conditional
+OpenACC regions enforce this boundary; command boundaries drain pending kernels
+before host state changes. MMG is followed by collection, repartitioning and
+managed-state refresh. Managed allocation also covers the root state container.
+
+GPU MPI builds use IEEE division; `nofma=1` disables host and device FMA. NVHPC
+21.3 was exercised on A100/A6000 in the earlier source matrix; H100 was built natively with NVHPC 25.7 targeting
+`GPU_CC=90` after the staged 21.3 runtime could not enumerate it. Keep each
+MPI/SDK runtime separate when staging libraries. In
+particular, an HDF5 library directory containing an older SDK can accidentally
+make a newer compiler link the old OpenACC runtime.
+The current C++17 integration and reviewer GPU examples were rerun with NVHPC
+25.7 on A6000; use the project's supported SDK/toolchain for reproduction.
+
+The validation drivers retain full-field and checkpoint comparisons at `1e-8`,
+integer/topology equality, GPU identities and actual kernel traces. Short 2D/3D
+fixed, MMG, hydraulic and averaged-output cases exercise GPU MPI. Non-averaged MMG
+checkpoints also exercise each run's own restart. The parent resets averaging
+windows at restart, so averaged-output trajectory restart is outside this matrix.
+See the test README for commands and retained reports. Longer CPU/GPU comparisons
+must be assessed separately: host compilers can generate different Triangle
+meshes, and adaptive trajectories can diverge. Once meshes differ, compare
+physical observables or interpolate fields to common spatial locations rather
+than require equal node/element arrays. Array-comparator rejection after remeshing
+alone does not identify a solver defect. A passing short matrix does not
+establish complete scientific equivalence or a speedup.
 
 ## Physical-step PT mechanics
 
@@ -222,6 +280,23 @@ timing, so seconds cannot be compared directly with earlier instrumentation.
 
 ## Correctness checks
 
+For godo/godo-s/earthsim-01, use the
+[Grid Engine workflow](../tests/functional/mpi/README.md#cpu-correctness-through-grid-engine).
+The scheduler-submitted 2026-11-09 checks passed 78 CPU comparisons on godo-s and
+24 two-/four-node comparisons on godo, plus the standard 2D/3D comparisons. Rank
+audits verified scheduler job IDs, allocated hosts/slots and executable hashes.
+The two A100s also passed their halo checks through `qsub`. Earthsim-01's qmaster
+was unavailable, so scheduler-submitted checks there remain pending.
+
+Multi-node CPU and physical GPU halo checks are now available through the
+[cluster validation commands](../tests/functional/mpi/README.md#cpu-correctness-across-ssh-hosts).
+The 2026-11-09 two-node CPU matrix passed 54 exact parent comparisons and the
+2D/3D `make set`/`make cmp` workflow. A100, H100 and A6000 halo checks passed in
+both dimensions with distinct GPU UUIDs. H100 larger-message checks required
+disabling CUDA IPC and using host staging. These earlier halo checks are
+correctness results, not full-solver scaling or NVLink measurements; the NVIDIA
+GPU MPI section describes the subsequent solver integration.
+
 Use HDF5/MMG executables built from the parent commit and changed sources:
 
 ```sh
@@ -394,9 +469,9 @@ It is a transport harness, not a working GPU solver, NVLink benchmark or proof o
 GPUDirect. The query checks MPI capability, not the actual path taken; see the
 [Open MPI capability API](https://docs.open-mpi.org/en/main/man-openmpi/man3/MPIX_Query_cuda_support.3.html).
 
-A future NVIDIA backend must pack/unpack on the GPU, keep timestep arrays resident,
-synchronize GPU producers before MPI, and wait before GPU consumers/buffer reuse.
-One rank per GPU is the initial target. CUDA-aware MPI may use NVLink/NVSwitch or
+The NVIDIA solver backend packs/unpacks on GPUs, synchronizes producers before
+MPI and consumers after MPI, and initially uses one rank per GPU with pinned host
+staging. A separate CUDA-aware transport may use NVLink/NVSwitch or
 PCIe depending on hardware and transport; verify the path with profiling. Noncontiguous
 GPU MPI datatypes can be expensive; see [Open MPI CUDA support](https://docs.open-mpi.org/en/main/tuning-apps/accelerators/cuda.html).
 CPU MMG would require a collect/remesh/repartition/upload stage.
@@ -407,11 +482,13 @@ synchronous device kernels, then passes contiguous device addresses to the same
 MPI post/wait helpers. It covers irregular rows, scalar/vector/tensor widths,
 asymmetric empty messages and reusable buffers in both dimensions. Explicit host
 mode passed at 1/2/3/4/6/8 ranks. Host success verifies indexing and transport only.
-GPU-required mode failed its prerequisite check in this workspace: no NVIDIA
-device, NVHPC/CUDA compiler or CUDA-aware MPI is available. The Intel iGPU is also
-not exposed to the workspace. The full solver still rejects `usempi=1 openacc=1`.
-Single-/multi-GPU solver correctness, performance and NVLink routing remain
-unverified. See the [accelerator test commands](../tests/functional/mpi/README.md#accelerator-halo-checks).
+The local workspace exposes no GPU. Remote 2D/3D halo checks passed on A100,
+H100 and A6000 devices on 2026-11-09, verifying distinct physical UUIDs and larger
+buffers. The tested H100 CUDA IPC configuration failed for larger messages;
+CUDA-aware MPI with host staging passed. Full solver verification is now separate
+from that harness; passing transport checks alone does not establish solver
+correctness, performance or NVLink routing. See the
+[accelerator test commands](../tests/functional/mpi/README.md#accelerator-halo-checks).
 
 The existing OpenACC build targets NVIDIA GPUs. An Intel integrated GPU would
 require a supported compiler/backend and kernel port, such as SYCL or Intel
@@ -422,10 +499,10 @@ No Intel GPU runtime/device is exposed in this workspace. NPU AI TOPS describes
 neural-network throughput and is not a measurement of DES double-precision mesh
 operations; it does not justify an NPU port.
 
-The cost-effective next step is to use the best measured CPU configuration, then
-validate a single GPU before renting several. Compare total time and cost per
-completed scientific run, including MMG, initialization and output. CPU correctness
-checks cannot prove GPU correctness or predict multi-GPU speedup.
+Full timestep and MMG-transition checks accompany the GPU backend. Compare
+complete scientific runs, including MMG, initialization and output, and retain
+CPU comparisons separately from one-GPU/multi-GPU comparisons. Passing halo or
+short solver checks does not predict multi-GPU solver speedup.
 
 ## Partitioning and remeshing choices: research snapshot, 2026-11-05
 

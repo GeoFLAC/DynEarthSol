@@ -168,6 +168,13 @@ defaults are not what you want.
   * Coupling is 3D only, so build with `make ndims=3 usegospl=1`. The active
     conda environment does not matter unless it has its own compilers;
     `make config` shows what was picked.
+  * `usempi=1 usegospl=1` connects DES CPU/GPU ranks to an independent persistent
+    GoSPL MPI world, with separate rank counts. Use the
+    [MPI coupling launcher](doc/gospl-mpi-coupling.md) and reserve resources for
+    both models. Reviewers can follow the [short runnable checks](doc/mpi-quickstart.md)
+    for CPU MPI, one/two GPUs and a coarse coupled example. Coupled checkpoints
+    preserve the surface model and pending exchange; continuation keeps GoSPL's
+    rank count fixed while DES ranks may change.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
@@ -325,15 +332,19 @@ make openacc=1 GPU_CC=90
 
 # Running DES
 
-The experimental [CPU MPI backend](doc/mpi.md) uses spatial partitions, compact
-local meshes and neighbor halo exchanges. It rebuilds ownership after every MMG
+The experimental [MPI backends](doc/mpi.md) use spatial partitions, compact
+local meshes and neighbor halo exchanges. They rebuild ownership after every MMG
 remesh. Rank zero retains a global mesh for MMG, marker management and output.
 RCB remains the default; `usemetis=1` adds an optional METIS partitioner. The guide
 covers correctness checks, OpenMP/MPI timings and isolated parallel-remeshing
 compatibility prototypes. The existing MMG policy and field transfer remain in use.
 Thermal, force and mass assembly support interior-node/halo overlap; per-rank
-profiles and controlled timing tools expose its overhead. Accelerator halo tests
-are available, while the full GPU MPI solver remains unintegrated.
+profiles and controlled timing tools expose its overhead. `usempi=1 openacc=1`
+adds NVIDIA GPU timestep executables with one GPU per rank, pinned host staging
+for halos and CPU mesh management. Full-field/checkpoint tests accompany the
+backend; verify scientific equivalence and performance for the intended case.
+The [reviewer quickstart](doc/mpi-quickstart.md) gives copyable build/run commands,
+small examples and expected results for CPU MPI, multiple GPUs and coupling.
 
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.

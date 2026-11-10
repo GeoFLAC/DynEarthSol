@@ -14,7 +14,7 @@ endif
 ifneq (, $(findstring nvc++, $(CC)))
 	CFLAGS = -Wall -O3
 	ifeq ($(nofma), 1)
-		CFLAGS += -mno-fma
+		CFLAGS += -Mnofma
 	endif
 
 	ifeq ($(nprof), 1)
@@ -25,7 +25,7 @@ ifneq (, $(findstring nvc++, $(CC)))
 		## from the build host, which is what makes a tree shared between hosts link
 		## objects built for the wrong arch. Assembled into ONE -gpu=: repeating the
 		## option leaves it to nvc++ whether occurrences merge or the last one wins.
-		GPU_OPTS = mem:managed
+		GPU_OPTS = managed
 		ifneq ($(strip $(GPU_CC)),)
 			GPU_OPTS := cc$(strip $(GPU_CC)),$(GPU_OPTS)
 		endif

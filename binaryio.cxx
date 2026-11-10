@@ -314,6 +314,22 @@ bool BinaryInput::has_array(const char *name) const
     return offset.find(name) != offset.end();
 }
 
+void BinaryOutput::write_checkpoint_reference(const std::string& name,const std::string& value)
+{
+    std::vector<uint> bytes(value.begin(),value.end());
+    int length=bytes.size();write_scalar(length,name+"_length");
+    write_array(bytes,name.c_str(),bytes.size());
+}
+
+std::string BinaryInput::read_checkpoint_reference(const std::string& name)
+{
+    if(!has_array(name.c_str()))return {};
+    int length=0;read_scalar(length,name+"_length");
+    if(length<=0 || length>4096)die(EXIT_IO_RESTART,"invalid coupled checkpoint reference length");
+    std::vector<uint> bytes(length);read_array(bytes,name.c_str());
+    return std::string(bytes.begin(),bytes.end());
+}
+
 
 void BinaryInput::read_header()
 {
@@ -570,6 +586,15 @@ void HDF5Output::write_run_provenance(const BuildInfo& build, const CpuInfo& cpu
     AttrSink sink = {*this, g};
     provenance_fields(sink, build, cpu, dev, restart_from, peak_rss_gib);
     H5Gclose(g);
+}
+
+void HDF5Output::write_checkpoint_reference(const std::string& name,const std::string& value)
+{
+    hid_t group=H5Gopen2(file_id,"/provenance",H5P_DEFAULT);
+    if(group<0)die(EXIT_IO_RW,"cannot open coupled checkpoint provenance");
+    write_attribute(value,name,group);
+    if(H5Aexists(group,name.c_str())<=0)die(EXIT_IO_RW,"cannot write coupled checkpoint reference");
+    H5Gclose(group);
 }
 
 
@@ -1132,6 +1157,30 @@ HDF5Input::~HDF5Input()
 bool HDF5Input::has_array(const char *name) const
 {
     return H5Lexists(file_id, name, H5P_DEFAULT) > 0;
+}
+
+std::string HDF5Input::read_checkpoint_reference(const std::string& name)
+{
+    if(H5Lexists(file_id,"/provenance",H5P_DEFAULT)<=0)return {};
+    hid_t group=H5Gopen2(file_id,"/provenance",H5P_DEFAULT);
+    if(H5Aexists(group,name.c_str())<=0){H5Gclose(group);return {};}
+    hid_t attr=H5Aopen(group,name.c_str(),H5P_DEFAULT);
+    hid_t type=H5Aget_type(attr);
+    if(H5Tis_variable_str(type)>0) {
+        char* text=nullptr;
+        if(H5Aread(attr,type,&text)<0)die(EXIT_IO_RW,"cannot read coupled checkpoint reference");
+        std::string value=text?text:"";
+        if(text)H5free_memory(text);
+        H5Tclose(type);H5Aclose(attr);H5Gclose(group);
+        if(value.size()>4096)die(EXIT_IO_RESTART,"invalid coupled checkpoint reference length");
+        return value;
+    }
+    std::size_t size=H5Tget_size(type);
+    if(size>4096)die(EXIT_IO_RESTART,"invalid coupled checkpoint reference length");
+    std::vector<char> bytes(size+1,0);
+    if(H5Aread(attr,type,bytes.data())<0)die(EXIT_IO_RW,"cannot read coupled checkpoint reference");
+    H5Tclose(type);H5Aclose(attr);H5Gclose(group);
+    return std::string(bytes.data());
 }
 
 template <typename T>

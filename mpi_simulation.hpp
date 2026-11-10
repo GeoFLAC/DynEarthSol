@@ -12,10 +12,12 @@ enum class MpiEntity { Node, Element };
 #include <utility>
 
 enum class MpiEntity { Node, Element };
+// Call before parsing parameters: managed allocations must use this rank's GPU.
+void mpi_select_device();
 enum class MpiOp {
     State, Temperature, PorePressure, StrainRate, Stress, Force, Velocity,
     Coordinate, Rotation, Volume, Dvoldt, Edvoldt, Nmd, Mass, TimeStep,
-    OldMeanStress, Friction, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SwapVolume,
+    OldMeanStress, Friction, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SurfaceIdle, SwapVolume,
     Remesh, PhaseChange, Hydrous, Collect, Geometry, Boundary, Sample, Average, Metrics, Report, Stop, Count
 };
 

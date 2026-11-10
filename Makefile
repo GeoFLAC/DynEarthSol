@@ -22,7 +22,7 @@
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
-##  - usempi = 1 : experimental CPU MPI timestep kernels; builds dynearthsol[23]d.mpi.
+##  - usempi = 1 : MPI timestep kernels; openacc=1 builds dynearthsol[23]d.mpi.gpu.
 ##  - usemetis = 1 : optional METIS partitioner for usempi=1 (requires METIS 5).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
@@ -159,14 +159,17 @@ else
 	endif
 endif
 ifeq ($(usempi), 1)
-ifneq ($(filter-out 0,$(openacc) $(nprof) $(usegospl)),)
-$(error usempi=1 currently supports CPU builds without nprof or GoSPL)
+ifneq ($(filter-out 0,$(nprof)),)
+$(error usempi=1 currently supports builds without nprof)
 endif
 MPI_CXX ?= mpicxx
 CXX = $(MPI_CXX)
 ## Open MPI and MPICH spell the wrapper introspection differently.
 CXX_BACKEND := $(shell $(CXX) --showme:command 2>/dev/null || $(CXX) -show 2>/dev/null)
 suffix = .mpi
+ifeq ($(openacc), 1)
+suffix = .mpi.gpu
+endif
 else
 CXX_BACKEND = ${CXX}
 endif
@@ -493,7 +496,7 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 	endif
 
 	ifeq ($(nofma), 1)
-		CXXFLAGS += -mno-fma
+		CXXFLAGS += -Mnofma
 	endif
 
 	ifeq ($(openacc), 1)
@@ -515,17 +518,20 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 		endif
 
 		CXXFLAGS += -acc=gpu -cuda -DACC
-		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
+		ifeq ($(usempi), 1)
+			CXXFLAGS += -Kieee
+		endif
+		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
 
 		## Keep our symbols out of .dynsym
 		LDFLAGS += -Wl,--version-script=local-symbols.map
 		ifeq ($(nofma), 1)
-			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
+			CXXFLAGS += -gpu=cc$(GPU_CC),managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
 		else
-			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed
+			CXXFLAGS += -gpu=cc$(GPU_CC),managed
 			# CXXFLAGS += -gpu=managed
 		endif
 	endif
@@ -625,6 +631,8 @@ INCS =	\
 	mpi_local_fields.hpp \
 	mpi_transport.hpp \
 	mpi_halo_kernels.hpp \
+	mpi_gpu_buffer.hpp \
+	mpi_acc.hpp \
 	exit_codes.hpp \
 	mpi_state.hpp \
 	monitor.hpp \
@@ -711,8 +719,14 @@ endif
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
 ifeq ($(usempi), 1)
+ifneq ($(openacc), 1)
 	# MPI changes the DES executable, not this CPU-only eigensolver library.
 	C3X3_LIBNAME = 3x3
+endif
+ifeq ($(openacc), 1)
+	# Device routines must come from the GPU eigensolver archive.
+	C3X3_LIBNAME = 3x3.gpu
+endif
 endif
 ## GPU_CC goes to the sub-make as itself: it folds the capability into the one -gpu= it
 ## assembles, and its flag stamp covers CFLAGS, so a changed capability deletes the

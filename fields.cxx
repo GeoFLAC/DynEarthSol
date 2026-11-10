@@ -171,7 +171,7 @@ void update_temperature(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int e=mpi_eb; e<mpi_ee;e++) {
             // diffusion matrix
 
@@ -203,27 +203,38 @@ void update_temperature(const Param &param, const Variables &var,
         }
 
 #ifdef USEMPI
+#ifndef ACC
         #pragma omp master
+#endif
         {
             mpi_begin_gather(var,tmp_result,NODES_PER_ELEM);
         }
+#ifndef ACC
         #pragma omp barrier
+#endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
+#ifndef ACC
                 #pragma omp master
+#endif
                 { var.mpi->finish_exchange(); }
+#ifndef ACC
                 #pragma omp barrier
+#endif
             }
             const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+#ifndef ACC
             #pragma omp for
+#endif
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
 #else
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
 #endif
             if ((*var.bcflag)[n] & BOUNDZ1)
@@ -295,7 +306,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
         reduction(max:diff_max_local) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-        #pragma acc parallel loop gang vector reduction(max:diff_max_local) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(max:diff_max_local) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
@@ -366,7 +377,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int n=mpi_nb; n<mpi_ne; n++) {
         tdot[n] = 0.0;
         {
@@ -419,7 +430,7 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, strain_rate) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 #ifdef THREED
         double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
@@ -512,7 +523,7 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
             shared(var, param, force)  firstprivate(small_vel)
 #endif
 #endif
-        #pragma acc parallel loop gang vector collapse(2) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) async
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++)
                 if (std::fabs((*var.vel)[i][j]) > small_vel) {
@@ -526,7 +537,7 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
         #pragma omp parallel for default(none) \
             shared(var, param, force)
 #endif
-        #pragma acc parallel loop gang vector collapse(2) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) async
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++)
                 force[i][j] -= param.control.damping_factor * force[i][j];
@@ -538,7 +549,7 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, param, force)
 #endif
-        #pragma acc parallel loop gang vector collapse(2) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) async
         for (int i=0; i<var.nnode; ++i) {
             for (int j=0;j<NDIMS;j++) {
                 if ((force[i][j]<0) == ((*var.vel)[i][j]<0)) {
@@ -563,7 +574,7 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
             shared(var, param, force)  firstprivate(small_vel)
 #endif
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<var.nnode; ++i) {
             double mass = (*var.mass)[i];
             double young = (*var.ymass)[i];
@@ -634,7 +645,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int e=mpi_eb; e<mpi_ee;e++) {
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
@@ -668,27 +679,38 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
         }
 
 #ifdef USEMPI
+#ifndef ACC
         #pragma omp master
+#endif
         {
             mpi_begin_gather(var,tmp_result,NODES_PER_ELEM*NDIMS);
         }
+#ifndef ACC
         #pragma omp barrier
+#endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
+#ifndef ACC
                 #pragma omp master
+#endif
                 { var.mpi->finish_exchange(); }
+#ifndef ACC
                 #pragma omp barrier
+#endif
             }
             const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+#ifndef ACC
             #pragma omp for
+#endif
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
 #else
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int n=mpi_nb; n<mpi_ne;n++) {
 #endif
             double magnitude[NDIMS] = {};
@@ -760,7 +782,7 @@ double calculate_residual_force(const Variables& var, array_t& force_residual)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, force_residual, num) reduction(+:l2) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector collapse(2) reduction(+:l2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) reduction(+:l2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int i=mpi_nb; i<mpi_ne; ++i)
         for (int j = 0; j < NDIMS; ++j)
             l2 += std::pow(force_residual[i][j], 2) / num;
@@ -792,7 +814,7 @@ void update_velocity(const Variables& var, array_t& vel)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, vel) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector collapse(2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int i=mpi_nb; i<mpi_ne; ++i)
         for (int j=0;j<NDIMS;j++)
             vel[i][j] += var.dt * (*var.force)[i][j] / (*var.mass)[i];
@@ -821,7 +843,7 @@ void update_coordinate(const Variables& var, array_t& coord)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector collapse(2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int i=mpi_nb; i<mpi_ne; ++i) {
         for (int j=0 ; j<NDIMS; ++j){
             (*var.coord)[i][j] += (*var.vel)[i][j] * var.dt;
@@ -906,7 +928,7 @@ void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain,
     #pragma omp parallel for default(none) shared(var, stress, strain) \
         firstprivate(dt) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector firstprivate(dt) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector firstprivate(dt) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 

@@ -430,7 +430,7 @@ namespace {
         #pragma omp parallel for default(none) \
             shared(param, var, ms, rule_kind, rule_to, serpentinize, vt, topo, lost) firstprivate(mpi_eb,mpi_ee)
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee)
         for (int e=mpi_eb; e<mpi_ee; e++) {
             int nmarkers = (*var.markers_in_elem)[e].size();
             #pragma acc loop seq
@@ -495,7 +495,7 @@ namespace {
         #pragma omp parallel for default(none) \
             shared(param, var, ms, vt, topo, nsteps, wet_crust_below) firstprivate(mpi_eb,mpi_ee)
 #endif
-        #pragma acc parallel loop gang vector async firstprivate(mpi_eb,mpi_ee)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee)
         for (int e=mpi_eb; e<mpi_ee; e++) {
             int nmarkers = (*var.markers_in_elem)[e].size();
             #pragma acc loop seq
@@ -748,7 +748,7 @@ void phase_changes(const Param& param, Variables& var)
     const int mpi_eb=mpi_element_begin(var), mpi_ee=mpi_element_end(var);
     int is_error = 0;
 
-    #pragma acc parallel loop gang vector reduction(+:is_error) async firstprivate(mpi_eb,mpi_ee)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(+:is_error) async firstprivate(mpi_eb,mpi_ee)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();
         #pragma acc loop seq

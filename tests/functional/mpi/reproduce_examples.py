@@ -5,8 +5,6 @@ Full mode preserves physical, stopping, mesh and output settings. Regression mod
 caps steps and increases output frequency; every override is recorded. Maxwell
 uses the separate, documented current-format constitutive benchmark.
 """
-from __future__ import annotations
-
 import argparse
 import configparser
 import csv
@@ -25,7 +23,8 @@ import time
 import h5py
 import numpy as np
 
-from run_mpi import ROOT, compare_physical_hdf5
+from run_mpi import ROOT, compare_physical_hdf5, command_text
+from run_gpu_mpi import compare_fields, device_records
 
 YEAR_SECONDS = 365.2422 * 86400
 CASES = {
@@ -52,7 +51,7 @@ def configuration(name, mode, max_steps=None):
     path = ROOT / source
     cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     cfg.optionxform = str
-    cfg.read(path)
+    cfg.read(path,encoding='utf-8')
     original = {section: dict(cfg[section]) for section in cfg.sections()}
     for key in ("poly_filename", "exo_filename"):
         if key in cfg["mesh"]:
@@ -96,7 +95,7 @@ def execute(command, directory, threads, timeout):
                 process.wait()
             raise
     if status:
-        raise RuntimeError(f"Exit {status}: {shlex.join(command)}; {directory / 'run.log'}")
+        raise RuntimeError(f"Exit {status}: {command_text(command)}; {directory / 'run.log'}")
     log = (directory / "run.log").read_text()
     if "Ending simulation." not in log:
         raise RuntimeError(f"No completion marker: {directory}")
@@ -172,15 +171,19 @@ def check_maxwell(summary):
                 final_stress_pa=float(actual[-1]), analytical_final_stress_pa=float(expected[-1]))
 
 
-def analyze(reference, current, cfg, ndims):
+def analyze(reference, current, cfg, ndims, gpu=False):
     prefix = cfg["sim"]["modelname"]
     checked = {}
+    comparisons = []
     for kind in ("save", "chkpt"):
         old, new = frames(reference, prefix, kind), frames(current, prefix, kind)
         if old != new or (kind == "save" and len(old) < 2):
             raise AssertionError(f"Saved frame sets differ: {kind}: {old} / {new}")
         for frame in old:
-            compare_physical_hdf5(reference, current, frame, prefix, kind)
+            if gpu:
+                comparisons.append(compare_fields(reference,current,frame,kind,prefix=prefix))
+            else:
+                compare_physical_hdf5(reference, current, frame, prefix, kind)
         checked[kind] = old
     monitors = compare_monitors(reference, current)
     summary = physical_summary(current, prefix, ndims)
@@ -196,7 +199,8 @@ def analyze(reference, current, cfg, ndims):
         subprocess.run([sys.executable, str(ROOT / "benchmarks-cores/compare.py"),
                         str(reference / prefix), str(current / prefix), str(checked["save"][-1])],
                        env=env, stdout=output, stderr=subprocess.STDOUT, check=True)
-    return dict(bit_exact=True, frames=checked, monitors=monitors, physical=summary,
+    return dict(bit_exact=all(row['bit_exact'] for row in comparisons), comparisons=comparisons,
+                frames=checked, monitors=monitors, physical=summary,
                 reference=str(reference), current=str(current))
 
 
@@ -341,7 +345,10 @@ def main():
     parser.add_argument("--timeout", type=float, default=7200, help="Seconds allowed per executable")
     parser.add_argument("--workdir", type=Path)
     parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--gpu", action="store_true",help="Verify GPU MPI identities and compare physical fields within 1e-8")
+    parser.add_argument("--gpu-reference", action="store_true",help="Compare GPU MPI against a one-GPU run; retain CPU comparisons separately")
     args = parser.parse_args()
+    if args.gpu_reference and not args.gpu:parser.error('--gpu-reference requires --gpu')
     if args.ranks < 2 or args.serial_threads < 1 or args.timeout <= 0 or (
             args.max_steps is not None and args.max_steps < 4):
         parser.error("ranks >= 2, threads >= 1, timeout > 0 and max-steps >= 4 are required")
@@ -359,16 +366,19 @@ def main():
         args.workdir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="reproduce-", dir=args.workdir))
     print(f"Artifacts: {work}", flush=True)
-    results = dict(cases={}, mode=args.mode, gpu_tested=False, completed=False)
+    reference_kind='gpu1' if args.gpu_reference else 'parent'
+    results = dict(cases={}, mode=args.mode, gpu_tested=args.gpu, completed=False,
+                   reference_backend='GPU MPI, one rank' if args.gpu_reference else 'parent CPU')
     try:
         for name in args.cases:
             cfg, provenance = configuration(name, args.mode, args.max_steps)
             directory = work / name
             directory.mkdir()
             (directory / "provenance.json").write_text(json.dumps(provenance, indent=2)+"\n")
-            (directory / "original.cfg").write_text((ROOT / provenance["source"]).read_text())
+            (directory / "original.cfg").write_text((ROOT / provenance["source"]).read_text(encoding='utf-8'),encoding='utf-8')
             timings = {}
-            for kind, exe in zip(("parent", "mpi"), executables[provenance["ndims"]]):
+            for kind, exe in zip((reference_kind, "mpi"), executables[provenance["ndims"]]):
+                if args.gpu_reference:exe=executables[provenance['ndims']][1]
                 target = directory / kind
                 target.mkdir()
                 for prefix in (cfg["sim"]["modelname"], cfg.get("monitor", "output_prefix", fallback="monitor")):
@@ -377,11 +387,15 @@ def main():
                     cfg.write(stream)
                 command = [str(exe), "model.cfg"]
                 threads = args.serial_threads if kind == "parent" else 1
-                if kind == "mpi":
-                    command = shlex.split(args.launcher) + ["-n", str(args.ranks)] + command
+                if kind == "mpi" or args.gpu_reference:
+                    command = shlex.split(args.launcher) + ["-n", str(args.ranks if kind=='mpi' else 1)] + command
                 print(f"Running {name}: {kind}", flush=True)
                 timings[kind] = execute(command, target, threads, args.timeout)
-            report = analyze(directory / "parent", directory / "mpi", cfg, provenance["ndims"])
+            report = analyze(directory / reference_kind, directory / "mpi", cfg, provenance["ndims"], args.gpu)
+            if args.gpu:
+                report['devices']=device_records((directory/'mpi/run.log').read_text(),args.ranks)
+                if args.gpu_reference:
+                    report['reference_devices']=device_records((directory/'gpu1/run.log').read_text(),1)
             report.update(provenance=provenance, timings=timings)
             if name.startswith("maxwell"):
                 report["analytical"] = check_maxwell(report["physical"])
@@ -390,8 +404,11 @@ def main():
             if args.plot:
                 plot_case(name, report, directory, cfg)
             (work / "results.json").write_text(json.dumps(results, indent=2)+"\n")
-            print(f"Passed {name}: {len(report['frames']['save'])} frames, bit-exact", flush=True)
+            print(f"Passed {name}: {len(report['frames']['save'])} frames, bit_exact={report['bit_exact']}", flush=True)
         results["completed"] = True
+    except Exception as error:
+        results['failure']=str(error)
+        raise
     finally:
         (work / "results.json").write_text(json.dumps(results, indent=2)+"\n")
     print(f"Results: {work / 'results.json'}", flush=True)

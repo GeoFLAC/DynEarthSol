@@ -24,7 +24,7 @@ KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree
     h_results = nullptr;
     h_results_capacity = 0;
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
     m_bvh_state = nullptr;
 
     std::vector<float3> h_points(numPoints);
@@ -38,6 +38,9 @@ KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree
     }
 
 #else
+    // Mesh management in GPU MPI uses the same double-precision search as the
+    // CPU solver. Float BVH coordinates can change marker and remap identities.
+    #pragma acc wait
     nano_kdtree.buildIndex();
 #endif
 }
@@ -48,14 +51,14 @@ KNN::~KNN()
         delete[] h_results;
         h_results = nullptr;
     }
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
     knn_bvh_destroy(static_cast<KNNBVHState*>(m_bvh_state));
 #endif
 }
 
 int KNN::max_batch_size(int k_neig) const
 {
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
     int batch_size = knn_bvh_max_batch(static_cast<KNNBVHState*>(m_bvh_state), k_neig);
     if (batch_size <= 0) {
         throw std::runtime_error("Insufficient GPU memory to process even a single query batch.");
@@ -78,7 +81,7 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
 
     const size_t required_size = (size_t)nquery * k_neig;
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
     if (is_msg) printf("(lbvh GPU)\n");
 
     if (is_sync_to_host && required_size > h_results_capacity) {
@@ -133,6 +136,7 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
             d_guess_radii_sq));
 
 #else
+    #pragma acc wait
     if (is_msg) printf("(nano-kdtree)\n");
 
     if (required_size > h_results_capacity) {

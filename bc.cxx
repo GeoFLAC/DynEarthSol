@@ -353,7 +353,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     #pragma omp parallel for default(none) shared(var) \
         reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
     for (int i=0; i<var.nnode; ++i) {
         if (! is_on_boundary(*var.bcflag, i)) continue;
         uint flag = (*var.bcflag)[i];
@@ -454,18 +454,22 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     };
 #else
     double zmin = 0;
-    #pragma acc enter data copyin(zmin) async
+    #pragma acc enter data copyin(zmin) async if(des_acc_offload())
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
 #endif
-    #pragma acc parallel loop gang vector async reduction(min:zmin)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async reduction(min:zmin)
     for (int k=0; k<var.nnode; ++k) {
         ConstArrayAccessor tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
 #ifdef USEMPI
-    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&zmin, 1);
+    if (var.mpi && var.mpi->in_kernel()) {
+        // The host MPI reduction consumes the asynchronous device reduction.
+        #pragma acc wait
+        var.mpi->minimum(&zmin, 1);
+    }
 #endif
 #endif
 #ifndef ACC
@@ -485,9 +489,9 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #endif
 #endif
 #ifdef THREED
-    #pragma acc parallel loop gang vector async copyin(lateral_faces[0:4])
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async copyin(lateral_faces[0:4])
 #else
-    #pragma acc parallel loop gang vector async present(zmin)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async present(zmin)
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -723,7 +727,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         }
     }
 #ifndef THREED
-    #pragma acc exit data copyout(zmin) async
+    #pragma acc exit data copyout(zmin) async if(des_acc_offload())
 #endif
     #pragma acc wait
 #ifdef NPROF
@@ -746,7 +750,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.etmp_int)[e] = -1;
 
@@ -774,7 +778,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int n=0; n<bound; ++n) {
                 // this facet belongs to element e
                 int e = (*var.bfacets[i])[n].first;
@@ -860,7 +864,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = (*var.bnodes[i])[j];
                 const int npatch = var.support.size(n);
@@ -885,7 +889,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int n=0; n<bound; ++n) {
                 const int e = (*var.bfacets[i])[n].first;
                 (*var.etmp_int)[e] = -1;
@@ -1022,7 +1026,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
@@ -1031,7 +1035,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int i=0; i<var.surfinfo.etop; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
@@ -1122,7 +1126,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1169,7 +1173,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
@@ -1229,10 +1233,8 @@ namespace {
         }
 
         // Accumulate time and steps since last coupling
-        const double SEC_PER_YR = 3.1536e7;
-        double dt_years = var.dt / SEC_PER_YR;
-        var.gospl_driver->accumulated_dt += dt_years;
-        var.gospl_driver->step_counter++;
+        double dt_years = var.dt / YEAR2SEC;
+        var.gospl_driver->advance_clock(dt_years);
 
         // Check whether it's time to couple
         bool do_couple;
@@ -1243,6 +1245,10 @@ namespace {
 
         if (!do_couple)
             return;  // GoSPL idle this step
+
+        // The Python bridge reads coordinates/velocities and writes coordinates
+        // on the host. Finish OpenACC producers before that ownership change.
+        #pragma acc wait
 
         // ===== COUPLING STEP =====
         double total_dt = var.gospl_driver->accumulated_dt;
@@ -1270,16 +1276,11 @@ namespace {
                 coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
-        // Static storage for time-averaged velocity reference.
-        // Stored as static (not in GoSPLDriver) to avoid any allocation in
-        // GoSPLDriver's memory space, which is adjacent to PETSc-managed memory
-        // that can interfere with the C++ heap.
-        static std::vector<double> surface_coords_start;
-        static bool has_surface_start = false;
-        // var.nremesh when surface_coords_start was recorded. A remesh renumbers the nodes
-        // (renumbering_mesh), so top_nodes[i] may name a different node afterwards even
-        // when the surface node count is unchanged.
-        static int nremesh_at_start = -1;
+        // Persist this reference with the coupling clock. Mesh numbers include
+        // the preceding run so a continuation preserves remesh invalidation.
+        auto& surface_coords_start=var.gospl_driver->surface_coords_start;
+        auto& has_surface_start=var.gospl_driver->has_surface_start;
+        auto& nremesh_at_start=var.gospl_driver->nremesh_at_surface_start;
 
         // Re-initialize GoSPL topography on the first coupling event only.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
@@ -1302,7 +1303,7 @@ namespace {
         // coupling event or after remeshing.
         if (var.gospl_driver->velocity_coupling) {
             std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
-            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh;
+            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh_prior+var.nremesh;
             for (std::size_t i = 0; i < ntop; ++i) {
                 int n = top_nodes[i];
                 if (use_time_avg) {
@@ -1314,13 +1315,13 @@ namespace {
 #endif
                     vz_yr[i] = (coords[i*3+NDIMS-1] - surface_coords_start[i*3+NDIMS-1]) / total_dt;
                 } else {
-                    vx_yr[i] = (*var.vel)[n][0]       * SEC_PER_YR;
+                    vx_yr[i] = (*var.vel)[n][0]       * YEAR2SEC;
 #ifdef THREED
-                    vy_yr[i] = (*var.vel)[n][1]        * SEC_PER_YR;
+                    vy_yr[i] = (*var.vel)[n][1]        * YEAR2SEC;
 #else
                     vy_yr[i] = 0.0;
 #endif
-                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * SEC_PER_YR;
+                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * YEAR2SEC;
                 }
             }
             int r = var.gospl_driver->set_surface_velocity(
@@ -1386,7 +1387,7 @@ namespace {
         // Done after GoSPL returns; surface_coords_start is a static vector allocated in
         // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
         surface_coords_start = coords;
-        nremesh_at_start = var.nremesh;
+        nremesh_at_start = var.nremesh_prior+var.nremesh;
         has_surface_start = true;
 
         var.gospl_driver->record_coupling(total_dt, min_dh, max_dh, sum_dh / ntop);
@@ -1744,7 +1745,7 @@ void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, plstrain, lambha)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int ti = 0; ti < var.ntop_elems; ++ti) {
         const int e = (*var.top_elems)[ti];
         plstrain[e] -= plstrain[e] * lambha * var.dt;
@@ -1768,7 +1769,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<var.ntop_elems; i++) {
             const int e = (*var.top_elems)[i];
 
@@ -1791,7 +1792,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
             const int npatch = var.support.size(nt);
@@ -1824,7 +1825,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0;i<var.surfinfo.ntop;i++)
         (*var.surfinfo.dh)[i] = 0.;
 
@@ -1872,7 +1873,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<var.surfinfo.ntop; i++) {
             // get global index of node
             // update coordinate via dh
@@ -1886,7 +1887,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0;i<var.surfinfo.etop;i++) {
             double dh_e = 0.;
 
@@ -1918,7 +1919,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:maxdh) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(max:maxdh) async
     for (int i=0; i<var.surfinfo.ntop; ++i) {
         double tmp = fabs((*var.surfinfo.dh)[i]);
 
@@ -1941,7 +1942,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop if(des_acc_offload()) gang vector
             for (int i=0;i<var.surfinfo.ntop;i++)
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 

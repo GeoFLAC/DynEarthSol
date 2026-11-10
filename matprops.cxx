@@ -282,7 +282,7 @@ void MatProps::refresh_elem_cache()
 #endif
     // NO `async`: the host reads `changed` immediately below, and appending async would
     // read the reduction before it lands and silently freeze the means.
-    #pragma acc parallel loop gang vector reduction(|:changed)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(|:changed)
     for (int e = 0; e < nelem; ++e) {
         for (int m = 0; m < nmat; ++m) {
             const std::size_t i = std::size_t(e) * nmat + m;
@@ -295,7 +295,7 @@ void MatProps::refresh_elem_cache()
 #ifndef ACC
     #pragma omp parallel for default(none) firstprivate(nelem)
 #endif
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload()) gang vector
     for (int e = 0; e < nelem; ++e) {
         double* c = &cache_props[std::size_t(e) * MP_STRIDE];
         c[MPC_BULKM]      = harmonic_mean(bulk_modulus, elemmarkers[e]);

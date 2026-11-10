@@ -319,7 +319,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector \
+        #pragma acc parallel loop if(des_acc_offload()) gang vector \
             reduction(+: n_volume, n_dpressure, n_viscosity, n_stress) \
             reduction(min: first_elem)
         for (int e=0; e<var.nelem; e++) {
@@ -341,7 +341,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector \
+        #pragma acc parallel loop if(des_acc_offload()) gang vector \
             reduction(+: n_temperature, n_tmass, n_force, n_vel, n_coord) \
             reduction(min: first_node)
         for (int n=0; n<var.nnode; n++) {

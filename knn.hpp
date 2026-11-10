@@ -16,7 +16,7 @@ public:
     int max_batch_size(int k_neig) const;
 
     const char* backend_name() const {
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         return "lbvh GPU";
 #else
         return "nano-kdtree";
@@ -29,7 +29,7 @@ public:
     // GPU memory consumed by d_queries + d_results for one batch.
     // Returns 0 for CPU builds (no GPU allocation).
     static size_t query_mem_bytes(int nquery, int k) {
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         return (size_t)nquery * (3 * sizeof(float) + (size_t)k * sizeof(neighbor));
 #else
         (void)nquery; (void)k; return 0;
