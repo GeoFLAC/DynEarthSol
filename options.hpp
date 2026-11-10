@@ -328,7 +328,7 @@ public:
     std::map<std::string, std::string> scan_lines(std::istream &in) const
     {
         std::map<std::string, std::string> raw;
-        std::string line, section;
+        std::string text, section;
         bool in_section = false;
         // An invalid line stops the scan at once. A repeated key or an unbracketed
         // list is held back until the whole file has been read, so that a
@@ -337,9 +337,13 @@ public:
         const auto defer = [&](const std::string &msg) {
             if (! deferred) deferred.reset(new ConfigError(msg, true));
         };
-        while (std::getline(in, line)) {
-            const std::string shown = detail::trim(line);
-            line = detail::trim(line.substr(0, line.find('#')));
+        // getline writes only to text, never to a string this code assigned. With
+        // g++ 8 headers in C++17, nvc++ -gpu=mem:managed allocates a string made
+        // here with managed new, but the out-of-line getline in libstdc++.so frees
+        // with glibc: growing such a string aborts (munmap_chunk(): invalid pointer).
+        while (std::getline(in, text)) {
+            const std::string shown = detail::trim(text);
+            const std::string line = detail::trim(text.substr(0, text.find('#')));
             if (line.empty()) continue;
 
             const auto bad_line = [&]() {
