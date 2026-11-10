@@ -67,10 +67,10 @@ def bind_parallel_surface(model, comm):
     def seed(self, elevdata, k=3, power=1.0):
         points = np.asarray(elevdata['coords'], dtype=np.float64)
         elevations = np.asarray(elevdata.get('elev', elevdata.get('elevations')), dtype=np.float64)
-        ids, weights = _weights(points, self.mCoords, k, power)
+        ids, weights = _weights(points, self.mCoords[self.locIDs], k, power)
         mapped = np.sum(weights * elevations[ids], axis=1)
-        self.hGlobal.getArray()[:] = mapped[self.glbIDs]
-        self.hLocal.getArray()[:] = mapped[self.locIDs]
+        self.hLocal.getArray()[:] = mapped
+        self.dm.localToGlobal(self.hLocal, self.hGlobal)
 
     def interpolate(self, points, k=3, power=1.0):
         return transfer.interpolate(self, self.hGlobal.getArray(), points, k, power)

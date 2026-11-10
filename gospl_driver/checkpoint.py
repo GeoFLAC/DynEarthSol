@@ -55,9 +55,8 @@ def _capture(model):
         elif isinstance(value,PETSc.Object) or isinstance(value,types.MethodType) or name in ('profiler','vtkMesh','modelRunTime','outputDir') or name.startswith('_soluteBudget'):
             resources[name]=type(value).__name__
         else:
-            # Reject unknown nonserializable model memory rather than silently
-            # drop it. This includes forcing tables, counters and cache keys.
-            pickle.dumps(value,protocol=5)
+            # save() serializes the complete snapshot once and rejects unknown
+            # nonserializable values before writing this rank's state file.
             data[name]=value
     return dict(data=data,vectors=vectors,matrices=matrices,solvers=solvers,resources=resources,
                 owned_ids=np.asarray(model.glbIDs).copy(),local_ids=np.asarray(model.locIDs).copy(),

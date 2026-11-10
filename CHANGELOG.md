@@ -109,9 +109,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
-- MPI reuses current root fields and material caches instead of gathering or
-  scanning them again between state changes; coupling avoids a redundant GoSPL
-  elevation copy.
+- MPI reuses current root fields and material caches, skips repeated PT velocity
+  synchronization, and combines RSF diagnostics into one collective reduction.
+- DES–GoSPL coupling seeds each rank's local surface vertices and avoids redundant
+  elevation copies and checkpoint serialization.
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or

@@ -28,6 +28,7 @@ public:
     explicit MpiSimulation(Param&);
     ~MpiSimulation();
     bool is_root() const;
+    // Root has attached its management mesh to the compact backend.
     bool distributed() const;
     bool in_kernel() const;
     int worker_loop();

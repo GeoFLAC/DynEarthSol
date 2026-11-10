@@ -739,6 +739,7 @@ MpiSimulation::~MpiSimulation() {
 }
 bool MpiSimulation::is_root()const{return impl_->rank==0;}
 bool MpiSimulation::distributed()const{
+    if(!impl_->active)return false;
 #ifdef ACC
     return true; // A single GPU exercises the same compact backend without halos.
 #else
@@ -754,7 +755,7 @@ PTResult MpiSimulation::pt_result()const{return impl_->pt;}
 void MpiSimulation::attach(Variables& v){impl_->master=&v;impl_->active=true;synchronize(v);}
 void MpiSimulation::synchronize(Variables& v){dispatch(MpiOp::State,v);}
 bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
-    auto& m=*impl_;if(!distributed() || !m.active || m.inside || m.master!=&v)return false;
+    auto& m=*impl_;if(!distributed() || m.inside || m.master!=&v)return false;
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Preserve marker maintenance at mesh checks. Idle GoSPL steps retain local
     // mechanical surface correction, without root state transfers or worker RPC.

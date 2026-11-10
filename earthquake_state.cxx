@@ -112,8 +112,9 @@ void compute_earthquake_metrics(const Variables& var, double& speed, double& pla
     plastic_rate = compute_max_plastic_strain_rate(var);
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
-        speed = var.mpi->maximum(speed);
-        plastic_rate = var.mpi->maximum(plastic_rate);
+        double maxima[] = {speed, plastic_rate};
+        var.mpi->maximum(maxima, 2);
+        speed = maxima[0]; plastic_rate = maxima[1];
     }
 #endif
 }

@@ -718,7 +718,11 @@ void update_mesh(const Param& param, Variables& var)
     compute_volume(var, *var.volume);
 
     // surface_processes() above can move elemmarkers via correct_surface_marker().
-    var.mat->refresh_elem_cache();
+    // An attached MPI backend refreshes caches during state redistribution.
+#ifdef USEMPI
+    if (!var.mpi || !var.mpi->distributed())
+#endif
+        var.mat->refresh_elem_cache();
 
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
@@ -1094,7 +1098,10 @@ int main(int argc, const char* argv[])
         var.steps ++;
         var.time += var.dt;
         // Pick up what the previous step's phase changes and remeshing moved.
-        var.mat->refresh_elem_cache();
+#ifdef USEMPI
+        if (!var.mpi || !var.mpi->distributed())
+#endif
+            var.mat->refresh_elem_cache();
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
@@ -1138,7 +1145,10 @@ int main(int argc, const char* argv[])
             // composition, for the next step and for a restart from this step,
             // which rebuilds the masses from it.
             phase_changes(param, var);
-            var.mat->refresh_elem_cache();
+#ifdef USEMPI
+            if (!var.mpi || !var.mpi->distributed())
+#endif
+                var.mat->refresh_elem_cache();
         }
 
         // Objective rotation still belongs to the current physical step, even

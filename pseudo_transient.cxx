@@ -401,7 +401,8 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
                 #pragma acc wait
             }
-            mpi_sync(var, *var.vel, MpiEntity::Node);
+            // Trial evaluation synchronized the accepted velocity; initial
+            // equilibrium resynchronized it above after restoring old rates.
             return result;
         }
         if (result.residual < best*(1-1e-12)) {
