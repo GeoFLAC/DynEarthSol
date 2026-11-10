@@ -210,3 +210,21 @@ Refreshed artifacts are under `results/final-regression-901`, `reviewer-cpu-905`
 `nodes-8664` in the local evidence directory. Large GPU arrays remain on mounted
 Kersti storage in `results/gpu-mpi-k73skkzj`; the PR contains source, fixtures,
 reproduction tools and summaries.
+
+## Automated review follow-up
+
+The MPI/C++20 CI job exposed a startup crash with `usemmg=0`: the root's two
+MMG-only mesh-size hint vectors are empty, but compact selection indexed them
+with node IDs. Those fields now participate in MPI state only under `USEMMG`.
+The failing three-rank case was reproduced before the fix and completes after it;
+the MMG-enabled field list is unchanged.
+
+Non-MMG 2D/3D builds passed parent (`c81fb3b`) `make set` / changed three-rank
+`make cmp`, both bit-exact, with remeshing disabled in the retained tiny configs.
+All 40 existing PT checks passed across dimensions 2/3, methods 0/1 and ranks
+3/4, covering elasticity, Maxwell relaxation, hydrostatic/dynamic steps and
+collective failure. Existing tolerances were retained. C++17/C++20 host halo
+checks passed at ranks 1/2 in both dimensions. The Python review cleanup also
+passed two-rank protocol failure, rank-local KeyboardInterrupt/SystemExit cleanup
+and 14 coupled remeshing-continuation comparisons. Review artifacts are retained
+under `results/pr-review-*`, `results/pr128-*` and the mounted Nemex run directories.

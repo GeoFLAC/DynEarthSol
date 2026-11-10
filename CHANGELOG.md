@@ -189,6 +189,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- MPI builds without MMG skip its unpopulated mesh-size hints during partitioning,
+  avoiding a startup crash when selecting compact node fields.
 - PT running-scale roundoff estimates retain the original element forces before
   boundary assembly reuses its temporary buffer, avoiding partition-dependent
   thresholds.
