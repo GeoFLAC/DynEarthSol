@@ -3,7 +3,6 @@
 Interface as qualify_theis. build(study, output, record_source, space) takes
 the 2D study (all laws, every mesh) and the 3D study as the dimension check.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,20 +20,13 @@ NAMES = dict(van_genuchten='van Genuchten', brooks_corey='Brooks–Corey', gardn
              layered='van Genuchten / Gardner')
 
 
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def _analytical(ax, x, y, color, law):
     """Analytical curve; the two-law column is dashed so it stands apart from Gardner."""
     ax.plot(x, y, '--' if law == 'layered' else '-', color=color, lw=1.2, label=NAMES[law])
 
 
 def build(study, output, record_source, space):
-    summary, other = _check(study, record_source), _check(space, record_source)
+    summary, other = pf.load_study(study, record_source), pf.load_study(space, record_source)
     laws = list(dict.fromkeys(c['law'] for c in summary['cases']))
     finest = {law: min((c for c in summary['cases'] if c['law'] == law), key=lambda c: c['spacing_m']) for law in laws}
     for law, case in finest.items():

@@ -4,7 +4,6 @@ Interface as qualify_convection. build(study, output, record_source, space, time
 takes the selected run (finest time step), the mesh sequence and the time-step
 sequence. SPEC is the review entry for 'mandel'; setup(folder) draws its setup.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -20,15 +19,8 @@ import check_mandel as cm
 KEY = 'mandel'
 
 
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def build(study, output, record_source, space, times):
-    summary = _check(study, record_source)
+    summary = pf.load_study(study, record_source)
     case = summary['cases'][0]
     folder = study/f"h{case['spacing_m']:g}"
     for path in folder.glob('mandel.*'):
@@ -38,8 +30,8 @@ def build(study, output, record_source, space, times):
     for a, b in zip(frames, case['frames']):
         for key in ('max_error_over_p0', 'centre_des_over_p0', 'settlement_m', 'platen_vz_spread'):
             np.testing.assert_allclose(a[key], b[key], rtol=0, atol=1e-12)
-    mesh = _check(space, record_source)
-    steps = [(_check(t, record_source), t) for t in times]
+    mesh = pf.load_study(space, record_source)
+    steps = [(pf.load_study(t, record_source), t) for t in times]
     tc, p0 = cm.TC, cm.REF.p0
 
     data = output/'data'/KEY; data.mkdir(parents=True, exist_ok=True)

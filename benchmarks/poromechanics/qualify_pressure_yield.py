@@ -6,7 +6,6 @@ data/pressure_yield/, and returns the review record. study is the mesh
 sequence at 400 steps, steps the 1600-step run on 0.05 m, and extra any
 further step/mesh refinements (6400 steps, 0.025 m).
 """
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -21,13 +20,6 @@ sys.path.insert(0, str(pf.ROOT/'tests/functional/hydromechanics'))
 import check_pressure_yield as cp
 
 KEY = 'pressure_yield'
-
-
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 def _history(folder, element_depths=(0.0, 1.0)):
@@ -50,8 +42,8 @@ def _history(folder, element_depths=(0.0, 1.0)):
 
 
 def build(study, output, record_source, steps, extra=(), slabs=()):
-    summary, fine = _load(study, record_source), _load(steps, record_source)
-    more = [(_load(s, record_source), s) for s in extra]
+    summary, fine = pf.load_study(study, record_source), pf.load_study(steps, record_source)
+    more = [(pf.load_study(s, record_source), s) for s in extra]
     runs = [(c, summary['steps'], study) for c in summary['cases']] + [(c, fine['steps'], steps) for c in fine['cases']]
     runs += [(c, s['steps'], root) for s, root in more for c in s['cases']]
     # The same mesh and step count under the other PT option: keep the first run, report the agreement.
@@ -139,7 +131,7 @@ def build(study, output, record_source, steps, extra=(), slabs=()):
     b = best[0]
     slab_cases = []
     for slab in slabs:
-        saved = _load(slab, record_source)
+        saved = pf.load_study(slab, record_source)
         case = saved['cases'][0]
         assert saved['ndims'] == 3
         folder = slab/f"h{case['spacing_m']:g}"

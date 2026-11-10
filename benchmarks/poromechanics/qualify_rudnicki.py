@@ -4,7 +4,6 @@ Interface as qualify_convection. build(study, output, record_source, space, time
 takes the selected run, the mesh sequence (one study per spacing) and the
 time-step check.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -18,13 +17,6 @@ sys.path.insert(0, str(pf.ROOT/'tests/functional/hydromechanics'))
 import check_rudnicki as cr
 
 KEY = 'rudnicki'
-
-
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 def _binned(ax, r, v, color, edges):
@@ -54,7 +46,7 @@ def _arrived(case):
 
 
 def build(study, output, record_source, space, times=()):
-    summary = _check(study, record_source)
+    summary = pf.load_study(study, record_source)
     case = summary['cases'][0]
     folder = study/f"h{case['spacing_m']:g}"
     for path in folder.glob('rudnicki.*'):
@@ -64,9 +56,9 @@ def build(study, output, record_source, space, times=()):
     for a, b in zip(frames, case['frames']):
         for key in ('pressure_rms', 'radial_rms', 'hoop_rms'):
             np.testing.assert_allclose(a[key], b[key], rtol=0, atol=1e-12)
-    mesh = sorted((_check(s, record_source)['cases'][0] for s in space), key=lambda c: -c['spacing_m'])
+    mesh = sorted((pf.load_study(s, record_source)['cases'][0] for s in space), key=lambda c: -c['spacing_m'])
     for c in mesh: _arrived(c)
-    steps = [_check(t, record_source) for t in times]
+    steps = [pf.load_study(t, record_source) for t in times]
     for t in steps: _arrived(t['cases'][0])
     _arrived(case)
 

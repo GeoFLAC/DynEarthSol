@@ -5,7 +5,6 @@ replays the finest mesh from raw saves, writes figures/borehole.* and
 data/borehole/, and returns the review record. steps is the finer-step
 study on one mesh.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,13 +20,6 @@ import check_borehole as cb
 KEY = 'borehole'
 
 
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def _binned(r, values, edges):
     idx = np.digitize(r, edges) - 1
     keep = [(edges[i] + edges[i+1])/2 for i in range(len(edges) - 1) if np.any(idx == i)]
@@ -36,7 +28,7 @@ def _binned(r, values, edges):
 
 
 def build(study, output, record_source, steps):
-    summary, fine = _load(study, record_source), _load(steps, record_source)
+    summary, fine = pf.load_study(study, record_source), pf.load_study(steps, record_source)
     cases = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     finest, refined = cases[-1], fine['cases'][0]
     replay_difference = 0.

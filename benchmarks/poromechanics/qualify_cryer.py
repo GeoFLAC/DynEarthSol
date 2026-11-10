@@ -4,7 +4,6 @@ Interface as qualify_convection. build(study, output, record_source, space, time
 takes the selected run, the mesh sequence and the time-step sequence. SPEC is
 the review entry for 'cryer'; setup(folder) draws its setup.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -20,13 +19,6 @@ import check_cryer as cc
 KEY = 'cryer'
 
 
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def _late(case):
     """Largest error and RMS after ct/R^2 = 0.05, past the one-step coupling lag."""
     late = [f for f in case['frames'] if f['t_over_tc'] > .05]
@@ -39,7 +31,7 @@ def build(study, output, record_source, space, times=()):
     studies = sorted({study, space, *times, *(d for d in study.parent.glob('cryer-*') if (d/'summary.json').exists())})
     table = []
     for d in studies:
-        sm = _check(d, record_source)
+        sm = pf.load_study(d, record_source)
         for c in sm['cases']:
             table.append(dict(study=d, steps=sm['steps'], summary=sm, case=c, late=_late(c)))
     best = min(table, key=lambda e: (e['case']['spacing_m'], -e['steps']))

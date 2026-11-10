@@ -6,7 +6,6 @@ data/rainfall/, and returns the review record. pressure_driven is the slope
 study with the same soil (phi = 30 degrees, c = 1 kPa) loaded by bedrock
 pressure, for comparison.
 """
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -20,13 +19,6 @@ import slope_application as sa
 import rainfall_slope as rs
 
 KEY = 'rainfall'
-
-
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 SLIP = 1e-3                               # mean plastic strain of the basal 0.6 m that marks failure (see qualify_slope)
@@ -43,7 +35,7 @@ def _at_slip(case, key):
 
 
 def build(study, output, record_source, pressure_driven):
-    summary, driven = _load(study, record_source), _load(pressure_driven, record_source)
+    summary, driven = pf.load_study(study, record_source), pf.load_study(pressure_driven, record_source)
     cases = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     finest = cases[-1]
     folder = study/f"h{finest['spacing_m']:g}"

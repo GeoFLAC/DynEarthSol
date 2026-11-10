@@ -33,6 +33,14 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 COLORS = ['#0072B2', '#D55E00', '#009E73', '#CC79A7']
 
 
+def load_study(study, record_source):
+    """Read a recorded study after verifying its archived runner."""
+    summary = json.loads((study/'summary.json').read_text())
+    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
+    record_source(study/'summary.json'); record_source(study/'runner.py')
+    return summary
+
+
 def save_figure(fig, output, name):
     # Keep dense fields compact in SVG/PDF while preserving vector labels.
     for ax in fig.axes:

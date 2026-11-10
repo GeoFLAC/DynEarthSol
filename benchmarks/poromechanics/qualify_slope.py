@@ -10,7 +10,6 @@ read against the base pressure at which the basal slip reaches fixed
 plastic strains (it converges with mesh and step; the last PT equilibrium
 does not).
 """
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,13 +22,6 @@ import diagram_style as ds
 import slope_application as sa
 
 KEY = 'slope'
-
-
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 LEVELS = (1e-3, 2e-3)                    # mean plastic strain of the basal 0.6 m, mid-slope
@@ -50,7 +42,7 @@ def _level(case, strain):
 
 
 def build(study, output, record_source, steps):
-    summary, fine = _load(study, record_source), _load(steps, record_source)
+    summary, fine = pf.load_study(study, record_source), pf.load_study(steps, record_source)
     cases = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     finest = cases[-1]
     folder = study/f"h{finest['spacing_m']:g}"

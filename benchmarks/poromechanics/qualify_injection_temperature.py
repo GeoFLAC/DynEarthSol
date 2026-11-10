@@ -7,7 +7,6 @@ data/injection_temperature/, and returns the review record. avdonin and
 coarse are the Avdonin mesh studies, steps a list of step studies on one
 mesh, doublet the closed-box ledger study.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -22,13 +21,6 @@ import check_injection_temperature as hot
 import check_injection_energy as ce
 
 KEY = 'injection_temperature'
-
-
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 def _record_run(folder, record_source):
@@ -52,10 +44,10 @@ def _ledger_series(folder):
 
 
 def build(avdonin, output, record_source, coarse, steps, doublet, sanity=()):
-    mesh, low, energy = (_load(s, record_source) for s in (avdonin, coarse, doublet))
+    mesh, low, energy = (pf.load_study(s, record_source) for s in (avdonin, coarse, doublet))
     slabs = []
     for slab in sanity:
-        saved = _load(slab, record_source)
+        saved = pf.load_study(slab, record_source)
         for case in saved['cases']:
             folder = slab/f"h{case['spacing_m']:g}"
             _record_run(folder, record_source)
@@ -65,7 +57,7 @@ def build(avdonin, output, record_source, coarse, steps, doublet, sanity=()):
                                            [r[name] for r in case['frames']], rtol=1e-8, atol=1e-12)
             slabs.append(case)
     slabs.sort(key=lambda c: -c['spacing_m'])
-    timing = [_load(s, record_source) for s in steps]
+    timing = [pf.load_study(s, record_source) for s in steps]
     cases = sorted(mesh['cases'] + low['cases'], key=lambda c: -c['spacing_m'])
     finest = cases[-1]
     folder = avdonin/f"h{finest['spacing_m']:g}"; _record_run(folder, record_source)

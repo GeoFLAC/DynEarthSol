@@ -13,7 +13,7 @@ import shutil
 import prepare_figures as pf
 import des_options
 from manual_pages import MANUAL
-from setup_drawings import schematic
+from setup_drawings import DRAW, schematic
 
 
 SPECS = {
@@ -1093,8 +1093,11 @@ def write_review(records, output):
     """One problem per page, from one shared source for HTML and Markdown."""
     (output/'style.css').write_text(STYLE)
     all_records=[*records,*[dict(key=key,reference_only=True) for key in REFERENCE_ONLY]]
+    setup_owners = {}
     for rec in all_records:
         key=rec['key'];s=SPECS[key];slug=SLUGS[key]
+        setup_slug = setup_owners.setdefault(DRAW[key], slug)
+        setup = f'fig/{setup_slug}/setup'
         assets=output/'fig'/slug
         if assets.exists():shutil.rmtree(assets)
         assets.mkdir(parents=True)
@@ -1106,9 +1109,10 @@ def write_review(records, output):
             if source!=target:
                 if target.exists():shutil.rmtree(target)
                 source.rename(target)
-            rec.update(page=slug+'.html',schematic=f'fig/{slug}/setup.svg',
+            rec.update(page=slug+'.html',schematic=setup+'.svg',
                        analytical_solution=f'fig/{slug}/e1.svg',derivation=slug+'.html#derivation')
-        schematic(key,assets)
+        if setup_slug == slug:
+            schematic(key,assets)
         equations=reference_lines(key)
         for i,equation in enumerate(equations,1):equation_figure(equation,assets,f'e{i}')
         rec['equation_files']=[f'fig/{slug}/e{i}.svg' for i in range(1,len(equations)+1)]
@@ -1129,9 +1133,9 @@ def write_review(records, output):
             note='Analytical reference. Full DES radial-flow or subsidence qualification remains unfinished.'
             parts+=['<p class="note">'+note+'</p>'];md+=[note]
         parts+=['<section id="setup"><h2>1. Problem setup</h2><div class="setup-grid">',
-            f'<figure><img class="setup" src="fig/{slug}/setup.svg" alt="{html.escape(title)}: geometry and boundary conditions">',
-            f'<figcaption>Geometry and imposed conditions. <a href="fig/{slug}/setup.pdf">Vector PDF</a></figcaption></figure><dl>']
-        md+=['## Problem setup',f'![Setup](fig/{slug}/setup.png)']
+            f'<figure><img class="setup" src="{setup}.svg" alt="{html.escape(title)}: geometry and boundary conditions">',
+            f'<figcaption>Geometry and imposed conditions. <a href="{setup}.pdf">Vector PDF</a></figcaption></figure><dl>']
+        md+=['## Problem setup',f'![Setup]({setup}.png)']
         for label,description in s['labels']:
             parts+=['<dt>'+html.escape(label)+'</dt><dd>'+html.escape(description)+'</dd>']
             md+=['**'+label+'.** '+description]

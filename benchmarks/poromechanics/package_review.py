@@ -65,10 +65,10 @@ def package(review, archive):
     for case in provenance['cases']:
         page = review/case['page']
         assert page.is_file()
-        assets = Path(case['schematic']).parent
-        for stem in ('setup', 'result'):
-            for ext in ('png', 'svg', 'pdf'):
-                assert (review/assets/f'{stem}.{ext}').is_file(), stem
+        for ext in ('png', 'svg', 'pdf'):
+            assert (review/Path(case['schematic']).with_suffix('.'+ext)).is_file(), 'setup'
+            result = review/'fig'/page.stem/f'result.{ext}'
+            assert result.is_file(), result
         assert case['equation_files']
         assert all((review/f).is_file() for f in case['equation_files'])
         assert case['analytical_solution'] == case['equation_files'][0]

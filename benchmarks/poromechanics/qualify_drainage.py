@@ -5,7 +5,6 @@ replays the finest PT run against an independently recomputed reference,
 writes figures/drainage.* and data/drainage/, and returns the review record.
 steps is the finer-step study on the finest mesh; sanity the 3D check.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,20 +20,13 @@ import check_unsaturated_drainage as cd
 KEY = 'drainage'
 
 
-def _load(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def _folder(root, case):
     return root/(f"h{case['spacing_m']:g}" + ('-explicit' if case['mode'] == 'explicit' else ''))
 
 
 def build(study, output, record_source, steps, sanity=None, explicit_study=None):
-    summary, fine = (_load(s, record_source) for s in (study, steps))
-    s3d = _load(sanity, record_source) if sanity else None
+    summary, fine = (pf.load_study(s, record_source) for s in (study, steps))
+    s3d = pf.load_study(sanity, record_source) if sanity else None
     reference = cd.REF.solve(summary['reference_grid'], cd.TIMES)
     control_grid = 2*summary['reference_grid']
     control = cd.REF.solve(control_grid, cd.TIMES)
@@ -49,7 +41,7 @@ def build(study, output, record_source, steps, sanity=None, explicit_study=None)
         np.testing.assert_allclose(r['settlement'], kept['settlement'], rtol=1e-6)
     pt = sorted((c for c in summary['cases'] if c['mode'] == 'PT'), key=lambda c: -c['spacing_m'])
     # The mesh study's own explicit case is invalid (characteristic speed left at 0; see its NOTE-explicit.txt).
-    explicit = [c for c in _load(explicit_study, record_source)['cases'] if c['mode'] == 'explicit'] if explicit_study else []
+    explicit = [c for c in pf.load_study(explicit_study, record_source)['cases'] if c['mode'] == 'explicit'] if explicit_study else []
     finest, refined = pt[-1], fine['cases'][0]
     replay_difference = 0.
     for root, case in [(study, finest), (steps, refined)] + [(explicit_study, c) for c in explicit]:

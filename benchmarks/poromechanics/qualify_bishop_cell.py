@@ -5,7 +5,6 @@ restart) takes the 2D step sequence (with the explicit runs), the 3D step
 sequence, the 2D sequence of the build before the fixed-stress correction and
 the restart checks.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -22,19 +21,12 @@ KEY = 'bishop_cell'
 NAMES = dict(moderate=r'moderate suction, $\chi\Pi^\prime>0$', strong=r'strong suction, $\Pi^\prime<0$')
 
 
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def _cases(summary, state, mode='PT'):
     return sorted((c for c in summary['cases'] if c['state'] == state and c['mode'] == mode), key=lambda c: c['steps'])
 
 
 def build(study, output, record_source, space, before, restart):
-    summary, other, old = (_check(s, record_source) for s in (study, space, before))
+    summary, other, old = (pf.load_study(s, record_source) for s in (study, space, before))
     checks = {state: json.loads((restart/state/'restart.json').read_text()) for state in cc.STATES}
     for state in cc.STATES:
         record_source(restart/state/'restart.json')

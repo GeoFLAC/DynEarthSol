@@ -5,7 +5,6 @@ takes the 2D mesh sequence, the finest mesh with twice the steps (the
 selected run, since the mesh sequence reaches its time-step floor) and the
 3D study.
 """
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,13 +20,6 @@ import check_mctigue as cm
 KEY = 'mctigue'
 METRICS = (('pressure_error', 'o', ds.HOT, 'pressure'), ('temperature_error', 'D', ds.INK, 'temperature'),
            ('strain_error', '^', ds.WATER, 'vertical strain'), ('heave_error', 's', ds.MUTED, 'surface heave'))
-
-
-def _check(study, record_source):
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
 
 
 def heat_ledger(folder):
@@ -57,7 +49,7 @@ def heat_ledger(folder):
 
 
 def build(study, output, record_source, times, space):
-    summary, steps, other = (_check(s, record_source) for s in (study, times, space))
+    summary, steps, other = (pf.load_study(s, record_source) for s in (study, times, space))
     mesh = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     finest = steps['cases'][0]; h = finest['spacing_m']
     assert abs(h - mesh[-1]['spacing_m']) < 1e-12, 'the time-step check must use the finest mesh'
