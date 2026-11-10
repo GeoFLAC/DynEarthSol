@@ -97,7 +97,7 @@ void pack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& out) {
     out.resize(std::size_t(rows.size())*f.columns);std::size_t offset=0;
     if(rows.empty())return;
     for(int i=0;i<f.n;++i) {
-        mpi_pack_device_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
+        mpi_pack_columns<true>(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
                                 rows.data(),rows.size(),out.device()+offset);
         offset+=std::size_t(rows.size())*f.fields[i].columns;
     }
@@ -107,7 +107,7 @@ void unpack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& in) {
     if(rows.empty())return;
     in.upload();std::size_t offset=0;
     for(int i=0;i<f.n;++i) {
-        mpi_unpack_device_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
+        mpi_unpack_columns<true>(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
                                   rows.data(),rows.size(),in.device()+offset);
         offset+=std::size_t(rows.size())*f.fields[i].columns;
     }
@@ -326,7 +326,7 @@ struct MpiSimulation::Impl {
     std::vector<Buffers> peer;
     std::vector<MPI_Request> requests;
     std::vector<MpiPeerBuffer> transfers;
-    int rank=0,size=1,global_n=0,global_e=0,last_step=-1,generation=0;
+    int rank=0,size=1,global_n=0,global_e=0,generation=0;
     bool active=false,inside=false;
     MpiOp current=MpiOp::State;
     double scalar=0,measurements[2]={};
@@ -399,6 +399,9 @@ struct MpiSimulation::Impl {
         #pragma acc wait
         const double start=MPI_Wtime();
         if(rank==0) {
+            // Only root management changes marker composition. Refresh here,
+            // before rebuilding the compact caches from the new marker counts.
+            master->mat->refresh_elem_cache();
             // Serial remeshing leaves this inactive hydraulic scratch array at
             // its old size. Compact selection/collection still visits it.
             if(!param.control.has_hydraulic_diffusion && master->old_mean_stress)
@@ -437,7 +440,9 @@ struct MpiSimulation::Impl {
             prefetch_managed(const_cast<int*>(ids->data()),ids->size()*sizeof(int));
         mpi_cuda_check(cudaDeviceSynchronize());
 #endif
-        last_step=-1;root_version=version;surface_version=geometry_version=~std::uint64_t(0);
+        // Redistribution finishes a mutating command; root stays current when
+        // execute() advances the command version on return.
+        root_version=version+1;surface_version=geometry_version=~std::uint64_t(0);
         communication_s+=MPI_Wtime()-start;
     }
     void gather_rows(bool nodes,const Fields& from,const Fields& to,bool surface=false,const int_vec* query=nullptr) {
@@ -498,7 +503,8 @@ struct MpiSimulation::Impl {
         if(root_version==version)return;
         Fields gn,ge;if(rank==0) {gn=node_fields(*master);ge=element_fields(*master);}
         gather_rows(true,node_fields(local),gn);gather_rows(false,element_fields(local),ge);
-        if(rank==0) {master->mat->refresh_elem_cache();master->mat->hydro_diff_max=local.mat->hydro_diff_max;}root_version=version;
+        if(rank==0) master->mat->hydro_diff_max=local.mat->hydro_diff_max;
+        root_version=version;
     }
     void geometry() {
         if(geometry_version==version || root_version==version)return;
@@ -513,11 +519,12 @@ struct MpiSimulation::Impl {
     }
     Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
     void boundary() {
-        if(surface_version==version)return;
+        if(surface_version==version || root_version==version)return;
         Fields gn,ge;if(rank==0){gn=surface_n(*master);ge=surface_e(*master);}
         gather_rows(true,surface_n(local),gn,true);gather_rows(false,surface_e(local),ge,true);surface_version=version;
     }
     void query() {
+        if(root_version==version)return;
         if(rank==0) {MpiState a(bytes,true);a.value(queries_n);a.value(queries_e);}
         std::uint64_t n=bytes.size();MPI_Bcast(&n,1,MPI_UINT64_T,0,MPI_COMM_WORLD);
         if(rank) bytes.resize(n);
@@ -566,7 +573,6 @@ struct MpiSimulation::Impl {
     void execute(MpiOp op,double arg) {
         current=op;inside=true;double started=MPI_Wtime(),comm_before=communication_s;Variables& v=local;
         MpiAccScope offload(!management(op));
-        if(!management(op) && last_step!=v.steps) {v.mat->refresh_elem_cache();last_step=v.steps;}
         switch(op) {
         case MpiOp::State:distribute(true);break;
         case MpiOp::Temperature:update_temperature(param,v,*v.temperature,*v.tmp_result);exchange(MpiEntity::Node,{{v.temperature->data(),1}});break;
@@ -623,7 +629,7 @@ struct MpiSimulation::Impl {
             break;
         }
         case MpiOp::Remesh:full();if(rank==0)remesh(param,*master,int(arg));distribute(true);break;
-        case MpiOp::PhaseChange:full();if(rank==0){phase_changes(param,*master);master->mat->refresh_elem_cache();}distribute(false);break;
+        case MpiOp::PhaseChange:full();if(rank==0)phase_changes(param,*master);distribute(false);break;
         case MpiOp::Hydrous:full();if(rank==0)advect_hydrous_markers(param,*master,arg,*master->markersets[master->hydrous_marker_index],*master->hydrous_elemmarkers);distribute(false);break;
         case MpiOp::Collect:full();if(arg!=0)collect_averages();break;
         case MpiOp::Geometry:geometry();break;

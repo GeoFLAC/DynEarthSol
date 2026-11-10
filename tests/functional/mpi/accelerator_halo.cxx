@@ -1,6 +1,5 @@
 // Production SoA halo indexing + OpenACC device allocation + the real MPI
 // transport. --host explicitly selects CPU fallback for testing without a GPU.
-#define DES_MPI_DEVICE_KERNELS
 #include <openacc.h>
 #include <mpi.h>
 #ifdef OMPI_MAJOR_VERSION
@@ -128,14 +127,14 @@ int main(int argc,char** argv) {
                     input[c*p->stride+i]=iteration*10000000+rank*100000+p->rank*1000+c*p->stride+i;
                 acc_memcpy_to_device(p->field,input.data(),input.size()*sizeof(double));
                 acc_memcpy_to_device(p->target,empty.data(),empty.size()*sizeof(double));
-                if(p->nsend)mpi_pack_device_columns(p->field,p->stride,columns,p->sending,p->nsend,p->send);
+                if(p->nsend)mpi_pack_columns<true>(p->field,p->stride,columns,p->sending,p->nsend,p->send);
                 buffers.push_back({p->rank,p->send,p->receive,p->nsend*columns,p->nrecv*columns});
             }
             // Kernels are synchronous: GPU packing is complete before MPI reads.
             int pending=mpi_post_buffers(buffers.data(),buffers.size(),95,requests.data());
             mpi_finish_buffers(pending,requests.data());
             for(auto* p:peers) {
-                if(p->nrecv)mpi_unpack_device_columns(p->target,p->stride,columns,p->receiving,p->nrecv,p->receive);
+                if(p->nrecv)mpi_unpack_columns<true>(p->target,p->stride,columns,p->receiving,p->nrecv,p->receive);
                 std::vector<double> output(std::size_t(p->stride)*columns),expected(output.size(),-1);
                 acc_memcpy_from_device(output.data(),p->target,output.size()*sizeof(double));
                 for(int c=0;c<columns;++c)for(int i=0;i<p->nrecv;++i)

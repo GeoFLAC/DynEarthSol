@@ -114,7 +114,7 @@ def bind_parallel_surface(model, comm):
                 self.tecdata = None
             before = self.hGlobal.getArray().copy()
             self.runProcessesForDt(dt, verbose=False, skip_tectonics=False)
-            delta = self.hGlobal.getArray().copy() - before
+            delta = self.hGlobal.getArray() - before
             if has_velocity:
                 delta -= self._upsub_override[self.glbIDs] * dt
             return transfer.interpolate(self, delta, np.asarray(points), k, power)
