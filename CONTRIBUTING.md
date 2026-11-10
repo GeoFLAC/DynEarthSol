@@ -1,12 +1,13 @@
-# Development Notes
+# Contributing to DynEarthSol
 
-The main repository is on:
-  https://github.com/GeoFLAC/DynEarthSol
+The main repository is https://github.com/GeoFLAC/DynEarthSol. Clone it with
+its submodules:
 
-To get the most timely progress, using Github:
-  git clone https://github.com/GeoFLAC/DynEarthSol.git
+```bash
+git clone --recurse-submodules https://github.com/GeoFLAC/DynEarthSol.git
+```
 
-## Design notes:
+## Design notes
 
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
 * Avoid creating/destroying objects in inner for-loops.
@@ -40,8 +41,6 @@ To get the most timely progress, using Github:
   53: GoSPL step failed
   54: mechanical solve did not converge
   60: Assertion violated    61: unreachable branch
-  These are renumbered: earlier builds used 1 input, 2 IO, 10 triangulation,
-  11 runtime, 12 assertion, so 10-12 mean something different in older logs.
 
 ## Source files and classes
 
@@ -214,20 +213,19 @@ reviewed.
 A `benchmarks-v*` tag releases the benchmark dataset from its own branch, which
 carries its own `CITATION.cff` DOI and `.zenodo.json`.
 
-A tag pushed before this workflow existed can still be packaged: run *Release
-with submodules and Zenodo* from the Actions tab with the tag as its input.
-Publishing such a release runs the old file from its own tag, though, so
-re-cutting the tag is usually the better move.
+To package an existing tag again, run *Release with submodules and Zenodo* from
+the Actions tab with the tag as its input.
 
 A tag name that has ever carried a published release is spent: deleting the
 release frees the tag but not the name, and neither does deleting the repository
 ([immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)).
-A release that has to be redone therefore takes the next version number, which
-is why 2.0.1 does not exist.
+A release that has to be redone therefore takes the next version number.
 
 ## Git Submodule Workflow
 
-Since this repository relies on Git submodules (e.g., `knn-bvh`), your development workflow needs to account for them. Submodules are essentially pointers to specific commits in other repositories.
+This repository uses three Git submodules: `knn-bvh`, `mmg` and `nanoflann`.
+A submodule is a pointer to one commit of another repository, so your workflow
+must account for them.
 
 **1. Pulling the latest changes:**
 When you pull updates from the main repository, Git does not automatically update the submodule contents by default. To fetch and update everything in one command, use:
@@ -237,7 +235,10 @@ git pull --recurse-submodules
 *(If you simply ran `git pull` and notice your submodules are out of sync, you can fix it by running `git submodule update`.)*
 
 **2. Modifying a submodule:**
-By default, submodules are in a "detached HEAD" state. If you need to modify the code inside a submodule:
+By default, submodules are in a "detached HEAD" state. Only `knn-bvh` is a
+GeoFLAC repository; a change to `mmg` or `nanoflann` goes to its upstream
+project first, and this repository then moves the pointer (step 5). To modify
+`knn-bvh`:
 1. `cd` into the submodule directory.
 2. Checkout the appropriate branch (e.g., `git checkout main`).
 3. Make your changes, `git add`, `git commit`, and `git push` from **within** the submodule directory.

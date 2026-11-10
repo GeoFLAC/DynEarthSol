@@ -310,6 +310,10 @@ DOI: [10.5281/zenodo.20293558](https://doi.org/10.5281/zenodo.20293558).
 Forty-two merged pull requests; the full list is in the
 [release notes](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v2.0.0).
 
+Exit codes: 1 user input, 2 IO, 10 triangulation or tetrahedralization,
+11 runtime, 12 assertion (a programming error). 2.0.2 replaces them with
+two-digit codes ([#86]).
+
 ### Added
 
 - Poroelasticity ([#2], [#3]).
