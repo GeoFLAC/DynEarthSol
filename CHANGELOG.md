@@ -251,6 +251,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   build copied into a container) instead of failing to link its library; a
   failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
 
+- Plane-strain and 3D Mohr-Coulomb shear returns preserve principal-stress
+  ordering by returning two active faces to their common edge, including the
+  combined plastic-strain increment.
+- An admissible shear return is evaluated before tensile clipping when the
+  elastic predictor exceeds the tensile cap. Constant-strength material
+  checks cover both changes; general apex and combined returns remain separate.
+
 ## [2.0.2] - 2026-09-17
 
 DOI: [10.5281/zenodo.20330979](https://doi.org/10.5281/zenodo.20330979).

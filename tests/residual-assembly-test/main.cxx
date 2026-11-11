@@ -727,6 +727,114 @@ static void test_material_trials() {
                 delete after; delete ntmp; delete etmp; delete volume_n;
                 delete flags; delete normals;
             }
+            if (model == MatProps::rh_ep && alpha == 0) {
+                // Independent symmetric-edge states from the two active MC
+                // equations and isotropic compliance (c=100 kPa, phi=30 deg).
+                p.bulk_modulus={65e9/3}; p.shear_modulus={1e10};
+                p.cohesion0=p.cohesion1={1e5};
+                p.friction_angle0=p.friction_angle1={30};
+                p.tension_max=1e9;
+                m->param.control.has_hydraulic_diffusion=false;
+                m->strain_rate.resize(ne,0.);
+                for(int e=0;e<ne;++e) for(int d=0;d<NSTR;++d) m->strain_rate[e][d]=0;
+                div->assign(ne,0.);
+                for(int dilation : {0,30}) {
+                    p.dilation_angle0=p.dilation_angle1={double(dilation)};
+                    delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
+                    for(int edge : {0,1}) for(int orientation=0;orientation<4;++orientation) {
+                        const double base = edge == 0 ? -1e6 : 1e5;
+                        const double unique = edge == 0 ? -1e5 : -1.4e5;
+                        const double lower = edge == 0 ?
+                            (dilation == 0 ? -949487.1659305394 : -1028287.187078898) :
+                            (dilation == 0 ? -102564.06460551017 : -145505.28461683675);
+                        const double upper = edge == 0 ?
+                            (dilation == 0 ? -201025.66813892123 : -227292.3418550404) :
+                            (dilation == 0 ? 81282.03230275508 : 66968.29229897956);
+                        const double target_base = edge == 0 ? lower : upper;
+                        const double target_unique = edge == 0 ? upper : lower;
+                        double normal[3]={0,0,0};
+                        if(orientation<3) normal[orientation]=1;
+                        else for(int d=0;d<NDIMS;++d) normal[d]=1/std::sqrt(double(NDIMS));
+                        for(int e=0;e<ne;++e) {
+                            for(int d=0;d<NDIMS;++d)
+                                m->stress[e][d]=base+(unique-base)*normal[d]*normal[d];
+                            m->stress[e][NDIMS]=(unique-base)*normal[0]*normal[1];
+#ifdef THREED
+                            m->stress[e][4]=(unique-base)*normal[0]*normal[2];
+                            m->stress[e][5]=(unique-base)*normal[1]*normal[2];
+#endif
+                            (*yy)[e]=base+(unique-base)*normal[2]*normal[2];
+                            (*pls)[e]=(*dpls)[e]=0;
+                        }
+                        update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                                      m->strain_rate,m->pressure,m->pressure_increment,m->vel,
+                                      *friction,*state,true);
+                        #pragma acc wait
+                        const double volume = (2*(base-target_base)+unique-target_unique)/(65e9);
+                        const double plastic_base=(base-target_base-15e9*volume)/2e10;
+                        const double plastic_unique=(unique-target_unique-15e9*volume)/2e10;
+                        double increment;
+#ifdef THREED
+                        const double mean=(2*plastic_base+plastic_unique)/3;
+                        increment=std::sqrt((2*(plastic_base-mean)*(plastic_base-mean)+
+                            (plastic_unique-mean)*(plastic_unique-mean)+mean*mean)/2);
+#else
+                        increment=0.5*std::fabs(plastic_base-plastic_unique);
+#endif
+                        for(int e=0;e<ne;++e) {
+                            for(int d=0;d<NDIMS;++d)
+                                check("MC edge normal stress",m->stress[e][d],
+                                    target_base+(target_unique-target_base)*normal[d]*normal[d]);
+                            check("MC edge shear",m->stress[e][NDIMS],(target_unique-target_base)*normal[0]*normal[1]);
+#ifdef THREED
+                            check("MC edge rotated xz",m->stress[e][4],(target_unique-target_base)*normal[0]*normal[2]);
+                            check("MC edge rotated yz",m->stress[e][5],(target_unique-target_base)*normal[1]*normal[2]);
+#else
+                            check("MC edge plane-strain yy",(*yy)[e],target_base+(target_unique-target_base)*normal[2]*normal[2]);
+#endif
+                            check("MC edge plastic history",(*pls)[e],increment);
+                            check("MC edge plastic increment",(*dpls)[e],increment);
+                        }
+                    }
+                }
+            }
+            if (model == MatProps::rh_ep && alpha == 0) {
+                // The elastic trial exceeds c/tan(phi), but its admissible
+                // associated shear return lies below it; no tensile flow.
+                const double trial[3]={169e3,185e3,200e3};
+                const double target[3]={165347.65655963385,170585.93935780309,170585.93935780309};
+                const double volume=(trial[0]+trial[1]+trial[2]-target[0]-target[1]-target[2])/65e9;
+                double plastic[3];
+                for(int k=0;k<3;++k) plastic[k]=(trial[k]-target[k]-15e9*volume)/2e10;
+                double increment;
+#ifdef THREED
+                const double mean=(plastic[0]+plastic[1]+plastic[2])/3;
+                double squared=mean*mean;
+                for(int k=0;k<3;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
+                increment=std::sqrt(squared/2);
+#else
+                increment=0.5*(std::max(plastic[0],std::max(plastic[1],plastic[2]))-
+                               std::min(plastic[0],std::min(plastic[1],plastic[2])));
+#endif
+                for(int e=0;e<ne;++e) {
+                    for(int d=0;d<NDIMS;++d) m->stress[e][d]=trial[d];
+                    for(int d=NDIMS;d<NSTR;++d) m->stress[e][d]=0;
+                    (*yy)[e]=trial[2];
+                    (*pls)[e]=(*dpls)[e]=0;
+                }
+                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                #pragma acc wait
+                for(int e=0;e<ne;++e) {
+                    for(int d=0;d<NDIMS;++d) check("shear return before tensile clipping",m->stress[e][d],target[d]);
+                    for(int d=NDIMS;d<NSTR;++d) check("uncut shear has no rotation",m->stress[e][d],0);
+                    check("uncut shear plastic history",(*pls)[e],increment);
+                    check("uncut shear plastic increment",(*dpls)[e],increment);
+#ifndef THREED
+                    check("uncut shear yy",(*yy)[e],target[2]);
+#endif
+                }
+            }
             delete baseline; delete m->var.mat;
             delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
             delete friction; delete state; delete div; delete m;
