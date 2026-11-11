@@ -46,13 +46,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - `mat.permeability_model=2` uses `k=k0*(phi/phi0)^n`, with positive material
   exponents from `mat.permeability_exponent` (default `[3]`).
 
-- `mesh.remeshing_option=14` restores selected reference boundaries on 2D
-  unstructured meshes. Select marker bits with
-  `mesh.num_remeshing_reset_boundaries` and `mesh.remeshing_reset_boundaries`.
-
 - Saved frames include the nodal vector `displacement = coordinate - coord0`
-  in native and HDF5 output. It follows the current reference geometry,
-  including reference-boundary resets during remeshing.
+  in native and HDF5 output. It follows the current reference geometry.
 
 - `control.has_shear_heating` integrates the nonelastic heating proposed in
   [#88](https://github.com/GeoFLAC/DynEarthSol/pull/88), including plastic

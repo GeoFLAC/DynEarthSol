@@ -196,9 +196,6 @@ struct Mesh {
 
     bool is_discarding_internal_segments;
     int remeshing_option;
-    int num_remeshing_reset_boundaries;
-    int_vec remeshing_reset_boundaries;
-    uint remeshing_reset_boundary_mask;
 
     // MMG freeze rules (FREEZE / REQUIRED POLICY, remeshing.cxx)
     double mmg_remesh_active_plstrain;

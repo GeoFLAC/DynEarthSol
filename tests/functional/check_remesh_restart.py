@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise selected reference resets, inactive behavior and exact continuation."""
+"""Check exact explicit/GVS continuation across a pending remesh stage."""
 import argparse
 import configparser
 import json
@@ -8,51 +8,32 @@ from pathlib import Path
 import subprocess
 import sys
 
-import numpy as np
-
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
 from pt_initial_checkpoint import fields
 
 
-def configuration(bits):
+def configuration():
     cfg = configparser.ConfigParser(); cfg.optionxform = str
     cfg.read(ROOT/'tests/functional/displacement_output/displacement_output.cfg')
     cfg['sim'].update(modelname='reset', max_steps='1', has_output_during_remeshing='true',
                       has_marker_output='true')
     cfg['mesh'].update(meshing_elem_shape='0', resolution='.5', quality_check_step_interval='1',
-        min_quality='.01', max_boundary_distortion='2e-7', remeshing_option='14',
-        num_remeshing_reset_boundaries=str(len(bits)), remeshing_reset_boundaries=json.dumps(bits))
+        min_quality='.99', max_boundary_distortion='2e-7', remeshing_option='0')
     cfg['control']['fixed_dt'] = '.001'
     cfg['bc'].update(vbc_val_x0='.001', vbc_val_x1='.001', vbc_val_z0='-.001', vbc_val_z1='-.001')
     return cfg
 
 
-def run(exe, folder, cfg, name='input', expected=0):
+def run(exe, folder, cfg, name='input'):
     folder.mkdir(parents=True, exist_ok=True)
     with (folder/(name+'.cfg')).open('w') as stream: cfg.write(stream)
     result = subprocess.run([str(exe), name+'.cfg'], cwd=folder, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90,
         env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
     (folder/(name+'.log')).write_text(result.stdout)
-    assert result.returncode == expected, (expected, result.returncode, result.stdout[-2000:])
-
-
-def inspect(folder, bits):
-    model = Dynearthsol(str(folder/'reset'))
-    rows = scan_frames(model.modelname)
-    assert len(rows) >= 4, 'No before/after remesh frames'
-    final = rows[-1]['frame']; x = model.read_field(final, 'coordinate')
-    flags = model.read_field(final, 'bcflag'); ref = model.read_field(final, 'coord0')
-    for bit, dimension, initial, velocity in ((1,0,0.,.001),(2,0,1.,.001),
-                                            (16,1,-1.,-.001),(32,1,0.,-.001)):
-        nodes = (flags & bit) != 0
-        expected = initial if bit in bits else initial+.001*velocity
-        np.testing.assert_allclose(x[nodes, dimension], expected, rtol=0, atol=1e-12)
-        if bit in bits:
-            np.testing.assert_allclose(ref[nodes, dimension], x[nodes, dimension], rtol=0, atol=1e-12)
-    return dict(frames=len(rows), nodes=len(x), selected=bits)
+    assert result.returncode == 0, (result.returncode, result.stdout[-2000:])
 
 
 def check_continuation(exe, out, cfg):
@@ -60,6 +41,8 @@ def check_continuation(exe, out, cfg):
     cfg['sim']['max_steps'] = '3'
     fresh = out/'fresh'; run(exe,fresh,cfg)
     seed = Dynearthsol(str(fresh/'reset')); rows = scan_frames(seed.modelname)
+    assert any(a['steps'] == b['steps'] and a['time'] == b['time']
+               for a, b in zip(rows, rows[1:])), 'No before/after remesh frames'
     def exists(path):
         return path.is_file() or Path(str(path)+'.vtkhdf').is_file()
     checkpoint = next(r['frame'] for r in rows if r['steps']==1 and
@@ -90,36 +73,16 @@ def check_continuation(exe, out, cfg):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('exe', type=Path); parser.add_argument('output', type=Path)
-    parser.add_argument('--exe-3d', type=Path)
     args = parser.parse_args(); exe = args.exe.resolve(); out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    results = []
-    for bits in ([1], [1,16], [1,2,16,32]):
-        folder = out/('selected-'+'-'.join(map(str,bits)))
-        run(exe, folder, configuration(bits)); results.append(inspect(folder,bits))
-    invalid = [(-1,'[]'), (1,'[0]'), (1,'[3]'), (1,'[1024]'), (0,'[]'), (2,'[1]')]
-    for i,(count,bits) in enumerate(invalid):
-        cfg = configuration([1]); cfg['mesh'].update(num_remeshing_reset_boundaries=str(count),remeshing_reset_boundaries=bits)
-        run(exe, out/f'invalid-{i}', cfg, expected=11)
-    cfg = configuration([1]); cfg['mesh']['meshing_elem_shape']='1'
-    run(exe,out/'structured',cfg,expected=11)
-    if args.exe_3d:
-        run(args.exe_3d.resolve(),out/'3d',configuration([1]),expected=30)
     matched = 0
-    for selected in (False, True):
-        for method in ('explicit', 'gvs'):
-            cfg = configuration([1])
-            cfg['control']['use_global_velocity_scaling'] = str(method == 'gvs')
-            if not selected:
-                cfg['mesh']['remeshing_option'] = '0'
-                cfg['mesh']['min_quality'] = '.99'
-                # This regression also runs with the parent executable.
-                del cfg['mesh']['num_remeshing_reset_boundaries']
-                del cfg['mesh']['remeshing_reset_boundaries']
-            matched += check_continuation(exe, out/f'restart-{method}-{selected}', cfg)
-    (out/'summary.json').write_text(json.dumps(dict(passed=True,cases=results,
-        input_rejections=len(invalid)+1+bool(args.exe_3d),exact_restart_payloads=matched),indent=2)+'\n')
-    print('PASS selected boundary resets and continuation;',matched,'exact payloads')
+    for method in ('explicit', 'gvs'):
+        cfg = configuration()
+        cfg['control']['use_global_velocity_scaling'] = str(method == 'gvs')
+        matched += check_continuation(exe, out/f'restart-{method}', cfg)
+    (out/'summary.json').write_text(json.dumps(dict(passed=True,
+        exact_restart_payloads=matched),indent=2)+'\n')
+    print('PASS explicit/GVS remesh continuation;',matched,'exact payloads')
 
 
 if __name__=='__main__': main()

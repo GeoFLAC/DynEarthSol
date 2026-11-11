@@ -133,14 +133,9 @@ jobs:
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
-    - name: test selected reference boundaries and remesh continuation
+    - name: test explicit and GVS remesh continuation
       run: >-
-        python3 boundary_reset/check_reset.py ../../dynearthsol2d
-        boundary-reset --exe-3d ../../dynearthsol3d
-
-    - name: test selected boundary projections
-      working-directory: ./tests/boundary-reset-test
-      run: make check
+        python3 check_remesh_restart.py ../../dynearthsol2d remesh-restart
 
     - name: test 2d restart
       working-directory: ./tests/regression

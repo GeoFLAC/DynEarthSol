@@ -335,17 +335,9 @@ static void declare_parameters(opt::Registry &cfg,
          "mattype_option 0 this can move a regional-attribute boundary inside the wall band), and "
          "every remesh caps the size target at every restored-wall node at resolution (see "
          "mmg_aniso_wall_ratio), so the walls can carry more elements than the cfg's sizes give.\n"
-         "14: restore selected reference-boundary components (2D unstructured meshes only; "
-         "mesh.remeshing_reset_boundaries).\n"
          "On an unstructured mesh (meshing_elem_shape = 0), options 1, 11 and 13 stop the run at a "
          "remesh (exit 42) when a top-surface node is within smallest_size^(1/NDIMS) * resolution "
          "of the restored bottom, or below it: the domain has necked through.\n")
-
-        ("mesh.num_remeshing_reset_boundaries", opt::value<int>(&p.mesh.num_remeshing_reset_boundaries)->default_value(0),
-         "Number of selected boundary-marker bits for remeshing_option=14.")
-        ("mesh.remeshing_reset_boundaries", opt::list()->default_value("[]"),
-         "Boundary-marker bits to restore, e.g. [1,16]. Single faces restore normal components; "
-         "two selected faces restore their corner fully.")
 
         ("mesh.mmg_remesh_active_plstrain", opt::value<double>(&p.mesh.mmg_remesh_active_plstrain)->default_value(0.01),
          "Conservative MMG remeshing (always on with MMG): a remesh keeps quiet elements as they are "
@@ -1667,25 +1659,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
     parse_point_source(vm,p,"injection",p.injection,true);
     parse_point_source(vm,p,"heat_injection",p.heat_injection,false);
     std::cout << "Checking consistency of input parameters...\n";
-
-    if (p.mesh.num_remeshing_reset_boundaries < 0)
-        die(EXIT_CONFIG_VALUE, "mesh.num_remeshing_reset_boundaries must be nonnegative.");
-    get_numbers(vm, "mesh.remeshing_reset_boundaries", p.mesh.remeshing_reset_boundaries,
-                p.mesh.num_remeshing_reset_boundaries, "mesh.num_remeshing_reset_boundaries");
-    p.mesh.remeshing_reset_boundary_mask = 0;
-    for (int marker : p.mesh.remeshing_reset_boundaries) {
-        if (marker <= 0 || marker > static_cast<int>(BOUNDN3) || (marker & (marker-1)))
-            die(EXIT_CONFIG_VALUE, "mesh.remeshing_reset_boundaries requires single boundary-marker bits.");
-        p.mesh.remeshing_reset_boundary_mask |= static_cast<uint>(marker);
-    }
-    if (p.mesh.remeshing_option == 14 && !p.mesh.remeshing_reset_boundary_mask)
-        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option=14 requires selected boundary-marker bits.");
-#ifdef THREED
-    if (p.mesh.remeshing_option == 14)
-        die(EXIT_UNSUPPORTED_DIM, "mesh.remeshing_option=14 is available only in 2D.");
-#endif
-    if (p.mesh.remeshing_option == 14 && p.mesh.meshing_elem_shape != 0)
-        die(EXIT_CONFIG_VALUE, "mesh.remeshing_option=14 requires an unstructured mesh (meshing_elem_shape=0).");
 
     //
     // Unspecified thermal side values use bc.surface_temperature and bc.mantle_temperature.
