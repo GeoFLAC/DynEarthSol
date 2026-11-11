@@ -371,6 +371,7 @@ def process_single_frame(args):
             try:
                 convert_field(des,frame,name,fvtu)
             except (KeyError,NameError):
+                # Older or uncoupled outputs can omit these inventory fields.
                 pass
 
         # node number for debugging
