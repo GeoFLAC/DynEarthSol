@@ -1,28 +1,13 @@
-# Development Notes
+# Contributing to DynEarthSol
 
-The main repository is on:
-  https://github.com/GeoFLAC/DynEarthSol
+The main repository is https://github.com/GeoFLAC/DynEarthSol. Clone it with
+its submodules:
 
-To get the most timely progress, using Github:
-  git clone https://github.com/GeoFLAC/DynEarthSol.git
+```bash
+git clone --recurse-submodules https://github.com/GeoFLAC/DynEarthSol.git
+```
 
-## To-do list:
-
-High priority:
-* Simple benchmarks for rheology
-* Local remeshing
-* Different init_marker_spacing in regions
-
-Low priority:
-* Save output as vtk format directly
-* Stress BC, esp no-stress sidewall
-* Heatflux BC
-* Frictional heating
-* Adiabatic cooling (adiabatic temperature profile)
-* Internal heating
-* Volume changed induced stress
-
-## Design notes:
+## Design notes
 
 * Avoid C++ stream for bulk output, as stream is slower than C-style IO.
 * Avoid creating/destroying objects in inner for-loops.
@@ -56,8 +41,34 @@ Low priority:
   53: GoSPL step failed
   54: mechanical solve did not converge
   60: Assertion violated    61: unreachable branch
-  These are renumbered: earlier builds used 1 input, 2 IO, 10 triangulation,
-  11 runtime, 12 assertion, so 10-12 mean something different in older logs.
+
+## Source files and classes
+
+The code is procedural: plain data structs such as `Param` and `Variables` go
+to free functions, and each subsystem has one `.cxx`/`.hpp` pair. Flat data and
+free functions also port to the OpenACC path, where device code cannot make
+virtual calls. Keep this shape. Each new file or class is one more
+thing that a reader must find and keep in mind. The class rules follow the
+Google C++ style guide and Ousterhout's case against "classitis" in *A
+Philosophy of Software Design*.
+
+* Put new code in the file of the subsystem that it belongs to. A helper that
+  one file uses stays in that file, as a `static` function or in an anonymous
+  namespace. A helper that several files use goes next to the data that it
+  works on.
+* Add a new `.cxx`/`.hpp` pair only for a new subsystem: its own data, its own
+  entry points called from the time loop or from several files, and some
+  hundreds of lines of code. A few dozen lines go into an existing file.
+* Split a file only when it is very large -- several thousand lines -- and only
+  along a seam that it already has: a group of functions with its own data and
+  its own callers. The split is its own commit that moves the code unchanged,
+  so the results do not change; edit the moved code in a later commit.
+* Prefer a struct and free functions to a class. Add a class only when it owns
+  a resource or keeps an invariant across calls: an open file, a search tree,
+  an array layout that it checks. Do not add a class to group functions (a file
+  or a namespace does that), to hold the state of one call, or as an interface
+  with one implementation. Select among variants with a `switch` on the option
+  code, as for `rheol_type`, not with a class hierarchy.
 
 ## Benchmarks and regression testing
 
@@ -77,12 +88,46 @@ field and exits 1 if any field exceeds 1e-8 or contains NaN/Inf. Run
 `python compare.py --help` (or read its module docstring) for manual usage and
 restart-troubleshooting instructions.
 
+## Code comments
+
+A comment is for the reader of the code as it is now. It gives what the code
+cannot say by itself: the physics or the method, with its reference; units and
+sign conventions; an invariant and what breaks without it; a known limit; a
+TODO. The rules follow the Linux kernel coding style (say what the code does
+and why, not how) and Wilson et al., *Best Practices for Scientific Computing*
+(2014): document purpose, not mechanics.
+
+* **No history.** Do not write what the code was before, when or why it
+  changed, which bug or run found a problem, or who wrote it: no "previously",
+  "used to", "no longer", "the old code", "since v2.0", dates, hashes, pull
+  request numbers or author names. `git log` and `git blame` keep this for
+  every line; write it in the commit message when a reader needs it. A history
+  note stays in the file after the next change makes it false.
+* **Docs too.** `CONTRIBUTING.md`, `README.md`, the `--help` text and
+  `examples/defaults.cfg` say how the code works now; what changed goes in
+  `CHANGELOG.md` and the commit message.
+* **Keep the reason, drop the story.** What a reader needs to change the code
+  safely stays in the code; Ousterhout puts it as "comments belong in the code,
+  not the commit log". A guard says which case it handles -- "a degenerate
+  facet puts the marker outside every element" -- not the run that found it.
+* **No test campaigns.** No tables of measured cases, no verification lists, no
+  timings. A number in the code gets its source in one clause: a paper, a
+  derivation, a benchmark case.
+* **One fact, one place.** Write a rule once, at the code that implements it;
+  other places give the name of that function. An overview block lists names,
+  not their rules.
+* Do not restate the code. Do not keep code in comments: delete it, and the
+  history keeps it.
+* A function header is one to five lines; an inline note is one or two.
+
 ## Commit messages
 
 The message records what the code cannot: what was wrong before, why this fix
-and not another, and what it was measured to do. Conventions follow the Git and
-Linux kernel patch guides and Chris Beams' seven rules; the split with code
-comments follows Hutterer's "On commit messages".
+and not another, and what it was measured to do, only as much as a reader needs
+to judge or revert the change. The order in which things were tried, debug
+sessions and verification matrices go in the pull request, not in the message.
+Conventions follow the Git and Linux kernel patch guides and Chris Beams' seven
+rules; the split with code comments follows Hutterer's "On commit messages".
 
 ```
 type: imperative summary, 72 characters or fewer, no period
@@ -101,19 +146,15 @@ Co-Authored-By: Name <email>
 * `type` is one of `fix`, `feat`, `refactor`, `test`, `docs`, `ci`, `build`,
   `cleanup`. A subsystem may follow in parentheses, `fix(rsf):`, when a series
   is confined to one; most commits do not need it. Lowercase after the colon.
-* **Comment versus commit.** A code comment states the invariant the code must
-  hold *now* and what breaks if it is violated; it is bound to the code and rots
-  when it carries history. The commit body holds the history: the wrong
-  behaviour it replaced, the reasoning, the measurements. Write each fact in one
-  place. When a fact must live in the code -- an ordering contract, a guard's
-  reason -- put it in the comment or an assertion, and let the body say so
-  ("asserted at the consumer") rather than repeat it.
+* **Comment versus commit.** "Code comments" says what stays in the code. When
+  the change's reason lives there -- an ordering contract, a guard's reason --
+  the body says so ("asserted at the consumer") rather than repeat it.
 * Refer to earlier work by its subject line or pull request number, never by
   hash alone: branches here are rebased and replayed, so hashes go stale.
 * Trailers: `Co-Authored-By` for every AI tool or person who wrote part of the
   change; `Fixes #N` when the commit closes an issue.
 * Length is set by the problem, not by habit. Most fixes fit three short
-  paragraphs; if the body restates the diff's comments, cut one of the two.
+  paragraphs.
 
 ## Issues and pull requests
 
@@ -172,20 +213,19 @@ reviewed.
 A `benchmarks-v*` tag releases the benchmark dataset from its own branch, which
 carries its own `CITATION.cff` DOI and `.zenodo.json`.
 
-A tag pushed before this workflow existed can still be packaged: run *Release
-with submodules and Zenodo* from the Actions tab with the tag as its input.
-Publishing such a release runs the old file from its own tag, though, so
-re-cutting the tag is usually the better move.
+To package an existing tag again, run *Release with submodules and Zenodo* from
+the Actions tab with the tag as its input.
 
 A tag name that has ever carried a published release is spent: deleting the
 release frees the tag but not the name, and neither does deleting the repository
 ([immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)).
-A release that has to be redone therefore takes the next version number, which
-is why 2.0.1 does not exist.
+A release that has to be redone therefore takes the next version number.
 
 ## Git Submodule Workflow
 
-Since this repository relies on Git submodules (e.g., `knn-bvh`), your development workflow needs to account for them. Submodules are essentially pointers to specific commits in other repositories.
+This repository uses three Git submodules: `knn-bvh`, `mmg` and `nanoflann`.
+A submodule is a pointer to one commit of another repository, so your workflow
+must account for them.
 
 **1. Pulling the latest changes:**
 When you pull updates from the main repository, Git does not automatically update the submodule contents by default. To fetch and update everything in one command, use:
@@ -195,7 +235,10 @@ git pull --recurse-submodules
 *(If you simply ran `git pull` and notice your submodules are out of sync, you can fix it by running `git submodule update`.)*
 
 **2. Modifying a submodule:**
-By default, submodules are in a "detached HEAD" state. If you need to modify the code inside a submodule:
+By default, submodules are in a "detached HEAD" state. Only `knn-bvh` is a
+GeoFLAC repository; a change to `mmg` or `nanoflann` goes to its upstream
+project first, and this repository then moves the pointer (step 5). To modify
+`knn-bvh`:
 1. `cd` into the submodule directory.
 2. Checkout the appropriate branch (e.g., `git checkout main`).
 3. Make your changes, `git add`, `git commit`, and `git push` from **within** the submodule directory.

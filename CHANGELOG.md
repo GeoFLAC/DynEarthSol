@@ -31,6 +31,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
   with commit-message guidelines and an AI-usage policy, pull request and issue
   templates, and `AGENTS.md` for coding assistants ([#96]).
+- Rules in `CONTRIBUTING.md` for code comments, source files and classes,
+  which also keep history out of the docs; `AGENTS.md` asks coding assistants
+  and AI reviewers to follow them ([#129]).
 - Frames embed their step, counts and time, so a run restarts and is read
   without its `.info` index; `utils/recreate_info.py` rebuilds the index ([#96]).
 - Provenance records: the executable embeds its build identity, each run writes
@@ -119,9 +122,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
 - **Breaking.** `mmg_hmin_factor` and `mmg_hmax_factor` are retired: MMG takes
-  its size band from `smallest_size` and `largest_size`, and
-  `examples/defaults.cfg` gives the conversion. With `use_mmg_init`, a `.poly`
-  region without a size constraint is no longer refined to `resolution` ([#95]).
+  its size band from `smallest_size` and `largest_size`; [#95] gives the
+  conversion. With `use_mmg_init`, a `.poly` region without a size constraint
+  is no longer refined to `resolution` ([#95]).
 - **Breaking.** `meshing_option = 2` meshes are finer; multiplying
   `largest_size` by 3.46 (2D) or 5.93 (3D) keeps the old initial mesh ([#95]).
 - **Breaking.** Checkpoints written before this change do not restart ([#95]).
@@ -310,6 +313,10 @@ DOI: [10.5281/zenodo.20293558](https://doi.org/10.5281/zenodo.20293558).
 Forty-two merged pull requests; the full list is in the
 [release notes](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v2.0.0).
 
+Exit codes: 1 user input, 2 IO, 10 triangulation or tetrahedralization,
+11 runtime, 12 assertion (a programming error). 2.0.2 replaces them with
+two-digit codes ([#86]).
+
 ### Added
 
 - Poroelasticity ([#2], [#3]).
@@ -424,3 +431,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+[#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129

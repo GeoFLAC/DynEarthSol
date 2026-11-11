@@ -94,7 +94,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("monitor.points_x", opt::list()->default_value("[]"),
          "Monitoring x coordinates array '[x0, x1, ...]'.")
         ("monitor.points_y", opt::list()->default_value("[]"),
-         "Monitoring y coordinates array '[y0, y1, ...]' (3D only; 2D legacy alias for monitor.points_z).")
+         "Monitoring y coordinates array '[y0, y1, ...]' (3D; in 2D, used as monitor.points_z when that is not given).")
         ("monitor.points_z", opt::list()->default_value("[]"),
          "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
         ("monitor.points_unit", opt::value<std::string>(&p.monitor.points_unit)->default_value("m"),
@@ -603,7 +603,7 @@ static void declare_parameters(opt::Registry &cfg,
          opt::value<std::string>()->default_value("shear"),
          "Elastic-speed ceiling used by global velocity scaling. It sets the floor of\n"
          "the fictitious density rho_fict = K / v_elastic^2.\n"
-         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (historical default).\n"
+         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (default).\n"
          "bulk : sqrt(K/rho), giving rho_fict >= rho and restoring physical density\n"
          "       when the pseudo-wave speed reaches the bulk-wave ceiling.\n")
         ("control.rsf_slip_rate_projection_option",
@@ -611,7 +611,7 @@ static void declare_parameters(opt::Registry &cfg,
              ->default_value(rsf_slip_rate_projection_maximum_shear),
          "Velocity-dimensional rate supplied to the RSF update.\n"
          "0: project the element velocity onto the maximum-shear direction inferred from stress\n"
-         "   (default; the historical behavior).\n"
+         "   (default).\n"
          "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
          "   element's minimum altitude.\n")
         ("control.rsf_dtheta_max",
@@ -979,7 +979,7 @@ static void declare_parameters(opt::Registry &cfg,
          "Conducting PT loop to get initial stress field from inital guess")
         ("ic.initial_stress_option", opt::value<int>(&p.ic.initial_stress_option)->default_value(0),
          "How to initialize stress?\n"
-         "0: use the legacy gravity-dependent initialization.\n"
+         "0: lithostatic stress and strain from gravity; zero stress when gravity = 0.\n"
          "1: prescribe a homogeneous absolute Cauchy stress tensor; requires gravity=0.\n")
 #ifdef THREED
         ("ic.initial_stress", opt::list()->default_value("[0,0,0,0,0,0]"),
@@ -1543,7 +1543,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
         get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
-        // 2D legacy alias: points_y means z when points_z is not given
+        // 2D: points_y supplies z when points_z is not given
         const bool z_from_y = vm.str("monitor.points_z") == "[]" &&
                               vm.str("monitor.points_y") != "[]";
         get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
