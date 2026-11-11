@@ -11,7 +11,9 @@
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
+#include "hydraulics.hpp"
 #include "output.hpp"
+#include "monitor.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
 
@@ -194,9 +196,71 @@ void Output::_write(const Variables& var, bool disable_averaging)
     
     bin.write_array(*var.temperature, "temperature", var.temperature->size());
     bin.write_array(*var.ppressure, "pore pressure", var.ppressure->size());
-    bin.write_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
+    if (var.matrix_pressure)
+        bin.write_cell_array(*var.matrix_pressure, "matrix pressure", var.matrix_pressure->size());
+    if (param_.control.has_hydraulic_diffusion && var.fluid_balance)
+        bin.write_aux_array(*var.fluid_balance, var.fluid_split ? "fluid mass balance" : "fluid balance", var.fluid_balance->size());
+    if (var.energy_balance)
+        bin.write_aux_array(*var.energy_balance,"sensible energy balance",var.energy_balance->size());
+    if (param_.control.has_hydraulic_diffusion && var.mat->has_retention) {
+        double_vec saturation(var.nelem), effective_saturation(var.nelem), relperm(var.nelem), density(var.nelem);
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var, saturation, effective_saturation, relperm, density)
+#endif
+        #pragma acc parallel loop gang vector
+        for (int e = 0; e < var.nelem; ++e) {
+            ConstConnAccessor conn = (*var.connectivity)[e];
+            const int_vec &markers = (*var.elemmarkers)[e];
+            double s = 0, se = 0, kr = 0;
+            for (int j = 0; j < NODES_PER_ELEM; ++j) {
+                const double p = (*var.ppressure)[conn[j]];
+                double sat;
+                se += element_se(*var.mat, markers, p, &sat);
+                s += sat;
+                kr += element_kr(*var.mat, markers, p);
+            }
+            s /= NODES_PER_ELEM;
+            se /= NODES_PER_ELEM;
+            kr /= NODES_PER_ELEM;
+            saturation[e] = s;
+            effective_saturation[e] = se;
+            relperm[e] = kr;
+            density[e] = hydraulic_bulk_density(*var.mat, e, s);
+        }
+        bin.write_cell_array(saturation, "saturation", saturation.size());
+        bin.write_cell_array(effective_saturation, "effective saturation", effective_saturation.size());
+        bin.write_cell_array(relperm, "relative permeability", relperm.size());
+        bin.write_cell_array(density, "bulk density", density.size());
+    }
+    if (var.pore_strain || var.mat->permeability_model) {
+        double_vec phi(var.nelem), perm(var.nelem);
+        for (int e = 0; e < var.nelem; ++e) {
+            phi[e] = var.mat->phi(e);
+            perm[e] = var.mat->perm(e);
+        }
+        bin.write_cell_array(phi, "porosity", phi.size());
+        bin.write_cell_array(perm, "permeability", perm.size());
+    }
+    if (var.pore_dilation) {
+        bin.write_cell_array(*var.pore_dilation,"pore dilation",var.pore_dilation->size());
+        bin.write_cell_array(*var.pore_plastic_increment,"plastic volume increment",var.pore_plastic_increment->size());
+    }
+    if (var.fluid_split) {
+        double_vec water(var.nnode);
+        for (int n = 0; n < var.nnode; ++n) water[n] = nodal_fluid_mass(param_,var,n);
+        bin.write_array(water,"fluid mass",water.size());
+        bin.write_array(*var.fluid_split,"hydraulic split buffer",var.fluid_split->size());
+        bin.write_array(*var.solid_mass,"solid mass",var.solid_mass->size());
+        bin.write_array(*var.solid_capacity,"solid heat capacity",var.solid_capacity->size());
+        bin.write_array(*var.pending_temperature,"pending temperature increment",var.pending_temperature->size());
+    }
+    bin.write_cell_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
+    if (var.shear_heat) {
+        bin.write_cell_array(*var.shear_heat, "shear heating", var.shear_heat->size());
+        bin.write_cell_array(*var.pending_heat, "pending shear heat", var.pending_heat->size());
+    }
 
-    bin.write_array(*var.plstrain, "plastic strain", var.plstrain->size());
+    bin.write_cell_array(*var.plstrain, "plastic strain", var.plstrain->size());
 
     // Strain rate and plastic strain rate do not need to be checkpointed,
     // so we don't have to distinguish averged/non-averaged variants.
@@ -209,7 +273,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
     for (std::size_t i=0; i<delta_plstrain_avg.size(); ++i) {
         delta_plstrain_avg[i] *= inv_dt;
     }
-    bin.write_array(*delta_plstrain, "plastic strain-rate", delta_plstrain->size());
+    bin.write_cell_array(*delta_plstrain, "plastic strain-rate", delta_plstrain->size());
 
     tensor_t *strain_rate = var.strain_rate;
     if (!disable_averaging && is_averaged) {
@@ -222,12 +286,12 @@ void Output::_write(const Variables& var, bool disable_averaging)
             s0[i] = (s[i] - s0[i]) * inv_dt;
         }
     }
-    bin.write_array(*strain_rate, "strain-rate", strain_rate->size());
+    bin.write_cell_array(*strain_rate, "strain-rate", strain_rate->size());
 
-    bin.write_array(*var.strain, "strain", var.strain->size());
-    bin.write_array(*var.stress, "stress", var.stress->size());
+    bin.write_cell_array(*var.strain, "strain", var.strain->size());
+    bin.write_cell_array(*var.stress, "stress", var.stress->size());
 
-    bin.write_array(*var.viscosity, "viscosity", var.viscosity->size());
+    bin.write_cell_array(*var.viscosity, "viscosity", var.viscosity->size());
 
     if (!disable_averaging && is_averaged) {
         double *s = stress_avg.data();
@@ -236,7 +300,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (int i=0; i<stress_avg.num_elements(); ++i) {
             s[i] *= tmp;
         }
-        bin.write_array(stress_avg, "stress averaged", stress_avg.size());
+        bin.write_cell_array(stress_avg, "stress averaged", stress_avg.size());
     }
 
     double_vec tmp(var.nelem);
@@ -244,17 +308,17 @@ void Output::_write(const Variables& var, bool disable_averaging)
     for (int e=0; e<var.nelem; ++e) {
         tmp[e] = var.mat->rho(e);
     }
-    bin.write_array(tmp, "density", tmp.size());
+    bin.write_cell_array(tmp, "density", tmp.size());
 
     #pragma omp parallel for default(none) shared(var, tmp)
     for (int e=0; e<var.nelem; ++e) {
         tmp[e] = elem_quality(*var.coord, *var.connectivity, *var.volume, e);
     }
-    bin.write_array(tmp, "mesh quality", tmp.size());
+    bin.write_cell_array(tmp, "mesh quality", tmp.size());
 
     if (var.mat->rheol_type & MatProps::rh_rsf) {
-        bin.write_array(*var.dyn_fric_coeff, "dynamic friction coefficient", var.dyn_fric_coeff->size());
-        bin.write_array(*var.state_variable, "friction state variable", var.state_variable->size());
+        bin.write_cell_array(*var.dyn_fric_coeff, "dynamic friction coefficient", var.dyn_fric_coeff->size());
+        bin.write_cell_array(*var.state_variable, "friction state variable", var.state_variable->size());
     }
 
     // bin.write_array(*var.mass, "mass", var.mass->size());
@@ -269,11 +333,22 @@ void Output::_write(const Variables& var, bool disable_averaging)
         int_vec &a = (*var.elemmarkers)[e];
         tmp[e] = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
     }
-    bin.write_array(tmp, "material", tmp.size());
+    bin.write_cell_array(tmp, "material", tmp.size());
 
     bin.write_nodal_vec_array(*var.force, "force", var.force->size());
     if (param_.control.has_PT && var.PT_force_residual_valid)
         bin.write_nodal_vec_array(*var.force_residual, "PT residual force", var.force_residual->size());
+
+    array_t displacement(var.nnode);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, displacement)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n = 0; n < var.nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            displacement[n][d] = (*var.coord)[n][d] - (*var.coord0)[n][d];
+    #pragma acc wait
+    bin.write_nodal_vec_array(displacement, "displacement", displacement.size());
 
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 
@@ -472,10 +547,55 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
     bin.write_scalar(var.dt, "dt");
+    if (var.pending_heat) {
+        bin.write_scalar(1, "shear heat version");
+        bin.write_array(*var.pending_heat, "pending shear heat", var.pending_heat->size());
+        bin.write_array(*var.shear_heat, "shear heating", var.shear_heat->size());
+    }
+    if (var.fluid_split) {
+        bin.write_scalar(1,"hydraulic content model");
+        bin.write_scalar(2,"hydraulic coupling version");
+        bin.write_scalar(int(var.fluid_pressure_consumed),"hydraulic pressure consumed");
+        bin.write_scalar(var.fluid_reference_temperature,"fluid reference temperature");
+        const auto reference = hydraulic_reference(param);
+        bin.write_aux_array(reference,"hydraulic reference law",reference.size());
+        bin.write_array(*var.fluid_split,"hydraulic split buffer",var.fluid_split->size());
+        bin.write_array(*var.solid_mass,"solid mass",var.solid_mass->size());
+        bin.write_array(*var.solid_capacity,"solid heat capacity",var.solid_capacity->size());
+        bin.write_array(*var.pending_temperature,"pending temperature increment",var.pending_temperature->size());
+    }
+    const double_vec controls = dt_controls(param);
+    bin.write_scalar(1, "dt controls version");
+    bin.write_aux_array(controls, "dt controls", controls.size());
+    if (hydraulic_strain_form(param))
+        bin.write_scalar(1, "physical hydraulic step");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+    {
+        double_vec positions, weights;
+        int_vec elements;
+        monitor_checkpoint(param,var,positions,elements,weights);
+        if (!positions.empty()) {
+            bin.write_scalar(param.monitor.num_points, "monitor point count");
+            bin.write_aux_array(positions, "monitor point positions", positions.size());
+            bin.write_aux_array(elements, "monitor point elements", elements.size());
+            bin.write_aux_array(weights, "monitor point weights", weights.size());
+        }
+    }
+    if (var.matrix_pressure)
+        bin.write_array(*var.matrix_pressure, "matrix pressure", var.matrix_pressure->size());
+    if (param.control.has_hydraulic_diffusion && var.fluid_balance)
+        bin.write_aux_array(*var.fluid_balance, var.fluid_split ? "fluid mass balance" : "fluid balance", var.fluid_balance->size());
+    if (var.energy_balance)
+        bin.write_aux_array(*var.energy_balance,"sensible energy balance",var.energy_balance->size());
+    if (var.pore_strain)
+        bin.write_array(*var.pore_strain, "pore strain", var.pore_strain->size());
+    if (var.pore_dilation) {
+        bin.write_array(*var.pore_dilation,"pore dilation",var.pore_dilation->size());
+        bin.write_array(*var.pore_plastic_increment,"plastic volume increment",var.pore_plastic_increment->size());
+    }
     if (param.control.has_hydraulic_diffusion)
         bin.write_array(*var.dppressure, "pending pore pressure increment", var.dppressure->size());
     if (param.control.has_PT) {
@@ -484,10 +604,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
             bin.write_scalar(static_cast<int>(var.PT_skip_scale_update), "PT skip scale update");
         }
         bin.write_scalar(static_cast<int>(var.initial_equilibrium_done), "initial equilibrium done");
-        bin.write_scalar(var.output_start_time, "PT output start time");
-        bin.write_scalar(var.output_start_step, "PT output start step");
-        bin.write_scalar(var.output_next_regular_frame, "PT next regular frame");
     }
+    bin.write_scalar(var.output_start_time, param.control.has_PT ? "PT output start time" : "output start time");
+    bin.write_scalar(var.output_start_step, param.control.has_PT ? "PT output start step" : "output start step");
+    bin.write_scalar(var.output_next_regular_frame, param.control.has_PT ? "PT next regular frame" : "next regular frame");
+    bin.write_scalar(param.sim.output_step_interval, "output step interval");
+    bin.write_scalar(param.sim.output_time_interval_in_yr, "output time interval");
     bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");
 
     bin.write_array(*var.segment, "segment", var.segment->size());

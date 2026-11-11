@@ -366,6 +366,13 @@ def process_single_frame(args):
         #convert_field(des, frame, 'tmass', fvtu)
         #convert_field(des, frame, 'volume_n', fvtu)
         convert_field(des, frame, 'pore pressure', fvtu)
+        for name in ('fluid mass', 'hydraulic split buffer', 'solid mass',
+                     'solid heat capacity', 'pending temperature increment'):
+            try:
+                convert_field(des,frame,name,fvtu)
+            except (KeyError,NameError):
+                # Older or uncoupled outputs can omit these inventory fields.
+                pass
 
         # node number for debugging
         vtk_dataarray(fvtu, np.arange(nnode, dtype=np.int32), 'node number')
@@ -420,6 +427,14 @@ def process_single_frame(args):
         convert_field(des, frame, 'density', fvtu)
         convert_field(des, frame, 'material', fvtu)
         convert_field(des, frame, 'viscosity', fvtu)
+        for name in ('porosity', 'permeability', 'matrix pressure', 'saturation',
+                     'pore dilation', 'plastic volume increment',
+                     'effective saturation', 'relative permeability', 'bulk density',
+                     'shear heating', 'pending shear heat'):
+            try:
+                convert_field(des, frame, name, fvtu)
+            except KeyError:
+                pass  # Optional hydraulic cell fields.
         
         # element number for debugging
         vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')

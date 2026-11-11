@@ -31,7 +31,7 @@ the shared PT history; the merge had no textual conflicts.
   rollback checks. ASan/UBSan runs halt on undefined behavior.
 - Restart harnesses retain byte-exact comparisons (excluding wall-clock data).
   A failed exact comparison is reported as such below, not silently relaxed.
-- Existing `benchmarks-cores/compare.py` uses its established 1e-8 criterion.
+- Existing `tests/regression/compare.py` uses its established 1e-8 criterion.
   EP/RSF uses the unchanged analytical limits, including 2e-5 stress error.
 - These checks establish scoped correctness, not a new performance claim.
 
@@ -86,8 +86,8 @@ OMP_NUM_THREADS=4 make -C tests/residual-assembly-test check ndims=3 backend=omp
 make -C tests/residual-assembly-test check ndims=2 backend=acc
 make -C tests/residual-assembly-test check ndims=3 backend=acc
 
-OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 0 --keep-output
-OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 1 --keep-output
+OMP_NUM_THREADS=1 python3 benchmarks/faults-friction/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 0 --keep-output
+OMP_NUM_THREADS=1 python3 benchmarks/faults-friction/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 1 --keep-output
 ```
 
 For functional cases, copy the supplied cfg to a new directory, set
@@ -98,7 +98,7 @@ The byte-exact ADR restart checks use `OMP_NUM_THREADS=1`; the four-thread
 results above are kept separately. All runs use new output directories.
 
 For dry baseline comparisons, use separate parent/final executables and the
-same `benchmarks-cores` inputs. `make set` runs the base executable, then
+same `tests/regression` inputs. `make set` runs the base executable, then
 `make cmp` runs the final executable with `NDIMS=2 CASE=test-rect-tiny.cfg` or
 `NDIMS=3 CASE=test-3d-equ-tiny.cfg`, `OMP=1`, and the corresponding `EXE` paths.
 The baseline executables used `opt=2 openmp=0 hdf5=0`; final production
@@ -222,7 +222,7 @@ adding a checkpoint requirement. The existing hydraulic restart policy is not
 changed by this follow-up. `MechanicalState` now lives in the PT module and uses
 seven named scalar arrays rather than numbered columns.
 
-The new `examples/pt-elastic-load.cfg` is a dry, fixed-mesh elastic compression
+The new `examples/fundamentals/pt-elastic-load.cfg` is a dry, fixed-mesh elastic compression
 with a nonzero initial imbalance, three 0.01 s physical steps, and both PT options.
 For 2D, the computed equivalent shortening is approximately 4.286 mm and the
 vertical stress is approximately -100 kPa. See the solver notes for the setup,
@@ -268,8 +268,8 @@ Reproduce the new output check from the repository root, using fresh output
 paths and the appropriate executable for each build:
 
 ```sh
-OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-review-2d-0 --option 0
-OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/pt-elastic-load.cfg /tmp/pt-review-2d-1 --option 1
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-review-2d-0 --option 0
+OMP_NUM_THREADS=1 python3 tests/functional/pt_residual_output.py ./dynearthsol2d examples/fundamentals/pt-elastic-load.cfg /tmp/pt-review-2d-1 --option 1
 ```
 
 Repeat with `dynearthsol3d`. GPU checks use `dynearthsol2d.gpu` or
@@ -387,14 +387,14 @@ Reproduce held-load and Maxwell checks using the commands in
 For the EP/RSF suite:
 
 ```sh
-OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 0 --keep-output
-OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 1 --keep-output
+OMP_NUM_THREADS=1 python3 benchmarks/faults-friction/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 0 --keep-output
+OMP_NUM_THREADS=1 python3 benchmarks/faults-friction/simple_shear_rsf/check_simple_shear_benchmark.py --exe ./dynearthsol2d --all --pt --pt-option 1 --keep-output
 ```
 
 GPU Maxwell runs add `--steps 6 --timeout 240`; GPU elastic runs use
-`--timeout 180`. Local raw inputs, scripts, binaries, logs and comparison metrics
-are archived at `/home/slee91/work/des-pt-stationary-20261021` (`CONTRACT.txt`,
-`SUMMARY.json`, `FINDINGS.txt`). No long core-complex runs, new acceleration,
+`--timeout 180`. Raw inputs, scripts, binaries, logs and comparison metrics
+were archived outside the repository (`CONTRACT.txt`, `SUMMARY.json`,
+`FINDINGS.txt`). No long core-complex runs, new acceleration,
 MMG/Exodus/GoSPL builds or full hydraulic GPU qualification are included.
 
 ### Optional residual conversion notice
@@ -500,9 +500,8 @@ OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d
 ```
 
 Repeat for 3D, both PT options and `use_global_velocity_scaling` settings.
-Local raw evidence, scripts and parent/final binaries are retained at
-`/home/slee91/work/des-pt-review-20261022`; final application builds/tests are
-under `final/`. Earlier intermediate builds/tests were superseded after the
+Raw evidence, scripts and parent/final binaries were retained outside the
+repository, with the final application builds/tests under `final/`. Earlier intermediate builds/tests were superseded after the
 clock correction; only the final builds qualify that change. No long runs,
 new acceleration, full-application sanitizer, MMG/Exodus/GoSPL or full hydraulic
 GPU qualification is claimed.
@@ -551,8 +550,8 @@ Validation on GNU 13.3 with system Boost 1.83 and HDF5 1.10.10:
 Commands use `make ndims=2 hdf5=1 BOOST_ROOT_DIR=/usr` and its 3D equivalent,
 with `CONDA_PREFIX` unset to avoid mixing Conda libraries with system HDF5.
 Functional tests use `OMP_NUM_THREADS=1` for exact comparisons. Raw inputs,
-outputs and logs are retained under `/tmp/pr106-*`; the isolated worktrees are
-`/home/sungho/bin/des-pr106`, `des-pr106-parent` and `des-pr106-master`.
+outputs and logs were kept outside the repository, with separate worktrees
+for the change, its parent and master.
 NVHPC/GPU, MMG, Exodus and GoSPL runtime validation were not run in this merge
 check. The earlier scientific/convergence limits remain unchanged.
 
@@ -574,7 +573,7 @@ Validation with GCC 13.3, OpenMP, one thread for integration comparisons:
 
 - `make -j4 ndims=2` and `make -j4 ndims=3` pass (`hdf5=0`).
 - Pre-merge binaries run `make set`; merged binaries run `make cmp` in
-  `benchmarks-cores/`. Both `CASE=test-tiny.cfg NDIMS=2` and
+  `tests/regression/`. Both `CASE=test-tiny.cfg NDIMS=2` and
   `CASE=test-3d-equ-tiny.cfg NDIMS=3` report BIT-EXACT for all compared fields.
   The pre-merge binaries use HDF5; the new binaries use binary output.
 - `tests/functional/bad_input/check_bad_input.py --exe ./dynearthsol2d`
@@ -586,7 +585,7 @@ Validation with GCC 13.3, OpenMP, one thread for integration comparisons:
 - `pt_residual_output.py` passes held equilibrium, independent force/RMS,
   restart and changed-load checks in both dimensions with both PT options.
   `pt_maxwell_creep.py` passes 100 steps for all four combinations; maximum
-  normalized reference error is 2.171e-6. Both use `examples/pt-elastic-load.cfg`.
+  normalized reference error is 2.171e-6. Both use `examples/fundamentals/pt-elastic-load.cfg`.
 
 Inputs, output and build/comparison logs are under `/tmp/des-pr106-20261106/`.
 NVHPC/GPU, MMG, Exodus and GoSPL runtime checks were not repeated for this merge.

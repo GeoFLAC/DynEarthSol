@@ -353,7 +353,7 @@ make openacc=1 GPU_CC=90
 * The [input file generator](https://geoflac.github.io/des-inputgen) builds a
   cfg from a web form.
 * Benchmark cases with analytical solutions are under `benchmarks/`; the
-  regression cases the developers compare against are under `benchmarks-cores/`.
+  regression cases the developers compare against are under `tests/regression/`.
 * **Provenance**: every executable, run and frame records where it came from:
   `strings <exe> | grep '^build\.snapshot\.'` shows the build, `<modelname>.manifest`
   each run, and every frame its own origin. The fields are described in

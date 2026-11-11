@@ -7,9 +7,20 @@ double dist2(T a, T b);
 double compute_volume(ConstArrayIndirectAccessor coord);
 #pragma acc routine seq
 double compute_area_facet(ConstArrayIndirectAccessor coord);
+#pragma acc routine seq
+double compute_facet_measure(ConstArrayIndirectAccessor coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);
+
+// Integral of old shape j times new shape i over their simplex intersection.
+// Host-only geometry; includes partial overlap without normalizing lost volume.
+struct SimplexOverlap {
+    double volume = 0;
+    double product[NODES_PER_ELEM][NODES_PER_ELEM] = {};
+};
+SimplexOverlap simplex_overlap(ConstArrayIndirectAccessor old_coordinate,
+                               ConstArrayIndirectAccessor new_coordinate);
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt,
                     double_vec &etmp);
@@ -99,6 +110,8 @@ void spr_node_to_elem(const Param& param, const Variables& var,
 void restore_stress_from_ref(const Param& param, const Variables& var,
                              const SurfaceTopo& topo,
                              tensor_t* stress, double_vec* stressyy);
+
+double_vec dt_controls(const Param& param);
 
 double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit = true);

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "constants.hpp"
 #include "utils.hpp"
@@ -167,7 +168,7 @@ double ref_pressure(const Param& param, double z)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
             p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
-                1000.0 * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
+                param.mat.fluid_rho0[param.mat.mattype_ref] * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
             p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
@@ -184,6 +185,10 @@ double ref_pressure(const Param& param, double z)
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
+  permeability_model(p.mat.permeability_model),
+  fluid_thermal_advection(p.control.has_fluid_thermal_advection),
+  has_retention(std::any_of(p.mat.retention_model.begin(), p.mat.retention_model.end(),
+                            [](int m) { return m != retention_saturated; })),
   is_plane_strain(p.mat.is_plane_strain),
   visc_min(p.mat.visc_min),
   visc_max(p.mat.visc_max),
@@ -197,11 +202,10 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 //   stress_old(*var.stress_old),
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
-  ppressure(*var.ppressure),
-  dppressure(*var.dppressure),
   log_table(*var.log_table),
   tan_table(*var.tan_table),
-  sin_table(*var.sin_table)
+  sin_table(*var.sin_table),
+  pore_strain(var.pore_strain)
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
@@ -212,6 +216,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     visc_activation_energy = p.mat.visc_activation_energy;
     visc_activation_volume = p.mat.visc_activation_volume;
     heat_capacity = p.mat.heat_capacity;
+    fluid_heat_capacity = p.mat.fluid_heat_capacity;
     therm_cond = p.mat.therm_cond;
     pls0 = p.mat.pls0;
     pls1 = p.mat.pls1;
@@ -224,13 +229,38 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 
     // Hydraulic parameters
     porosity = p.mat.porosity;
+    matrix_storage = p.mat.matrix_storage;
+    matrix_exchange = p.mat.matrix_exchange;
     hydraulic_perm = p.mat.hydraulic_perm;
+    permeability_exponent = p.mat.permeability_exponent;
+    pore_healing_time = p.mat.pore_healing_time;
+    pore_healing_temperature = p.mat.pore_healing_temperature;
+    pore_healing_energy = p.mat.pore_healing_energy;
+    const double_vec &t = p.mat.permeability_tensor;
+    const int slot[3][3] = {{0,3,4},{3,1,5},{4,5,2}};
+    perm_bound = 0;
+    for (int i = 0; i < NDIMS; ++i) {
+        double row = 0;
+        for (int j = 0; j < NDIMS; ++j) {
+            const int a = (NDIMS == 2 && i == 1) ? 2 : i;
+            const int b = (NDIMS == 2 && j == 1) ? 2 : j;
+            perm_tensor[i][j] = t.empty() ? double(i == j) : t[slot[a][b]];
+            row += std::abs(perm_tensor[i][j]);
+        }
+        perm_bound = std::max(perm_bound, row);
+    }
     fluid_rho0 = p.mat.fluid_rho0;
     fluid_alpha = p.mat.fluid_alpha;
     fluid_bulk_modulus = p.mat.fluid_bulk_modulus;
     fluid_visc = p.mat.fluid_visc;
     biot_coeff = p.mat.biot_coeff;
     bulk_modulus_s = p.mat.bulk_modulus_s;
+    // An empty list (a Param not built by the input reader) means saturated.
+    for (int m = 0; m < nmat; ++m)
+        retention_laws.push_back(p.mat.retention_model.empty()
+            ? Retention{retention_saturated, 0, 0, 0}
+            : Retention{p.mat.retention_model[m], p.mat.retention_alpha[m],
+                        p.mat.retention_n[m], p.mat.residual_saturation[m]});
     // Rate-and-state friction parameters
     direct_a = p.mat.direct_a;
     evolution_b = p.mat.evolution_b;
@@ -314,11 +344,13 @@ MatProps::~MatProps()
 {
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume)
-    #pragma acc exit data delete(heat_capacity,therm_cond,pls0,pls1,cohesion0)
+    #pragma acc exit data delete(heat_capacity,fluid_heat_capacity,therm_cond,pls0,pls1,cohesion0)
     #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
 
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
+    #pragma acc exit data delete(permeability_exponent)
+    #pragma acc exit data delete(pore_healing_time,pore_healing_temperature,pore_healing_energy)
     // Deleting rate-and-state friction properties
     #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity,characteristic_distance)
     // #pragma acc exit data delete(static_friction_coefficient)
@@ -697,12 +729,55 @@ double MatProps::k(int e) const
 // hydraulic parameters
 double MatProps::phi(int e) const
 {
+    return pore_strain ? biot_porosity(phi0(e), alpha_biot(e), (*pore_strain)[e]) : phi0(e);
+}
+
+double MatProps::phi0(int e) const
+{
     return cache_props[std::size_t(e) * MP_STRIDE + MPC_PHI];
 }
 
 double MatProps::perm(int e) const
 {
-    return harmonic_mean(hydraulic_perm, elemmarkers[e]);
+    const double k0 = harmonic_mean(hydraulic_perm, elemmarkers[e]);
+    if (permeability_model == 2) {
+        if (k0 == 0) return k0;
+        return k0 * std::pow(phi(e) / phi0(e), arithmetic_mean(permeability_exponent, elemmarkers[e]));
+    }
+    return permeability_model == 1 ? kozeny_carman(k0, phi0(e), phi(e)) : k0;
+}
+
+double MatProps::pore_healing_rate(int e) const
+{
+    double t = 0, rate = 0;
+    int count = 0;
+    for (int j = 0; j < NODES_PER_ELEM; ++j)
+        t += temperature[connectivity[e][j]]/NODES_PER_ELEM;
+    if (!(t > 0 && std::isfinite(t))) return std::numeric_limits<double>::quiet_NaN();
+    for (int m = 0; m < nmat; ++m) {
+        const int markers = elemmarkers[e][m];
+        count += markers;
+        if (markers == 0 || pore_healing_time[m] == 0) continue;
+        const double t0 = pore_healing_temperature[m];
+        rate += markers*(t0/t)/pore_healing_time[m] *
+                std::exp(-pore_healing_energy[m]/8.3144*(1/t-1/t0));
+    }
+    return rate/count;
+}
+
+double MatProps::matrix_capacity(int e) const
+{
+    return matrix_storage.empty() ? 0 : arithmetic_mean(matrix_storage, elemmarkers[e]);
+}
+
+double MatProps::exchange(int e) const
+{
+    return matrix_exchange.empty() ? 0 : arithmetic_mean(matrix_exchange, elemmarkers[e]);
+}
+
+double MatProps::alpha_solid(int e) const
+{
+    return arithmetic_mean(alpha, elemmarkers[e]);
 }
 
 double MatProps::alpha_fluid(int e) const
@@ -716,44 +791,22 @@ double MatProps::beta_fluid(int e) const
     return cache_props[std::size_t(e) * MP_STRIDE + MPC_BETA_FLUID];
 }
 
-double MatProps::rho_fluid(int e) const
+double MatProps::rho_fluid_reference(int e) const
 {
-    const double p0 = 1.0e5; // Reference pressure in Pascals (1 atm)
-    const double T0 = 273; // Reference temperature in Kelvin (0°C)
+    return arithmetic_mean(fluid_rho0, elemmarkers[e]);
+}
 
-    // Average temperature of this element
-    double T = 0;
-    ConstConnAccessor conn = connectivity[e];
-    #pragma acc loop seq
-    for (int i = 0; i < NODES_PER_ELEM; ++i) {
-        T += temperature[conn[i]];
-    }
-    T /= NODES_PER_ELEM;
+double MatProps::cp_fluid(int e) const
+{
+    return arithmetic_mean(fluid_heat_capacity, elemmarkers[e]);
+}
 
-    // Average pore pressure of this element
-    double p = 0;
-    #pragma acc loop seq
-    for (int i = 0; i < NODES_PER_ELEM; ++i) {
-        p += ppressure[conn[i]];
-    }
-    p /= NODES_PER_ELEM;
-
-    // Use the functions to get thermal expansivity and compressibility
-    double alpha_f = alpha_fluid(e);  // Thermal expansivity for the fluid
-    double beta_f = beta_fluid(e);    // Compressibility for the fluid
-
-    // Calculate fluid density based on thermal expansivity and compressibility
-    double result = 0;
-    int n = 0;
-    #pragma acc loop seq
-    for (int m = 0; m < nmat; m++) {
-        double rho_f = (fluid_rho0)[m];  // Reference fluid density
-        result += rho_f * (1 - alpha_f * (T - T0) + beta_f * (p - p0)) * elemmarkers[e][m];
-        n += elemmarkers[e][m];
-    }
-
-    // Return the averaged fluid density
-    return result / n;
+double MatProps::thermal_capacity(int e) const
+{
+    const double solid = rho(e) * cp(e);
+    if (!fluid_thermal_advection) return solid;
+    const double pore = phi(e);
+    return (1-pore)*solid + pore*rho_fluid_reference(e)*cp_fluid(e);
 }
 
 double MatProps::mu_fluid(int e) const

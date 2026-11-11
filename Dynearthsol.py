@@ -210,19 +210,29 @@ class Dynearthsol:
         if name in set(['strain', 'strain-rate', 'stress', 'stress averaged']):
             count = self.nstr * nelem
             shape = (nelem, self.nstr)
-        elif name in set(['density', 'material', 'mesh quality',
+        elif name == 'fluid balance':
+            count, shape = 5, (5,)
+        elif name in ('fluid mass balance', 'sensible energy balance'):
+            count, shape = 6, (6,)
+        elif name in set(['density', 'material', 'mesh quality', 'porosity', 'permeability', 'matrix pressure',
+                          'saturation', 'effective saturation', 'relative permeability', 'bulk density',
                           'plastic strain', 'plastic strain-rate',
                           'viscosity', 'edvoldt', 'volume', 'radiogenic source',
+                          'shear heating', 'pending shear heat',
+                          'pore dilation', 'plastic volume increment',
                           'dynamic friction coefficient', 'friction state variable']):
             count = nelem
             shape = (nelem, )
         elif name in set(['connectivity']):
             count = (self.ndims + 1) * nelem
             shape = (nelem, self.ndims+1)
-        elif name in set(['coordinate', 'velocity', 'velocity averaged', 'force', 'PT residual force', 'coord0']):
+        elif name in set(['coordinate', 'velocity', 'velocity averaged', 'force',
+                          'PT residual force', 'coord0', 'displacement']):
             count = self.ndims * nnode
             shape = (nnode, self.ndims)
-        elif name in set(['bcflag', 'temperature', 'pore pressure', 'mass', 'tmass', 'volume_n']):
+        elif name in set(['bcflag', 'temperature', 'pore pressure', 'mass', 'tmass', 'volume_n',
+                          'fluid mass', 'hydraulic split buffer', 'solid mass', 'solid heat capacity',
+                          'pending temperature increment']):
             count = nnode
             shape = (nnode, )
         else:

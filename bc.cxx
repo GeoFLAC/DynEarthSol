@@ -8,6 +8,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "matprops.hpp"
+#include "hydraulics.hpp"
 #include "markerset.hpp"
 #include "barycentric-fn.hpp"
 #include "geometry.hpp"
@@ -795,8 +796,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 
                     // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
                     if (param.control.has_hydraulic_diffusion) {
-                        rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
-                        // 1000.0 is the fluid density (e.g., water, in kg/m³)
+                        rho_effective = hydraulic_bulk_density(*var.mat, e);
                         // Winkler foundation for the bottom boundary with adjusted effective density
                         p = var.compensation_pressure - 
                             (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
@@ -891,6 +891,59 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #endif
 }
 
+static double platen_average(const Variables& var, const array_t& field, bool weighted)
+{
+    // The preceding force/velocity update can still be on an async queue.
+    #pragma acc wait
+    double t = 0, m = 0;
+    double low = std::numeric_limits<double>::max(), high = -low;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, field) firstprivate(weighted) \
+        reduction(+:t,m) reduction(min:low) reduction(max:high)
+#endif
+    #pragma acc parallel loop gang vector reduction(+:t,m) reduction(min:low) reduction(max:high)
+    for (int n=0; n<var.nnode; ++n) {
+        if (!((*var.bcflag)[n] & BOUNDZ1)) continue;
+        const double mn = (*var.mass)[n];
+        const double value = field[n][NDIMS-1];
+        t += (weighted ? mn : 1.0) * value;
+        m += mn;
+        if (weighted) {
+            low = std::min(low, value);
+            high = std::max(high, value);
+        }
+    }
+    if (!(m > 0 && std::isfinite(m)))
+        die(EXIT_CONFIG_VALUE, "A rigid top platen requires top nodes with positive finite mass.");
+    // A uniform velocity is already admissible. Preserve its exact value,
+    // including when initialization reapplies the constraint after restart.
+    return weighted && low == high ? low : t/m;
+}
+
+void apply_platen_velocity(const Param& param, const Variables& var, array_t& vel)
+{
+    if (param.bc.vbc_z1 != 8) return;
+    const double v = platen_average(var, vel, true);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, vel) firstprivate(v)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n)
+        if ((*var.bcflag)[n] & BOUNDZ1) vel[n][NDIMS-1] = v;
+}
+
+void apply_platen_force(const Param& param, const Variables& var, array_t& force)
+{
+    if (param.bc.vbc_z1 != 8) return;
+    const double a = platen_average(var, force, false);  // platen acceleration
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, force) firstprivate(a)
+#endif
+    #pragma acc parallel loop gang vector
+    for (int n=0; n<var.nnode; ++n)
+        if ((*var.bcflag)[n] & BOUNDZ1) force[n][NDIMS-1] = (*var.mass)[n] * a;
+}
+
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
@@ -940,6 +993,9 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
             case 3: // Traction in the z-direction
                 traction[2] = var.stress_bc_values[i]; // Set z-direction traction value
                 break;
+            case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
+                for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
+                break;
             default:
                 continue; // Skip if no valid stress BC type
         }
@@ -951,6 +1007,9 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
                 break;
             case 3: // Traction in the z-direction (mapped to y in 2D)
                 traction[1] = var.stress_bc_values[i]; // Set y-direction traction value in 2D
+                break;
+            case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
+                for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
                 break;
             default:
                 continue; // Skip if no valid stress BC type
@@ -2032,6 +2091,13 @@ void build_velocity_constraints(const Param& param, const Variables& var,
                 for (int k=0; k<rank; ++k) p[n][d*NDIMS+j] -= q[k][d]*q[k][j];
             }
         }
+        // The platen supplies one shared vertical degree of freedom. A local
+        // support that fixes a top corner would otherwise be overwritten by
+        // the uniform-velocity projection.
+        if (param.bc.vbc_z1 == 8 && ((*var.bcflag)[n] & BOUNDZ1))
+            for (int d=0; d<NDIMS; ++d)
+                if (std::abs(p[n][d*NDIMS+NDIMS-1] - (d == NDIMS-1)) > 1e-12)
+                    die(EXIT_CONFIG_VALUE, "A rigid top platen requires free vertical motion at every top node.");
     }
 }
 

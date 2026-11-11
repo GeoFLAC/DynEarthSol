@@ -2,6 +2,7 @@
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
 #include <map>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -195,6 +196,9 @@ struct Mesh {
 
     bool is_discarding_internal_segments;
     int remeshing_option;
+    int num_remeshing_reset_boundaries;
+    int_vec remeshing_reset_boundaries;
+    uint remeshing_reset_boundary_mask;
 
     // MMG freeze rules (FREEZE / REQUIRED POLICY, remeshing.cxx)
     double mmg_remesh_active_plstrain;
@@ -258,7 +262,12 @@ struct Control {
 
     bool is_quasi_static;
     bool has_thermal_diffusion;
+    bool has_fluid_thermal_advection;
     bool has_hydraulic_diffusion;
+    int hydraulic_content_model = 0;
+    bool has_poroelastic_pressure_feedback = true;
+    bool has_thermal_pressurization;
+    bool has_shear_heating = false;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -283,6 +292,13 @@ struct Control {
 struct BC {
     double surface_temperature;
     double mantle_temperature;
+    int tbc[6] = {0, 0, 0, 0, 0, 1};
+    double tbc_value[6] = {
+        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
+    bool custom_temperature_boundary = false;
+
 
     double winkler_delta_rho;
     bool has_winkler_foundation;
@@ -368,6 +384,21 @@ struct BC {
     int hbc_z0;
     int hbc_z1;
 
+    double_vec hbc_pressure, hbc_flux;
+    int num_hbc_schedule;
+    double_vec hbc_schedule_time_in_yr, hbc_schedule_ratio;
+
+    // Vertical rate-controlled wells sharing one rate schedule
+    int num_wells;
+    int num_well_schedule;
+    double_vec well_x;
+    double_vec well_y;
+    double_vec well_z_top;
+    double_vec well_z_bottom;
+    double_vec well_rate;
+    double_vec well_schedule_time_in_yr;
+    double_vec well_schedule_ratio;
+
     double stress_val_x0;
     double stress_val_x1;
     double stress_val_y0;
@@ -417,6 +448,9 @@ struct IC {
     double_vec weakzone_segments_y_max;
 
     int temperature_option;
+    double temp_background, temp_anomaly_amplitude;
+    double temp_anomaly_xcenter, temp_anomaly_ycenter, temp_anomaly_zcenter;
+    double temp_anomaly_xsemi_axis, temp_anomaly_ysemi_axis, temp_anomaly_zsemi_axis;
     std::string Temp_filename;
     std::string Nodes_filename;
     std::string Connectivity_filename;
@@ -440,6 +474,9 @@ struct IC {
     double isostasy_adjustment_time_in_yr;
 
     double excess_pore_pressure;
+    int pore_pressure_option;
+    double pore_pressure_value;
+    double water_table_z;  // height of the initial hydrostatic water table (m)
     bool has_body_force_adjustment;
     int initial_stress_option;
     double_vec initial_stress;
@@ -505,14 +542,28 @@ struct Mat {
     double_vec dilation_angle0, dilation_angle1;
 
     // hydraulic parameters
+    int porosity_model;
+    int permeability_model;
+    double_vec permeability_exponent;
+    double_vec pore_healing_time, pore_healing_temperature, pore_healing_energy;
     double_vec porosity;
     double_vec hydraulic_perm;
+    double_vec matrix_storage, matrix_exchange; // immobile reservoir capacity (1/Pa), exchange (1/Pa/s)
+    double_vec permeability_tensor; // common dimensionless symmetric tensor: xx yy zz xy xz yz
     double_vec fluid_rho0;  // pore fluid density
+    double_vec fluid_heat_capacity;
     double_vec fluid_alpha; // pore fluid thermal expansivity
     double_vec fluid_bulk_modulus;  // pore fluid bulk modulus
     double_vec fluid_visc;  // pore fluid dynamic viscosity
     double_vec biot_coeff;  // Biot-Willis coefficient
+    bool derive_biot_coeff_from_bulk_moduli;
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
+    // Unsaturated retention: 0 saturated, 1 van Genuchten-Mualem,
+    // 2 Brooks-Corey-Burdine, 3 Gardner
+    int_vec retention_model;
+    double_vec retention_alpha;      // 1/Pa
+    double_vec retention_n;          // van Genuchten n or Brooks-Corey index
+    double_vec residual_saturation;
   
     // rate-and-state friction parameters
     double_vec direct_a;
@@ -554,9 +605,14 @@ enum MassScalingReferenceSpeed {
     mass_scaling_speed_bulk = 1
 };
 
-enum MonitorRebindMode {
-    monitor_rebind_initial_coord = 0,
-    monitor_rebind_pre_remesh_coord = 1
+enum MonitorPointType {
+    monitor_point_particle = 0,
+    monitor_point_grid = 1
+};
+
+enum MonitorRemeshOutput {
+    monitor_remesh_before = 0,
+    monitor_remesh_both = 1
 };
 
 struct Monitor {
@@ -566,7 +622,8 @@ struct Monitor {
 
     std::string points_unit;
     double points_scale_to_m;
-    int remesh_rebind_mode;
+    int point_type;
+    int remesh_output;
 
     double_vec points_x;
     double_vec points_y;
@@ -616,7 +673,20 @@ struct PointCloud {
 
 using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
 
+enum { injection_rate_constant = 0, injection_rate_total_amount = 1 };
+
+struct Injection {
+    bool enabled = false;
+    int num_points = 0;
+    std::string points_unit;
+    int rate_model = injection_rate_constant;
+    double_vec points_x, points_y, points_z;
+    double_vec rate, total_amount, start_time, end_time;
+    double_vec temperature;  // fluid sources only: injection temperature (K) per point; empty: none
+};
+
 struct Param {
+    Injection injection, heat_injection;
     Sim sim;
     Monitor monitor;
     Mesh mesh;
@@ -818,6 +888,11 @@ class MatProps;
 class MarkerSet;
 class VirtualTopology;
 struct Variables {
+    double_vec *fluid_point_source = nullptr;
+    double_vec *heat_source = nullptr;
+    // Fluid injected at a prescribed temperature: injected volume rate and its
+    // temperature-weighted sum per node, for the injected enthalpy.
+    double_vec *inflow_rate = nullptr, *inflow_heat = nullptr;
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
@@ -928,11 +1003,25 @@ struct Variables {
     double_vec *radiogenic_source;
 
     // For hyraulic proceses
-    double_vec *fmass; // pore water mass
     double_vec *ppressure; // pore pressure
     double_vec *dppressure; // delta pore pressure
-    double_vec *dppressure_zero; // delta pore pressure
-    double_vec *fluid_source; // injection and pumping of pore water
+    double_vec *matrix_pressure = nullptr; // immobile reservoir pressure per element
+    double_vec *old_temperature = nullptr; // physical-step baseline, never a PT history
+    double_vec *shear_heat = nullptr; // accepted nonelastic power density (W/m^3)
+    double_vec *pending_heat = nullptr; // undeposited physical energy per element (J; J/m in 2D)
+    double_vec *pore_strain = nullptr; // porosity history; physical steps only
+    double_vec *pore_dilation = nullptr; // remaining recoverable plastic volume strain
+    double_vec *pore_plastic_increment = nullptr; // constitutive trial, signed volume strain
+    double_vec *pore_recovery = nullptr; // frozen closure strain for this physical step
+    double_vec *fluid_split = nullptr; // extensive numerical fixed-stress buffer, never water
+    bool fluid_pressure_consumed = false; // raw pressure increment already applied to stress
+    double_vec *solid_mass = nullptr; // material mass carried by nodes (kg; kg/m in 2D)
+    double_vec *solid_capacity = nullptr; // material heat capacity carried by nodes (J/K; J/m/K)
+    double_vec *pending_temperature = nullptr; // accepted increment awaiting mechanical consumption
+    double_vec *energy_balance = nullptr; // sensible energy change, sources, carried heat, boundary reactions, error
+    double fluid_reference_temperature = 0; // EOS reference, preserved when temperature boundaries change
+    double_vec *fluid_source; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
+    double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 
     // For rate-and-state friction
     double_vec *dyn_fric_coeff;

@@ -9,8 +9,8 @@ you cannot infer from the tree.
 - The same sources build `dynearthsol2d` and `dynearthsol3d`; every change must
   compile with both `make ndims=2` and `make ndims=3`. Compiling is not
   verification: anything that can alter results gets `make set` on the parent
-  commit and `make cmp` in `benchmarks-cores/` before you report it done.
-  `benchmarks-cores/test-tiny.cfg` is a one-second smoke test.
+  commit and `make cmp` in `tests/regression/` before you report it done.
+  `tests/regression/test-tiny.cfg` is a one-second smoke test.
 - Issues and pull requests use the templates under `.github/` verbatim; never
   bypass them with `gh pr create --fill` or a hand-written body, and never open
   either or reply to a review without the user's explicit instruction.

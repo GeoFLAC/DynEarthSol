@@ -25,6 +25,12 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 bool side_wall_vbc_is_inflow(const BC &bc, int t, double time_in_yr);
 bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
+// Rigid frictionless top platen (bc.vbc_z1 = 8): all top nodes share one
+// vertical velocity and slide freely. The platen force is the total vertical
+// force on the top nodes, shared in proportion to nodal mass.
+// Intersecting supports must leave the top nodes' vertical motion free.
+void apply_platen_velocity(const Param& param, const Variables& var, array_t& vel);
+void apply_platen_force(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain);
 void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, tensor_t& stress, \
                               tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain);
