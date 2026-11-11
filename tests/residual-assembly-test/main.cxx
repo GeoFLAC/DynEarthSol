@@ -797,8 +797,6 @@ static void test_material_trials() {
                         }
                     }
                 }
-            }
-            if (model == MatProps::rh_ep && alpha == 0) {
                 // The elastic trial exceeds c/tan(phi), but its admissible
                 // associated shear return lies below it; no tensile flow.
                 const double trial[3]={169e3,185e3,200e3};
