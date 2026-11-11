@@ -648,7 +648,7 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
 void new_mesh_regular_equilateral(const Param& param, Variables& var)
 {
     double *pcoord, *pregattr;
-    int *pconnectivity, *psegment, *psegflag;
+    int_vec pconnectivity, psegment, psegflag;
 
     double sqrt3_to_2 = 2./std::sqrt(3.0);
 
@@ -664,17 +664,14 @@ void new_mesh_regular_equilateral(const Param& param, Variables& var)
     create_equilateral_segments(var, psegment, psegflag);
 
     var.coord = new array_t(pcoord, var.nnode);
-    var.connectivity = new conn_t(pconnectivity, var.nelem);
-    var.segment = new segment_t(psegment, var.nseg);
-    var.segflag = new segflag_t(psegflag, var.nseg);
+    var.connectivity = new conn_t(pconnectivity.data(), var.nelem);
+    var.segment = new segment_t(psegment.data(), var.nseg);
+    var.segflag = new segflag_t(psegflag.data(), var.nseg);
 
     create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
 
     delete [] pcoord;
-    delete [] pconnectivity;
-    delete [] psegment;
-    delete [] psegflag;
     delete [] pregattr;
 }
 
@@ -2907,8 +2904,8 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 } // end of anonymous namespace
 
 
-void create_equilateral_elem(const Variables& var, int *&connectivity) {
-    connectivity = new int[var.nelem*3];
+void create_equilateral_elem(const Variables& var, int_vec &connectivity) {
+    connectivity.resize(var.nelem*3);
 
     int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
 
@@ -2943,9 +2940,9 @@ void create_equilateral_elem(const Variables& var, int *&connectivity) {
     }
 }
 
-void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
-    segments = new int[var.nseg*2];
-    segflags = new int[var.nseg];
+void create_equilateral_segments(const Variables& var, int_vec &segments, int_vec &segflags) {
+    segments.resize(var.nseg*2);
+    segflags.resize(var.nseg);
     int seg_idx = 0;
     int flag_idx = 0;
 
@@ -3320,9 +3317,11 @@ void create_top_elems(Variables& var)
 
     var.ntop_elems = telems.size();
 
-    var.top_elems = new int_vec(var.ntop_elems);
-    for (int i=0; i<var.ntop_elems; i++)
-        (*var.top_elems)[i] = telems[i];
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.top_elems)
+        var.top_elems->assign(telems.begin(), telems.end());
+    else
+        var.top_elems = new int_vec(telems.begin(), telems.end());
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -3637,7 +3636,11 @@ void create_boundary_facets(Variables& var)
     }
 
     int etop = var.bfacets[iboundz1]->size();
-    var.connectivity_surface = new conn_t(etop);
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.connectivity_surface)
+        *var.connectivity_surface = conn_t(etop);
+    else
+        var.connectivity_surface = new conn_t(etop);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)

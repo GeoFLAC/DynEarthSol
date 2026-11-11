@@ -30,8 +30,8 @@ void create_neighbor(Variables& var);
 void create_elemmarkers(const Param&, Variables&);
 void create_markers(const Param&, Variables&);
 void create_new_mesh(const Param&, Variables&);
-void create_equilateral_elem(const Variables& var, int *&connectivity);
-void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags);
+void create_equilateral_elem(const Variables& var, int_vec &connectivity);
+void create_equilateral_segments(const Variables& var, int_vec &segments, int_vec &segflags);
 template <typename T_in, typename T_out>
 void average_nodal_to_elem(T_in nodal, const conn_t &connectivity, int nelem, T_out elem, bool is_surface=false);
 
