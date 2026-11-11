@@ -25,7 +25,6 @@ times depend on the branch; the comparison window ends at tau = 0.1.
 """
 import argparse
 import json
-import math
 from pathlib import Path
 
 import numpy as np

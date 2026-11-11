@@ -125,8 +125,6 @@ if __name__ == '__main__':
     d = Drainage(**liakopoulos_like())
     times = [300.0, 1200.0, 3600.0, 7200.0]
     runs = {n: d.solve(n, times) for n in (50, 100, 200)}
-    # The trapezoid weights integrate exactly what they should.
-    z, h, w = d._grid(10)
     for k, t in enumerate(times):
         s = [runs[n][k]['settlement'] for n in (50, 100, 200)]
         p = [runs[n][k]['p'][::{50: 1, 100: 2, 200: 4}[n]] for n in (50, 100, 200)]

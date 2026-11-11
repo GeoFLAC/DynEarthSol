@@ -93,11 +93,10 @@ def case(executable, folder, h, steps, dim):
         stream.seek(seed.field_pos['pore pressure']); stream.write(initial.astype(np.float64).tobytes())
     cfg['sim'].update(is_restarting='true', restarting_from_modelname='seed', restarting_from_frame='0',
                       output_step_interval=str(steps//4), max_steps=str(steps//2))
-    first = run(executable, folder, cfg, 'first')
-    switch = scan_frames(str(folder/'first'))[-1]['time']
+    run(executable, folder, cfg, 'first')
     cfg['mat'].update(hydraulic_perm=repr([PERMEABILITY[1]]), permeability_tensor=repr(TENSORS[1]))
     cfg['sim'].update(restarting_from_modelname='first', restarting_from_frame='2', max_steps=str(steps))
-    second = run(executable, folder, cfg, 'second')
+    run(executable, folder, cfg, 'second')
     cfg['sim'].update(restarting_from_modelname='second', restarting_from_frame='3')
     run(executable, folder, cfg, 'resumed')
     return analyze(folder, h, steps, dim)

@@ -151,7 +151,7 @@ def main():
         cfg = config();cfg['control']['has_PT'] = str(method=='pt').lower()
         if method == 'explicit':
             cfg['control']['fixed_dt'] = '0'
-        fresh = run(executable,folder,cfg,'fresh',4)
+        run(executable,folder,cfg,'fresh',4)
         resumed = run(executable,folder,cfg,'resumed',4,folder/'fresh')
         payloads = compare_continuation(folder,'fresh',resumed)
         report['cases'].append(dict(name=method+'-unchanged',exact_payloads=payloads))

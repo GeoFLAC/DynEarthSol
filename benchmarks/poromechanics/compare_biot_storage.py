@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 
 import consolidation as pf
-import numpy as np
 
 
 import sys
