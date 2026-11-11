@@ -71,16 +71,19 @@ Relative polygon paths are resolved against the source configuration directory.
 OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d tests/functional/pt_output_schedule.cfg /tmp/des-pt-schedule --schedule mixed
 ```
 
-Repeat with `--schedule step`, `time`, and `catchup`, new output directories,
-and the 3D executable. Use `--schedule step-default` to omit the time interval
-and exercise the disabled-time default; the PT checkpoint clock must remain
-finite. Repeat with both PT options and with global velocity scaling on/off to
-cover both scheduler paths. The supplied RSF fixture forces global velocity
-scaling on; use an otherwise identical copy with `rheology_type=elastic` to test
-the off setting. The same cell tests binary and HDF5 checkpoints.
+Repeat with `--schedule step`, `time`, `catchup`, and `overflow`, new output
+directories, and the 3D executable. Use `--schedule step-default` to omit the
+time interval and check a finite checkpoint clock. Select `--method pt`,
+`explicit`, or `gvs` to exercise each integration/output path; the driver
+uses elastic material unless `--rsf` retains the RSF fixture (PT/GVS only).
+Repeat with both PT options. The same checks support binary and HDF5 output.
+Use `--schedule step --step-after-restart 6` or
+`--schedule time --time-after-restart 3.5` to change cadence at restart and
+compare physical fields against an independent output-every-step run.
 The comparison includes frame numbers, physical steps, output times and all
-subsequent save/checkpoint payloads. Cadence settings remain unchanged on restart.
-PT checkpoints retain the original schedule anchors and the next regular output
+subsequent save/checkpoint payloads. Unchanged cadence retains its original
+anchors; an explicitly changed cadence starts a new schedule at the restart
+point. Checkpoints retain the schedule anchors and the next regular output
 index. Older checkpoints without these fields remain readable with a warning
 and legacy scheduling; incomplete new schedule records are rejected. This test
 does not qualify earthquake-event history or averaged-field accumulator restart.

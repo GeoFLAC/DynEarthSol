@@ -390,22 +390,49 @@ void restart(const Param& param, Variables& var)
             var.PT_skip_scale_update = skip != 0;
         }
 
-        if (param.control.has_PT) {
-            const int fields = bin_chkpt.has_array("PT output start time") +
-                bin_chkpt.has_array("PT output start step") +
-                bin_chkpt.has_array("PT next regular frame");
+        {
+            // A permitted step-zero conversion can change the mechanical method.
+            // Read the schema written by the checkpoint, not the current mode.
+            const bool pt_schedule = bin_chkpt.has_array("PT output start time") ||
+                bin_chkpt.has_array("PT output start step") || bin_chkpt.has_array("PT next regular frame");
+            const bool generic_schedule = bin_chkpt.has_array("output start time") ||
+                bin_chkpt.has_array("output start step") || bin_chkpt.has_array("next regular frame");
+            if (pt_schedule && generic_schedule)
+                die(EXIT_IO_RESTART, "Ambiguous output schedule in checkpoint.");
+            const char *time_key = pt_schedule ? "PT output start time" : "output start time";
+            const char *step_key = pt_schedule ? "PT output start step" : "output start step";
+            const char *frame_key = pt_schedule ? "PT next regular frame" : "next regular frame";
+            const int fields = bin_chkpt.has_array(time_key) + bin_chkpt.has_array(step_key) +
+                bin_chkpt.has_array(frame_key);
             if (fields != 0 && fields != 3)
-                die(EXIT_IO_RESTART, "Incomplete PT output schedule in checkpoint.");
+                die(EXIT_IO_RESTART, "Incomplete output schedule in checkpoint.");
             if (fields == 3) {
-                bin_chkpt.read_scalar(var.output_start_time, "PT output start time");
-                bin_chkpt.read_scalar(var.output_start_step, "PT output start step");
-                bin_chkpt.read_scalar(var.output_next_regular_frame, "PT next regular frame");
+                bin_chkpt.read_scalar(var.output_start_time, time_key);
+                bin_chkpt.read_scalar(var.output_start_step, step_key);
+                bin_chkpt.read_scalar(var.output_next_regular_frame, frame_key);
                 if (!std::isfinite(var.output_start_time) || var.output_start_step < 0 ||
                     var.output_start_step > var.steps || var.output_next_regular_frame < 1)
-                    die(EXIT_IO_RESTART, "Invalid PT output schedule in checkpoint.");
+                    die(EXIT_IO_RESTART, "Invalid output schedule in checkpoint.");
                 var.output_schedule_restored = true;
             } else if (var.steps > 0) {
-                std::cerr << "Warning: checkpoint lacks PT output schedule; using legacy restart scheduling.\n";
+                std::cerr << "Warning: checkpoint lacks output schedule; using legacy restart scheduling.\n";
+            }
+            const int periods = bin_chkpt.has_array("output step interval") +
+                bin_chkpt.has_array("output time interval");
+            if (periods != 0 && (periods != 2 || fields != 3))
+                die(EXIT_IO_RESTART, "Incomplete output cadence in checkpoint.");
+            if (periods == 2) {
+                int step_interval;
+                double time_interval;
+                bin_chkpt.read_scalar(step_interval, "output step interval");
+                bin_chkpt.read_scalar(time_interval, "output time interval");
+                if (step_interval != param.sim.output_step_interval ||
+                    time_interval != param.sim.output_time_interval_in_yr) {
+                    // An explicitly changed cadence starts at the restart point.
+                    var.output_start_time = var.time;
+                    var.output_start_step = var.steps;
+                    var.output_next_regular_frame = 1;
+                }
             }
         }
     }
@@ -514,6 +541,33 @@ void restart(const Param& param, Variables& var)
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
+    }
+
+    if (param.monitor.enabled) {
+        const bool count_saved = bin_chkpt.has_array("monitor point count");
+        const bool positions_saved = bin_chkpt.has_array("monitor point positions");
+        const bool elements_saved = bin_chkpt.has_array("monitor point elements");
+        const bool weights_saved = bin_chkpt.has_array("monitor point weights");
+        if (count_saved != positions_saved || elements_saved != weights_saved ||
+            (elements_saved && !count_saved))
+            die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
+        if (count_saved) {
+            int count = 0;
+            bin_chkpt.read_scalar(count, "monitor point count");
+            if (count < 0) die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
+            if (count == param.monitor.num_points) {
+                double_vec positions(std::size_t(count)*NDIMS), weights;
+                int_vec elements;
+                bin_chkpt.read_array(positions, "monitor point positions");
+                if (elements_saved) {
+                    elements.resize(count);
+                    weights.resize(std::size_t(count)*NODES_PER_ELEM);
+                    bin_chkpt.read_array(elements, "monitor point elements");
+                    bin_chkpt.read_array(weights, "monitor point weights");
+                }
+                monitor_restore(var,positions,elements,weights);
+            }
+        }
     }
 
     // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
@@ -636,10 +690,34 @@ void restart(const Param& param, Variables& var)
         refresh_rsf_friction(param, var, *var.dyn_fric_coeff, *var.state_variable);
     }
 
-    // Preserve the saved next-step dt and velocity scale for PT. Recomputing
-    // here would select a different interval than uninterrupted execution,
-    // which selects dt at mesh/slow-update stages. Mass was rebuilt above.
-    if (param.control.use_global_velocity_scaling && !param.control.has_PT) {
+    bool dt_controls_changed = false;
+    const int control_fields = bin_chkpt.has_array("dt controls version") +
+                               bin_chkpt.has_array("dt controls");
+    if (control_fields) {
+        if (control_fields != 2)
+            die(EXIT_IO_RESTART, "Incomplete timestep controls in checkpoint.");
+        int version = 0;
+        bin_chkpt.read_scalar(version, "dt controls version");
+        if (version != 1)
+            die(EXIT_IO_RESTART, "Unsupported timestep-controls checkpoint version.");
+        const double_vec current = dt_controls(param);
+        double_vec saved(current.size());
+        bin_chkpt.read_array(saved, "dt controls");
+        if (saved.size() != current.size() ||
+            std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
+            die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
+        dt_controls_changed = saved != current;
+    } else {
+        // Older files identify the mechanical method through their clock schema.
+        dt_controls_changed = (!param.control.has_PT && bin_chkpt.has_array("PT output start time")) ||
+            (param.control.has_PT && bin_chkpt.has_array("output start time")) ||
+            (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
+    }
+
+    // Unchanged controls retain the saved next interval and velocity scale.
+    // Changed controls must use the same timestep/mass pair as a fresh stage.
+    if (dt_controls_changed ||
+        (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
@@ -986,24 +1064,23 @@ int main(int argc, const char* argv[])
     var.output->write_exact(var);
     monitor_initialize(param, var);
 
-    if (param.sim.is_restarting && param.control.has_PT && var.steps > 0 &&
+    if (param.sim.is_restarting && var.steps > 0 &&
         var.steps % param.mesh.quality_check_step_interval == 0)
         remesh_if_needed(param, var);
 
-    if (param.control.has_PT && !var.output_schedule_restored) {
+    if (!var.output_schedule_restored) {
         var.output_start_time = var.reference_frame_time;
         var.output_start_step = var.steps;
         var.output_next_regular_frame = 1;
     }
-    const double starting_time = param.control.has_PT ? var.output_start_time : var.reference_frame_time;
+    const double starting_time = var.output_start_time;
     // The disabled-time sentinel must not overflow into a PT checkpoint clock.
-    const double reference_interval_in_yr = param.control.has_PT &&
-        param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
+    const double reference_interval_in_yr = param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
         ? 0 : param.sim.output_time_interval_in_yr;
     var.reference_frame_time = starting_time + reference_interval_in_yr * YEAR2SEC;
-    const double starting_step = param.control.has_PT ? var.output_start_step : var.steps;
-    int next_regular_frame = param.control.has_PT ? var.output_next_regular_frame : 1;
-    if (param.control.has_PT && !param.control.use_global_velocity_scaling)
+    const double starting_step = var.output_start_step;
+    int next_regular_frame = var.output_next_regular_frame;
+    if (!param.control.use_global_velocity_scaling)
         var.reference_frame_time = starting_time +
             next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
@@ -1076,9 +1153,10 @@ int main(int argc, const char* argv[])
         if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
         if (param.control.has_moving_mesh)
             update_mesh(param, var);
-        else if (param.control.rsf_dtheta_max > 0.0) {
-            // Select the next step from the accepted velocity. The GVS mass
-            // must follow the same current rate used by the state bound.
+        else if (param.control.rsf_dtheta_max > 0.0 ||
+                 param.control.use_global_velocity_scaling) {
+            // A fixed mesh still needs the accepted velocity's GVS mass and
+            // timestep together; changing only dt leaves stale inertia.
             var.dt = compute_dt(param, var);
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
@@ -1133,7 +1211,7 @@ int main(int argc, const char* argv[])
                               starting_time, starting_step, next_regular_frame);
         } else {
             if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-               (var.steps - starting_step) == next_regular_frame * param.sim.output_step_interval)
+               (var.steps - starting_step) == static_cast<int64_t>(next_regular_frame) * param.sim.output_step_interval)
               ||
               (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
                (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
@@ -1146,8 +1224,7 @@ int main(int argc, const char* argv[])
             // When is_outputting_averaged_fields is turned on, the output cannot be
             // done at arbitrary time steps.
             ) {
-                if (param.control.has_PT)
-                    var.output_next_regular_frame = next_regular_frame + 1;
+                var.output_next_regular_frame = next_regular_frame + 1;
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
 

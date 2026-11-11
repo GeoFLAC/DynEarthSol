@@ -11,6 +11,7 @@
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
+#include "monitor.hpp"
 #include "output.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
@@ -275,6 +276,17 @@ void Output::_write(const Variables& var, bool disable_averaging)
     if (param_.control.has_PT && var.PT_force_residual_valid)
         bin.write_nodal_vec_array(*var.force_residual, "PT residual force", var.force_residual->size());
 
+    array_t displacement(var.nnode);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, displacement)
+#endif
+    #pragma acc parallel loop gang vector async
+    for (int n = 0; n < var.nnode; ++n)
+        for (int d = 0; d < NDIMS; ++d)
+            displacement[n][d] = (*var.coord)[n][d] - (*var.coord0)[n][d];
+    #pragma acc wait
+    bin.write_nodal_vec_array(displacement, "displacement", displacement.size());
+
     bin.write_array(*var.coord0, "coord0", var.coord0->size());
 
     bin.write_array(*var.bcflag, "bcflag", var.bcflag->size());
@@ -476,6 +488,20 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+    const double_vec controls = dt_controls(param);
+    bin.write_scalar(1, "dt controls version");
+    bin.write_aux_array(controls, "dt controls", controls.size());
+    {
+        double_vec positions, weights;
+        int_vec elements;
+        monitor_checkpoint(param,var,positions,elements,weights);
+        if (!positions.empty()) {
+            bin.write_scalar(param.monitor.num_points, "monitor point count");
+            bin.write_aux_array(positions, "monitor point positions", positions.size());
+            bin.write_aux_array(elements, "monitor point elements", elements.size());
+            bin.write_aux_array(weights, "monitor point weights", weights.size());
+        }
+    }
     if (param.control.has_hydraulic_diffusion)
         bin.write_array(*var.dppressure, "pending pore pressure increment", var.dppressure->size());
     if (param.control.has_PT) {
@@ -484,10 +510,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
             bin.write_scalar(static_cast<int>(var.PT_skip_scale_update), "PT skip scale update");
         }
         bin.write_scalar(static_cast<int>(var.initial_equilibrium_done), "initial equilibrium done");
-        bin.write_scalar(var.output_start_time, "PT output start time");
-        bin.write_scalar(var.output_start_step, "PT output start step");
-        bin.write_scalar(var.output_next_regular_frame, "PT next regular frame");
     }
+    bin.write_scalar(var.output_start_time, param.control.has_PT ? "PT output start time" : "output start time");
+    bin.write_scalar(var.output_start_step, param.control.has_PT ? "PT output start step" : "output start step");
+    bin.write_scalar(var.output_next_regular_frame, param.control.has_PT ? "PT next regular frame" : "next regular frame");
+    bin.write_scalar(param.sim.output_step_interval, "output step interval");
+    bin.write_scalar(param.sim.output_time_interval_in_yr, "output time interval");
     bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");
 
     bin.write_array(*var.segment, "segment", var.segment->size());

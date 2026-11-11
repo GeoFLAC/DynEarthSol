@@ -17,6 +17,12 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Material-following monitor points use `monitor.point_type` (`particle` or
+  `grid`), retain their exact checkpoint location, and preserve CSV histories
+  through restart. `monitor.remesh_output` selects before/both remesh rows;
+  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column.
+- Native and HDF5 frames include nodal `displacement = coordinate - coord0`.
+
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
@@ -72,6 +78,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   built from another `Dockerfile` or `ubuntu:22.04` ([#119]).
 
 ### Changed
+
+- **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
+  the material through deformation, remeshing and restart; delete the retired
+  key from existing inputs.
+- **Breaking.** Seismic moment uses element plastic-strain increments in N m
+  (N m/m in 2D, without Mw), replacing the velocity-based definition.
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -161,6 +173,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   Ubuntu 22.04, with gcc 11 or clang 14 ([#119]).
 
 ### Fixed
+
+- Explicit/GVS output cadence and pending remesh stages survive restart.
+  Changed timestep controls refresh timestep and mass together; fixed-mesh
+  GVS also refreshes both from the accepted velocity. Large output intervals
+  no longer overflow the regular frame-index product.
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
