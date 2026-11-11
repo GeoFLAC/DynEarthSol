@@ -12,6 +12,8 @@ endif
 $(TARGET): main.cxx $(ROOT)/earthquake_state.cxx $(ROOT)/matprops.cxx $(ROOT)/utils.cxx $(wildcard $(ROOT)/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) main.cxx $(ROOT)/matprops.cxx $(ROOT)/utils.cxx $(LDFLAGS) -o $@
 check: $(TARGET)
-	@task_dir=$$(mktemp -d); cd "$$task_dir" && OMP_NUM_THREADS=1 $(CURDIR)/$(TARGET)
+	@task_dir=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$task_dir"' EXIT; \
+	cd "$$task_dir" && OMP_NUM_THREADS=1 $(CURDIR)/$(TARGET)
 clean:
 	rm -f moment-2d moment-3d

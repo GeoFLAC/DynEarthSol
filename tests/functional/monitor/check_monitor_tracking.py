@@ -22,8 +22,7 @@ A third pair checks the rows written at remeshes (monitor.remesh_output = both,
 monitored every 4 steps): a row before each remesh between monitor steps, a row
 after every remesh with the remapped values, and a restart from a remesh step
 that reproduces the uninterrupted CSV row for row.
-Errors are in units of the mesh spacing h and of V. An executable without
-monitor.point_type runs the grid type only.
+Errors are in units of the mesh spacing h and of V.
 
     check_monitor_tracking.py EXECUTABLE OUTPUT [--tolerance 1e-6]
 """
@@ -72,7 +71,7 @@ def config(name, steps, point_type, restart_from=None, interval=1, remesh_output
                           points_x='[' + ','.join(repr(p[0]) for p in POINTS) + ']',
                           points_z='[' + ','.join(repr(p[1]) for p in POINTS) + ']',
                           output_prefix='monitor', output_coord='yes', output_velocity='yes')
-    if point_type: cfg['monitor']['point_type'] = point_type
+    cfg['monitor']['point_type'] = point_type
     if remesh_output: cfg['monitor']['remesh_output'] = remesh_output
     return cfg
 
@@ -141,7 +140,7 @@ def errors(folder, models, grid):
         worst_x = worst_v = 0.0; steps = []
         for row in rows(folder/f'monitor_point_{i}.csv'):
             step = int(row['step']); steps.append(step)
-            kind = int(row.get('row', 0))
+            kind = int(row['row'])
             position, velocity, node, node_velocity = (post if kind == 2 else ref)[step]
             ex, ev = (node, node_velocity) if grid else (position, velocity)
             got = (float(row['coord_x']), float(row['coord_z'])); vel = (float(row['velocity_x']), float(row['velocity_z']))
@@ -157,55 +156,52 @@ def main():
     p.add_argument('executable', type=Path); p.add_argument('output', type=Path)
     p.add_argument('--tolerance', type=float, default=1e-6)
     a = p.parse_args()
+    exe = a.executable.expanduser().resolve()
     out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
-    report = dict(executable=str(a.executable.resolve()), tolerance=a.tolerance, cases={})
-    known = subprocess.run([str(a.executable), '-h'], capture_output=True, text=True).stdout
-    types = ['particle', 'grid'] if '--monitor.point_type' in known else [None]
+    report = dict(executable=str(exe), tolerance=a.tolerance, cases={})
     restarts = []
-    for point_type in types:
-        label = point_type or 'grid'
-        folder = out/f'{label}-material'; folder.mkdir()
-        remeshes = run(a.executable, folder, 'box', config('box', STEPS, point_type))
-        report['cases'][f'{label}-material'] = dict(remesh_log_lines=remeshes, points=errors(
-            folder, [Dynearthsol(str(folder/'box'))], label == 'grid'))
-        folder = out/f'{label}-restart'; folder.mkdir(); half = STEPS//2
-        run(a.executable, folder, 'first', config('first', half, point_type))
-        run(a.executable, folder, 'second', config('second', STEPS, point_type, restart_from=('first', half)))
-        points = errors(folder, [Dynearthsol(str(folder/'first')), Dynearthsol(str(folder/'second'))], label == 'grid')
+    for point_type in ('particle', 'grid'):
+        folder = out/f'{point_type}-material'; folder.mkdir()
+        remeshes = run(exe, folder, 'box', config('box', STEPS, point_type))
+        report['cases'][f'{point_type}-material'] = dict(remesh_log_lines=remeshes, points=errors(
+            folder, [Dynearthsol(str(folder/'box'))], point_type == 'grid'))
+        folder = out/f'{point_type}-restart'; folder.mkdir(); half = STEPS//2
+        run(exe, folder, 'first', config('first', half, point_type))
+        run(exe, folder, 'second', config('second', STEPS, point_type, restart_from=('first', half)))
+        points = errors(folder, [Dynearthsol(str(folder/'first')), Dynearthsol(str(folder/'second'))], point_type == 'grid')
         for q in points: q['kept_rows_before_restart'] = q['first_step'] == 0 and q['rows'] >= STEPS + 1
-        report['cases'][f'{label}-restart'] = dict(points=points); restarts += points
+        report['cases'][f'{point_type}-restart'] = dict(points=points); restarts += points
     passed = all(q['position_error_over_h'] <= a.tolerance and q['velocity_error_over_V'] <= a.tolerance
                  for c in report['cases'].values() for q in c['points']) and \
              all(q['kept_rows_before_restart'] for q in restarts)
-    if '--monitor.remesh_output' in known:
-        folder = out/'remesh-rows-material'; folder.mkdir()
-        run(a.executable, folder, 'box', config('box', STEPS, 'particle', interval=4, remesh_output='both'))
-        model = Dynearthsol(str(folder/'box')); remeshes = remesh_steps(model)
-        points = errors(folder, [model], False)
-        kinds = {}
-        for r in rows(folder/'monitor_point_0.csv'):
-            kinds.setdefault(int(r['step']), []).append(int(r['row']))
-        regular_ok = all(k != 0 or s % 4 == 0 for s, ks in kinds.items() for k in ks)
-        before_ok = all((1 in kinds.get(s, [])) == (s % 4 != 0) for s in remeshes)
-        after_ok = all(kinds.get(s, [])[-1:] == [2] for s in remeshes)
-        start = next(s for s in remeshes if s >= STEPS//3 and s % 4)
-        folder = out/'remesh-rows-restart'; folder.mkdir()
-        run(a.executable, folder, 'first', config('first', start, 'particle', interval=4, remesh_output='both'))
-        run(a.executable, folder, 'second', config('second', STEPS, 'particle', restart_from=('first', start),
-                                                   interval=4, remesh_output='both'))
-        same = True
-        for i in range(len(POINTS)):
-            whole = rows(out/'remesh-rows-material'/f'monitor_point_{i}.csv')
-            resumed = rows(folder/f'monitor_point_{i}.csv')
-            keys = lambda rr: [(r['step'], r['row']) for r in rr]
-            same &= keys(whole) == keys(resumed) and all(
-                abs(float(u[c]) - float(w[c])) <= 1e-9*max(1.0, abs(float(w[c])))
-                for u, w in zip(resumed, whole) for c in w if c not in ('matched_node', 'matched_elem'))
-        report['remesh_rows'] = dict(remesh_steps=remeshes, restart_step=start, points=points,
-                                     regular_rows_on_interval=regular_ok, before_rows=before_ok,
-                                     after_rows=after_ok, restart_reproduces_csv=bool(same))
-        passed = passed and regular_ok and before_ok and after_ok and same and all(
-            q['position_error_over_h'] <= a.tolerance and q['velocity_error_over_V'] <= a.tolerance for q in points)
+    folder = out/'remesh-rows-material'; folder.mkdir()
+    run(exe, folder, 'box', config('box', STEPS, 'particle', interval=4, remesh_output='both'))
+    model = Dynearthsol(str(folder/'box')); remeshes = remesh_steps(model)
+    points = errors(folder, [model], False)
+    kinds = {}
+    for r in rows(folder/'monitor_point_0.csv'):
+        kinds.setdefault(int(r['step']), []).append(int(r['row']))
+    regular_ok = all(k != 0 or s % 4 == 0 for s, ks in kinds.items() for k in ks)
+    before_ok = all((1 in kinds.get(s, [])) == (s % 4 != 0) for s in remeshes)
+    after_ok = all(kinds.get(s, [])[-1:] == [2] for s in remeshes)
+    start = next(s for s in remeshes if s >= STEPS//3 and s % 4)
+    folder = out/'remesh-rows-restart'; folder.mkdir()
+    run(exe, folder, 'first', config('first', start, 'particle', interval=4, remesh_output='both'))
+    run(exe, folder, 'second', config('second', STEPS, 'particle', restart_from=('first', start),
+                                               interval=4, remesh_output='both'))
+    same = True
+    for i in range(len(POINTS)):
+        whole = rows(out/'remesh-rows-material'/f'monitor_point_{i}.csv')
+        resumed = rows(folder/f'monitor_point_{i}.csv')
+        keys = lambda rr: [(r['step'], r['row']) for r in rr]
+        same &= keys(whole) == keys(resumed) and all(
+            abs(float(u[c]) - float(w[c])) <= 1e-9*max(1.0, abs(float(w[c])))
+            for u, w in zip(resumed, whole) for c in w if c not in ('matched_node', 'matched_elem'))
+    report['remesh_rows'] = dict(remesh_steps=remeshes, restart_step=start, points=points,
+                                 regular_rows_on_interval=regular_ok, before_rows=before_ok,
+                                 after_rows=after_ok, restart_reproduces_csv=bool(same))
+    passed = passed and regular_ok and before_ok and after_ok and same and all(
+        q['position_error_over_h'] <= a.tolerance and q['velocity_error_over_V'] <= a.tolerance for q in points)
     report['passed'] = passed
     (out/'report.json').write_text(json.dumps(report, indent=1))
     for name, c in report['cases'].items():
@@ -213,14 +209,13 @@ def main():
             print(f"{name:16s} point {q['point']}: rows {q['rows']} (steps {q['first_step']}-{q['last_step']}), "
                   f"position {q['position_error_over_h']:.2e} h, velocity {q['velocity_error_over_V']:.2e} V"
                   + (f", earlier rows kept: {q['kept_rows_before_restart']}" if 'kept_rows_before_restart' in q else ''))
-    if 'remesh_rows' in report:
-        r = report['remesh_rows']
-        print(f"remesh rows: remeshes at {r['remesh_steps']}, restart at {r['restart_step']}; regular rows on interval "
-              f"{r['regular_rows_on_interval']}, before rows {r['before_rows']}, after rows {r['after_rows']}, "
-              f"restart reproduces CSV {r['restart_reproduces_csv']}")
-        for q in r['points']:
-            print(f"remesh-rows      point {q['point']}: position {q['position_error_over_h']:.2e} h, "
-                  f"velocity {q['velocity_error_over_V']:.2e} V")
+    r = report['remesh_rows']
+    print(f"remesh rows: remeshes at {r['remesh_steps']}, restart at {r['restart_step']}; regular rows on interval "
+          f"{r['regular_rows_on_interval']}, before rows {r['before_rows']}, after rows {r['after_rows']}, "
+          f"restart reproduces CSV {r['restart_reproduces_csv']}")
+    for q in r['points']:
+        print(f"remesh-rows      point {q['point']}: position {q['position_error_over_h']:.2e} h, "
+              f"velocity {q['velocity_error_over_V']:.2e} V")
     print('PASSED' if passed else 'FAILED')
     sys.exit(0 if passed else 1)
 

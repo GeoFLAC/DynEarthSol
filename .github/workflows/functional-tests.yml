@@ -86,7 +86,7 @@ jobs:
         done
         python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol2d --threads 1
         python3 monitor_restart/check_state.py ../../dynearthsol2d monitor-state-2d
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 monitor/check_monitor_tracking.py "$PWD/../../dynearthsol2d" monitor-tracking-2d
+        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 monitor/check_monitor_tracking.py ../../dynearthsol2d monitor-tracking-2d
         OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 check_restart_dt.py ../../dynearthsol2d restart-dt-2d
 
     - name: test 2d seismic moment
