@@ -81,3 +81,26 @@ running-scale elastic example, steps 2/3 must be accepted without relaxation
 updates. `../functional/pt_maxwell_creep.py` checks continued traction-driven
 Maxwell creep for 100 steps against a homogeneous discrete reference. Commands
 and the meaning of candidate evaluations are in `../../doc/pt-solver.md`.
+
+Mohr-Coulomb checks prescribe plastic increments and reconstruct elastic trial
+stresses from final stresses on a single face or either edge. Positive and
+negative cohesion slopes, dilation angles 0/30 degrees, and equal/unequal edge
+multipliers must return to those targets. Rebuilding strength from the recorded
+plastic history and applying a second zero-strain step must preserve yield and
+history. Plane-strain cases cover tensile clipping and states at and on either
+side of the tensile cap. These are local 3D and plane-strain tests within a linear cohesion segment,
+with fixed friction/dilation. The pure 2D, two-principal-stress formulation is
+separate; general apex and fully coupled shear/tension evolution are not qualified.
+
+`check.sh` also runs a strongly softening case in a separate process. An
+inadmissible return must report its diagnostic and exit with status 54 on every
+test backend; an out-of-order candidate must not continue silently. The material
+kernel completes before the host checks this return status.
+
+For a fixed friction angle, the return uses `H = 2*sqrt(Nphi)*dc/d(plstrain)`.
+Its strength increment is `H*depls`, using exactly the increment stored in history.
+On an edge, isotropic elasticity fixes the difference `d` of the two face
+multipliers. Their sum `s` satisfies `E*s + H*depls(s,d) = R`. The recorded
+plane-strain measure is piecewise linear in `s,d`; the 3D measure has
+`depls^2 = A*s^2 + B*d^2`. The return solves that scalar consistency equation,
+then checks multiplier signs, stress ordering, tensile bounds and yield.

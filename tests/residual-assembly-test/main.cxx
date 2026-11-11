@@ -498,11 +498,23 @@ static void test_constraints() {
 }
 
 
-static void test_material_trials() {
+static void test_material_trials(bool rejected_case=false) {
     std::printf("[PT material pressure and repeated trials]\n");
+    const auto plastic_increment = [](const double plastic[3]) {
+#ifdef THREED
+        const double mean=(plastic[0]+plastic[1]+plastic[2])/3;
+        double squared=mean*mean;
+        for(int k=0;k<3;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
+        return std::sqrt(squared/2);
+#else
+        return 0.5*(std::max(plastic[0],std::max(plastic[1],plastic[2]))-
+                    std::min(plastic[0],std::min(plastic[1],plastic[2])));
+#endif
+    };
     for (int model : {MatProps::rh_elastic, MatProps::rh_maxwell, MatProps::rh_viscous,
                       MatProps::rh_ep, MatProps::rh_evp}) {
         for (double alpha : {0.,0.6,1.}) {
+            if(rejected_case && (model!=MatProps::rh_ep || alpha!=0)) continue;
             Fixture* m = new Fixture();
             build_mesh(*m);
             const int ne=m->var.nelem, nn=m->var.nnode;
@@ -544,6 +556,23 @@ static void test_material_trials() {
             m->var.mat=new MatProps(m->param,m->var);
             auto* baseline=new MechanicalState(ne);
             baseline->capture(m->var);
+            if(rejected_case) {
+                p.bulk_modulus={65e9/3}; p.shear_modulus={1e10};
+                p.pls0={0}; p.pls1={1e-8}; p.cohesion0={1e5}; p.cohesion1={9e4};
+                p.friction_angle0=p.friction_angle1={30};
+                p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e9;
+                delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
+                m->param.control.has_hydraulic_diffusion=false;
+                const double trial[3]={-1e6,-1e6,-1e5};
+                for(int e=0;e<ne;++e) {
+                    for(int d=0;d<NDIMS;++d) m->stress[e][d]=trial[d];
+                    for(int d=NDIMS;d<NSTR;++d) m->stress[e][d]=0;
+                    (*yy)[e]=trial[2];
+                }
+                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                return; // The caller requires status 54, not successful continuation.
+            }
             if (model==MatProps::rh_elastic || model==MatProps::rh_ep) {
                 update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
                               m->strain_rate,m->pressure,m->pressure_increment,m->vel,
@@ -773,14 +802,8 @@ static void test_material_trials() {
                         const double volume = (2*(base-target_base)+unique-target_unique)/(65e9);
                         const double plastic_base=(base-target_base-15e9*volume)/2e10;
                         const double plastic_unique=(unique-target_unique-15e9*volume)/2e10;
-                        double increment;
-#ifdef THREED
-                        const double mean=(2*plastic_base+plastic_unique)/3;
-                        increment=std::sqrt((2*(plastic_base-mean)*(plastic_base-mean)+
-                            (plastic_unique-mean)*(plastic_unique-mean)+mean*mean)/2);
-#else
-                        increment=0.5*std::fabs(plastic_base-plastic_unique);
-#endif
+                        const double plastic[3]={plastic_base,plastic_base,plastic_unique};
+                        const double increment=plastic_increment(plastic);
                         for(int e=0;e<ne;++e) {
                             for(int d=0;d<NDIMS;++d)
                                 check("MC edge normal stress",m->stress[e][d],
@@ -799,21 +822,14 @@ static void test_material_trials() {
                 }
                 // The elastic trial exceeds c/tan(phi), but its admissible
                 // associated shear return lies below it; no tensile flow.
+                p.dilation_angle0=p.dilation_angle1={30};
+                delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
                 const double trial[3]={169e3,185e3,200e3};
                 const double target[3]={165347.65655963385,170585.93935780309,170585.93935780309};
                 const double volume=(trial[0]+trial[1]+trial[2]-target[0]-target[1]-target[2])/65e9;
                 double plastic[3];
                 for(int k=0;k<3;++k) plastic[k]=(trial[k]-target[k]-15e9*volume)/2e10;
-                double increment;
-#ifdef THREED
-                const double mean=(plastic[0]+plastic[1]+plastic[2])/3;
-                double squared=mean*mean;
-                for(int k=0;k<3;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
-                increment=std::sqrt(squared/2);
-#else
-                increment=0.5*(std::max(plastic[0],std::max(plastic[1],plastic[2]))-
-                               std::min(plastic[0],std::min(plastic[1],plastic[2])));
-#endif
+                const double increment=plastic_increment(plastic);
                 for(int e=0;e<ne;++e) {
                     for(int d=0;d<NDIMS;++d) m->stress[e][d]=trial[d];
                     for(int d=NDIMS;d<NSTR;++d) m->stress[e][d]=0;
@@ -832,7 +848,114 @@ static void test_material_trials() {
                     check("uncut shear yy",(*yy)[e],target[2]);
 #endif
                 }
+                // Reconstruct trial stresses from prescribed plastic flow and
+                // final stresses on yield, then rebuild strength from the stored
+                // history and check a second, unloaded constitutive update.
+                p.bulk_modulus={65e9/3}; p.shear_modulus={1e10};
+                p.pls0={0}; p.pls1={1e-4};
+                p.cohesion0={1e5};
+                p.friction_angle0=p.friction_angle1={30}; p.tension_max=1e9;
+                m->param.control.has_hydraulic_diffusion=false;
+                for(int e=0;e<ne;++e) for(int d=0;d<NSTR;++d) m->strain_rate[e][d]=0;
+                div->assign(ne,0.);
+                for(double slope : {-5e8,2e9}) for(int dilation : {0,30}) {
+                    p.cohesion1={1e5+slope*1e-4};
+                    p.dilation_angle0=p.dilation_angle1={double(dilation)};
+                    delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
+                    double amc,anphi,anpsi,hardn,tenmax;
+                    m->var.mat->plastic_props(0,0,amc,anphi,anpsi,hardn,tenmax);
+                    check("MC nonzero cohesion slope",hardn,slope);
+                    const double psi=dilation==0 ? 1. : 3.;
+                    // face=0 is a single face; 1/2 repeat the low/high stress.
+                    for(int face=0;face<3;++face) for(double ratio : {1.,2.}) {
+                        if(face==0 && ratio!=1) continue;
+                        const double first=1e-6, second=ratio*first;
+                        double plastic[3]={-first,0,psi*first};
+                        if(face==1) { plastic[1]=-second; plastic[2]=psi*(first+second); }
+                        if(face==2) { plastic[0]=-(first+second); plastic[1]=psi*second; }
+                        const double increment=plastic_increment(plastic);
+                        const double strength=2*std::sqrt(3.)*(1e5+slope*increment);
+                        double target[3]={3*(-2e5)-strength,0,-2e5};
+                        target[1]=face==1 ? target[0] : face==2 ? target[2] : 0.5*(target[0]+target[2]);
+                        const double volume=plastic[0]+plastic[1]+plastic[2];
+                        double trial[3];
+                        for(int k=0;k<3;++k) trial[k]=target[k]+2e10*plastic[k]+15e9*volume;
+                        for(int e=0;e<ne;++e) {
+                            for(int d=0;d<NDIMS;++d) m->stress[e][d]=trial[d];
+                            for(int d=NDIMS;d<NSTR;++d) m->stress[e][d]=0;
+                            (*yy)[e]=trial[2];
+                            (*pls)[e]=(*dpls)[e]=0;
+                        }
+                        update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                                      m->strain_rate,m->pressure,m->pressure_increment,m->vel,
+                                      *friction,*state,true);
+                        #pragma acc wait
+                        for(int e=0;e<ne;++e) {
+                            for(int d=0;d<NDIMS;++d)
+                                check("MC tangent normal stress",m->stress[e][d],target[d]);
+                            for(int d=NDIMS;d<NSTR;++d) check("MC tangent has no rotation",m->stress[e][d],0);
+#ifndef THREED
+                            check("MC tangent plane-strain yy",(*yy)[e],target[2]);
+#endif
+                            check("MC tangent plastic history",(*pls)[e],increment);
+                            check("MC tangent plastic increment",(*dpls)[e],increment);
+                            check("MC tangent stays in linear strength range",(*pls)[e]<1e-4,1);
+                        }
+                        double new_amc,new_phi,new_psi,new_slope,new_cap;
+                        m->var.mat->plastic_props(0,(*pls)[0],new_amc,new_phi,new_psi,new_slope,new_cap);
+                        const double high=NDIMS==2 ? (*yy)[0] : m->stress[0][2];
+                        check("MC stored history reproduces yield",m->stress[0][0]-new_phi*high+new_amc,0);
+                        update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                                      m->strain_rate,m->pressure,m->pressure_increment,m->vel,
+                                      *friction,*state,true);
+                        #pragma acc wait
+                        for(int e=0;e<ne;++e) {
+                            for(int d=0;d<NDIMS;++d)
+                                check("MC unloaded stress stays on yield",m->stress[e][d],target[d]);
+#ifndef THREED
+                            check("MC unloaded plane-strain yy",(*yy)[e],target[2]);
+#endif
+                            check("MC unloaded plastic history",(*pls)[e],increment);
+                            check("MC unloaded plastic increment",(*dpls)[e],0);
+                        }
+                    }
+                }
             }
+#ifndef THREED
+            if (model == MatProps::rh_ep && alpha == 0) {
+                p.pls0={0}; p.pls1={1}; p.cohesion0=p.cohesion1={1e5};
+                p.friction_angle0=p.friction_angle1={30};
+                p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=0;
+                delete m->var.mat; m->var.mat=new MatProps(m->param,m->var);
+                m->param.control.has_hydraulic_diffusion=false;
+                // After clipping, trace is conserved by zero-dilation shear flow;
+                // p0 = 3*p2 - 2*c*sqrt(3) and p1=p2 fix the returned edge.
+                const double cases[][3]={{-1e6,2e6,2e6},{-1e6,-1e4,2e6},
+                    {-1e6,-1e4,0},{-1e6,-1e4,-1e-6},{-1e6,-1e4,1e-6}};
+                for(const auto& trial : cases) {
+                    const double uncut=trial[0]+trial[1]+trial[2];
+                    const double clipped=trial[0]+std::min(trial[1],0.)+std::min(trial[2],0.);
+                    const double total=(uncut+2e5*std::sqrt(3.))/5<=0 ? uncut : clipped;
+                    const double upper=(total+2e5*std::sqrt(3.))/5;
+                    const double target[3]={3*upper-2e5*std::sqrt(3.),upper,upper};
+                    for(int e=0;e<ne;++e) {
+                        m->stress[e][0]=trial[0]; m->stress[e][1]=trial[1]; m->stress[e][2]=0;
+                        (*yy)[e]=trial[2]; (*pls)[e]=(*dpls)[e]=0;
+                    }
+                    update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                                  m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
+                    #pragma acc wait
+                    for(int e=0;e<ne;++e) {
+                        check("MC clipped edge xx",m->stress[e][0],target[0]);
+                        check("MC clipped edge zz",m->stress[e][1],target[1]);
+                        check("MC clipped edge yy",(*yy)[e],target[2]);
+                        check("MC clipped edge ordering",m->stress[e][0]<=m->stress[e][1] &&
+                              m->stress[e][1]<=(*yy)[e]+1e-9,1);
+                        check("MC clipped edge yield",m->stress[e][0]-3*(*yy)[e]+2e5*std::sqrt(3.),0);
+                    }
+                }
+            }
+#endif
             delete baseline; delete m->var.mat;
             delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
             delete friction; delete state; delete div; delete m;
@@ -925,7 +1048,11 @@ static void test_darcy_gravity_limit() {
     delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if(argc==2 && std::strcmp(argv[1],"--reject-mc-return")==0) {
+        test_material_trials(true);
+        return 1;
+    }
     test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();

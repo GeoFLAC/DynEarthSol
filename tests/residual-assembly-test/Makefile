@@ -39,7 +39,7 @@ $(ROOT)/3x3-C/lib3x3.a: $(wildcard $(ROOT)/3x3-C/*.c $(ROOT)/3x3-C/*.h)
 $(TARGET): $(SOURCES) $(HEADERS) $(ROOT)/3x3-C/lib3x3.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) $(ROOT)/3x3-C/lib3x3.a -o $@
 check: $(TARGET)
-	./$(TARGET)
+	sh check.sh ./$(TARGET)
 endif
 clean:
 	rm -f residual-2d-* residual-3d-* driver.*.o des-main.*.o

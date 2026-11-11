@@ -253,10 +253,14 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - Plane-strain and 3D Mohr-Coulomb shear returns preserve principal-stress
   ordering by returning two active faces to their common edge, including the
-  combined plastic-strain increment.
+  combined plastic-strain increment. Strain-dependent cohesion uses that same
+  increment in the return and stored history, including the yield-intercept
+  conversion for plane strain ([#136]).
 - An admissible shear return is evaluated before tensile clipping when the
-  elastic predictor exceeds the tensile cap. Constant-strength material
-  checks cover both changes; general apex and combined returns remain separate.
+  elastic predictor reaches the tensile cap; edge returns also apply after
+  plane-strain tensile clipping. Rejected returns stop with exit status 54
+  instead of storing an inadmissible stress. General apex and combined-return
+  qualification remains separate ([#136]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -431,3 +435,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+
+[#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
