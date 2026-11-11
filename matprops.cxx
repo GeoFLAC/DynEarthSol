@@ -221,6 +221,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     friction_angle1 = p.mat.friction_angle1;
     dilation_angle0 = p.mat.dilation_angle0;
     dilation_angle1 = p.mat.dilation_angle1;
+    relaxation_time = p.mat.relaxation_time;
 
     // Hydraulic parameters
     porosity = p.mat.porosity;
@@ -315,7 +316,7 @@ MatProps::~MatProps()
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume)
     #pragma acc exit data delete(heat_capacity,therm_cond,pls0,pls1,cohesion0)
-    #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
+    #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1,relaxation_time)
 
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
@@ -781,4 +782,9 @@ double MatProps::c_v(int e) const
 double MatProps::d_c(int e) const
 {
     return arithmetic_mean(characteristic_distance, elemmarkers[e]);
+}
+
+double MatProps::tau_dl(int e) const
+{
+    return arithmetic_mean(relaxation_time, elemmarkers[e]);
 }

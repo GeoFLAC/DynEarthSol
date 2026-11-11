@@ -568,6 +568,13 @@ static void declare_parameters(po::options_description &cfg,
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", po::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+        ("control.has_duvaut_lions", po::value<bool>(&p.control.has_duvaut_lions)->default_value(false),
+         "Duvaut-Lions viscoplastic regularization of the plastic return map (rh_ep, and the plastic "
+         "candidate of rh_evp). Each step the stress becomes (1-w)*elastic trial + w*rate-independent "
+         "return, and the plastic-strain increment is scaled by w, with w = dt/(tau+dt) and tau = "
+         "mat.relaxation_time. The overstress relaxes over tau, which gives the shear band a finite "
+         "width set by tau and the loading rate instead of by the element size. tau = 0 is the "
+         "rate-independent return, bit for bit.\n")
 
         ("control.has_hydration_processes", po::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -1193,6 +1200,10 @@ static void declare_parameters(po::options_description &cfg,
          "Nonlocal weight m of nonlocal_option 1, >= 1: weakening reads m*kbar + (1-m)*k. 1 is the "
          "plain nonlocal average; slightly above 1 is the over-nonlocal form (Vermeer & Brinkgreve "
          "1994), which helps a strongly softening band localize fully.")
+
+        ("mat.relaxation_time", po::value<std::string>()->default_value("[0]"),
+         "Duvaut-Lions relaxation time tau of the materials '[d0, d1, d2, ...]' (in seconds), used "
+         "with control.has_duvaut_lions. tau = eta/G relates it to a viscosity eta for shear modulus G.")
 
         ("mat.porosity", po::value<std::string>()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
@@ -2109,6 +2120,15 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         get_numbers(vm, "mat.friction_angle1", p.mat.friction_angle1, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.dilation_angle0", p.mat.dilation_angle0, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.dilation_angle1", p.mat.dilation_angle1, p.mat.nmat, nmat_key, true);
+
+        get_numbers(vm, "mat.relaxation_time", p.mat.relaxation_time, p.mat.nmat, nmat_key, true);
+        for (double tau : p.mat.relaxation_time)
+            if (!(tau >= 0))
+                die(EXIT_CONFIG_VALUE, "mat.relaxation_time must be >= 0.");
+        if (p.control.has_duvaut_lions &&
+            p.mat.rheol_type != MatProps::rh_ep && p.mat.rheol_type != MatProps::rh_evp)
+            die(EXIT_CONFIG_VALUE, "control.has_duvaut_lions needs rheology_type elasto-plastic "
+                "or elasto-visco-plastic (the rate-and-state types are not supported).");
 
         if (p.mat.nonlocal_option < 0 || p.mat.nonlocal_option > 1)
             die(EXIT_CONFIG_VALUE, "mat.nonlocal_option must be 0 or 1.");

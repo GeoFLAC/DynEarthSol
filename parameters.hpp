@@ -259,6 +259,7 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_duvaut_lions;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -504,6 +505,9 @@ struct Mat {
     int nonlocal_option;
     double nonlocal_length;
     double nonlocal_m;
+
+    // Duvaut-Lions viscoplastic regularization (control.has_duvaut_lions), in seconds
+    double_vec relaxation_time;
 
     // hydraulic parameters
     double_vec porosity;

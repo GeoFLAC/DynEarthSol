@@ -809,6 +809,58 @@ static void elasto_plastic2d(double bulkm, double shearm,
     }
 }
 
+#pragma acc routine seq
+template <typename T>
+static void plastic_candidate(bool is_plane_strain, double w,
+                              double bulkm, double shearm,
+                              double amc, double anphi, double anpsi,
+                              double hardn, double ten_max,
+                              const double* de, double& depls, T s, double& syy,
+                              int& failure_mode, bool has_hydraulic_diffusion,
+                              double& dpp)
+{
+    /* The plastic stress of rh_ep and rh_evp: the rate-independent return of
+     * elasto_plastic{,2d}(), relaxed by Duvaut-Lions viscoplasticity when w < 1.
+     *
+     * Backward Euler on dsigma/dt = -(sigma - sigma_RI)/tau gives
+     *   sigma = (1-w) sigma_trial + w sigma_RI,   w = dt/(tau+dt),
+     * and the plastic-strain increment is scaled by the same w. w = 1 (flag off or
+     * tau = 0) calls the return map alone and is bit-identical to it. */
+    if (w >= 1) {
+        if (is_plane_strain)
+            elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                             de, depls, s, syy, failure_mode,
+                             has_hydraulic_diffusion, dpp);
+        else
+            elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                           de, depls, s, failure_mode,
+                           has_hydraulic_diffusion, dpp);
+        return;
+    }
+
+    // elastic trial: the same stress elasto_plastic{,2d}() start their return from
+    double st[NSTR];
+    for (int i=0; i<NSTR; ++i) st[i] = s[i];
+    double styy = syy;
+    if (has_hydraulic_diffusion)
+        elastic_effective(bulkm, shearm, de, st, dpp, styy);
+    else
+        elastic(bulkm, shearm, de, st, styy);
+
+    if (is_plane_strain)
+        elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                         de, depls, s, syy, failure_mode,
+                         has_hydraulic_diffusion, dpp);
+    else
+        elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                       de, depls, s, failure_mode,
+                       has_hydraulic_diffusion, dpp);
+
+    for (int i=0; i<NSTR; ++i) s[i] = (1 - w) * st[i] + w * s[i];
+    if (is_plane_strain) syy = (1 - w) * styy + w * syy;
+    depls *= w;
+}
+
 void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& stressyy, double_vec& dpressure, double_vec& viscosity,
                    tensor_t& strain, double_vec& plstrain,
@@ -822,6 +874,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
     // Loop-invariant, so the per-element gathers they gate are decided once.
     const bool has_hydraulic_diffusion = param.control.has_hydraulic_diffusion;
+    // control.has_duvaut_lions: the plastic return of rh_ep / rh_evp relaxes over
+    // mat.relaxation_time, w = dt/(tau+dt) (plastic_candidate()).
+    const bool has_dl = param.control.has_duvaut_lions && var.dt > 0;
+    const double dt_dl = var.dt;
     // mat.nonlocal_option: weakening reads khat = m*kbar + (1-m)*k (nonlocal.hpp). kbar is
     // lagged by one step, so only the local term moves the yield surface within the step and
     // the softening modulus is scaled by (1 - m).
@@ -842,7 +898,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, \
-                     needs_projected_velocity, pls_nl, nl_m, nl_hfac)
+                     needs_projected_velocity, pls_nl, nl_m, nl_hfac, has_dl, dt_dl)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -993,16 +1049,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                        amc, anphi, anpsi, hardn, ten_max);
                 if (pls_nl) hardn *= nl_hfac;
                 int failure_mode;
-                if (var.mat->is_plane_strain) {
-                    elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
-                }
-                else {
-                    elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
-                }
+                const double w = has_dl ? dt_dl / (var.mat->tau_dl(e) + dt_dl) : 1.0;
+                plastic_candidate(var.mat->is_plane_strain, w,
+                                  bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                  de, depls, s, syy, failure_mode,
+                                  has_hydraulic_diffusion, dpp);
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
             }
@@ -1030,17 +1081,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sp[i] = s[i];
                 int failure_mode;
-                if (var.mat->is_plane_strain) {
-                    spyy = syy;
-                    elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                     de, depls, sp, spyy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
-                }
-                else {
-                    elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
-                                   de, depls, sp, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
-                }
+                spyy = syy;
+                const double w = has_dl ? dt_dl / (var.mat->tau_dl(e) + dt_dl) : 1.0;
+                plastic_candidate(var.mat->is_plane_strain, w,
+                                  bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
+                                  de, depls, sp, spyy, failure_mode,
+                                  has_hydraulic_diffusion, dpp);
                 double spII = second_invariant2(sp);
 
                 // use the smaller as the final stress

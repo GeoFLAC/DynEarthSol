@@ -59,6 +59,10 @@ public:
     #pragma acc routine seq
     double d_c(int e) const;
 
+    // Duvaut-Lions relaxation time (control.has_duvaut_lions), marker-weighted
+    #pragma acc routine seq
+    double tau_dl(int e) const;
+
     #pragma acc routine seq
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
@@ -132,6 +136,7 @@ private:
     double_vec cohesion0, cohesion1;
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
+    double_vec relaxation_time;
 
     // hydraulic process
     const double_vec &ppressure;
