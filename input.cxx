@@ -1203,7 +1203,21 @@ static void declare_parameters(po::options_description &cfg,
 
         ("mat.relaxation_time", po::value<std::string>()->default_value("[0]"),
          "Duvaut-Lions relaxation time tau of the materials '[d0, d1, d2, ...]' (in seconds), used "
-         "with control.has_duvaut_lions. tau = eta/G relates it to a viscosity eta for shear modulus G.")
+         "with control.has_duvaut_lions. tau = eta/G relates it to a viscosity eta for shear modulus G.\n"
+         "tau sets a physical shear-band width W; the band stops depending on the mesh once about 5 "
+         "elements span it (below about 3 it follows the mesh). To choose tau and the mesh: "
+         "(1) pick a target width W and set tau ~ W*dc/(G*V), with dc the strength lost by softening "
+         "(cohesion0 - cohesion1), G the shear modulus and V the fault slip rate (an estimate calibrated "
+         "on examples/core-complex-dl.cfg, where tau = 3.3e8 s gives W ~ 1.15 km); "
+         "(2) give elements of about W/5 to every place where a fault may start: a refined zone "
+         "(mesh.meshing_option 2) around the initial weak zone, so the band forms on fine elements "
+         "from t = 0, plus MMG plastic-strain refinement (mesh.mmg_metric_refine_coeff, e.g. 100) to "
+         "follow faults as they grow. The refinement acts only after plastic strain builds up, so it "
+         "does not replace the zone: on that example faults that start on the coarse elements "
+         "outside it do not form by 50 kyr; (3) stop the refinement at W/5: its floor is "
+         "sqrt(mesh.smallest_size) * mesh.mmg_remesh_defensive_tiny_ratio * mesh.resolution. A floor "
+         "of W/5 and one of W/7 give widths within 3 %; finer elements only shrink the time step. "
+         "A larger tau costs overstress (12-19 MPa on that example).")
 
         ("mat.porosity", po::value<std::string>()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
