@@ -228,6 +228,8 @@ struct Control {
     double fixed_dt;
     double damping_factor;
     int damping_option;
+    double highpass_damping_alpha;
+    double highpass_damping_time;
     int ref_pressure_option;
     bool is_using_mixed_stress;
 
@@ -948,6 +950,8 @@ struct Variables {
 #endif
 
     array_t *vel, *force, *coord0;
+    array_t *vel_mean = nullptr;  // running mean of vel for control.highpass_damping_*; null when off
+    bool vel_mean_from_chkpt = false;  // restored at a restart: do not reset it to vel
     array_t *force_residual;
     // Accepted PT diagnostic in force_residual; invalid after buffer reallocation
     // or before acceptance. It is not constitutive/restart history.
