@@ -476,6 +476,10 @@ void restart(const Param& param, Variables& var)
         // a checkpoint from a run without the damping has none: the mean then starts from vel
         if (var.vel_mean && bin_chkpt.has_array("vel_mean")) {
             bin_chkpt.read_array(*var.vel_mean, "vel_mean");
+            if (bin_chkpt.has_array("highpass_alpha")) {  // else init_highpass_damping derives them
+                bin_chkpt.read_scalar(var.highpass_alpha, "highpass_alpha");
+                bin_chkpt.read_scalar(var.highpass_time, "highpass_time");
+            }
             var.vel_mean_from_chkpt = true;
         }
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
@@ -1015,7 +1019,7 @@ int main(int argc, const char* argv[])
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
-    reset_highpass_damping(var);
+    init_highpass_damping(param, var);
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "
               << param.sim.info_display_step_interval

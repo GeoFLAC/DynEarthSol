@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <iostream>
 
 #include "constants.hpp"
@@ -67,7 +68,7 @@ void allocate_variables(const Param &param, Variables& var)
     var.force = new array_t(n, 0);
     var.force_residual = new array_t(n, 0);
     if (param.control.has_PT) var.PT_force_residual_valid = false;
-    var.vel_mean = (param.control.highpass_damping_alpha > 0) ? new array_t(n, 0) : nullptr;
+    var.vel_mean = param.control.has_highpass_damping ? new array_t(n, 0) : nullptr;
 
     var.strain_rate = new tensor_t(e, 0);
 
@@ -550,8 +551,8 @@ static void apply_highpass_damping(const Param& param, const Variables& var, arr
 {
     if (!var.vel_mean) return;
     const double dt = var.dt;
-    const double cf = -std::expm1(-param.control.highpass_damping_alpha * dt) / dt;
-    const double w = -std::expm1(-dt / param.control.highpass_damping_time);
+    const double cf = -std::expm1(-var.highpass_alpha * dt) / dt;
+    const double w = -std::expm1(-dt / var.highpass_time);
     array_t& vm = *var.vel_mean;
     if ((int)vm.size() != var.nnode) {  // safety net; remeshing interpolates vel_mean
         vm.resize(var.nnode, false);
@@ -572,9 +573,34 @@ static void apply_highpass_damping(const Param& param, const Variables& var, arr
 }
 
 
-void reset_highpass_damping(Variables& var)
+void init_highpass_damping(const Param& param, Variables& var)
 {
-    if (!var.vel_mean || var.vel_mean_from_chkpt) return;
+    if (!var.vel_mean) return;
+    if (!var.vel_mean_from_chkpt || var.highpass_alpha <= 0) {
+        // derived values are fixed at the start of a run (a restart reads them back), so they
+        // do not drift with the domain
+        double L = 0;
+        for (int d=0; d<NDIMS; d++) {
+            double lo = (*var.coord)[0][d], hi = lo;
+            for (int i=1; i<var.nnode; ++i) {
+                lo = std::min(lo, (*var.coord)[i][d]);
+                hi = std::max(hi, (*var.coord)[i][d]);
+            }
+            L = std::max(L, hi - lo);
+        }
+        const double c = var.max_vbc_val * param.control.inertial_scaling;
+        if ((param.control.highpass_damping_alpha == 0 || param.control.highpass_damping_time == 0) && !(c > 0)) {
+            std::cerr << "Error: control.has_highpass_damping cannot derive its defaults: no boundary velocity.\n"
+                         "Set control.characteristic_speed, or control.highpass_damping_alpha and _time.\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+        var.highpass_alpha = param.control.highpass_damping_alpha > 0 ? param.control.highpass_damping_alpha : 50 * c / L;
+        var.highpass_time = param.control.highpass_damping_time > 0 ? param.control.highpass_damping_time : 10 * L / c;
+        std::printf("  High-pass damping: alpha = %.3g 1/s, T_f = %.3g s (c = %.3g m/s, L = %.3g m)\n",
+                    var.highpass_alpha, var.highpass_time, c, L);
+        std::fflush(stdout);
+    }
+    if (var.vel_mean_from_chkpt) return;
     var.vel_mean->resize(var.nnode, false);
     for (int i=0; i<var.nnode; ++i)
         for (int j=0; j<NDIMS; j++)

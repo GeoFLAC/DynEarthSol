@@ -494,17 +494,26 @@ static void declare_parameters(opt::Registry &cfg,
          "4: Rayleigh damping.\n")
         ("control.damping_factor", opt::value<double>(&p.control.damping_factor)->default_value(0.8),
          "A factor for force damping (0-1)")
-        ("control.highpass_damping_alpha", opt::value<double>(&p.control.highpass_damping_alpha)->default_value(0),
-         "Mass-proportional damping of the fluctuating velocity (in 1/s). Adds the nodal force\n"
+        ("control.has_highpass_damping", opt::value<bool>(&p.control.has_highpass_damping)->default_value(false),
+         "Damp the fluctuating part of the velocity? Adds the nodal force\n"
          "-alpha * mass * (vel - vel_mean), where vel_mean is a running mean of the velocity over\n"
-         "control.highpass_damping_time. Motion steadier than that time (creep, steady fault slip,\n"
-         "rigid rotation) is not damped; faster fluctuations of P and S waves are, with damping\n"
-         "ratio alpha/(2*omega). Acts on top of control.damping_option. 0: off.\n")
-        ("control.highpass_damping_time", opt::value<double>(&p.control.highpass_damping_time)->default_value(3.15e9),
-         "Averaging time of vel_mean for control.highpass_damping_alpha (in seconds). Choose it\n"
-         "longer than the wave and burst periods (mass-scaled) and much shorter than the run.\n"
-         "vel_mean starts from the velocity at the start of a run, is interpolated through\n"
-         "remeshing like vel and is checkpointed, so a restart continues it.\n")
+         "a time T_f. Motion steadier than T_f (creep, steady fault slip, rigid rotation) is not\n"
+         "damped; faster fluctuations, the elastic P and S waves of the mass-scaled solver, are,\n"
+         "with damping ratio alpha/(2*omega). It removes the strain-rate noise radiated by\n"
+         "slipping faults, at no cost in dt. Acts on top of control.damping_option. It adds no\n"
+         "length scale, so it does not make shear bands mesh-independent. Needs\n"
+         "control.is_quasi_static and not control.has_PT. vel_mean is interpolated\n"
+         "through remeshing like vel and is checkpointed.\n")
+        ("control.highpass_damping_alpha", opt::value<double>(&p.control.highpass_damping_alpha)->default_value(0),
+         "alpha of control.has_highpass_damping (in 1/s). 0: 50 * c / L, where\n"
+         "c = max boundary velocity (or control.characteristic_speed) * control.inertial_scaling\n"
+         "is the pseudo wave speed and L the largest extent of the initial domain; this damps\n"
+         "the domain-scale modes about 8 times critically.\n")
+        ("control.highpass_damping_time", opt::value<double>(&p.control.highpass_damping_time)->default_value(0),
+         "T_f of control.has_highpass_damping (in seconds). 0: 10 * L / c, ten wave crossings\n"
+         "of the domain, which is 1e-4 of the time L / V to deform it by order 100 % at the\n"
+         "default control.inertial_scaling. Set it longer than the wave periods and shorter\n"
+         "than the time over which the slip rates should change.\n")
 
         ("control.ref_pressure_option", opt::value<int>(&p.control.ref_pressure_option)->default_value(0),
          "How to define reference pressure?\n"
@@ -1743,16 +1752,21 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if ( p.control.damping_factor < 0 || p.control.damping_factor > 1 ) {
             die(EXIT_CONFIG_VALUE, "control.damping_factor must be between 0 and 1.");
         }
-        if ( p.control.highpass_damping_alpha < 0 ) {
-            die(EXIT_CONFIG_VALUE, "control.highpass_damping_alpha must be >= 0.");
+        if ( p.control.highpass_damping_alpha < 0 || p.control.highpass_damping_time < 0 ) {
+            die(EXIT_CONFIG_VALUE, "control.highpass_damping_alpha and control.highpass_damping_time must be >= 0.");
         }
+        if ( p.control.has_highpass_damping ) {
 #ifdef ACC
-        if ( p.control.highpass_damping_alpha > 0 ) {
-            die(EXIT_CONFIG_VALUE, "control.highpass_damping_alpha is not implemented for GPU builds.");
-        }
+            die(EXIT_CONFIG_VALUE, "control.has_highpass_damping is not implemented for GPU builds.");
 #endif
-        if ( p.control.highpass_damping_alpha > 0 && p.control.highpass_damping_time <= 0 ) {
-            die(EXIT_CONFIG_VALUE, "control.highpass_damping_time must be > 0.");
+            if ( !p.control.is_quasi_static ) {
+                die(EXIT_CONFIG_VALUE, "control.has_highpass_damping needs control.is_quasi_static = yes:\n"
+                    "with true inertia the waves it removes are physical.");
+            }
+            if ( p.control.has_PT ) {
+                die(EXIT_CONFIG_VALUE, "control.has_highpass_damping is not supported with control.has_PT:\n"
+                    "the pseudo-transient iterations exclude artificial damping.");
+            }
         }
         // ref_pressure() is 'acc routine seq' and cannot reject an option itself; it
         // returns 0. Keep this range in step with its branches and the help above.

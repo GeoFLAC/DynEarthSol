@@ -67,7 +67,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 void apply_damping(const Param& param, const Variables& var, array_t& force);
 double calculate_residual_force(const Variables& var, array_t& force_residual);
 void update_velocity(const Variables& var, array_t& vel);
-void reset_highpass_damping(Variables& var);
+void init_highpass_damping(const Param& param, Variables& var);
 void update_coordinate(const Variables& var, array_t& coord);
 void rotate_stress(const Variables &var, tensor_t &stress, tensor_t &strain,
                    double dt);
