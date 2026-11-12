@@ -498,8 +498,11 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_array(*var.plstrain_remesh, "plstrain_remesh", var.plstrain_remesh->size());
     if (var.nonlocal.plstrain_nl)
         bin.write_array(*var.nonlocal.plstrain_nl, "plstrain_nonlocal", var.nonlocal.plstrain_nl->size());
-    if (var.vel_mean)
+    if (var.vel_mean) {
         bin.write_array(*var.vel_mean, "vel_mean", var.vel_mean->size());
+        bin.write_scalar(var.highpass_alpha, "highpass_alpha");
+        bin.write_scalar(var.highpass_time, "highpass_time");
+    }
 #ifdef USEMMG
     bin.write_array(*var.init_elem_size_n, "init_elem_size_n", var.init_elem_size_n->size());
     bin.write_array(*var.refined_elem_size_n, "refined_elem_size_n",

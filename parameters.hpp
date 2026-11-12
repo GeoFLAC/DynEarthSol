@@ -228,6 +228,7 @@ struct Control {
     double fixed_dt;
     double damping_factor;
     int damping_option;
+    bool has_highpass_damping;
     double highpass_damping_alpha;
     double highpass_damping_time;
     int ref_pressure_option;
@@ -967,6 +968,7 @@ struct Variables {
     array_t *vel, *force, *coord0;
     array_t *vel_mean = nullptr;  // running mean of vel for control.highpass_damping_*; null when off
     bool vel_mean_from_chkpt = false;  // restored at a restart: do not reset it to vel
+    double highpass_alpha = 0, highpass_time = 0;  // values in use (given or derived)
     array_t *force_residual;
     tensor_t *strain_rate, *strain, *stress;
     elem_cache *tmp_result;
