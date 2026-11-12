@@ -496,6 +496,17 @@ static void declare_parameters(po::options_description &cfg,
          "4: Rayleigh damping.\n")
         ("control.damping_factor", po::value<double>(&p.control.damping_factor)->default_value(0.8),
          "A factor for force damping (0-1)")
+        ("control.highpass_damping_alpha", po::value<double>(&p.control.highpass_damping_alpha)->default_value(0),
+         "Mass-proportional damping of the fluctuating velocity (in 1/s). Adds the nodal force\n"
+         "-alpha * mass * (vel - vel_mean), where vel_mean is a running mean of the velocity over\n"
+         "control.highpass_damping_time. Motion steadier than that time (creep, steady fault slip,\n"
+         "rigid rotation) is not damped; faster fluctuations of P and S waves are, with damping\n"
+         "ratio alpha/(2*omega). Acts on top of control.damping_option. 0: off.\n")
+        ("control.highpass_damping_time", po::value<double>(&p.control.highpass_damping_time)->default_value(3.15e9),
+         "Averaging time of vel_mean for control.highpass_damping_alpha (in seconds). Choose it\n"
+         "longer than the wave and burst periods (mass-scaled) and much shorter than the run.\n"
+         "vel_mean starts from the velocity at the start of a run, is interpolated through\n"
+         "remeshing like vel and is checkpointed, so a restart continues it.\n")
 
         ("control.ref_pressure_option", po::value<int>(&p.control.ref_pressure_option)->default_value(0),
          "How to define reference pressure?\n"
@@ -1776,6 +1787,17 @@ static void validate_parameters(const po::variables_map &vm, Param &p)
         }
         if ( p.control.damping_factor < 0 || p.control.damping_factor > 1 ) {
             die(EXIT_CONFIG_VALUE, "control.damping_factor must be between 0 and 1.");
+        }
+        if ( p.control.highpass_damping_alpha < 0 ) {
+            die(EXIT_CONFIG_VALUE, "control.highpass_damping_alpha must be >= 0.");
+        }
+#ifdef ACC
+        if ( p.control.highpass_damping_alpha > 0 ) {
+            die(EXIT_CONFIG_VALUE, "control.highpass_damping_alpha is not implemented for GPU builds.");
+        }
+#endif
+        if ( p.control.highpass_damping_alpha > 0 && p.control.highpass_damping_time <= 0 ) {
+            die(EXIT_CONFIG_VALUE, "control.highpass_damping_time must be > 0.");
         }
         // ref_pressure() is 'acc routine seq' and cannot reject an option itself; it
         // returns 0. Keep this range in step with its branches and the help above.

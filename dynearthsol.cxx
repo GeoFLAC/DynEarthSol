@@ -444,6 +444,11 @@ void restart(const Param& param, Variables& var)
         bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         if (param.mat.nonlocal_option)
             bin_chkpt.read_array(*var.nonlocal.plstrain_nl, "plstrain_nonlocal");
+        // a checkpoint from a run without the damping has none: the mean then starts from vel
+        if (var.vel_mean && bin_chkpt.has_array("vel_mean")) {
+            bin_chkpt.read_array(*var.vel_mean, "vel_mean");
+            var.vel_mean_from_chkpt = true;
+        }
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
         bin_save.read_array(*var.ppressure, "pore pressure");
         // previous-step volume for volumetric strain rate.
@@ -973,6 +978,7 @@ int main(int argc, const char* argv[])
         param.ic.has_body_force_adjustment = false;
     }
 
+    reset_highpass_damping(var);
     std::cout << "Starting simulation...\n";
     std::cout << "  Showing model progress every "
               << param.sim.info_display_step_interval

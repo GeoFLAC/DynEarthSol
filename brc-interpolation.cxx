@@ -388,6 +388,13 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     array_t *new_vel = new array_t(n);
     interpolate_field(brc, el, old_connectivity, *var.vel, *new_vel, n);
 
+    // Running mean for control.highpass_damping_*, carried like vel so the filter keeps its state.
+    array_t *new_vel_mean = nullptr;
+    if (var.vel_mean) {
+        new_vel_mean = new array_t(n);
+        interpolate_field(brc, el, old_connectivity, *var.vel_mean, *new_vel_mean, n);
+    }
+
     array_t *new_coord0 = new array_t(n);
     interpolate_field(brc, el, old_connectivity, *var.coord0, *new_coord0, n);
 
@@ -424,6 +431,11 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 
     delete var.vel;
     var.vel = new_vel;
+
+    if (var.vel_mean) {
+        delete var.vel_mean;
+        var.vel_mean = new_vel_mean;
+    }
 
     delete var.coord0;
     var.coord0 = new_coord0;

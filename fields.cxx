@@ -68,6 +68,7 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.force = new array_t(n, 0);
     var.force_residual = new array_t(n, 0);
+    var.vel_mean = (param.control.highpass_damping_alpha > 0) ? new array_t(n, 0) : nullptr;
 
     var.strain_rate = new tensor_t(e, 0);
 
@@ -535,6 +536,44 @@ static void apply_damping(const Param& param, const Variables& var, array_t& for
 #endif
 }
 
+// Mass-proportional damping of the fluctuating part of the velocity:
+// f -= m (v - vbar) (1 - exp(-alpha dt)) / dt, the exact decay of the fluctuation over one step,
+// then vbar relaxes toward v over control.highpass_damping_time.
+static void apply_highpass_damping(const Param& param, const Variables& var, array_t& force)
+{
+    if (!var.vel_mean) return;
+    const double dt = var.dt;
+    const double cf = -std::expm1(-param.control.highpass_damping_alpha * dt) / dt;
+    const double w = -std::expm1(-dt / param.control.highpass_damping_time);
+    array_t& vm = *var.vel_mean;
+    if ((int)vm.size() != var.nnode) {  // safety net; remeshing interpolates vel_mean
+        vm.resize(var.nnode, false);
+        for (int i=0; i<var.nnode; ++i)
+            for (int j=0; j<NDIMS; j++) vm[i][j] = (*var.vel)[i][j];
+    }
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, force, vm) firstprivate(cf, w)
+#endif
+    for (int i=0; i<var.nnode; ++i) {
+        const double m = (*var.mass)[i];
+        for (int j=0; j<NDIMS; j++) {
+            const double v = (*var.vel)[i][j];
+            force[i][j] -= cf * m * (v - vm[i][j]);
+            vm[i][j] += w * (v - vm[i][j]);
+        }
+    }
+}
+
+
+void reset_highpass_damping(Variables& var)
+{
+    if (!var.vel_mean || var.vel_mean_from_chkpt) return;
+    var.vel_mean->resize(var.nnode, false);
+    for (int i=0; i<var.nnode; ++i)
+        for (int j=0; j<NDIMS; j++)
+            (*var.vel_mean)[i][j] = (*var.vel)[i][j];
+}
+
 /*
 #pragma acc routine seq
 static double rho(const conn_t &var_connectivity, \
@@ -646,6 +685,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
     apply_damping(param, var, force);
+    apply_highpass_damping(param, var, force);
     
     #pragma acc wait
 
