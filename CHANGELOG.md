@@ -20,8 +20,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Material-following monitor points use `monitor.point_type` (`particle` or
   `grid`), retain their exact checkpoint location, and preserve CSV histories
   through restart. `monitor.remesh_output` selects before/both remesh rows;
-  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column.
-- Native and HDF5 frames include nodal `displacement = coordinate - coord0`.
+  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column
+  ([#135]).
+- Native and HDF5 frames include nodal `displacement = coordinate - coord0` ([#135]).
 
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
@@ -81,9 +82,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
-  key from existing inputs.
+  key from existing inputs ([#135]).
 - **Breaking.** Seismic moment uses element plastic-strain increments in N m
-  (N m/m in 2D, without Mw), replacing the velocity-based definition.
+  (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -177,7 +178,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Explicit/GVS output cadence and pending remesh stages survive restart.
   Changed timestep controls refresh timestep and mass together; fixed-mesh
   GVS also refreshes both from the accepted velocity. Large output intervals
-  no longer overflow the regular frame-index product.
+  no longer overflow the regular frame-index product ([#135]).
+- Restart manifests report only the steps executed in the current run ([#135]).
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
@@ -441,3 +443,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+[#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135

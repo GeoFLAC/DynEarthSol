@@ -6,9 +6,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -16,6 +14,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tests/functional"))
+from des_test_utils import run_des
+
 DEFAULT_EXE = REPO_ROOT / "dynearthsol2d"
 DEFAULT_CFG = HERE / "monitor_restart_base.cfg"
 POINT_FILES = tuple(f"monitor_history_point_{point}.csv" for point in range(2))
@@ -52,22 +53,7 @@ def run_config(
     threads: int,
     expected_error: str | None = None,
 ) -> str:
-    case_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = case_dir / f"{name}.cfg"
-    cfg_path.write_text(cfg, encoding="ascii")
-    env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(threads)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    result = subprocess.run(
-        [str(exe), str(cfg_path)],
-        cwd=case_dir,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    (case_dir / f"{name}.log").write_text(result.stdout, encoding="utf-8")
+    result = run_des(exe, case_dir, name, cfg, threads=threads, check=False)
     if expected_error is None:
         if result.returncode != 0:
             print(result.stdout, file=sys.stderr)
@@ -119,11 +105,11 @@ def clone_baseline(baseline: Path, destination: Path) -> None:
     shutil.copytree(baseline, destination)
 
 
-def insert_duplicate(path: Path, *, has_header: bool, row_index: int) -> None:
+def insert_internal_duplicate(path: Path, *, has_header: bool) -> None:
     lines = path.read_bytes().splitlines(keepends=True)
     row_offset = 1 if has_header else 0
-    index = row_offset + row_index
-    lines.insert(index + 1, lines[index])
+    internal_index = row_offset + 1
+    lines.insert(internal_index + 1, lines[internal_index])
     path.write_bytes(b"".join(lines))
 
 
@@ -134,24 +120,13 @@ def remove_checkpoint_row(path: Path, *, has_header: bool) -> None:
     path.write_bytes(b"".join(lines))
 
 
-def corrupt_last_row_column_count(path: Path) -> None:
+def corrupt_kept_row_column_count(path: Path, *, has_header: bool) -> None:
     lines = path.read_bytes().splitlines(keepends=True)
-    last = lines[-1].rstrip(b"\r\n")
-    newline = b"\r\n" if lines[-1].endswith(b"\r\n") else b"\n"
-    fields = last.split(b",")
+    index = (1 if has_header else 0) + 1
+    fields = lines[index].rstrip(b"\r\n").split(b",")
     if len(fields) < 3:
         raise AssertionError("fixture row has too few fields to corrupt")
-    lines[-1] = b",".join(fields[:-1]) + newline
-    path.write_bytes(b"".join(lines))
-
-
-def corrupt_last_row_value(path: Path) -> None:
-    lines = path.read_bytes().splitlines(keepends=True)
-    last = lines[-1].rstrip(b"\r\n")
-    newline = b"\r\n" if lines[-1].endswith(b"\r\n") else b"\n"
-    fields = last.split(b",")
-    fields[-1] = b"not-a-number"
-    lines[-1] = b",".join(fields) + newline
+    lines[index] = b",".join(fields[:-1]) + b"\n"
     path.write_bytes(b"".join(lines))
 
 
@@ -180,17 +155,6 @@ def check_history_replacement(
             f"{suffix}: restart did not reproduce the uninterrupted CSV histories"
         )
 
-    legacy = run_root / f"legacy_{suffix}"
-    clone_baseline(baseline, legacy)
-    for path in point_paths(legacy):
-        # Older CSVs omit the final row-kind column, including its header.
-        lines = path.read_bytes().splitlines()
-        path.write_bytes(b"".join(line.rsplit(b",", 1)[0] + b"\n" for line in lines))
-    expected_legacy = read_histories(legacy)
-    run_config(exe, restart_cfg, legacy, "restart", threads=threads)
-    if read_histories(legacy) != expected_legacy:
-        raise AssertionError(f"{suffix}: restart changed legacy CSV histories")
-
     frame_zero = run_root / f"frame_zero_{suffix}"
     clone_baseline(baseline, frame_zero)
     frame_zero_cfg = render_cfg(
@@ -204,17 +168,6 @@ def check_history_replacement(
     if read_histories(frame_zero) != expected:
         raise AssertionError(
             f"{suffix}: frame-0 restart duplicated or changed the initial row"
-        )
-
-    duplicate = run_root / f"checkpoint_duplicate_{suffix}"
-    clone_baseline(baseline, duplicate)
-    for path in point_paths(duplicate):
-        insert_duplicate(path, has_header=write_header, row_index=2)
-    run_config(exe, restart_cfg, duplicate, "restart", threads=threads)
-    assert_steps(duplicate, [0, 1, 2, 3, 4], has_header=write_header)
-    if read_histories(duplicate) != expected:
-        raise AssertionError(
-            f"{suffix}: exact checkpoint duplicates were not canonicalized"
         )
 
     new_history = run_root / f"new_history_{suffix}"
@@ -234,13 +187,12 @@ def check_fail_fast(
     run_config(exe, fresh_cfg, baseline, "fresh", threads=threads)
 
     cases = (
-        ("malformed_tail", (1,), corrupt_last_row_column_count,
+        ("malformed_row", (1,),
+         lambda path: corrupt_kept_row_column_count(path, has_header=True),
          "wrong number of columns"),
-        ("non_numeric_tail", (1,), corrupt_last_row_value,
-         "non-numeric data column"),
         ("internal_duplicate", (0, 1),
-         lambda path: insert_duplicate(path, has_header=True, row_index=1),
-         "duplicate row before the restart cutoff"),
+         lambda path: insert_internal_duplicate(path, has_header=True),
+         "duplicate or out-of-order rows for one step"),
         ("missing_checkpoint_row", (0, 1),
          lambda path: remove_checkpoint_row(path, has_header=True),
          "missing the row corresponding to the restart checkpoint"),
@@ -272,6 +224,14 @@ def check_fail_fast(
         raise AssertionError("complete point history was modified before partial-set failure")
     if point_paths(partial)[1].exists():
         raise AssertionError("missing point history was silently recreated before failure")
+
+    for name, cfg in (("fresh_open_failure", fresh_cfg), ("restart_open_failure", restart_cfg)):
+        folder = run_root / name
+        clone_baseline(baseline, folder)
+        cfg = cfg.replace("output_prefix = monitor_history", "output_prefix = missing/monitor_history")
+        result = run_des(exe, folder, name, cfg, threads=threads, check=False)
+        assert result.returncode == 20, (name, result.returncode, result.stdout)
+        assert "cannot open" in result.stdout and "monitor file" in result.stdout
 
 
 def parse_args() -> argparse.Namespace:

@@ -249,7 +249,7 @@ void init(const Param& param, Variables& var)
 }
 
 
-void restart(const Param& param, Variables& var)
+void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 {
     std::cout << "Initializing mesh and field data from checkpoints...\n";
 
@@ -391,25 +391,23 @@ void restart(const Param& param, Variables& var)
         }
 
         {
-            // A permitted step-zero conversion can change the mechanical method.
-            // Read the schema written by the checkpoint, not the current mode.
-            const bool pt_schedule = bin_chkpt.has_array("PT output start time") ||
-                bin_chkpt.has_array("PT output start step") || bin_chkpt.has_array("PT next regular frame");
-            const bool generic_schedule = bin_chkpt.has_array("output start time") ||
-                bin_chkpt.has_array("output start step") || bin_chkpt.has_array("next regular frame");
-            if (pt_schedule && generic_schedule)
-                die(EXIT_IO_RESTART, "Ambiguous output schedule in checkpoint.");
-            const char *time_key = pt_schedule ? "PT output start time" : "output start time";
-            const char *step_key = pt_schedule ? "PT output start step" : "output start step";
-            const char *frame_key = pt_schedule ? "PT next regular frame" : "next regular frame";
-            const int fields = bin_chkpt.has_array(time_key) + bin_chkpt.has_array(step_key) +
-                bin_chkpt.has_array(frame_key);
+            // Prefer the common keys; older PT checkpoints use a "PT " prefix.
+            auto read_clock = [&bin_chkpt](auto& value, const char* name) {
+                if (bin_chkpt.has_array(name)) {
+                    bin_chkpt.read_scalar(value, name);
+                    return 1;
+                }
+                const std::string alias = std::string("PT ") + name;
+                if (!bin_chkpt.has_array(alias.c_str())) return 0;
+                bin_chkpt.read_scalar(value, alias);
+                return 1;
+            };
+            const int fields = read_clock(var.output_start_time, "output start time") +
+                read_clock(var.output_start_step, "output start step") +
+                read_clock(var.output_next_regular_frame, "next regular frame");
             if (fields != 0 && fields != 3)
                 die(EXIT_IO_RESTART, "Incomplete output schedule in checkpoint.");
             if (fields == 3) {
-                bin_chkpt.read_scalar(var.output_start_time, time_key);
-                bin_chkpt.read_scalar(var.output_start_step, step_key);
-                bin_chkpt.read_scalar(var.output_next_regular_frame, frame_key);
                 if (!std::isfinite(var.output_start_time) || var.output_start_step < 0 ||
                     var.output_start_step > var.steps || var.output_next_regular_frame < 1)
                     die(EXIT_IO_RESTART, "Invalid output schedule in checkpoint.");
@@ -541,33 +539,6 @@ void restart(const Param& param, Variables& var)
 #endif
         if (param.mat.is_plane_strain)
             bin_chkpt.read_array(*var.stressyy, "stressyy");
-    }
-
-    if (param.monitor.enabled) {
-        const bool count_saved = bin_chkpt.has_array("monitor point count");
-        const bool positions_saved = bin_chkpt.has_array("monitor point positions");
-        const bool elements_saved = bin_chkpt.has_array("monitor point elements");
-        const bool weights_saved = bin_chkpt.has_array("monitor point weights");
-        if (count_saved != positions_saved || elements_saved != weights_saved ||
-            (elements_saved && !count_saved))
-            die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
-        if (count_saved) {
-            int count = 0;
-            bin_chkpt.read_scalar(count, "monitor point count");
-            if (count < 0) die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
-            if (count == param.monitor.num_points) {
-                double_vec positions(std::size_t(count)*NDIMS), weights;
-                int_vec elements;
-                bin_chkpt.read_array(positions, "monitor point positions");
-                if (elements_saved) {
-                    elements.resize(count);
-                    weights.resize(std::size_t(count)*NODES_PER_ELEM);
-                    bin_chkpt.read_array(elements, "monitor point elements");
-                    bin_chkpt.read_array(weights, "monitor point weights");
-                }
-                monitor_restore(var,positions,elements,weights);
-            }
-        }
     }
 
     // Restored side-wall columns and wall shifts (remeshing_option 13, SideProfile); no record = no
@@ -708,9 +679,8 @@ void restart(const Param& param, Variables& var)
             die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
         dt_controls_changed = saved != current;
     } else {
-        // Older files identify the mechanical method through their clock schema.
+        // The old PT clock identifies PT checkpoints without saved dt controls.
         dt_controls_changed = (!param.control.has_PT && bin_chkpt.has_array("PT output start time")) ||
-            (param.control.has_PT && bin_chkpt.has_array("output start time")) ||
             (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
     }
 
@@ -720,6 +690,28 @@ void restart(const Param& param, Variables& var)
         (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+    }
+
+    if (param.monitor.enabled) {
+        const int fields = bin_chkpt.has_array("monitor point count") +
+            bin_chkpt.has_array("monitor point positions") +
+            bin_chkpt.has_array("monitor point elements") + bin_chkpt.has_array("monitor point weights");
+        if (fields != 0 && fields != 4)
+            die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
+        int count = 0;
+        if (fields == 4)
+            bin_chkpt.read_scalar(count, "monitor point count");
+        if (count < 0)
+            die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
+        // A changed point set relocates the configured points.
+        if (count > 0 && count == param.monitor.num_points) {
+            monitor.positions.resize(std::size_t(count)*NDIMS);
+            monitor.elements.resize(count);
+            monitor.weights.resize(std::size_t(count)*NODES_PER_ELEM);
+            bin_chkpt.read_array(monitor.positions, "monitor point positions");
+            bin_chkpt.read_array(monitor.elements, "monitor point elements");
+            bin_chkpt.read_array(monitor.weights, "monitor point weights");
+        }
     }
 
     report_mesh_info(var, "restart");
@@ -930,6 +922,7 @@ int main(int argc, const char* argv[])
     var.output = new Output(param, build, cpu, dev, manifest, var.func_time.start_time,
                   (param.sim.is_restarting) ? param.sim.restarting_from_frame : 0);
 
+    MonitorCheckpoint monitor_checkpoint_state;  // filled by restart()
     if (! param.sim.is_restarting) {
         init(param, var);
         var.info_display_next_step = param.sim.info_display_step_interval;
@@ -964,7 +957,7 @@ int main(int argc, const char* argv[])
     else {
         // The serpentinization grid is not built here: restart() restores it
         // or leaves var.vtopo null (see the gate there).
-        restart(param, var);
+        restart(param, var, monitor_checkpoint_state);
     }
 
 
@@ -1062,7 +1055,7 @@ int main(int argc, const char* argv[])
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
 
     var.output->write_exact(var);
-    monitor_initialize(param, var);
+    monitor_initialize(param, var, monitor_checkpoint_state);
 
     if (param.sim.is_restarting && var.steps > 0 &&
         var.steps % param.mesh.quality_check_step_interval == 0)
@@ -1073,17 +1066,16 @@ int main(int argc, const char* argv[])
         var.output_start_step = var.steps;
         var.output_next_regular_frame = 1;
     }
-    const double starting_time = var.output_start_time;
     // The disabled-time sentinel must not overflow into a PT checkpoint clock.
     const double reference_interval_in_yr = param.sim.output_time_interval_in_yr == std::numeric_limits<double>::max()
         ? 0 : param.sim.output_time_interval_in_yr;
-    var.reference_frame_time = starting_time + reference_interval_in_yr * YEAR2SEC;
-    const double starting_step = var.output_start_step;
+    var.reference_frame_time = var.output_start_time + reference_interval_in_yr * YEAR2SEC;
     int next_regular_frame = var.output_next_regular_frame;
     if (!param.control.use_global_velocity_scaling)
-        var.reference_frame_time = starting_time +
+        var.reference_frame_time = var.output_start_time +
             next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
+    const int first_step = var.steps;  // a restart resumes the step count
     EarthquakeState earthquake;
     init_earthquake_state(param, earthquake);
 
@@ -1207,23 +1199,9 @@ int main(int argc, const char* argv[])
         update_earthquake_tracking(param, var, earthquake);
 
         if (param.control.use_global_velocity_scaling) {
-            handle_ats_output(param, var, *var.output, earthquake,
-                              starting_time, starting_step, next_regular_frame);
+            handle_ats_output(param, var, *var.output, earthquake, next_regular_frame);
         } else {
-            if (( (param.sim.output_step_interval != std::numeric_limits<int>::max() &&
-               (var.steps - starting_step) == static_cast<int64_t>(next_regular_frame) * param.sim.output_step_interval)
-              ||
-              (param.sim.output_time_interval_in_yr != std::numeric_limits<double>::max() &&
-               (var.time - starting_time) > next_regular_frame * param.sim.output_time_interval_in_yr * YEAR2SEC)
-             )
-            // time or step output requirements are met
-            &&
-            ((! param.sim.is_outputting_averaged_fields) ||
-                (param.sim.is_outputting_averaged_fields &&
-                    (var.steps % param.mesh.quality_check_step_interval == 0)))
-            // When is_outputting_averaged_fields is turned on, the output cannot be
-            // done at arbitrary time steps.
-            ) {
+            if (regular_output_is_due(param, var, next_regular_frame, false)) {
                 var.output_next_regular_frame = next_regular_frame + 1;
                 if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
                     var.output->write_checkpoint(param, var);
@@ -1231,7 +1209,7 @@ int main(int argc, const char* argv[])
                 var.output->write(var);
 
                 next_regular_frame ++;
-                var.reference_frame_time = starting_time +
+                var.reference_frame_time = var.output_start_time +
                     next_regular_frame * reference_interval_in_yr * YEAR2SEC;
 
             }
@@ -1265,9 +1243,7 @@ int main(int argc, const char* argv[])
 #endif
 
     } while (var.steps < param.sim.max_steps &&
-             (var.time <= param.sim.max_time_in_yr * YEAR2SEC ||
-              (param.sim.is_outputting_averaged_fields &&
-               var.steps % param.mesh.quality_check_step_interval != 0)));
+             (var.time <= param.sim.max_time_in_yr * YEAR2SEC || !output_allowed(param, var)));
 
 #ifdef HAS_GOSPL_CPP_INTERFACE
     // Report the coupling events since the last progress line, if any.
@@ -1333,7 +1309,7 @@ int main(int argc, const char* argv[])
 #endif
     }
 
-    write_manifest_end(param, manifest, var, var.steps - static_cast<int>(starting_step),
+    write_manifest_end(param, manifest, var, var.steps - first_step,
                        duration_ns, init_time, computation_time, peak_rss_gib);
     return 0;
 }

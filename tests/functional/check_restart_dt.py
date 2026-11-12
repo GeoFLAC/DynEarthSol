@@ -7,15 +7,12 @@ fixed dt. Older executables can supply legacy PT checkpoints.
 """
 
 import argparse
-import configparser
 import copy
 import hashlib
 import itertools
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -24,13 +21,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames
 from pt_initial_checkpoint import fields
+from des_test_utils import read_config, run_des
 
 BULK, SHEAR, DENSITY = 2e7, 1e7, 2650.
 
 
 def config():
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(max_time_in_yr='1e6', output_step_interval='1',
                       output_time_interval_in_yr='1e6', checkpoint_frame_interval='1',
                       has_initial_checkpoint='true', is_outputting_averaged_fields='false')
@@ -52,12 +49,7 @@ def run(executable, folder, cfg, name, steps, source=None):
                       is_restarting=str(source is not None).lower())
     if source is not None:
         cfg['sim'].update(restarting_from_modelname=str(source), restarting_from_frame='1')
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'),
-                       stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+    run_des(executable, folder, name, cfg)
     return Dynearthsol(str(folder/name))
 
 

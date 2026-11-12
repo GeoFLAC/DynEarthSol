@@ -13,28 +13,27 @@ from pathlib import Path
 import struct
 import subprocess
 
+from des_test_utils import checkpoint_file, native_offsets
+
 
 def fields(path):
-    hdf_path = Path(str(path) + '.vtkhdf')
-    if not path.is_file() and hdf_path.is_file():
+    found = checkpoint_file(path)
+    if found is not None and found != Path(path):
         import h5py
         import numpy as np
         result = {}
-        with h5py.File(hdf_path, 'r') as stream:
+        with h5py.File(found, 'r') as stream:
             def read_dataset(name, obj):
                 if isinstance(obj, h5py.Dataset):
                     value = obj[...]
                     if np.issubdtype(value.dtype, np.number):
-                        assert np.isfinite(value).all(), (hdf_path, name)
+                        assert np.isfinite(value).all(), (found, name)
                     result[name] = value.tobytes()
                     result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
             stream.visititems(read_dataset)
         return result
-    data = path.read_bytes()
-    entries = []
-    for line in data[:4096].split(b'\0', 1)[0].splitlines()[1:]:
-        name, pos = line.split(b'\t')
-        entries.append((name.decode(), int(pos)))
+    data = Path(path).read_bytes()
+    entries = list(native_offsets(data).items())
     return {name: data[pos:entries[i + 1][1] if i + 1 < len(entries) else len(data)]
             for i, (name, pos) in enumerate(entries)}
 

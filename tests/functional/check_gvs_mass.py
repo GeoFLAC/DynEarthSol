@@ -7,13 +7,10 @@ per step. Checks the mass actually used, rather than only saved dt or vmax.
 """
 
 import argparse
-import configparser
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -22,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames
 from pt_initial_checkpoint import fields
+from des_test_utils import read_config, run_des
 
 
 def main():
@@ -36,9 +34,7 @@ def main():
     for ceiling in ('shear', 'bulk'):
         folder = output / ceiling
         folder.mkdir()
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
         cfg['sim'].update(modelname='fresh', max_steps='64', max_time_in_yr='1e6',
                           output_step_interval='1', checkpoint_frame_interval='1',
                           has_initial_checkpoint='yes')
@@ -54,12 +50,7 @@ def main():
         cfg['mat'].update(bulk_modulus='[2e7]', shear_modulus='[1e7]', alpha='[0]')
         cfg['control']['has_moving_mesh'] = 'false'
         timeout = 60
-        with (folder / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
-        env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
-        with (folder / 'run.log').open('w') as stream:
-            subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        run_des(executable, folder, 'input', cfg, timeout)
         model = Dynearthsol(str(folder / 'fresh'))
         rows = scan_frames(str(folder / 'fresh'))
         times = {r['frame']: r['time'] for r in rows}
@@ -101,11 +92,7 @@ def main():
         assert scale_max / scale_min > 100, 'GVS did not change its scale enough to exercise mass updates'
         cfg['sim'].update(modelname='resumed', is_restarting='true',
                           restarting_from_modelname='fresh', restarting_from_frame='16')
-        with (folder / 'restart.cfg').open('w') as stream:
-            cfg.write(stream)
-        with (folder / 'restart.log').open('w') as stream:
-            subprocess.run([str(executable), 'restart.cfg'], cwd=folder, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        run_des(executable, folder, 'restart', cfg, timeout)
         resumed = Dynearthsol(str(folder / 'resumed'))
         fresh_steps = {r['steps']: r for r in rows}
         for row in scan_frames(str(folder / 'resumed')):

@@ -27,18 +27,17 @@ Errors are in units of the mesh spacing h and of V.
     check_monitor_tracking.py EXECUTABLE OUTPUT [--tolerance 1e-6]
 """
 import argparse
-import configparser
 import csv
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
+sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol
+from des_test_utils import read_config, run_des
 
 LX, LZ, H_MESH = 10.0, 5.0, 0.5
 STEPS, V = 60, 10.0/60                    # m/s: the box doubles its length
@@ -46,8 +45,7 @@ POINTS = [(2.3, -1.7), (5.1, -3.3), (7.7, -0.9)]
 
 
 def config(name, steps, point_type, restart_from=None, interval=1, remesh_output=None):
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname=name, max_steps=str(steps), max_time_in_yr='1', output_step_interval='1',
                       output_time_interval_in_yr='1e9', checkpoint_frame_interval='1', has_initial_checkpoint='yes',
                       has_output_during_remeshing='yes')
@@ -77,11 +75,7 @@ def config(name, steps, point_type, restart_from=None, interval=1, remesh_output
 
 
 def run(exe, folder, name, cfg):
-    with (folder/f'{name}.cfg').open('w') as f: cfg.write(f)
-    with (folder/f'{name}.log').open('w') as f:
-        code = subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, stdout=f, stderr=subprocess.STDOUT).returncode
-    if code: raise RuntimeError(f'{folder}/{name}: exit {code}')
-    return (folder/f'{name}.log').read_text().lower().count('remesh')
+    return run_des(exe, folder, name, cfg, timeout=900).stdout.lower().count('remesh')
 
 
 def frames(models):

@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <cerrno>
 #include <climits>
-#include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -10,15 +9,10 @@
 #include <limits>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <vector>
 
-#ifdef _WIN32
-#include <io.h>
-#else
 #include <sys/types.h>
 #include <unistd.h>
-#endif
 
 #include "monitor.hpp"
 #include "barycentric-fn.hpp"
@@ -51,57 +45,16 @@ enum MonitorRowKind {
 
 struct MonitorManager {
     bool initialized = false;
-    bool legacy_csv = false;
     int last_written_step = std::numeric_limits<int>::min();
     std::vector<MonitorPointState> points;
-    double_vec restart_positions;
-    int_vec restart_elements;
-    double_vec restart_weights;
 };
 
 MonitorManager g_monitor;
 
-#ifdef _WIN32
-typedef std::int64_t monitor_file_offset_t;
-
-monitor_file_offset_t monitor_file_tell(std::FILE* fp)
-{
-    return _ftelli64(fp);
-}
-
-int monitor_file_seek(std::FILE* fp, monitor_file_offset_t offset, int origin)
-{
-    return _fseeki64(fp, offset, origin);
-}
-
-int monitor_file_truncate(std::FILE* fp, monitor_file_offset_t offset)
-{
-    return _chsize_s(_fileno(fp), offset) == 0 ? 0 : -1;
-}
-#else
-typedef off_t monitor_file_offset_t;
-
-monitor_file_offset_t monitor_file_tell(std::FILE* fp)
-{
-    return ftello(fp);
-}
-
-int monitor_file_seek(std::FILE* fp, monitor_file_offset_t offset, int origin)
-{
-    return fseeko(fp, offset, origin);
-}
-
-int monitor_file_truncate(std::FILE* fp, monitor_file_offset_t offset)
-{
-    return ftruncate(fileno(fp), offset);
-}
-#endif
-
 struct MonitorCsvRestartPlan {
     bool exists = false;
-    bool legacy_csv = false;
     bool has_checkpoint_row = false;
-    monitor_file_offset_t keep_bytes = 0;
+    off_t keep_bytes = 0;
     std::vector<std::tuple<int, int, double> > row_keys;   // step, row kind, time
 };
 
@@ -343,7 +296,7 @@ std::string monitor_filename(const Param& param, int point_id)
 
 bool read_monitor_csv_line(std::FILE* fp, const std::string& filename,
                            std::string& line,
-                           monitor_file_offset_t& end_offset)
+                           off_t& end_offset)
 {
     line.clear();
     int ch = 0;
@@ -358,7 +311,7 @@ bool read_monitor_csv_line(std::FILE* fp, const std::string& filename,
         monitor_csv_restart_error(filename, "has an unterminated final row");
     }
 
-    end_offset = monitor_file_tell(fp);
+    end_offset = ftello(fp);
     if (end_offset < 0)
         monitor_csv_io_error(filename, "locate rows in", EXIT_IO_RW);
 
@@ -414,21 +367,6 @@ int parse_monitor_csv_kind(const std::string& filename, const std::string& line)
     return static_cast<int>(kind);
 }
 
-void validate_monitor_csv_values(const std::string& filename,
-                                 const std::string& line)
-{
-    const char* begin = line.c_str();
-    while (true) {
-        char* end = nullptr;
-        std::strtod(begin, &end);
-        if (end == begin || (*end != ',' && *end != '\0')) {
-            monitor_csv_restart_error(filename, "has a non-numeric data column");
-        }
-        if (*end == '\0') return;
-        begin = end + 1;
-    }
-}
-
 MonitorCsvRestartPlan inspect_monitor_restart_file(
     const Param& param, const Variables& var, const std::string& filename)
 {
@@ -442,137 +380,77 @@ MonitorCsvRestartPlan inspect_monitor_restart_file(
     plan.exists = true;
 
     const std::string expected_header = make_csv_header(param);
-    std::size_t expected_columns = monitor_csv_column_count(expected_header);
-    monitor_file_offset_t line_start = 0;
-    monitor_file_offset_t line_end = 0;
+    const std::size_t expected_columns = monitor_csv_column_count(expected_header);
+    off_t line_end = 0;
     std::string line;
 
     if (param.monitor.write_header) {
         if (!read_monitor_csv_line(fp, filename, line, line_end)) {
-            std::fclose(fp);
             monitor_csv_restart_error(filename, "is missing its CSV header");
         }
-        if (line == expected_header.substr(0,expected_header.size()-4)) {
-            plan.legacy_csv = true;
-            --expected_columns;
-        } else if (line != expected_header) {
-            std::fclose(fp);
+        if (line != expected_header) {
             monitor_csv_restart_error(
                 filename, "has a header that does not match the current monitor schema");
         }
         plan.keep_bytes = line_end;
-        line_start = line_end;
     }
 
-    bool stale_suffix = false;
     bool have_previous = false;
     int previous_step = -1;
     int previous_kind = -1;
     double previous_time = 0.0;
-    std::string previous_line;
 
+    // Keep the rows up to the checkpoint's regular row. The rest, including the
+    // checkpoint step's remesh rows that the restart repeats, is rewritten unread.
     while (read_monitor_csv_line(fp, filename, line, line_end)) {
-        if (!param.monitor.write_header && !have_previous &&
-            monitor_csv_column_count(line) == expected_columns-1) {
-            plan.legacy_csv = true;
-            --expected_columns;
-        }
-        if (monitor_csv_column_count(line) != expected_columns) {
-            std::fclose(fp);
-            monitor_csv_restart_error(
-                filename, "has a data row with the wrong number of columns");
-        }
-        validate_monitor_csv_values(filename, line);
-
         int step = -1;
         double time = 0.0;
         parse_monitor_csv_key(filename, line, step, time);
-        const int kind = plan.legacy_csv ? monitor_row_regular : parse_monitor_csv_kind(filename,line);
+        if (step > var.steps) break;
+        if (monitor_csv_column_count(line) != expected_columns) {
+            monitor_csv_restart_error(
+                filename, "has a data row with the wrong number of columns");
+        }
+        const int kind = parse_monitor_csv_kind(filename,line);
+        if (step == var.steps && kind != monitor_row_regular) break;
+
         if (kind == monitor_row_regular && step != 0 && step % param.monitor.step_interval != 0) {
-            std::fclose(fp);
             monitor_csv_restart_error(
                 filename, "does not match the current monitor step interval");
         }
-
         if (have_previous) {
             if (step < previous_step || time < previous_time) {
-                std::fclose(fp);
                 monitor_csv_restart_error(
                     filename, "has non-monotonic step/time rows");
             }
-            if (step == previous_step && time == previous_time && kind != previous_kind) {
-                // Rows of one step follow the order they are written in: regular, before, after.
-                if (kind < previous_kind) {
-                    std::fclose(fp);
-                    monitor_csv_restart_error(
-                        filename, "has rows of one step out of order");
-                }
-            }
-            else if (step == previous_step) {
-                if (time != previous_time || line != previous_line) {
-                    std::fclose(fp);
-                    monitor_csv_restart_error(
-                        filename, "has ambiguous rows for the same step");
-                }
-                const bool discardable_duplicate = stale_suffix ||
-                    (step == var.steps && time == var.time &&
-                     plan.has_checkpoint_row);
-                if (!discardable_duplicate) {
-                    std::fclose(fp);
-                    monitor_csv_restart_error(
-                        filename, "has a duplicate row before the restart cutoff");
-                }
-                if (!stale_suffix) {
-                    stale_suffix = true;
-                    plan.keep_bytes = line_start;
-                }
+            // Rows of one step follow the order they are written in: regular, before, after.
+            if (step == previous_step && (time != previous_time || kind <= previous_kind)) {
+                monitor_csv_restart_error(
+                    filename, "has duplicate or out-of-order rows for one step");
             }
         }
-
-        if (!stale_suffix) {
-            if (step < var.steps) {
-                if (time > var.time) {
-                    std::fclose(fp);
-                    monitor_csv_restart_error(
-                        filename, "has a pre-checkpoint step after the checkpoint time");
-                }
-                plan.keep_bytes = line_end;
+        if (step == var.steps) {
+            if (time != var.time) {
+                monitor_csv_restart_error(
+                    filename, "has a checkpoint step with a different time");
             }
-            else if (step == var.steps) {
-                if (time != var.time) {
-                    std::fclose(fp);
-                    monitor_csv_restart_error(
-                        filename, "has a checkpoint step with a different time");
-                }
-                // The checkpoint precedes the step's remesh, which the restart repeats:
-                // its remesh rows are written again.
-                if (kind == monitor_row_regular) {
-                    plan.has_checkpoint_row = true;
-                    plan.keep_bytes = line_end;
-                }
-                else {
-                    stale_suffix = true;
-                    plan.keep_bytes = line_start;
-                }
-            }
-            else {
-                stale_suffix = true;
-                plan.keep_bytes = line_start;
-            }
+            plan.has_checkpoint_row = true;
+        }
+        else if (time > var.time) {
+            monitor_csv_restart_error(
+                filename, "has a pre-checkpoint step after the checkpoint time");
         }
 
+        plan.keep_bytes = line_end;
         plan.row_keys.push_back(std::make_tuple(step, kind, time));
         have_previous = true;
         previous_step = step;
         previous_kind = kind;
         previous_time = time;
-        previous_line = line;
-        line_start = line_end;
     }
 
     if (var.steps % param.monitor.step_interval == 0 &&
         !plan.has_checkpoint_row) {
-        std::fclose(fp);
         monitor_csv_restart_error(
             filename, "is missing the row corresponding to the restart checkpoint");
     }
@@ -588,18 +466,13 @@ void open_monitor_files_fresh(const Param& param, MonitorManager& manager)
         MonitorPointState& p = manager.points[i];
         const std::string filename = monitor_filename(param, p.id);
         p.fp = std::fopen(filename.c_str(), "w");
-        if (!p.fp) {
-            std::cerr << "Error: cannot open monitor file '" << filename << "'\n";
-            continue;
-        }
+        if (!p.fp)
+            monitor_csv_io_error(filename, "open", EXIT_IO_OPEN);
         if (param.monitor.write_header) {
-            if (!write_csv_header(p.fp, param)) {
-                std::cerr << "Error: cannot write monitor file '" << filename << "'\n";
-                std::fclose(p.fp);
-                p.fp = nullptr;
-                continue;
-            }
-            std::fflush(p.fp);
+            if (!write_csv_header(p.fp, param))
+                monitor_csv_io_error(filename, "write", EXIT_IO_RW);
+            if (std::fflush(p.fp) != 0)
+                monitor_csv_io_error(filename, "flush", EXIT_IO_RW);
         }
     }
 }
@@ -617,16 +490,11 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
         const bool existence_matches = plans[i].exists == plans[0].exists;
         const bool rows_match = !plans[i].exists ||
             plans[i].row_keys == plans[0].row_keys;
-        if (!existence_matches || !rows_match || plans[i].legacy_csv != plans[0].legacy_csv) {
+        if (!existence_matches || !rows_match) {
             monitor_csv_restart_error(
-                filename, "does not have the same history as the other monitor points (including CSV schema)");
+                filename, "does not have the same history as the other monitor points");
         }
-        std::vector<std::tuple<int, int, double> >().swap(plans[i].row_keys);
     }
-
-    manager.legacy_csv = !plans.empty() && plans[0].legacy_csv;
-    if (manager.legacy_csv)
-        std::printf("Continuing legacy monitor CSVs with regular rows. Use a new monitor.output_prefix for remesh rows.\n");
 
     // Open every point before truncating any of them. A permission failure on
     // one point therefore leaves every existing history byte-for-byte intact.
@@ -635,10 +503,6 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
         const std::string filename = monitor_filename(param, p.id);
         p.fp = std::fopen(filename.c_str(), plans[i].exists ? "r+b" : "w+b");
         if (p.fp == nullptr) {
-            for (std::size_t j = 0; j < i; ++j) {
-                std::fclose(manager.points[j].fp);
-                manager.points[j].fp = nullptr;
-            }
             monitor_csv_io_error(filename, "open for restart", EXIT_IO_OPEN);
         }
     }
@@ -647,13 +511,13 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
         MonitorPointState& p = manager.points[i];
         const std::string filename = monitor_filename(param, p.id);
         if (plans[i].exists) {
-            if (monitor_file_seek(p.fp, 0, SEEK_END) != 0)
+            if (fseeko(p.fp, 0, SEEK_END) != 0)
                 monitor_csv_io_error(filename, "seek in", EXIT_IO_RW);
-            const monitor_file_offset_t file_size = monitor_file_tell(p.fp);
+            const off_t file_size = ftello(p.fp);
             if (file_size < 0)
                 monitor_csv_io_error(filename, "measure", EXIT_IO_RW);
             if (plans[i].keep_bytes < file_size &&
-                monitor_file_truncate(p.fp, plans[i].keep_bytes) != 0) {
+                ftruncate(fileno(p.fp), plans[i].keep_bytes) != 0) {
                 monitor_csv_io_error(filename, "trim stale rows from", EXIT_IO_RW);
             }
         }
@@ -662,7 +526,7 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
         }
 
         std::clearerr(p.fp);
-        if (monitor_file_seek(p.fp, 0, SEEK_END) != 0)
+        if (fseeko(p.fp, 0, SEEK_END) != 0)
             monitor_csv_io_error(filename, "seek in", EXIT_IO_RW);
         if (std::fflush(p.fp) != 0)
             monitor_csv_io_error(filename, "flush", EXIT_IO_RW);
@@ -692,30 +556,30 @@ int get_material_index(const Variables& var, int e)
 }
 
 // A nodal field at the point: interpolated (particle) or at the nearest node (grid).
-double nodal(const Param& param, const Variables& var, const MonitorPointState& p, int dim, const array_t* field)
+template <typename ValueAtNode>
+double sample_nodal(const Param& param, const Variables& var, const MonitorPointState& p,
+                    ValueAtNode value)
 {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    if (field == nullptr) return nan;
     if (param.monitor.point_type == monitor_point_grid)
-        return p.node_id < 0 ? nan : (*field)[p.node_id][dim];
+        return p.node_id < 0 ? nan : value(p.node_id);
     if (p.elem < 0) return nan;
     ConstConnAccessor conn = (*var.connectivity)[p.elem];
     double v = 0.0;
-    for (int k = 0; k < NODES_PER_ELEM; ++k) v += p.weight[k] * (*field)[conn[k]][dim];
+    for (int k = 0; k < NODES_PER_ELEM; ++k) v += p.weight[k] * value(conn[k]);
     return v;
+}
+
+double nodal(const Param& param, const Variables& var, const MonitorPointState& p, int dim, const array_t* field)
+{
+    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
+    return sample_nodal(param, var, p, [field, dim](int n) { return (*field)[n][dim]; });
 }
 
 double nodal_scalar(const Param& param, const Variables& var, const MonitorPointState& p, const double_vec* field)
 {
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    if (field == nullptr) return nan;
-    if (param.monitor.point_type == monitor_point_grid)
-        return p.node_id < 0 ? nan : (*field)[p.node_id];
-    if (p.elem < 0) return nan;
-    ConstConnAccessor conn = (*var.connectivity)[p.elem];
-    double v = 0.0;
-    for (int k = 0; k < NODES_PER_ELEM; ++k) v += p.weight[k] * (*field)[conn[k]];
-    return v;
+    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
+    return sample_nodal(param, var, p, [field](int n) { return (*field)[n]; });
 }
 
 double elem_scalar_or_nan(const Variables& var, int elem, const double_vec* field)
@@ -733,7 +597,7 @@ double elem_tensor_or_nan(const Variables& var, int elem, int comp, const tensor
 void monitor_write_point_row(const Param& param,
                              const Variables& var,
                              const MonitorPointState& p,
-                             std::FILE* fp, int kind, bool legacy)
+                             std::FILE* fp, int kind)
 {
     if (fp == nullptr) return;
 
@@ -832,7 +696,7 @@ void monitor_write_point_row(const Param& param,
     if (param.monitor.output_state_variable) {
         csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.state_variable), first);
     }
-    if (!legacy) csv_write_int(fp,kind,first);
+    csv_write_int(fp,kind,first);
 
     std::fputc('\n', fp);
     std::fflush(fp);
@@ -841,24 +705,29 @@ void monitor_write_point_row(const Param& param,
 void monitor_write_all_points(const Param& param, const Variables& var, MonitorManager& manager,
                               int kind = monitor_row_regular)
 {
-    // Legacy files have no row-kind column: preserve their schema and regular
-    // series without appending ambiguous off-interval remesh samples.
-    if (manager.legacy_csv && kind != monitor_row_regular) return;
     for (std::size_t i = 0; i < manager.points.size(); ++i) {
         bind(param, var, manager.points[i]);
-        monitor_write_point_row(param,var,manager.points[i],manager.points[i].fp,kind,manager.legacy_csv);
+        monitor_write_point_row(param,var,manager.points[i],manager.points[i].fp,kind);
     }
 }
 
 } // namespace
 
-void monitor_initialize(const Param& param, Variables& var)
+void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpoint& saved)
 {
     monitor_finalize(var);
     if (!param.monitor.enabled) return;
 
-    const bool resume = g_monitor.restart_positions.size() == std::size_t(param.monitor.num_points) * NDIMS;
-    const bool reference = resume && g_monitor.restart_elements.size() == std::size_t(param.monitor.num_points);
+    const double_vec& positions = saved.positions;
+    const int_vec& elements = saved.elements;
+    const double_vec& weights = saved.weights;
+    if (std::any_of(positions.begin(), positions.end(), [](double v) { return !std::isfinite(v); }))
+        die(EXIT_IO_RESTART,"Invalid monitor checkpoint positions.");
+    if (std::any_of(elements.begin(), elements.end(), [&var](int e) { return e < -1 || e >= var.nelem; }))
+        die(EXIT_IO_RESTART,"Invalid monitor checkpoint element.");
+    if (std::any_of(weights.begin(), weights.end(), [](double w) { return !std::isfinite(w); }))
+        die(EXIT_IO_RESTART,"Invalid monitor checkpoint weight.");
+    const bool resume = !positions.empty();
     g_monitor.points.resize(param.monitor.num_points);
     for (int i = 0; i < param.monitor.num_points; ++i) {
         MonitorPointState& p = g_monitor.points[i];
@@ -870,21 +739,18 @@ void monitor_initialize(const Param& param, Variables& var)
         p.query[NDIMS-1] = param.monitor.points_z[i];
         // A restart continues the material point where the checkpoint left it.
         for (int d = 0; d < NDIMS; ++d)
-            p.position[d] = resume ? g_monitor.restart_positions[i*NDIMS + d] : p.query[d];
-        if (reference) {
-            p.elem = g_monitor.restart_elements[i];
+            p.position[d] = resume ? positions[i*NDIMS + d] : p.query[d];
+        if (resume) {
+            p.elem = elements[i];
             for (int k = 0; k < NODES_PER_ELEM; ++k)
-                p.weight[k] = g_monitor.restart_weights[i*NODES_PER_ELEM+k];
+                p.weight[k] = weights[i*NODES_PER_ELEM+k];
         }
     }
-    if (!reference) {
+    if (!resume) {
         Barycentric_transformation bary(*var.coord,*var.connectivity,*var.volume);
         #pragma acc wait
         for (MonitorPointState& p : g_monitor.points) locate(var,bary,p.position,p);
     }
-    g_monitor.restart_positions.clear();
-    g_monitor.restart_elements.clear();
-    g_monitor.restart_weights.clear();
 
     monitor_open_files(param, var, g_monitor);
     g_monitor.initialized = true;
@@ -932,64 +798,22 @@ void monitor_remesh_update(const Param& param, Variables& var)
         monitor_write_all_points(param, var, g_monitor, monitor_row_after_remesh);
 }
 
-void monitor_checkpoint(const Param& param, const Variables& var,
-                        double_vec& positions, int_vec& elements, double_vec& weights)
+MonitorCheckpoint monitor_checkpoint(const Param& param, const Variables& var)
 {
-    positions.clear(); elements.clear(); weights.clear();
-    if (!param.monitor.enabled || !g_monitor.initialized) return;
+    MonitorCheckpoint saved;
+    if (!param.monitor.enabled || !g_monitor.initialized) return saved;
     const std::size_t count = g_monitor.points.size();
-    positions.resize(count*NDIMS);
-    elements.resize(count);
-    weights.assign(count*NODES_PER_ELEM,0);
+    saved.positions.resize(count*NDIMS);
+    saved.elements.resize(count);
+    saved.weights.assign(count*NODES_PER_ELEM,0);
     for (std::size_t i = 0; i < count; ++i) {
         const MonitorPointState& p = g_monitor.points[i];
-        current_position(var,p,&positions[i*NDIMS]);
-        elements[i] = p.elem;
+        current_position(var,p,&saved.positions[i*NDIMS]);
+        saved.elements[i] = p.elem;
         if (p.elem >= 0)
-            for (int k = 0; k < NODES_PER_ELEM; ++k) weights[i*NODES_PER_ELEM+k] = p.weight[k];
+            for (int k = 0; k < NODES_PER_ELEM; ++k) saved.weights[i*NODES_PER_ELEM+k] = p.weight[k];
     }
-}
-
-void monitor_restore(const Variables& var, const double_vec& positions,
-                     const int_vec& elements, const double_vec& weights)
-{
-    const std::size_t count = positions.size()/NDIMS;
-    if (positions.size()%NDIMS ||
-        std::any_of(positions.begin(),positions.end(),[](double v) { return !std::isfinite(v); }))
-        die(EXIT_IO_RESTART,"Invalid monitor checkpoint positions.");
-    const bool reference = !elements.empty() || !weights.empty();
-    if (reference && (elements.size() != count || weights.size() != count*NODES_PER_ELEM))
-        die(EXIT_IO_RESTART,"Inconsistent monitor checkpoint reference sizes.");
-    if (reference) {
-        for (std::size_t i = 0; i < count; ++i) {
-            const int e = elements[i];
-            if (e < -1 || e >= var.nelem)
-                die(EXIT_IO_RESTART,"Invalid monitor checkpoint element.");
-            double sum = 0;
-            for (int k = 0; k < NODES_PER_ELEM; ++k) {
-                const double w = weights[i*NODES_PER_ELEM+k];
-                if (!std::isfinite(w) || (e >= 0 && (w < -1e-10 || w > 1+NODES_PER_ELEM*1e-10)))
-                    die(EXIT_IO_RESTART,"Invalid monitor checkpoint weight.");
-                sum += w;
-            }
-            if (e < 0) continue;
-            if (std::fabs(sum-1) > 1e-10)
-                die(EXIT_IO_RESTART,"Monitor checkpoint weights do not sum to one.");
-            for (int d = 0; d < NDIMS; ++d) {
-                double point = 0, scale = 1;
-                for (int k = 0; k < NODES_PER_ELEM; ++k) {
-                    const double x = (*var.coord)[(*var.connectivity)[e][k]][d];
-                    point += weights[i*NODES_PER_ELEM+k]*x;
-                    scale = std::max(scale,std::fabs(x));
-                }
-                if (std::fabs(point-positions[i*NDIMS+d]) > 128*std::numeric_limits<double>::epsilon()*scale)
-                    die(EXIT_IO_RESTART,"Monitor checkpoint position and weights disagree.");
-            }
-        }
-    }
-    g_monitor.restart_positions = positions;
-    g_monitor.restart_elements = elements;
-    g_monitor.restart_weights = weights;
+    return saved;
 }
 
 void monitor_finalize(Variables& /*var*/)
@@ -1003,5 +827,4 @@ void monitor_finalize(Variables& /*var*/)
     g_monitor.points.clear();
     g_monitor.last_written_step = std::numeric_limits<int>::min();
     g_monitor.initialized = false;
-    g_monitor.legacy_csv = false;
 }

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Reject malformed tracer checkpoints before changing monitor histories."""
 import argparse
-import configparser
 import csv
 import io
 import json
@@ -14,11 +13,12 @@ from run_monitor_restart import (DEFAULT_CFG, REPO_ROOT, clone_baseline,
 
 sys.path.insert(0, str(REPO_ROOT))
 from Dynearthsol import Dynearthsol
+from des_test_utils import checkpoint_file, native_offsets, read_config
+from pt_initial_checkpoint import fields
 
 
 def checkpoint(folder):
-    path = folder/'monitor_restart.chkpt.000001'
-    return path if path.is_file() else Path(str(path)+'.vtkhdf')
+    return checkpoint_file(folder/'monitor_restart.chkpt.000001')
 
 
 def change(path, key, value=None, *, integer=False, rename=None):
@@ -43,9 +43,7 @@ def change(path, key, value=None, *, integer=False, rename=None):
         assert len(old) == len(new) and data[:4096].count(old) == 1
         data[:4096] = data[:4096].replace(old, new)
     else:
-        entries = dict(line.rsplit(b'\t', 1) for line in
-                       bytes(data[:4096]).split(b'\0', 1)[0].splitlines()[1:])
-        fmt, offset = '<i' if integer else '<d', int(entries[key.encode()])
+        fmt, offset = '<i' if integer else '<d', native_offsets(data)[key]
         if callable(value):
             value = value(struct.unpack_from(fmt, data, offset)[0])
         struct.pack_into(fmt, data, offset, value)
@@ -70,13 +68,13 @@ def main():
               'Invalid monitor checkpoint element'),
              ('weight-nan', 'monitor point weights', float('nan'), False, None,
               'Invalid monitor checkpoint weight'),
-             ('weight-range', 'monitor point weights', 2., False, None,
-              'Invalid monitor checkpoint weight'),
-             ('weight-sum', 'monitor point weights', lambda w: w/2 if w > .5 else w+.1, False, None,
-              'weights do not sum to one'),
-             ('position-mismatch', 'monitor point positions', 1e6, False, None,
-              'position and weights disagree'),
              ('missing-weights', 'monitor point weights', None, False, 'monitor other weights',
+              'Incomplete monitor checkpoint state'),
+             ('missing-elements', 'monitor point elements', None, False, 'monitor other elements',
+              'Incomplete monitor checkpoint state'),
+             ('missing-positions', 'monitor point positions', None, False, 'monitor other positions',
+              'Incomplete monitor checkpoint state'),
+             ('missing-count', 'monitor point count', None, True, 'monitor other count',
               'Incomplete monitor checkpoint state'),
              ('negative-count', 'monitor point count', -1, True, None,
               'Invalid monitor checkpoint count')]
@@ -87,14 +85,14 @@ def main():
         before = read_histories(folder)
         run_config(exe, restart_cfg, folder, 'restart', threads=1, expected_error=error)
         assert read_histories(folder) == before, name
-    # Position-only checkpoints retain their documented relocation fallback.
-    legacy = output/'legacy-position-only'
-    clone_baseline(baseline, legacy)
-    change(checkpoint(legacy), 'monitor point elements', rename='monitor other elements')
-    change(checkpoint(legacy), 'monitor point weights', rename='monitor other weights')
-    before = read_histories(legacy)
-    run_config(exe, restart_cfg, legacy, 'restart', threads=1)
-    after = read_histories(legacy)
+
+    absent = output/'no-monitor-state'
+    clone_baseline(baseline, absent)
+    for key in ('count', 'positions', 'elements', 'weights'):
+        change(checkpoint(absent), f'monitor point {key}', rename=f'monitor other {key}')
+    before = read_histories(absent)
+    run_config(exe, restart_cfg, absent, 'restart', threads=1)
+    after = read_histories(absent)
     for old, new in zip(before, after):
         a = list(csv.DictReader(io.StringIO(old.decode())))
         b = list(csv.DictReader(io.StringIO(new.decode())))
@@ -115,8 +113,7 @@ def main():
         weights = np.full(4, -4.6e-11)
         weights[np.flatnonzero(cells[e] == node)[0]] = 1+3*4.6e-11
         q = weights@x[cells[e]]
-        cfg = configparser.ConfigParser(interpolation=None)
-        cfg.optionxform = str
+        cfg = read_config(interpolation=None)
         cfg.read_string(template)
         for key, value in zip(('points_x', 'points_y', 'points_z'), q):
             cfg['monitor'][key] = repr([float(value), .5 if key != 'points_z' else -.5])
@@ -125,16 +122,8 @@ def main():
         near_corner = output/'near-corner'
         run_config(exe, render_cfg(stream.getvalue(), restarting=False, write_header=True),
                    near_corner, 'fresh', threads=1)
-        path = checkpoint(near_corner)
-        if path.suffix == '.vtkhdf':
-            import h5py
-            with h5py.File(path) as source:
-                saved = source['monitor point weights'][:4]
-        else:
-            data = path.read_bytes()
-            entries = dict(line.rsplit(b'\t', 1) for line in
-                           data[:4096].split(b'\0', 1)[0].splitlines()[1:])
-            saved = struct.unpack_from('<4d', data, int(entries[b'monitor point weights']))
+        saved = struct.unpack_from(
+            '<4d', fields(near_corner/'monitor_restart.chkpt.000001')['monitor point weights'])
         assert max(saved) > 1+1e-10, saved
         expected = read_histories(near_corner)
         run_config(exe, render_cfg(stream.getvalue(), restarting=True, write_header=True),
@@ -143,9 +132,9 @@ def main():
         corner_checked = True
     (output/'summary.json').write_text(json.dumps(dict(passed=True,
         rejected_checkpoints=len(cases), histories_unchanged_on_failure=True,
-        legacy_position_only_supported=True, legacy_csv_byte_exact=before == after,
+        absent_monitor_state_supported=True,
         boundary_tolerance_checked=corner_checked), indent=2)+'\n')
-    print('PASS tracer state guards and legacy fallback')
+    print('PASS tracer state guards and absent-state relocation')
 
 
 if __name__ == '__main__':

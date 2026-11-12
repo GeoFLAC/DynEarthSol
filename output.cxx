@@ -491,16 +491,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     const double_vec controls = dt_controls(param);
     bin.write_scalar(1, "dt controls version");
     bin.write_aux_array(controls, "dt controls", controls.size());
-    {
-        double_vec positions, weights;
-        int_vec elements;
-        monitor_checkpoint(param,var,positions,elements,weights);
-        if (!positions.empty()) {
-            bin.write_scalar(param.monitor.num_points, "monitor point count");
-            bin.write_aux_array(positions, "monitor point positions", positions.size());
-            bin.write_aux_array(elements, "monitor point elements", elements.size());
-            bin.write_aux_array(weights, "monitor point weights", weights.size());
-        }
+    const MonitorCheckpoint monitor = monitor_checkpoint(param, var);
+    if (!monitor.positions.empty()) {
+        bin.write_scalar(param.monitor.num_points, "monitor point count");
+        bin.write_aux_array(monitor.positions, "monitor point positions", monitor.positions.size());
+        bin.write_aux_array(monitor.elements, "monitor point elements", monitor.elements.size());
+        bin.write_aux_array(monitor.weights, "monitor point weights", monitor.weights.size());
     }
     if (param.control.has_hydraulic_diffusion)
         bin.write_array(*var.dppressure, "pending pore pressure increment", var.dppressure->size());
@@ -511,9 +507,9 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         }
         bin.write_scalar(static_cast<int>(var.initial_equilibrium_done), "initial equilibrium done");
     }
-    bin.write_scalar(var.output_start_time, param.control.has_PT ? "PT output start time" : "output start time");
-    bin.write_scalar(var.output_start_step, param.control.has_PT ? "PT output start step" : "output start step");
-    bin.write_scalar(var.output_next_regular_frame, param.control.has_PT ? "PT next regular frame" : "next regular frame");
+    bin.write_scalar(var.output_start_time, "output start time");
+    bin.write_scalar(var.output_start_step, "output start step");
+    bin.write_scalar(var.output_next_regular_frame, "next regular frame");
     bin.write_scalar(param.sim.output_step_interval, "output step interval");
     bin.write_scalar(param.sim.output_time_interval_in_yr, "output time interval");
     bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");

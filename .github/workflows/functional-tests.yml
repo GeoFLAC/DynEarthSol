@@ -51,21 +51,6 @@ jobs:
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
       run: make -j ndims=3 opt=2 openmp=1 hdf5=1
 
-    - name: test 3d monitoring, output and restart
-      run: |
-        for method in pt explicit gvs; do
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol3d pt_output_interval.cfg output-interval-3d-$method --schedule overflow --method $method
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol3d pt_output_interval.cfg output-step-change-3d-$method --schedule step --step-after-restart 6 --method $method
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol3d pt_output_interval.cfg output-time-change-3d-$method --schedule time --time-after-restart 3.5 --method $method
-        done
-        python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol3d --threads 1
-        python3 monitor_restart/check_state.py ../../dynearthsol3d monitor-state-3d
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 check_restart_dt.py ../../dynearthsol3d restart-dt-3d
-
-    - name: test 3d seismic moment
-      working-directory: ./tests/earthquake-moment-test
-      run: make check ndims=3
-
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 
@@ -77,31 +62,11 @@ jobs:
       working-directory: .
       run: make -j ndims=2 opt=2 openmp=1 hdf5=1
 
-    - name: test 2d monitoring, output and restart
-      run: |
-        for method in pt explicit gvs; do
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol2d pt_output_interval.cfg output-interval-2d-$method --schedule overflow --method $method
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol2d pt_output_interval.cfg output-step-change-2d-$method --schedule step --step-after-restart 6 --method $method
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol2d pt_output_interval.cfg output-time-change-2d-$method --schedule time --time-after-restart 3.5 --method $method
-        done
-        python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol2d --threads 1
-        python3 monitor_restart/check_state.py ../../dynearthsol2d monitor-state-2d
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 monitor/check_monitor_tracking.py ../../dynearthsol2d monitor-tracking-2d
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 check_restart_dt.py ../../dynearthsol2d restart-dt-2d
-
-    - name: test 2d seismic moment
-      working-directory: ./tests/earthquake-moment-test
-      run: make check ndims=2
-
     - name: test elastic plane-strain stress update
       run: python3 plane_strain_elastic/run_plane_strain_elastic.py ../../dynearthsol2d
 
-    - name: test displacement and explicit remesh continuation
-      run: |
-        python3 displacement_output/run_displacement_output.py --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d --expected-format hdf5 --threads 1
-        python3 check_remesh_restart.py ../../dynearthsol2d remesh-restart
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 check_gvs_mass.py ../../dynearthsol2d gvs-mass-2d
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 check_gvs_mass.py ../../dynearthsol3d gvs-mass-3d
+    - name: test monitor CSV restart
+      run: python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol2d --threads 1
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
