@@ -87,20 +87,45 @@ stresses from final stresses on a single face or either edge. Positive and
 negative cohesion slopes, dilation angles 0/30 degrees, and equal/unequal edge
 multipliers must return to those targets. Rebuilding strength from the recorded
 plastic history and applying a second zero-strain step must preserve yield and
-history. Plane-strain cases cover tensile clipping and states at and on either
-side of the tensile cap. These are local 3D and plane-strain tests within a linear cohesion segment,
-with fixed friction/dilation. The pure 2D, two-principal-stress formulation is
-separate; general apex and fully coupled shear/tension evolution are not qualified.
+history. Plane-strain trials at and on either side of the tensile cap check the
+uncut edge return below the cap and, above it, the property checks below.
 
-`check.sh` also runs a strongly softening case in a separate process. An
-inadmissible return must report its diagnostic and exit with status 54 on every
-test backend; an out-of-order candidate must not continue silently. The material
-kernel completes before the host checks this return status.
+Returns over the whole strength law are checked by their properties: inside
+the shear surface and tensile cap of the stored history and on one of them,
+principal order kept, history equal to the measure of the plastic strain implied
+by isotropic compliance, that plastic strain a nonnegative combination of the
+flows of the active surfaces, nonnegative plastic work, and unchanged by a
+second, unloaded update. Cases: a
+cohesion drop faster than elastic unloading (the return must reach the residual
+strength), also from a nonzero history whose distance to the breakpoint rounds
+one ulp short, friction and dilation softening within the step, tension with a
+friction angle constant or 1e-8 degrees from constant (the two returns must
+agree), rate-and-state softening to its residual cohesion, a single state update per
+step, and friction softening whose stress lies on the face of the stored
+friction coefficient, and in 3D biaxial
+and triaxial tension, tension-shear corners and the cone apex. The pure 2D,
+two-principal-stress formulation has only its closed-form single-face return;
+a softening case with dilation 0 and 30 degrees checks that the strength
+rebuilt from the stored history keeps the result on yield.
 
-For a fixed friction angle, the return uses `H = 2*sqrt(Nphi)*dc/d(plstrain)`.
-Its strength increment is `H*depls`, using exactly the increment stored in history.
-On an edge, isotropic elasticity fixes the difference `d` of the two face
-multipliers. Their sum `s` satisfies `E*s + H*depls(s,d) = R`. The recorded
-plane-strain measure is piecewise linear in `s,d`; the 3D measure has
-`depls^2 = A*s^2 + B*d^2`. The return solves that scalar consistency equation,
-then checks multiplier signs, stress ordering, tensile bounds and yield.
+`check.sh` also runs a non-finite trial in a separate process. It must report
+its cause and first element and exit with status 54 on every test backend.
+The material kernel completes before the host checks this return status.
+
+For a fixed friction angle, the closed-form return uses
+`H = 2*sqrt(Nphi)*dc/d(plstrain)`. Its strength increment is `H*depls`, using
+exactly the increment stored in history. On an edge, isotropic elasticity fixes
+the difference `d` of the two face multipliers. Their sum `s` satisfies
+`E*s + H*depls(s,d) = R`. The recorded plane-strain measure is piecewise linear
+in `s,d`; the 3D measure has `depls^2 = A*s^2 + B*d^2`.
+
+The closed form is kept only while the increment stays on the law's linear
+piece with fixed angles and tensile cap; plane-strain tension always uses the
+general return. Otherwise `consistent_return` solves
+`depls = recorded(return at strength(plstrain + depls))`: for a fixed strength
+it takes the first active set of the three shear faces and three tensile caps
+(fewest first) with nonnegative multipliers, kept order and no violated
+surface, and it searches the law's linear pieces in order, so a cohesion drop
+faster than elastic unloading continues to the residual strength. Localization
+from such softening needs mesh regularization, which is not part of this
+return.

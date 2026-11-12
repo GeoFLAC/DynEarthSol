@@ -251,16 +251,31 @@ For a release, the full auto-generated list of merged pull requests is in its
   build copied into a container) instead of failing to link its library; a
   failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
 
-- Plane-strain and 3D Mohr-Coulomb shear returns preserve principal-stress
-  ordering by returning two active faces to their common edge, including the
-  combined plastic-strain increment. Strain-dependent cohesion uses that same
-  increment in the return and stored history, including the yield-intercept
-  conversion for plane strain ([#136]).
-- An admissible shear return is evaluated before tensile clipping when the
-  elastic predictor reaches the tensile cap; edge returns also apply after
-  plane-strain tensile clipping. Rejected returns stop with exit status 54
-  instead of storing an inadmissible stress. General apex and combined-return
-  qualification remains separate ([#136]).
+- Plane-strain and 3D plastic shear returns handle two active Mohr-Coulomb
+  faces when a single-face correction crosses the principal-stress order.
+  Strain-dependent cohesion uses the recorded plastic increment in its return,
+  in 3D, plane strain and 2D, including the yield-intercept conversion for
+  plane strain. With a nonzero dilation angle the recorded increment exceeds
+  the plastic multiplier, so results of dilatant softening models change on
+  every yielding face, not only at edges; at zero dilation single-face
+  results are unchanged ([#136]).
+- An elastic trial at or above the tensile cap can return by shear when that
+  return finishes below the cap. When the closed-form returns do not apply,
+  the return covers the whole strength law: a cohesion drop faster than
+  elastic unloading continues to the residual strength, friction and dilation
+  softening and the cohesion-dependent tensile cap use the stored history,
+  and 3D biaxial and triaxial tension, tension-shear corners and the cone
+  apex return to the composite surface. Rate-and-state models use the same
+  piecewise cohesion law, including its residual value, with the step's slip
+  rate and state held fixed during the return; the stored friction
+  coefficient is that of the final plastic history. Plane-strain tension no longer
+  clips principal stresses: it returns from the elastic trial with associated
+  flow on the tensile cap and records that plastic strain, as in 3D, so
+  plane-strain results with tensile failure change. Other results change only
+  where the closed form does not apply (friction or dilation softening, or a
+  step that crosses a weakening breakpoint). A non-finite trial stops with
+  exit status 54, naming the step, the first element and the cause. Mesh
+  regularization of strong softening remains separate ([#136]).
 
 ## [2.0.2] - 2026-09-17
 

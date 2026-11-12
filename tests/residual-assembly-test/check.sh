@@ -12,9 +12,10 @@ else
     des_rejection_status=$?
 fi
 if [ "$des_rejection_status" -ne 54 ] ||
-   ! grep -q 'no admissible Mohr-Coulomb return' "$des_rejection_log"; then
+   ! grep -q 'no admissible Mohr-Coulomb return' "$des_rejection_log" ||
+   ! grep -q 'First element 0: non-finite trial stress' "$des_rejection_log"; then
     cat "$des_rejection_log"
-    echo 'FAIL: expected a Mohr-Coulomb diagnostic and exit status 54' >&2
+    echo 'FAIL: expected the non-finite cause, element 0 and exit status 54' >&2
     exit 1
 fi
-echo 'PASS: rejected Mohr-Coulomb return reports exit status 54'
+echo 'PASS: rejected Mohr-Coulomb return reports its cause and exit status 54'

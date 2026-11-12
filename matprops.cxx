@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "constants.hpp"
 #include "utils.hpp"
@@ -424,6 +425,20 @@ void MatProps::plastic_weakening(int e, double pls,
     hardening = h / n;
 }
 
+double MatProps::next_weakening_break(int e, double pls) const
+{
+    // Same branches as plastic_weakening().
+    double next = std::numeric_limits<double>::max();
+    for (int m=0; m<nmat; m++) {
+        if (elemmarkers[e][m] == 0) continue;
+        // param_at as in plastic_weakening_rsf; the same values for ordinary EP.
+        const double pls0_m = param_at(pls0, m), pls1_m = param_at(pls1, m);
+        if (pls < pls0_m) next = std::min(next, pls0_m);
+        else if (pls < pls1_m) next = std::min(next, pls1_m);
+    }
+    return next;
+}
+
 void MatProps::plastic_weakening_rsf(int e, double pls,
                                  double &cohesion, double &dynamic_friction_angle,
                                  double &dilation_angle, double &hardening, double &slip_rate,
@@ -635,8 +650,25 @@ void MatProps::plastic_props_rsf(int e, double pls,
     if (!frozen_history) update_state_variable(e, slip_rate, state_variable, dt, state_model);
     plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
                           dyn_fric_coeff, state_variable, state_model, dt, frozen_history);
+    rsf_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
+}
 
-    // derived variables
+void MatProps::rsf_strength(int e, double pls, double slip_rate, double state_variable,
+                            double dyn_fric_coeff, int state_model, bool frozen_history,
+                            double& amc, double& anphi, double& anpsi,
+                            double& hardn, double& ten_max) const
+{
+    // Same evaluation as plastic_props_rsf without the state update; the
+    // by-value rate, state and coefficient keep the caller's copies unchanged.
+    double cohesion, phi, psi;
+    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
+                          dyn_fric_coeff, state_variable, state_model, 0.0, frozen_history);
+    rsf_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
+}
+
+void MatProps::rsf_derived(double cohesion, double phi, double psi,
+                           double& amc, double& anphi, double& anpsi, double& ten_max) const
+{
     double sphi = std::sin(phi * DEG2RAD);
     double spsi = std::sin(psi * DEG2RAD);
 
