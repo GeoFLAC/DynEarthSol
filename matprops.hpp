@@ -63,12 +63,23 @@ public:
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
+    // Smallest pls0/pls1 above pls among the element's materials (the next
+    // slope change of the piecewise-linear weakening law), or the largest double.
+    #pragma acc routine seq
+    double next_weakening_break(int e, double pls) const;
     #pragma acc routine seq
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max, double& slip_rate,
                        double& dyn_fric_coeff, double& state_variable,
                        double dt, int state_model, bool frozen_history = false) const;
+    // RSF strength at pls with this step's rate and state held fixed: no state
+    // update and no change to the stored friction coefficient.
+    #pragma acc routine seq
+    void rsf_strength(int e, double pls, double slip_rate, double state_variable,
+                      double dyn_fric_coeff, int state_model, bool frozen_history,
+                      double& amc, double& anphi, double& anpsi,
+                      double& hardn, double& ten_max) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
@@ -163,6 +174,9 @@ private:
     #pragma acc routine seq
     void update_state_variable(int e, double slip_rate, double& state_variable,
                                double dt, int state_model) const;
+    #pragma acc routine seq
+    void rsf_derived(double cohesion, double phi, double psi,
+                     double& amc, double& anphi, double& anpsi, double& ten_max) const;
 };
 
 

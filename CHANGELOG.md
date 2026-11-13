@@ -251,6 +251,38 @@ For a release, the full auto-generated list of merged pull requests is in its
   build copied into a container) instead of failing to link its library; a
   failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
 
+- Plane-strain and 3D plastic shear returns handle two active Mohr-Coulomb
+  faces when a single-face correction crosses the principal-stress order.
+  Strain-dependent cohesion uses the recorded plastic increment in its return,
+  in 3D, plane strain and 2D, including the yield-intercept conversion for
+  plane strain. With a nonzero dilation angle the recorded increment exceeds
+  the plastic multiplier, so results of dilatant softening models change on
+  every yielding face, not only at edges; at zero dilation single-face
+  results are unchanged ([#136]).
+- An elastic trial at or above the tensile cap can return by shear when that
+  return finishes below the cap. When the closed-form returns do not apply,
+  the return covers the whole strength law: a cohesion drop faster than
+  elastic unloading continues to the residual strength, friction and dilation
+  softening and the cohesion-dependent tensile cap use the stored history,
+  3D biaxial and triaxial tension, tension-shear corners and the cone apex,
+  and the pure 2D face-cap and cap-cap corners, return to the composite
+  surface. Pure 2D (`mat.is_plane_strain = no`, the default) uses the same
+  returns in the same order as 3D and plane strain. Rate-and-state models use the same
+  piecewise cohesion law, including its residual value, with the step's slip
+  rate and state held fixed during the return; the stored friction
+  coefficient is that of the final plastic history. Plane-strain tension no longer
+  clips principal stresses: it returns from the elastic trial with associated
+  flow on the tensile cap and records that plastic strain, as in 3D, so
+  plane-strain results with tensile failure change. Other results change only
+  where the closed form does not apply (friction or dilation softening, or a
+  step that crosses a weakening breakpoint). In pure 2D with friction
+  softening, every yielding element takes the general return: the 2D
+  accretionary-wedge example runs about 35% longer. A non-finite trial stops
+  with exit status 54 in 3D, plane strain and pure 2D, also within a PT
+  iteration, naming the step, the first element and the cause; an
+  elasto-visco-plastic element whose viscous stress is selected does not stop.
+  Mesh regularization of strong softening remains separate ([#136]).
+
 ## [2.0.2] - 2026-09-17
 
 DOI: [10.5281/zenodo.20330979](https://doi.org/10.5281/zenodo.20330979).
@@ -424,3 +456,5 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+
+[#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136

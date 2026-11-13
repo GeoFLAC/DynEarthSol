@@ -498,6 +498,79 @@ static void test_constraints() {
 }
 
 
+// One-material element fields for constitutive updates on the test mesh.
+struct MaterialFixture {
+    Fixture* m;
+    tensor_t* strain;
+    double_vec *yy, *dp, *visc, *pls, *dpls, *friction, *state, *div;
+    MaterialFixture(int model, double alpha) {
+        m = new Fixture();
+        build_mesh(*m);
+        const int ne=m->var.nelem, nn=m->var.nnode;
+        strain = new tensor_t(ne,0.);
+        yy = new double_vec(ne,0.);
+        dp = new double_vec(ne,0.);
+        visc = new double_vec(ne,1e9);
+        pls = new double_vec(ne,0.);
+        dpls = new double_vec(ne,0.);
+        friction = new double_vec(ne,0.6);
+        state = new double_vec(ne,10.);
+        div = new double_vec(ne,0.);
+        m->strain_rate.resize(ne,0.);
+        m->temperature.assign(nn,300.);
+        m->pressure.assign(nn,10.);
+        m->pressure_increment.assign(nn,-10.);
+        m->markers.assign(ne,int_vec(1,1));
+        m->var.strain=strain; m->var.stressyy=yy; m->var.dpressure=dp;
+        m->var.viscosity=visc; m->var.plstrain=pls; m->var.delta_plstrain=dpls;
+        m->var.dyn_fric_coeff=friction; m->var.state_variable=state;
+        m->var.edvoldt=div; m->var.strain_rate=&m->strain_rate;
+        m->var.temperature=&m->temperature; m->var.ppressure=&m->pressure;
+        m->var.dppressure=&m->pressure_increment; m->var.elemmarkers=&m->markers;
+        m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
+        m->var.dt=0.1; m->var.time=1;
+        auto& p=m->param.mat;
+        p.nmat=1; p.rheol_type=model; p.is_plane_strain=NDIMS==2;
+        p.rho0={2500}; p.alpha={0}; p.porosity={0.2};
+        p.bulk_modulus={1e9}; p.shear_modulus={1e9};
+        p.visc_exponent={1}; p.visc_coefficient={1};
+        p.visc_activation_energy={0}; p.visc_activation_volume={0};
+        p.visc_min=p.visc_max=1e9;
+        p.biot_coeff={alpha}; p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9};
+        p.pls0={1}; p.pls1={2}; p.cohesion0=p.cohesion1={1e8};
+        p.friction_angle0=p.friction_angle1={0};
+        p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e8;
+        m->param.control.has_hydraulic_diffusion=true;
+        m->param.control.is_using_mixed_stress=true;
+        m->var.mat=new MatProps(m->param,m->var);
+    }
+    ~MaterialFixture() {
+        delete m->var.mat;
+        delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
+        delete friction; delete state; delete div; delete m;
+    }
+    // Uniform principal trial stress with zero plastic history.
+    void set_principal(const double trial[3]) {
+        for(int e=0;e<m->var.nelem;++e) {
+            for(int d=0;d<NDIMS;++d) m->stress[e][d]=trial[d];
+            for(int d=NDIMS;d<NSTR;++d) m->stress[e][d]=0;
+            (*yy)[e]=trial[2];
+            (*pls)[e]=(*dpls)[e]=0;
+        }
+    }
+    void set_material() {
+        delete m->var.mat;
+        m->var.mat=new MatProps(m->param,m->var);
+    }
+    void update() {
+        update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
+                      m->strain_rate,m->pressure,m->pressure_increment,m->vel,
+                      *friction,*state,true);
+        #pragma acc wait
+    }
+};
+
+
 static void test_material_trials() {
     std::printf("[PT material pressure and repeated trials]\n");
     for (int model : {MatProps::rh_elastic, MatProps::rh_maxwell, MatProps::rh_viscous,
@@ -734,6 +807,576 @@ static void test_material_trials() {
     }
 }
 
+// The plastic-strain measure stored in history (3D invariant, plane-strain
+// half range), computed independently of rheology.cxx.
+static double recorded_plastic_increment(const double plastic[3]) {
+#ifdef THREED
+    const double mean=(plastic[0]+plastic[1]+plastic[2])/3;
+    double squared=mean*mean;
+    for(int k=0;k<3;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
+    return std::sqrt(squared/2);
+#else
+    return 0.5*(std::max(plastic[0],std::max(plastic[1],plastic[2]))-
+                std::min(plastic[0],std::min(plastic[1],plastic[2])));
+#endif
+}
+
+// Pure 2D (two principal stresses, not plane strain): the same invariant of
+// the two in-plane components.
+static double recorded_plastic_increment_2d(const double plastic[3]) {
+    const double mean=(plastic[0]+plastic[1])/2;
+    double squared=mean*mean;
+    for(int k=0;k<2;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
+    return std::sqrt(squared/2);
+}
+
+// Plastic strain of a principal stress correction under the compliance of
+// set_mc_material: 3K = 65e9, lambda = K - 2G/3 = 15e9, 2G = 2e10.
+static void compliance_plastic(const double trial[3], const double result[3], double plastic[3]) {
+    const double volume=(trial[0]+trial[1]+trial[2]-result[0]-result[1]-result[2])/65e9;
+    for(int k=0;k<3;++k) plastic[k]=(trial[k]-result[k]-15e9*volume)/2e10;
+}
+
+// Pure 2D: the in-plane moduli a1 = K + 4G/3 = 35e9 and a2 = K - 2G/3 = 15e9
+// of set_mc_material, inverted (determinant a1^2 - a2^2 = 1e21).
+static void compliance_plastic_2d(const double trial[3], const double result[3], double plastic[3]) {
+    const double d0=trial[0]-result[0], d1=trial[1]-result[1];
+    plastic[0]=(35e9*d0-15e9*d1)/1e21;
+    plastic[1]=(35e9*d1-15e9*d0)/1e21;
+    plastic[2]=0;
+}
+
+// Elastic-plastic material with c=100 kPa, phi=30 deg, K=65/3 GPa, G=10 GPa.
+static void set_mc_material(MaterialFixture& f, double dilation) {
+    auto& p=f.m->param.mat;
+    p.bulk_modulus={65e9/3}; p.shear_modulus={1e10};
+    p.cohesion0=p.cohesion1={1e5};
+    p.friction_angle0=p.friction_angle1={30};
+    p.dilation_angle0=p.dilation_angle1={dilation};
+    p.tension_max=1e9;
+    f.m->param.control.has_hydraulic_diffusion=false;
+    for(int e=0;e<f.m->var.nelem;++e) for(int d=0;d<NSTR;++d) f.m->strain_rate[e][d]=0;
+    f.div->assign(f.m->var.nelem,0.);
+    f.set_material();
+}
+
+static void check_law_return(MaterialFixture& f, const char* name, const double trial[3],
+                             double minimum_history=0, double initial_history=0);
+
+static void test_mohr_coulomb_returns() {
+    std::printf("[Mohr-Coulomb returns]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    Fixture* m=f.m;
+    const int ne=m->var.nelem;
+    auto& p=m->param.mat;
+    auto& stress=m->stress;
+    auto &yy=*f.yy, &pls=*f.pls, &dpls=*f.dpls;
+
+    // Independent symmetric-edge states from the two active MC equations and
+    // isotropic compliance.
+    for(int dilation : {0,30}) {
+        set_mc_material(f, dilation);
+        for(int edge : {0,1}) for(int orientation=0;orientation<4;++orientation) {
+            const double base = edge == 0 ? -1e6 : 1e5;
+            const double unique = edge == 0 ? -1e5 : -1.4e5;
+            const double lower = edge == 0 ?
+                (dilation == 0 ? -949487.1659305394 : -1028287.187078898) :
+                (dilation == 0 ? -102564.06460551017 : -145505.28461683675);
+            const double upper = edge == 0 ?
+                (dilation == 0 ? -201025.66813892123 : -227292.3418550404) :
+                (dilation == 0 ? 81282.03230275508 : 66968.29229897956);
+            const double target_base = edge == 0 ? lower : upper;
+            const double target_unique = edge == 0 ? upper : lower;
+            double normal[3]={0,0,0};
+            if(orientation<3) normal[orientation]=1;
+            else for(int d=0;d<NDIMS;++d) normal[d]=1/std::sqrt(double(NDIMS));
+            for(int e=0;e<ne;++e) {
+                for(int d=0;d<NDIMS;++d)
+                    stress[e][d]=base+(unique-base)*normal[d]*normal[d];
+                stress[e][NDIMS]=(unique-base)*normal[0]*normal[1];
+#ifdef THREED
+                stress[e][4]=(unique-base)*normal[0]*normal[2];
+                stress[e][5]=(unique-base)*normal[1]*normal[2];
+#endif
+                yy[e]=base+(unique-base)*normal[2]*normal[2];
+                pls[e]=dpls[e]=0;
+            }
+            f.update();
+            const double edge_trial[3]={base,base,unique};
+            const double edge_target[3]={target_base,target_base,target_unique};
+            double plastic[3];
+            compliance_plastic(edge_trial,edge_target,plastic);
+            const double increment=recorded_plastic_increment(plastic);
+            for(int e=0;e<ne;++e) {
+                for(int d=0;d<NDIMS;++d)
+                    check("MC edge normal stress",stress[e][d],
+                        target_base+(target_unique-target_base)*normal[d]*normal[d]);
+                check("MC edge shear",stress[e][NDIMS],(target_unique-target_base)*normal[0]*normal[1]);
+#ifdef THREED
+                check("MC edge rotated xz",stress[e][4],(target_unique-target_base)*normal[0]*normal[2]);
+                check("MC edge rotated yz",stress[e][5],(target_unique-target_base)*normal[1]*normal[2]);
+#else
+                check("MC edge plane-strain yy",yy[e],target_base+(target_unique-target_base)*normal[2]*normal[2]);
+#endif
+                check("MC edge plastic history",pls[e],increment);
+                check("MC edge plastic increment",dpls[e],increment);
+            }
+        }
+    }
+
+    // The elastic trial exceeds c/tan(phi), but its admissible associated
+    // shear return lies below it; no tensile flow.
+    {
+        set_mc_material(f, 30);
+        const double trial[3]={169e3,185e3,200e3};
+        const double target[3]={165347.65655963385,170585.93935780309,170585.93935780309};
+        double plastic[3];
+        compliance_plastic(trial,target,plastic);
+        const double increment=recorded_plastic_increment(plastic);
+        f.set_principal(trial);
+        f.update();
+        for(int e=0;e<ne;++e) {
+            for(int d=0;d<NDIMS;++d) check("shear return before the tensile cap",stress[e][d],target[d]);
+            for(int d=NDIMS;d<NSTR;++d) check("uncut shear has no rotation",stress[e][d],0);
+            check("uncut shear plastic history",pls[e],increment);
+            check("uncut shear plastic increment",dpls[e],increment);
+#ifndef THREED
+            check("uncut shear yy",yy[e],target[2]);
+#endif
+        }
+    }
+
+    // Reconstruct trial stresses from prescribed plastic flow and final
+    // stresses on yield, then rebuild strength from the stored history and
+    // check a second, unloaded constitutive update.
+    for(double slope : {-5e8,2e9}) for(int dilation : {0,30}) {
+        p.pls0={0}; p.pls1={1e-4};
+        set_mc_material(f, dilation);
+        p.cohesion1={1e5+slope*1e-4};
+        f.set_material();
+        double amc,anphi,anpsi,hardn,tenmax;
+        m->var.mat->plastic_props(0,0,amc,anphi,anpsi,hardn,tenmax);
+        check("MC nonzero cohesion slope",hardn,slope);
+        const double psi=dilation==0 ? 1. : 3.;
+        // face=0 is a single face; 1/2 repeat the low/high stress.
+        for(int face=0;face<3;++face) for(double ratio : {1.,2.}) {
+            if(face==0 && ratio!=1) continue;
+            const double first=1e-6, second=ratio*first;
+            double plastic[3]={-first,0,psi*first};
+            if(face==1) { plastic[1]=-second; plastic[2]=psi*(first+second); }
+            if(face==2) { plastic[0]=-(first+second); plastic[1]=psi*second; }
+            const double increment=recorded_plastic_increment(plastic);
+            const double strength=2*std::sqrt(3.)*(1e5+slope*increment);
+            double target[3]={3*(-2e5)-strength,0,-2e5};
+            target[1]=face==1 ? target[0] : face==2 ? target[2] : 0.5*(target[0]+target[2]);
+            const double volume=plastic[0]+plastic[1]+plastic[2];
+            double trial[3];
+            for(int k=0;k<3;++k) trial[k]=target[k]+2e10*plastic[k]+15e9*volume;
+            f.set_principal(trial);
+            f.update();
+            for(int e=0;e<ne;++e) {
+                for(int d=0;d<NDIMS;++d)
+                    check("MC tangent normal stress",stress[e][d],target[d]);
+                for(int d=NDIMS;d<NSTR;++d) check("MC tangent has no rotation",stress[e][d],0);
+#ifndef THREED
+                check("MC tangent plane-strain yy",yy[e],target[2]);
+#endif
+                check("MC tangent plastic history",pls[e],increment);
+                check("MC tangent plastic increment",dpls[e],increment);
+                check("MC tangent stays in linear strength range",pls[e]<1e-4,1);
+            }
+            double new_amc,new_phi,new_psi,new_slope,new_cap;
+            m->var.mat->plastic_props(0,pls[0],new_amc,new_phi,new_psi,new_slope,new_cap);
+            const double high=NDIMS==2 ? yy[0] : stress[0][2];
+            check("MC stored history reproduces yield",stress[0][0]-new_phi*high+new_amc,0);
+            f.update();
+            for(int e=0;e<ne;++e) {
+                for(int d=0;d<NDIMS;++d)
+                    check("MC unloaded stress stays on yield",stress[e][d],target[d]);
+#ifndef THREED
+                check("MC unloaded plane-strain yy",yy[e],target[2]);
+#endif
+                check("MC unloaded plastic history",pls[e],increment);
+                check("MC unloaded plastic increment",dpls[e],0);
+            }
+        }
+    }
+
+#ifndef THREED
+    // Plane-strain trials at and on either side of the tensile cap 0. While the
+    // uncut-trial edge return stays below the cap, zero-dilation shear flow
+    // conserves trace: p1 = p2 = (trace + 2c*sqrt(3))/5, p0 = 3*p2 - 2c*sqrt(3).
+    // Above it the cap is active; check_law_return checks those by properties.
+    p.pls0={0}; p.pls1={1};
+    set_mc_material(f, 0);
+    p.tension_max=0;
+    f.set_material();
+    const double cases[][3]={{-1e6,2e6,2e6},{-1e6,-1e4,2e6},
+        {-1e6,-1e4,0},{-1e6,-1e4,-1e-6},{-1e6,-1e4,1e-6}};
+    for(const auto& trial : cases) {
+        check_law_return(f,"plane-strain tension",trial);
+        const double upper=(trial[0]+trial[1]+trial[2]+2e5*std::sqrt(3.))/5;
+        if(upper>0) continue;
+        for(int e=0;e<ne;++e) {
+            check("MC uncut edge below the cap xx",stress[e][0],3*upper-2e5*std::sqrt(3.));
+            check("MC uncut edge below the cap zz",stress[e][1],upper);
+            check("MC uncut edge below the cap yy",yy[e],upper);
+        }
+    }
+#endif
+}
+
+// Properties of any accepted return from a principal trial with no plastic
+// history, checked against the law at the stored history: inside the shear
+// surface and tensile cap and on one of them, principal order kept, history
+// equal to the measure of the plastic strain implied by isotropic compliance,
+// and no change from a second, unloaded update.
+// Whether plastic is a nonnegative combination of the flows of the surfaces
+// active at result: shear faces (low, high) with flow -e_low + Npsi*e_high,
+// and tensile caps with flow e_k. In principal space three flows suffice.
+// nd = 2 (pure 2D) has the one face (0,1) and caps on p0, p1.
+static bool in_active_flow_cone(const double result[3], const double plastic[3],
+                                double amc, double anphi, double anpsi, double cap,
+                                double scale, int nd=3) {
+    double flows[6][3];
+    int n=0;
+    const int faces[3][2]={{0,2},{1,2},{0,1}};
+    const double tol=1e-9*scale;
+    for(int i=nd==3 ? 0 : 2;i<3;++i) {
+        const auto& face=faces[i];
+        if(std::fabs(result[face[0]]-anphi*result[face[1]]+amc)<=tol) {
+            double* m=flows[n++];
+            m[0]=m[1]=m[2]=0; m[face[0]]=-1; m[face[1]]=anpsi;
+        }
+    }
+    for(int k=0;k<nd;++k)
+        if(result[k]>=cap-tol) {
+            double* m=flows[n++];
+            m[0]=m[1]=m[2]=0; m[k]=1;
+        }
+    const auto dot=[](const double* a, const double* b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; };
+    const double size=std::sqrt(dot(plastic,plastic));
+    if(size==0) return true;
+    for(int mask=1;mask<(1<<n);++mask) {
+        int idx[3], k=0;
+        for(int i=0;i<n && k<=3;++i) if(mask>>i&1) { if(k<3) idx[k]=i; ++k; }
+        if(k>3) continue;
+        // Least squares on the chosen flows: normal equations, Gaussian elimination.
+        double a[3][4];
+        for(int i=0;i<k;++i) {
+            for(int j=0;j<k;++j) a[i][j]=dot(flows[idx[i]],flows[idx[j]]);
+            a[i][k]=dot(flows[idx[i]],plastic);
+        }
+        bool singular=false;
+        for(int c=0;c<k && !singular;++c) {
+            int pivot=c;
+            for(int r=c+1;r<k;++r) if(std::fabs(a[r][c])>std::fabs(a[pivot][c])) pivot=r;
+            if(std::fabs(a[pivot][c])<=1e-12) { singular=true; break; }
+            for(int j=0;j<=k;++j) std::swap(a[c][j],a[pivot][j]);
+            for(int r=0;r<k;++r) if(r!=c) {
+                const double factor=a[r][c]/a[c][c];
+                for(int j=c;j<=k;++j) a[r][j]-=factor*a[c][j];
+            }
+        }
+        if(singular) continue;
+        double x[3], residual[3]={plastic[0],plastic[1],plastic[2]}, largest=0;
+        for(int i=0;i<k;++i) { x[i]=a[i][k]/a[i][i]; largest=std::max(largest,std::fabs(x[i])); }
+        bool nonnegative=true;
+        for(int i=0;i<k;++i) {
+            nonnegative=nonnegative && x[i]>=-1e-9*largest;
+            for(int d=0;d<3;++d) residual[d]-=x[i]*flows[idx[i]][d];
+        }
+        if(nonnegative && std::sqrt(dot(residual,residual))<=1e-6*size) return true;
+    }
+    return false;
+}
+
+static void check_law_return(MaterialFixture& f, const char* name, const double trial[3],
+                             double minimum_history, double initial_history) {
+    const auto flag=[name](const char* property, bool ok) {
+        char what[256];
+        std::snprintf(what,sizeof what,"%s: %s",name,property);
+        check(what,ok,1);
+    };
+    auto& stress=f.m->stress;
+    // Pure 2D has two principal stresses, from the in-plane tensor.
+    const int nd=NDIMS==2 && !f.m->param.mat.is_plane_strain ? 2 : 3;
+    const auto principal=[&](double r[3]) {
+        if(nd==2) {
+            const double mean=0.5*(stress[0][0]+stress[0][1]);
+            const double radius=std::hypot(0.5*(stress[0][0]-stress[0][1]),stress[0][2]);
+            r[0]=mean-radius; r[1]=mean+radius; r[2]=0;
+            return;
+        }
+        r[0]=stress[0][0]; r[1]=stress[0][1]; r[2]=NDIMS==2 ? (*f.yy)[0] : stress[0][2];
+    };
+    f.set_principal(trial);
+    for(int e=0;e<f.m->var.nelem;++e) (*f.pls)[e]=initial_history;
+    f.update();
+    double result[3];
+    principal(result);
+    double plastic[3];
+    if(nd==2) compliance_plastic_2d(trial,result,plastic);
+    else compliance_plastic(trial,result,plastic);
+    const double recorded=nd==2 ? recorded_plastic_increment_2d(plastic)
+                                : recorded_plastic_increment(plastic);
+    const double history=(*f.pls)[0];
+    double amc,anphi,anpsi,hardn,cap;
+    f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+    double scale=std::fabs(amc);
+    for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
+    const double shear=result[0]-anphi*result[nd-1]+amc, tension=cap-result[nd-1];
+    bool ordered=true;
+    for(int k=0;k+1<nd;++k) ordered=ordered && result[k]<=result[k+1]+1e-9*scale;
+    flag("principal order kept",ordered);
+    flag("inside the shear surface",shear>=-1e-9*scale);
+    flag("inside the tensile cap",tension>=-1e-9*scale);
+    flag("on the composite surface",std::min(shear,tension)<=1e-9*scale);
+    const double increment=(*f.dpls)[0];
+    flag("history is the initial history plus the increment",history==initial_history+increment);
+    flag("increment is the recorded plastic strain",std::fabs(increment-recorded)<=1e-6*recorded);
+    flag("history reaches the expected range",history>=minimum_history);
+    flag("plastic strain in the cone of active flows",
+         in_active_flow_cone(result,plastic,amc,anphi,anpsi,cap,scale,nd));
+    const double size=std::sqrt(plastic[0]*plastic[0]+plastic[1]*plastic[1]+plastic[2]*plastic[2]);
+    flag("nonnegative plastic work",
+         result[0]*plastic[0]+result[1]*plastic[1]+result[2]*plastic[2]>=-1e-9*scale*size);
+    f.update();
+    double again[3];
+    principal(again);
+    for(int k=0;k<nd;++k) flag("unloaded stress unchanged",std::fabs(again[k]-result[k])<=1e-9*scale);
+    flag("unloaded increment is zero",(*f.dpls)[0]<=1e-12*increment);
+}
+
+#ifndef THREED
+// Pure 2D (not plane strain): the single-face return softens by exactly the
+// increment it stores, so the strength rebuilt from history keeps it on yield.
+static void test_pure_2d_softening_return() {
+    std::printf("[Pure 2D Mohr-Coulomb softening return]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    auto& p=f.m->param.mat;
+    p.is_plane_strain=false;
+    for(int dilation : {0,30}) {
+        p.pls0={0}; p.pls1={1e-4};
+        set_mc_material(f, dilation);
+        p.cohesion1={1e5-5e8*1e-4};
+        f.set_material();
+        const double trial[3]={-1e6,-1e5,0};
+        f.set_principal(trial);
+        f.update();
+        auto& stress=f.m->stress;
+        const double history=(*f.pls)[0];
+        double amc,anphi,anpsi,hardn,cap;
+        f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+        const double low=0.5*(stress[0][0]+stress[0][1])-std::hypot(0.5*(stress[0][0]-stress[0][1]),stress[0][2]);
+        const double high=stress[0][0]+stress[0][1]-low;
+        check("pure 2D softening stays in the linear range",history>0 && history<1e-4,1);
+        check("pure 2D history is the increment",history,(*f.dpls)[0]);
+        check("pure 2D stored history reproduces yield",(low-anphi*high+amc)/amc,0);
+    }
+}
+
+// Pure 2D returns the closed form cannot give, checked by the properties of
+// check_law_return: softening past the segment (also from a history one ulp
+// short of the breakpoint), friction and dilation softening within the step,
+// and tension at the cap, its corner with the shear face and the cap-cap corner.
+static void test_pure_2d_law_returns() {
+    std::printf("[Pure 2D Mohr-Coulomb returns over the strength law]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    auto& p=f.m->param.mat;
+    p.is_plane_strain=false;
+    const double face[3]={-1e6,-1e5,0};
+    for(int dilation : {0,30}) {
+        p.pls0={0}; p.pls1={1e-8};
+        set_mc_material(f, dilation);
+        p.cohesion1={9e4};
+        f.set_material();
+        check_law_return(f,"pure 2D softening past the segment",face,1e-8);
+    }
+    p.pls0={0}; p.pls1={0.0009287493630057339};
+    set_mc_material(f, 0);
+    p.cohesion1={9e4};
+    f.set_material();
+    const double deep[3]={-1e8,-1e7,0};
+    check_law_return(f,"pure 2D softening past the segment from nonzero history",deep,
+                     p.pls1[0],0.0003829357836281204);
+    p.pls0={0}; p.pls1={1e-5};
+    set_mc_material(f, 10);
+    p.friction_angle1={20}; p.dilation_angle1={0};
+    f.set_material();
+    check_law_return(f,"pure 2D friction and dilation soften within the step",face);
+    // Tensile cap at zero: tension, the face-cap corner and the cap-cap corner.
+    for(int dilation : {0,30}) {
+        p.pls0={1}; p.pls1={2};
+        set_mc_material(f, dilation);
+        p.tension_max=0;
+        f.set_material();
+        const double tension[][3]={{-1e5,3e5,0},{-1e6,3e5,0},{-3e5,3e5,0},{2e5,3e5,0}};
+        for(const auto& trial : tension) check_law_return(f,"pure 2D tensile return",trial);
+        check("pure 2D biaxial tension returns to the cap corner",
+              std::fabs(f.m->stress[0][0])<=1e-9*3e5 && std::fabs(f.m->stress[0][1])<=1e-9*3e5,1);
+    }
+    // The default cap c/tan(phi) meets the face at p0 = p1 = c*sqrt(3).
+    set_mc_material(f, 0);
+    const double hydrostatic[3]={3e5,3.2e5,0};
+    check_law_return(f,"pure 2D face-cap apex",hydrostatic);
+    for(int d=0;d<2;++d) check("pure 2D apex stress",f.m->stress[0][d],1e5*std::sqrt(3.));
+}
+#endif
+
+// Returns the closed form cannot give: a cohesion drop faster than elastic
+// unloading, friction and dilation softening within the step, and (3D) the
+// tensile edge, apex and tension-shear corners.
+static void test_mohr_coulomb_law_returns() {
+    std::printf("[Mohr-Coulomb returns over the strength law]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    auto& p=f.m->param.mat;
+    const double edge[3]={-1e6,-1e6,-1e5}, face[3]={-1e6,-5e5,-1e5};
+    // Cohesion drops 1e5 -> 9e4 over 1e-8: the return reaches the residual strength.
+    for(int dilation : {0,30}) {
+        p.pls0={0}; p.pls1={1e-8};
+        set_mc_material(f, dilation);
+        p.cohesion1={9e4};
+        f.set_material();
+        check_law_return(f,"softening past the segment, edge",edge,1e-8);
+        check_law_return(f,"softening past the segment, face",face,1e-8);
+    }
+    // Nonzero initial history whose pls + (pls1 - pls) rounds one ulp below
+    // pls1: the search must still cross the breakpoint to the residual root.
+    p.pls0={0}; p.pls1={0.0009287493630057339};
+    set_mc_material(f, 0);
+    p.cohesion1={9e4};
+    f.set_material();
+    const double deep[3]={-1e8,-1e8,-1e7};
+    check_law_return(f,"softening past the segment from nonzero history",deep,
+                     p.pls1[0],0.0003829357836281204);
+    // Friction 30 -> 20 deg and dilation 10 -> 0 deg over 1e-5: the step
+    // ends inside the segment with strength and flow of the stored history.
+    p.pls0={0}; p.pls1={1e-5};
+    set_mc_material(f, 10);
+    p.friction_angle1={20}; p.dilation_angle1={0};
+    f.set_material();
+    check_law_return(f,"friction and dilation soften within the step",face);
+    check_law_return(f,"friction and dilation soften within the step, edge",edge);
+    // Tension past the cap 0 with an endpoint friction angle 1e-8 deg away
+    // from constant: the two returns differ by O(1e-8), not by a jump.
+    for(int type=0;type<2;++type) {
+        const double phi=type==0 ? 30 : 10, cohesion=type==0 ? 1e5 : 1e4;
+        const double trial[3]={-1e6,8e5,9e5};
+        double returned[2][3];
+        for(int perturbed=0;perturbed<2;++perturbed) {
+            p.pls0={0}; p.pls1={1e-3};
+            set_mc_material(f, 0);
+            p.cohesion0=p.cohesion1={cohesion};
+            p.friction_angle0={phi}; p.friction_angle1={phi-(perturbed ? 1e-8 : 0)};
+            p.tension_max=0;
+            f.set_material();
+            check_law_return(f,"tension with a constant or nearly constant friction angle",trial);
+            returned[perturbed][0]=f.m->stress[0][0];
+            returned[perturbed][1]=f.m->stress[0][1];
+            returned[perturbed][2]=NDIMS==2 ? (*f.yy)[0] : f.m->stress[0][2];
+        }
+        for(int k=0;k<3;++k)
+            check("tension return continuous in the friction angle",
+                  std::fabs(returned[0][k]-returned[1][k])<=1e-6*cohesion,1);
+    }
+#ifdef THREED
+    // Tensile cap at zero: biaxial and triaxial tension and tension-shear corners.
+    p.pls0={1}; p.pls1={2};
+    set_mc_material(f, 0);
+    p.tension_max=0;
+    f.set_material();
+    const double tension[][3]={{0,2e5,3e5},{1e5,2.9e5,3e5},{-1e6,2e5,3e5},
+                               {-1e6,-1e6,3e5},{2e5,2.5e5,3e5}};
+    for(const auto& trial : tension) check_law_return(f,"tensile corner",trial);
+    for(int d=0;d<3;++d) check("triaxial tension returns to the cap apex",f.m->stress[0][d],0);
+    // The default cap c/tan(phi) passes through the cone apex.
+    set_mc_material(f, 0);
+    const double hydrostatic[3]={3e5,3.2e5,3.5e5};
+    check_law_return(f,"cone apex",hydrostatic);
+    for(int d=0;d<3;++d) check("cone apex stress",f.m->stress[0][d],1e5*std::sqrt(3.));
+#endif
+}
+
+// Rate-and-state returns evaluate the same piecewise cohesion law, with rate
+// and state held at this step's values.
+static void test_rsf_law_returns() {
+    std::printf("[Rate-and-state Mohr-Coulomb returns over the strength law]\n");
+    MaterialFixture f(MatProps::rh_ep_rsf, 0);
+    auto& p=f.m->param.mat;
+    const double edge[3]={-1e6,-1e6,-1e5};
+    // With a = b = 0 and state model 0 the friction is the static 30 deg, so
+    // cohesion 1e5 -> 9e4 over 1e-8 must reach the 90 kPa residual as in EP.
+    p.pls0={0}; p.pls1={1e-8};
+    set_mc_material(f, 0);
+    p.cohesion1={9e4};
+    p.direct_a={0}; p.evolution_b={0};
+    p.characteristic_velocity={1e-6}; p.characteristic_distance={0.01};
+    p.state_var_model=0;
+    f.set_material();
+    check_law_return(f,"rate-and-state softening past the segment",edge,1e-8);
+    // Aging state law with a != b: a plastic update advances the state once,
+    // exactly as an elastic update from the same state does.
+    p.direct_a={0.01}; p.evolution_b={0.015}; p.state_var_model=1;
+    f.set_material();
+    const double elastic[3]={-1e6,-9e5,-8e5};
+    double state[2];
+    for(int plastic=0;plastic<2;++plastic) {
+        f.set_principal(plastic ? edge : elastic);
+        f.state->assign(f.m->var.nelem,10.);
+        f.update();
+        check(plastic ? "rate-and-state plastic update" : "rate-and-state elastic update",
+              (*f.dpls)[0]>0,plastic);
+        state[plastic]=(*f.state)[0];
+    }
+    check("rate-and-state state advanced once per step",state[1],state[0]);
+    // Friction 30 -> 20 deg (within the step and past pls1): the returned
+    // stress and the stored friction coefficient follow the final history.
+    // With a = b = 0 the coefficient is tan(phi(pls)); with the aging law the
+    // stress must lie on the face that the stored coefficient defines.
+    const double face[3]={-1e6,-5e5,-1e5};
+    for(double end : {1e-5,1e-8}) for(int aging=0;aging<2;++aging) {
+        p.pls0={0}; p.pls1={end};
+        set_mc_material(f, 0);
+        p.friction_angle1={20};
+        p.direct_a={aging ? 0.01 : 0.}; p.evolution_b={aging ? 0.015 : 0.};
+        p.state_var_model=aging;
+        f.set_material();
+        if(!aging) check_law_return(f,"rate-and-state friction softening",face);
+        // One update: the next one would recompute the coefficient anyway.
+        f.set_principal(face);
+        f.friction->assign(f.m->var.nelem,0.6);
+        f.state->assign(f.m->var.nelem,10.);
+        f.update();
+        const double history=(*f.pls)[0], mu=(*f.friction)[0];
+        double amc,anphi,anpsi,hardn,cap;
+        f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+        const double cohesion=amc/(2*std::sqrt(anphi));
+        const double static_mu=std::tan(std::asin((anphi-1)/(anphi+1)));
+        check("rate-and-state friction softening yields",history>0,1);
+        if(!aging) check("stored friction coefficient of the final history",mu,static_mu);
+        else check("stored friction coefficient differs from the static one",
+                   std::fabs(mu-static_mu)>1e-3,1);
+        const double sine=std::sin(std::atan(mu)), nphi=(1+sine)/(1-sine);
+        auto& stress=f.m->stress;
+        const double high=NDIMS==2 ? (*f.yy)[0] : stress[0][2];
+        check("stress on the face of the stored friction coefficient",
+              (stress[0][0]-nphi*high+2*cohesion*std::sqrt(nphi))/(2*cohesion),0);
+    }
+}
+
+// A non-finite trial has no admissible return. update_stress must stop the
+// process with status 54; check.sh runs this case separately, in 2D both in
+// plane strain and in pure 2D.
+static void test_rejected_mc_return(bool pure_2d) {
+    MaterialFixture f(MatProps::rh_ep, 0);
+    if (pure_2d) f.m->param.mat.is_plane_strain=false;
+    set_mc_material(f, 0);
+    const double trial[3]={std::nan(""),-1e6,-1e5};
+    f.set_principal(trial);
+    f.update();
+}
+
 static void test_pt_norm() {
     std::printf("[PT projected residual reduction]\n");
     auto* m = new Fixture();
@@ -819,10 +1462,22 @@ static void test_darcy_gravity_limit() {
     delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if(argc==2 && (std::strcmp(argv[1],"--reject-mc-return")==0 ||
+                   std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0)) {
+        test_rejected_mc_return(NDIMS==2 && std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0);
+        return 1;  // check.sh requires status 54 from update_stress
+    }
     test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();
+    test_mohr_coulomb_returns();
+    test_mohr_coulomb_law_returns();
+    test_rsf_law_returns();
+#ifndef THREED
+    test_pure_2d_softening_return();
+    test_pure_2d_law_returns();
+#endif
     test_constraints();
     test_cancellation();
     test_traction();
