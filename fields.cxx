@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <iostream>
 
 #include "constants.hpp"
@@ -67,6 +68,7 @@ void allocate_variables(const Param &param, Variables& var)
     var.force = new array_t(n, 0);
     var.force_residual = new array_t(n, 0);
     if (param.control.has_PT) var.PT_force_residual_valid = false;
+    var.vel_mean = param.control.has_highpass_damping ? new array_t(n, 0) : nullptr;
 
     var.strain_rate = new tensor_t(e, 0);
 
@@ -542,6 +544,75 @@ void apply_damping(const Param& param, const Variables& var, array_t& force)
 #endif
 }
 
+// Mass-proportional damping of the fluctuating part of the velocity:
+// f -= m (v - vbar) (1 - exp(-alpha dt)) / dt, the exact decay of the fluctuation over one step.
+// Only reads var: vbar is advanced once per step by update_highpass_mean, so extra force
+// evaluations (e.g. for output during remeshing) do not change the physics.
+static void apply_highpass_damping(const Variables& var, array_t& force)
+{
+    if (!var.vel_mean) return;
+    const double dt = var.dt;
+    const double cf = -std::expm1(-var.highpass_alpha * dt) / dt;
+    const array_t& vm = *var.vel_mean;
+    if ((int)vm.size() != var.nnode)
+        die(EXIT_INTERNAL_ASSERT, "vel_mean is not sized to the mesh; remeshing must interpolate it.");
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, force, vm) firstprivate(cf)
+#endif
+    for (int i=0; i<var.nnode; ++i) {
+        const double m = (*var.mass)[i];
+        for (int j=0; j<NDIMS; j++)
+            force[i][j] -= cf * m * ((*var.vel)[i][j] - vm[i][j]);
+    }
+}
+
+
+// Relax vbar toward v over control.highpass_damping_time. Called once per time step,
+// after update_velocity.
+void update_highpass_mean(Variables& var)
+{
+    if (!var.vel_mean) return;
+    const double w = -std::expm1(-var.dt / var.highpass_time);
+    array_t& vm = *var.vel_mean;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, vm) firstprivate(w)
+#endif
+    for (int i=0; i<var.nnode; ++i)
+        for (int j=0; j<NDIMS; j++)
+            vm[i][j] += w * ((*var.vel)[i][j] - vm[i][j]);
+}
+
+
+void init_highpass_damping(const Param& param, Variables& var)
+{
+    if (!var.vel_mean) return;
+    double L = 0, c = 0;
+    if (!var.vel_mean_from_chkpt) {
+        // derived values are fixed at the start of a run (a restart reads them back), so they
+        // do not drift with the domain
+        for (int d=0; d<NDIMS; d++) {
+            double lo = (*var.coord)[0][d], hi = lo;
+            for (int i=1; i<var.nnode; ++i) {
+                lo = std::min(lo, (*var.coord)[i][d]);
+                hi = std::max(hi, (*var.coord)[i][d]);
+            }
+            L = std::max(L, hi - lo);
+        }
+        c = var.max_vbc_val * param.control.inertial_scaling;  // find_max_vbc keeps it > 0
+        var.highpass_alpha = param.control.highpass_damping_alpha > 0 ? param.control.highpass_damping_alpha : 50 * c / L;
+        var.highpass_time = param.control.highpass_damping_time > 0 ? param.control.highpass_damping_time : 10 * L / c;
+        for (int i=0; i<var.nnode; ++i)
+            for (int j=0; j<NDIMS; j++)
+                (*var.vel_mean)[i][j] = (*var.vel)[i][j];
+        std::printf("  High-pass damping: alpha = %.3g 1/s, T_f = %.3g s (c = %.3g m/s, L = %.3g m)\n",
+                    var.highpass_alpha, var.highpass_time, c, L);
+    }
+    else
+        std::printf("  High-pass damping: alpha = %.3g 1/s, T_f = %.3g s (from the checkpoint)\n",
+                    var.highpass_alpha, var.highpass_time);
+    std::fflush(stdout);
+}
+
 /*
 #pragma acc routine seq
 static double rho(const conn_t &var_connectivity, \
@@ -655,7 +726,10 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             for (int d=0; d<NDIMS; ++d)
                 (*force_undamped)[n][d] = force[n][d];
     }
-    if (damp_force) apply_damping(param, var, force);
+    if (damp_force) {
+        apply_damping(param, var, force);
+        apply_highpass_damping(var, force);
+    }
     
     #pragma acc wait
 

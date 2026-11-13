@@ -17,6 +17,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Optional high-pass mass damping (`control.has_highpass_damping`, default off)
+  removes the strain-rate noise that slipping faults radiate in quasi-static
+  runs; its parameters are derived from the model unless set.
+
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
