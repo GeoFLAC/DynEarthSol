@@ -871,7 +871,7 @@ struct Variables {
     // These 5 arrays are allocated by external library
     array_t *coord = nullptr;
     conn_t *connectivity = nullptr;
-    conn_t *connectivity_surface = nullptr;
+    conn_t *connectivity_surface = nullptr;   // create_boundary_facets fills it
     segment_t *segment = nullptr;
     segflag_t *segflag = nullptr;
     regattr_t *regattr = nullptr;
@@ -904,7 +904,7 @@ struct Variables {
     double_vec vbc_vertical_ratio_x0;
     double_vec vbc_vertical_ratio_x1;
 
-    int_vec *top_elems = nullptr;
+    int_vec *top_elems = nullptr;   // create_top_elems fills it
     int ntop_elems;
     int_vec2D *markers_in_elem = nullptr;
     int_vec2D *hydrous_markers_in_elem = nullptr;
@@ -962,38 +962,6 @@ struct Variables {
     double_vec *etmp = nullptr;
     int_vec *etmp_int = nullptr;
 
-    // Remesh-only stress-remap transients, allocated per remesh(), nullptr otherwise.
-    // stress_n and spr_blend_weight double as the switch for the SPR recovery:
-    // remesh() leaves them null when the rheology has no viscous component, and each
-    // consumer skips its part of the chain on that.
-    // - stress_n, stressyy_n: SPR-recovered nodal stress
-    // - spr_blend_weight: Deborah weight toward the NN-remapped stress (1 = NN, 0 = SPR)
-    // - spr_p_ref_old: reference pressure added at pressure-centering, per element
-    // - remesh_is_changed: the NN pass's per-NEW-element is_changed mapping
-    //   (0 = geometry identical to an old element, 1 = remapped, -1 = ACM failed)
-    tensor_t *stress_n = nullptr;
-    double_vec *stressyy_n = nullptr;
-    double_vec *spr_blend_weight = nullptr;
-    double_vec *spr_p_ref_old = nullptr;
-    int_vec *remesh_is_changed = nullptr;
-
-    // Per-remesh scratch, per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
-    // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
-    // found" warning. Empty outside remeshing.
-    std::vector<char> remesh_affected_old_node;
-
-    // Per-remesh scratch, per NEW node: 1 if barycentric_node_interpolation found it outside the
-    // old mesh and copied the nearest old node's fields. restore_side_fields (option 13) and
-    // remesh() overwrite some of those copies (see there); the rest stay. Empty outside remeshing.
-    std::vector<char> remesh_node_outside;
-
-    // Per-remesh scratch, per NEW element: if its part inside the old mesh lies in exactly one old
-    // element whose markers are all one mattype, that mattype, else -1; _time: that old element's
-    // lowest-index marker's time. Filled by nearest_neighbor_interpolation, read by the marker
-    // replenishment, cleared after remap_markers. Empty outside remeshing.
-    std::vector<int> remesh_elem_split_mat;
-    std::vector<double> remesh_elem_split_time;
-
     // tensor_t *stress_old;
 
     MatProps *mat = nullptr;
@@ -1015,11 +983,6 @@ struct Variables {
 
     Variables()
     {
-        stress_n = nullptr;
-        stressyy_n = nullptr;
-        spr_blend_weight = nullptr;
-        spr_p_ref_old = nullptr;
-        remesh_is_changed = nullptr;
         vtopo = nullptr;
         vbc_vertical_div_x0.resize(4);
         vbc_vertical_div_x1.resize(4);

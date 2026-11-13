@@ -12,6 +12,7 @@
 #include "barycentric-fn.hpp"
 #include "binaryio.hpp"
 #include "markerset.hpp"
+#include "remesh-scratch.hpp"
 #include "mesh.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
@@ -1532,12 +1533,12 @@ namespace {
 #endif
     }
 
-    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): the
-    // split parent's (var.remesh_elem_split_mat) when from_split_parent, else the only mattype
-    // among its surviving markers (the caller guarantees one). Serial.
+    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): its
+    // split parent's (split->mat) when given split, else the only mattype among its surviving
+    // markers (the caller guarantees one). Serial.
     void replenish_markers_homogeneous(const Param& param, const Variables &var,
             int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi,
-            bool from_split_parent = false)
+            const SplitParents *split = nullptr)
     {
         if (homo_elems.empty()) return;
         MarkerSet &ms = *var.markersets[0];
@@ -1550,19 +1551,19 @@ namespace {
             int num_marker_in_elem = pr.second;
 
             int mt = 0;
-            if (from_split_parent)
-                mt = var.remesh_elem_split_mat[e];
+            if (split)
+                mt = split->mat[e];
             else
                 for (int t = 0; t < param.mat.nmat; ++t)
                     if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
 
             // Sediment: the lowest-index sediment survivor's time, else the split parent's
-            // (remesh_elem_split_time) rather than 0, an initial marker's. Other mattypes carry 0.
+            // (split->time) rather than 0, an initial marker's. Other mattypes carry 0.
             double ti_base = 0.;
             if (mt == param.mat.mattype_sediment) {
                 const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[e], mt);
                 if (m0 >= 0) ti_base = ms.get_time(m0);
-                else if (from_split_parent) ti_base = var.remesh_elem_split_time[e];
+                else if (split) ti_base = split->time[e];
             }
 
             const int first_new = ms.get_nmarkers();
@@ -1960,7 +1961,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
 
 void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
-                   const conn_t &old_connectivity)
+                   const conn_t &old_connectivity, const SplitParents &split)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -2082,17 +2083,17 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         rest = &filtered;
     }
 
-    // elements with a single-mattype parent (var.remesh_elem_split_mat) inherit its mattype
-    if ((int)var.remesh_elem_split_mat.size() != var.nelem)
+    // elements with a single-mattype parent (split.mat) inherit its mattype
+    if ((int)split.mat.size() != var.nelem)
         die(EXIT_INTERNAL_ASSERT, "remap_markers: the split-parent map is not for this mesh");
     int_pair_vec split_elems, nonsplit;
     nonsplit.reserve(rest->size());
     for (const auto& pr : *rest)
-        if (var.remesh_elem_split_mat[pr.first] >= 0) split_elems.push_back(pr);
+        if (split.mat[pr.first] >= 0) split_elems.push_back(pr);
         else nonsplit.push_back(pr);
     if (!split_elems.empty()) {
         replenish_markers_homogeneous(param, var, split_elems, 1, /*is_surface*/ false, EMI_vec(),
-                                      /*from_split_parent*/ true);
+                                      &split);
         std::cout << "    Marker replenish (split-parent): " << split_elems.size()
                   << " element(s) filled with their single parent's mattype.\n";
     }

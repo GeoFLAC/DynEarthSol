@@ -10,6 +10,7 @@
 #include "matprops.hpp"
 #include "utils.hpp"
 #include "geometry.hpp"
+#include "remesh-scratch.hpp"
 #include "fields.hpp"
 #include "bc.hpp"
 #include "mesh.hpp"
@@ -1257,7 +1258,7 @@ double SurfaceTopo::heff_at(ConstArrayAccessor p, double d) const
     return heff_at(c, d);
 }
 
-void compute_spr_blend_weight(const Param &param, const Variables &var)
+void compute_spr_blend_weight(const Param &param, const Variables &var, RemeshScratch &rs)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1273,10 +1274,11 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
         const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
         const double lde0 = std::log10(param.mesh.remesh_deborah_min);
         const double lde1 = std::log10(param.mesh.remesh_deborah_max);
+        double_vec *spr_blend_weight = rs.spr_blend_weight.get();
         // Host loop: visc()/shearm() read the host-side MatProps.
         #pragma acc wait
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(param, var) \
+        #pragma omp parallel for default(none) shared(param, var, spr_blend_weight) \
                 firstprivate(dt_remesh, lde0, lde1)
 #endif
         for (int e = 0; e < var.nelem; ++e) {
@@ -1293,7 +1295,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
             // switching remap operator abruptly for elements sitting on one; a
             // steeper S-curve (e.g. quintic) would need a wider De window to keep
             // the same mid-range sensitivity. Monotone, and w(t=1/2) = 1/2.
-            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
+            (*spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
         }
     }
 #ifdef NPROF_DETAIL
@@ -1303,7 +1305,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
 
 
 void center_stress_to_ref(const Param &param, const Variables &var,
-                          const SurfaceTopo &topo)
+                          const SurfaceTopo &topo, RemeshScratch &rs)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1330,8 +1332,9 @@ void center_stress_to_ref(const Param &param, const Variables &var,
     // old_coord, old_connectivity — all still old here). Undone by
     // restore_stress_from_ref on the new mesh.
     // ----------------------------------------------------------------
+    double_vec *spr_p_ref_old = rs.spr_p_ref_old.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo)
+    #pragma omp parallel for default(none) shared(param, var, topo, spr_p_ref_old)
 #endif
     #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
@@ -1353,7 +1356,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
         // Record the reference ADDED here so an unchanged element can subtract the
         // identical value in restore_stress_from_ref (the new-mesh topo table
         // differs globally).
-        (*var.spr_p_ref_old)[e] = p_ref_old;
+        (*spr_p_ref_old)[e] = p_ref_old;
     }
 
     #pragma acc wait
@@ -1416,7 +1419,7 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 }
 
 void spr_node_to_elem(const Param &param, const Variables &var,
-                      const SurfaceTopo &topo,
+                      const SurfaceTopo &topo, RemeshScratch &rs,
                       tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
@@ -1434,8 +1437,12 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     const double sea_level = param.control.surf_base_level;
     const double rho_w_g = param.bc.has_water_loading
                          ? param.bc.sea_water_density * param.control.gravity : 0.0;
+    tensor_t *stress_n = rs.stress_n.get();
+    const double_vec *stressyy_n = rs.stressyy_n.get();
+    const double_vec *spr_blend_weight = rs.spr_blend_weight.get();
+    const int_vec *remesh_is_changed = rs.remesh_is_changed.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo) \
+    #pragma omp parallel for default(none) shared(param, var, topo, stress_n) \
             firstprivate(sea_level, rho_w_g)
 #endif
     #pragma acc parallel loop if(des_acc_offload()) gang vector async
@@ -1446,10 +1453,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
         double p_ref_node = ref_pressure(param, topo.zeff((*var.coord)[n]));
 
-        (*var.stress_n)[n][NDIMS-1] = p_ref_node - p_water;
-        (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
+        (*stress_n)[n][NDIMS-1] = p_ref_node - p_water;
+        (*stress_n)[n][(NDIMS-1)*2] = 0.0;
 #ifdef THREED
-        (*var.stress_n)[n][5] = 0.0;
+        (*stress_n)[n][5] = 0.0;
 #endif
     }
 
@@ -1480,11 +1487,11 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // enters the compressiveness test below, so it is averaged here too.
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
-        average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
+        average_nodal_to_elem(stress_n->component_const(d), *var.connectivity,
                               var.nelem, stress->component(d));
 
     if (param.mat.is_plane_strain)
-        average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
+        average_nodal_to_elem(static_cast<const double*>(stressyy_n->data()), *var.connectivity,
                               var.nelem, stressyy->data());
 
     // Fallback: where the SPR average left a surface element LESS compressive
@@ -1522,20 +1529,21 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // Runs after the surface fallback: where the fallback restored the NN stress
     // the blend is a no-op, never making a surface element less compressive again.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn, \
+            remesh_is_changed, spr_blend_weight)
 #endif
     #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = (*stress)[e];
         ConstTensorAccessor s_nn = stress_nn[e];
-        if ((*var.remesh_is_changed)[e] == 0) {
+        if ((*remesh_is_changed)[e] == 0) {
             for (int d = 0; d < NSTR; ++d)
                 s[d] = s_nn[d];
             if (param.mat.is_plane_strain)
                 (*stressyy)[e] = stressyy_nn[e];
         }
         else {
-            const double w = (*var.spr_blend_weight)[e];
+            const double w = (*spr_blend_weight)[e];
             for (int d = 0; d < NSTR; ++d)
                 s[d] = w * s_nn[d] + (1.0 - w) * s[d];
             if (param.mat.is_plane_strain)
@@ -1552,7 +1560,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
 
 void restore_stress_from_ref(const Param &param, const Variables &var,
-                             const SurfaceTopo &topo,
+                             const SurfaceTopo &topo, const RemeshScratch &rs,
                              tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
@@ -1565,16 +1573,19 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
     // Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each
     // new element's depth (below the NEW surface) to recover the total stress.
+    const int_vec *remesh_is_changed = rs.remesh_is_changed.get();
+    const double_vec *spr_p_ref_old = rs.spr_p_ref_old.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo, \
+            remesh_is_changed, spr_p_ref_old)
 #endif
     #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         double p_ref;
-        if ((*var.remesh_is_changed)[e] == 0) {
+        if ((*remesh_is_changed)[e] == 0) {
             // Untouched element: subtract exactly what spr_elem_to_node added, so
             // the round trip is a bit-exact no-op (the new topo table differs).
-            p_ref = (*var.spr_p_ref_old)[e];
+            p_ref = (*spr_p_ref_old)[e];
         } else {
             ConstConnAccessor conn = (*var.connectivity)[e];
             double c[NDIMS] = {0.0};

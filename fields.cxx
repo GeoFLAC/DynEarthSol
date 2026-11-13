@@ -146,6 +146,8 @@ void reallocate_variables(const Param& param, Variables& var)
     // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
     // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
     // Called earlier the cache is built from empty counts -- wrong means, not a crash.
+    // It also binds strain_rate, recreated above. remesh() freed it (null) when the old
+    // mesh was moved out.
     delete var.mat;
     var.mat = new MatProps(param, var);
 
