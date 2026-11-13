@@ -328,7 +328,7 @@ void set_homogeneous_initial_stress(const Param &param, const Variables &var,
         imposed[i] = param.ic.initial_stress[i];
     const bool is_plane_strain = param.mat.is_plane_strain;
 
-    #pragma acc parallel loop gang vector copyin(imposed[0:NSTR]) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector copyin(imposed[0:NSTR]) async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = stress[e];
         TensorAccessor eps = strain[e];
@@ -363,7 +363,7 @@ void initial_stress_state(const Param &param, const Variables &var,
     double rho = var.mat->rho(0);
     double ks = var.mat->bulkm(0);
 
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload()) gang vector
     for (int e=0; e<var.nelem; ++e) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
@@ -664,7 +664,7 @@ void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,
         die(EXIT_CONFIG_VALUE);
     }
 
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload()) gang vector
     for (int e=0; e<nelem; ++e) {
         ConstArrayIndirectAccessor coord = coord_all.view_const(connectivity[e]);
         // the coordinate of the center of this element

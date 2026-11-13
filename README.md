@@ -169,6 +169,8 @@ defaults are not what you want.
     `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
     and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
     `dynearthsol-gospl` wrapper script.
+  * GoSPL coupling is not yet available in MPI builds; `make usempi=1 usegospl=1`
+    stops with an error.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
@@ -326,6 +328,9 @@ make useexo=1
 # enable HDF5-based vtkhdf output support (requires HDF5)
 make hdf5=1
 
+# experimental CPU MPI timestep kernels (requires mpicxx; separate .mpi executable)
+make ndims=2 usempi=1 usemmg=1 hdf5=1
+
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
 
@@ -343,6 +348,21 @@ make openacc=1 GPU_CC=90
 ```
 
 # Running DES
+
+The experimental [MPI backends](doc/mpi.md) use spatial partitions, compact
+local meshes and neighbor halo exchanges. They rebuild ownership after every MMG
+remesh. Rank zero retains a global mesh for MMG, marker management and output.
+RCB remains the default; `usemetis=1` adds an optional METIS partitioner. The guide
+covers correctness checks and scaling limits. The existing MMG policy
+and field transfer remain in use.
+Thermal, force and mass assembly support interior-node/halo overlap; per-rank
+profiles expose operation and communication costs. `usempi=1 openacc=1`
+adds NVIDIA GPU timestep executables with one GPU per rank, pinned host staging
+for halos and CPU mesh management. Full-field/checkpoint tests accompany the
+backend; verify scientific equivalence and performance for the intended case.
+The [reviewer quickstart](doc/mpi-quickstart.md) gives copyable build/run commands,
+small examples and expected results for CPU MPI and multiple GPUs.
+
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.
 * The input format is documented in `examples/defaults.cfg`, and working cases

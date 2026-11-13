@@ -13,6 +13,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 
 #include "barycentric-fn.hpp"
 #include "bc.hpp"
@@ -4862,7 +4863,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
     #pragma omp parallel for default(none) shared(var)
 #endif
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; e++) {
 #ifdef THREED
         double elem_size = std::cbrt((*var.volume)[e] / sizefactor);
@@ -4886,7 +4887,7 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, init_elem_size_n)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int n = 0; n < var.nnode; n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
@@ -4899,6 +4900,9 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
 
 int bad_mesh_quality(const Param &param, const Variables &var, int &index, double &min_quality)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->geometry(var);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -4918,7 +4922,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, smallest_vol) reduction(min:tiny)
 #endif
-    #pragma acc parallel loop gang vector reduction(min:tiny) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:tiny) async
     for (int e=0; e<var.nelem; e++)
         if ((*var.volume)[e] < smallest_vol && e < tiny) tiny = e;
     #pragma acc wait
@@ -4958,7 +4962,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, bottom, dist) reduction(min:far)
 #endif
-        #pragma acc parallel loop gang vector reduction(min:far) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:far) async
         for (int i=0; i<var.nnode; ++i) {
             if (is_bottom((*var.bcflag)[i]) && i < far) {
                 double z = (*var.coord)[i][NDIMS-1];
@@ -4998,7 +5002,7 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
         #pragma omp parallel for default(none) shared(var, dist, xlen) reduction(min:side)
 #endif
 #endif
-        #pragma acc parallel loop gang vector reduction(min:side) async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:side) async
         for (int i=0; i<var.nnode; ++i) {
             if (i >= side) continue;
             const uint f = (*var.bcflag)[i];
@@ -5198,7 +5202,7 @@ double side_wall_top_z(const Variables &var, int t)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) firstprivate(flag) reduction(max:top_z)
 #endif
-    #pragma acc parallel loop gang vector firstprivate(flag) reduction(max:top_z) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector firstprivate(flag) reduction(max:top_z) async
     for (int n = 0; n < var.nnode; ++n) {
         if (!((*var.bcflag)[n] & flag)) continue;
         const double z = (*var.coord)[n][NDIMS-1];
@@ -6022,6 +6026,10 @@ struct OldMesh {
 
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Remesh, var, bad_quality)) return;
+#endif
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -6066,7 +6074,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity_surface)[i]);
         old_surface_area[i] = compute_area_facet(coord);
@@ -6076,7 +6084,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,old_surface_area)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         double inv_volume = 1.0 / old_surface_area[i];
         (*var.surfinfo.edvacc_surf)[i] *= inv_volume;
@@ -6086,7 +6094,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (*var.volume_old)[e] - 1.0;
 
@@ -6321,7 +6329,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<var.surfinfo.etop; ++i) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity_surface)[i]);
         surface_area[i] = compute_area_facet(coord);
@@ -6331,7 +6339,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,surface_area)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0; i<var.surfinfo.etop; i++) {
         (*var.surfinfo.edvacc_surf)[i] *= surface_area[i];
     }
@@ -6340,7 +6348,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (1.0 + (*var.volume_old)[e]);
 
@@ -6369,7 +6377,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, var, nbot)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<nbot; ++i) {
             int n = (*var.bnodes[iboundz0])[i];
             (*var.coord0)[n][NDIMS-1] = -param.mesh.zlength;

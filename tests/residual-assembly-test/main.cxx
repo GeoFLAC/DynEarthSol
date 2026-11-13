@@ -377,6 +377,16 @@ static void test_body_force() {
         update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped);
         double baseline=0;
         for (int n=0;n<m->var.nnode;++n) baseline+=m->force_undamped[n][NDIMS-1];
+        // Boundary assembly overwrites tmp_result. The roundoff estimator
+        // must retain the original absolute element/body-force contributions.
+        auto* magnitude = new array_t(m->var.nnode);
+        update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,
+                     &m->force_undamped,0,false,magnitude);
+        for (int n=0;n<m->var.nnode;++n)
+            for (int d=0;d<NDIMS;++d)
+                check("element magnitude survives boundary scratch",(*magnitude)[n][d],
+                      d==NDIMS-1 ? weight*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
+        delete magnitude;
         const double rho = wet ? 2200 : 2500;
         const double area = NDIMS==2 ? 1 : 0.5;
         for (double dt : {0.5,1.0,0.5,0.0}) {

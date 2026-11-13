@@ -19,6 +19,7 @@
 #include "knn.hpp"
 #include "matprops.hpp"
 #include "remeshing.hpp"
+#include "mpi_simulation.hpp"
 
 
 namespace {
@@ -779,7 +780,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         #pragma omp for
 #else
         #pragma omp single
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
 #endif
         for (int i = 0; i < int(a_out.size()); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
@@ -1036,7 +1037,7 @@ void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) co
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, points)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int n=0; n<_nmarkers; n++) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[(*_elem)[n]]);
 
@@ -1107,7 +1108,7 @@ namespace {
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
                 old_connectivity, start, end)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop if(des_acc_offload()) gang vector
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 // 1. Get physical coordinates, x, of an old marker.
@@ -1128,7 +1129,7 @@ namespace {
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
                 nmarkers, queries, neighbors, start, end) firstprivate(k_neig)
 #endif
-            #pragma acc parallel loop gang vector deviceptr(neighbors)
+            #pragma acc parallel loop if(des_acc_offload()) gang vector deviceptr(neighbors)
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
@@ -1179,7 +1180,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, ms, markers_in_elem, elemmarkers)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int e = 0; e < var.nelem; e++) {
             int_vec &markers = markers_in_elem[e];
             for (int i = 0; i < int(markers.size()); i++) {
@@ -1379,7 +1380,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, unplenished_elems, ne, nneed_mk)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop if(des_acc_offload()) gang vector
         for (int i=0; i<ne; ++i)
             nneed_mk[i] = param.markers.min_num_markers_in_element - unplenished_elems[i].second;
 
@@ -1409,7 +1410,7 @@ namespace {
         #pragma omp parallel for default(none) \
                 shared(var, unplenished_elems, nneed_mk, etas, queries, ne, mk_start)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             for (int j=0; j<nneed_mk[i]; ++j) {
@@ -1430,7 +1431,7 @@ namespace {
 
         ms.calculate_marker_coord(var, points); // coordinate of markers
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         array_t point_tmp(1);
         PointCloud cloud(point_tmp);
 #else
@@ -1487,7 +1488,7 @@ namespace {
                 genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
 #endif
 #endif
-        #pragma acc parallel loop gang vector deviceptr(neighbors) reduction(||:is_no_nn)
+        #pragma acc parallel loop if(des_acc_offload()) gang vector deviceptr(neighbors) reduction(||:is_no_nn)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             int start = mk_start[i];
@@ -1704,7 +1705,7 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #ifndef ACC
     #pragma omp parallel for reduction(+:ncount,is_error) default(none) shared(var,std::cerr)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:ncount,is_error)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(+:ncount,is_error)
     for (int e=0; e<var.nelem; ++e) {
         const int_vec &em = (*var.elemmarkers)[e];
         int nmarker_mat = 0;
@@ -1761,7 +1762,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int i=0;i<var.ntop_elems;i++) {
         ConstConnAccessor tnodes = (*var.connectivity)[(*var.top_elems)[i]];
         ConstArrayIndirectAccessor coord = var.coord->view_const(tnodes);
@@ -1795,7 +1796,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:nchange) async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(+:nchange) async
     for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
@@ -1992,7 +1993,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
         #pragma acc wait
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         array_t point_tmp(1);
         PointCloud cloud(point_tmp);
 #else
@@ -2026,7 +2027,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var) reduction(+:nunplenished)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:nunplenished)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {
         int num_marker_in_elem = (*var.markers_in_elem)[e].size();
         if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
@@ -2239,6 +2240,10 @@ namespace {
 void advect_hydrous_markers(const Param& param, const Variables& var, double dt_subtotal,
                             MarkerSet& hydms, Array2D<int,1>& hydem)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Hydrous, var, dt_subtotal)) return;
+#endif
+
     std::unordered_map<int, Barycentric_transformation*> cache;
     Barycentric_transformation *bary;
 

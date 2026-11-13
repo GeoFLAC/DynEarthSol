@@ -209,7 +209,7 @@ print()
 if fmt_old != fmt_new:
     print('Comparison between :', fmt_old, 'and', fmt_new, '(new)')
 print('Relative difference (max, stddev) of frame = %d  step = %d' \
-            % (frame, int(des_old.steps[frame])))
+            % (frame, int(des_old.steps[des_old.frames.index(frame)])))
 print('  ---')
 n_fail, n_nonzero = compare(old, new)
 print('')

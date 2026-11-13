@@ -7,6 +7,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
@@ -277,12 +278,15 @@ void refresh_rsf_friction(const Param& param, Variables& var,
                           double_vec& dyn_fric_coeff,
                           const double_vec& state_variable)
 {
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
     if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable)
+    #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    for (int e = 0; e < var.nelem; ++e) {
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         const int projection_option =
             param.control.rsf_slip_rate_projection_option;
         double vx = 0.0;
@@ -830,6 +834,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& dyn_fric_coeff, double_vec& state_variable,
                    bool trial_reference_geometry, bool initial_equilibrium)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Stress, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -853,10 +863,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity)
+                     needs_projected_velocity) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
-    for (int e = 0; e < var.nelem; e++) {
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
 
         // Centroid interpolations, each gated on the branch that reads it: ungated they cost
@@ -1209,16 +1219,22 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::OldMeanStress, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
     #pragma omp parallel for default(none)                           \
-        shared(param, var, stress, old_mean_stress)
+        shared(param, var, stress, old_mean_stress) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstTensorAccessor s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
     }

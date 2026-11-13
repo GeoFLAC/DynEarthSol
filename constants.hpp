@@ -2,6 +2,7 @@
 #define DYNEARTHSOL3D_CONSTANTS_HPP
 
 static_assert(__cplusplus >= 201703L, "DynEarthSol needs C++17 or newer (-std=c++17)");
+#include "mpi_acc.hpp"
 
 # include <cmath>
 # include <map>
@@ -74,6 +75,11 @@ const int NODE_OF_FACET[FACETS_PER_ELEM][NODES_PER_FACET] =
     {{1,2},
      {2,0},
      {0,1}};
+#endif
+#ifdef ACC
+// This static lookup is indexed inside GPU kernels; managed heap allocation
+// does not make a host-side const/global array device-accessible.
+#pragma acc declare copyin(NODE_OF_FACET)
 #endif
 
 const double YEAR2SEC = 365.2422 * 86400;

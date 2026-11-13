@@ -11,54 +11,68 @@
 #include "matprops.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
+#include "mpi_simulation.hpp"
 
 double pt_residual_rms(const Variables& var, const VelocityConstraints& constraints,
                        const array_t& force)
 {
+    const int nn = mpi_node_end(var);
     double scale = 0;
     long long rank = 0;
     int bad = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, constraints, force) reduction(max:scale) reduction(+:rank) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(var, constraints, force) firstprivate(nn) reduction(max:scale) reduction(+:rank) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:scale) reduction(+:rank) reduction(|:bad)
+    #pragma acc parallel loop gang vector firstprivate(nn) reduction(max:scale) reduction(+:rank) reduction(|:bad)
     // Flatten components so every reduction update belongs to the parallel loop.
-    for (long long k=0; k<static_cast<long long>(var.nnode)*NDIMS; ++k) {
+    for (long long k=0; k<static_cast<long long>(nn)*NDIMS; ++k) {
         const int n = k/NDIMS, d = k%NDIMS;
         if (d == 0) rank += constraints.free_rank[n];
         const double f = force[n][d];
         bad |= !std::isfinite(f) || !std::isfinite((*var.vel)[n][d]);
         scale = std::max(scale, std::abs(f));
     }
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double maxima[] = {scale, static_cast<double>(bad)};
+        var.mpi->maximum(maxima, 2);
+        scale = maxima[0]; bad = maxima[1] != 0;
+    }
+#endif
     if (bad) return std::numeric_limits<double>::quiet_NaN();
-    if (!rank || scale == 0) return 0;
+    if (scale == 0) return 0;
     // Scale before squaring: large forces must not overflow and tiny imbalances
     // must not underflow to an artificial zero residual.
     double sum = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, force) firstprivate(scale) reduction(+:sum)
+    #pragma omp parallel for default(none) shared(var, force) firstprivate(scale, nn) reduction(+:sum)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:sum)
-    for (int n=0; n<var.nnode; ++n)
+    #pragma acc parallel loop gang vector firstprivate(nn) reduction(+:sum)
+    for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) {
             const double f = force[n][d]/scale;
             sum += f*f;
         }
-    return scale*std::sqrt(sum/rank);
+    double totals[] = {sum, static_cast<double>(rank)};
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->sum(totals, 2);
+#endif
+    return totals[1] ? scale*std::sqrt(totals[0]/totals[1]) : 0;
 }
 
 void MechanicalState::capture(const Variables& var)
 {
+    const int ee = mpi_element_end(var);
     #pragma acc wait
     nnode = var.nnode;
     physical_dt = var.dt;
     physical_time = var.time;
     connectivity = var.connectivity;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var) firstprivate(ee)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector firstprivate(ee)
+    for (int e=0; e<ee; ++e) {
         for (int d=0; d<NSTR; ++d) {
             stress[e][d] = (*var.stress)[e][d];
             strain[e][d] = (*var.strain)[e][d];
@@ -75,14 +89,15 @@ void MechanicalState::capture(const Variables& var)
 
 void MechanicalState::restore(Variables& var) const
 {
+    const int ee = mpi_element_end(var);
     if (var.nelem != static_cast<int>(stress.size()) || var.nnode != nnode ||
         var.connectivity != connectivity || var.dt != physical_dt || var.time != physical_time)
         die(EXIT_INTERNAL_ASSERT, "Mechanical baseline requires fixed topology and physical dt.");
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var)
+    #pragma omp parallel for default(none) shared(var) firstprivate(ee)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector firstprivate(ee) async
+    for (int e=0; e<ee; ++e) {
         for (int d=0; d<NSTR; ++d) {
             (*var.stress)[e][d] = stress[e][d];
             (*var.strain)[e][d] = strain[e][d];
@@ -127,19 +142,26 @@ struct PTWorkspace {
 // Only the route to equilibrium changes; acceptance uses the physical residual.
 void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, double& lowest)
 {
+    const int nn = mpi_node_end(var);
     double num = 0, den = 0, drive = 0;
     if (iteration > 0) {
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, w) reduction(+:num,den,drive)
+        #pragma omp parallel for default(none) shared(var, w) firstprivate(nn) reduction(+:num,den,drive)
 #endif
-        #pragma acc parallel loop gang vector reduction(+:num,den,drive)
-        for (int n=0; n<var.nnode; ++n)
+        #pragma acc parallel loop gang vector firstprivate(nn) reduction(+:num,den,drive)
+        for (int n=0; n<nn; ++n)
             for (int d=0; d<NDIMS; ++d) {
                 const double dv = w.momentum[n][d];
                 num += dv*(w.previous_force[n][d] - w.undamped[n][d]);
                 den += w.mass[n][d]*dv*dv;
                 drive += dv*w.undamped[n][d];
             }
+#ifdef USEMPI
+        if (var.mpi && var.mpi->in_kernel()) {
+            double totals[] = {num, den, drive};
+            var.mpi->sum(totals, 3); num=totals[0]; den=totals[1]; drive=totals[2];
+        }
+#endif
         if (num > 0 && den > 0)
             lowest = std::max(1e-12, std::min(1.0, num/den));
     }
@@ -147,10 +169,10 @@ void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, dou
     const double alpha = 4/((1+s)*(1+s));
     const double beta = (iteration > 0 && drive >= 0) ? ((1-s)/(1+s))*((1-s)/(1+s)) : 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, w) firstprivate(alpha, beta)
+    #pragma omp parallel for default(none) shared(var, w) firstprivate(alpha, beta, nn)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int n=0; n<var.nnode; ++n)
+    #pragma acc parallel loop gang vector firstprivate(nn)
+    for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) {
             w.momentum[n][d] = (beta > 0 ? beta*w.momentum[n][d] : 0.0) +
                 alpha*w.undamped[n][d]/w.mass[n][d];
@@ -158,32 +180,28 @@ void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, dou
         }
     project_free_vectors(var, w.constraints, w.momentum);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, w)
+    #pragma omp parallel for default(none) shared(var, w) firstprivate(nn)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int n=0; n<var.nnode; ++n)
+    #pragma acc parallel loop gang vector firstprivate(nn)
+    for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] += w.momentum[n][d];
 }
 
 // Upper magnitude estimate in the free subspace, from the already assembled
-// element cache. Absolute projector coefficients avoid cancellation in oblique
+// element contributions captured before boundary assembly reuses its scratch.
+// Absolute projector coefficients avoid cancellation in oblique
 // constraints. This is a roundoff scale, not a physical error bound.
 double absolute_force_rms(const Variables& var, const VelocityConstraints& constraints,
                           array_t& magnitude)
 {
+    const int nn = mpi_node_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, constraints, magnitude)
+    #pragma omp parallel for default(none) shared(var, constraints, magnitude) firstprivate(nn)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int n=0; n<var.nnode; ++n) {
-        double assembled[NDIMS] = {};
-        const int* patch = var.support.patch(n);
-        const int* local = var.support.local(n);
-        for (int k=0; k<var.support.size(n); ++k) {
-            ConstElemCacheAccessor tr = (*var.tmp_result)[patch[k]];
-            for (int d=0; d<NDIMS; ++d)
-                assembled[d] += std::abs(tr[local[k]+NODES_PER_ELEM*d]);
-        }
+    #pragma acc parallel loop gang vector firstprivate(nn)
+    for (int n=0; n<nn; ++n) {
+        double assembled[NDIMS];
+        for (int d=0; d<NDIMS; ++d) assembled[d] = magnitude[n][d];
         for (int i=0; i<NDIMS; ++i) {
             double value = 0;
             for (int j=0; j<NDIMS; ++j)
@@ -196,12 +214,13 @@ double absolute_force_rms(const Variables& var, const VelocityConstraints& const
 
 bool is_finite_candidate(const Variables& var)
 {
+    const int ee = mpi_element_end(var);
     int bad = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(var) firstprivate(ee) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:bad)
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector firstprivate(ee) reduction(|:bad)
+    for (int e=0; e<ee; ++e) {
         for (int d=0; d<NSTR; ++d)
             bad |= !std::isfinite((*var.stress)[e][d]) || !std::isfinite((*var.strain)[e][d]);
         bad |= !std::isfinite((*var.stressyy)[e]) || !std::isfinite((*var.plstrain)[e]) ||
@@ -209,16 +228,21 @@ bool is_finite_candidate(const Variables& var)
                !std::isfinite((*var.dpressure)[e]) ||
                !std::isfinite((*var.state_variable)[e]) || !std::isfinite((*var.dyn_fric_coeff)[e]);
     }
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->maximum(&bad, 1);
+#endif
     return !bad;
 }
 
 double evaluate_mechanical_trial(const Param& param, Variables& var,
                                  PTWorkspace& w, bool initial_equilibrium,
-                                 double displacement_dt)
+                                 double displacement_dt, array_t* magnitude = nullptr)
 {
+    mpi_sync(var, *var.vel, MpiEntity::Node);
     w.start.restore(var);
     update_strain_rate(var, *var.strain_rate);
     compute_dvoldt(var, *var.ntmp, *var.etmp);
+    mpi_sync(var, *var.ntmp, MpiEntity::Node);
     compute_edvoldt(var, *var.ntmp, *var.edvoldt);
     update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                   *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
@@ -229,7 +253,7 @@ double evaluate_mechanical_trial(const Param& param, Variables& var,
                    param.mat.is_plane_strain ? var.stressyy : nullptr);
     #pragma acc wait
     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result,
-                 &w.undamped, displacement_dt, false);
+                 &w.undamped, displacement_dt, false, magnitude);
     project_free_vectors(var, w.constraints, w.undamped);
     return pt_residual_rms(var, w.constraints, w.undamped);
 }
@@ -246,6 +270,7 @@ const char* pt_status_name(PTStatus status)
 
 PTResult solve_pt(const Param& param, Variables& var, bool initial)
 {
+    const int nn = mpi_node_end(var), ee = mpi_element_end(var);
     #pragma acc wait
     // Heap ownership also keeps the workspace's nested arrays available to the
     // managed-memory accelerator path. No snapshot survives mesh motion/remesh.
@@ -254,11 +279,11 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     PTWorkspace& w = *owner;
     var.PT_force_residual_valid = false;
     w.start.capture(var);
-    for (int n=0; n<var.nnode; ++n)
+    for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) w.old_velocity[n][d] = (*var.vel)[n][d];
     build_velocity_constraints(param, var, w.constraints, initial);
     if (initial)
-        for (int n=0; n<var.nnode; ++n)
+        for (int n=0; n<nn; ++n)
             for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = 0;
 
     // Physical transport uses this same dt once after convergence. Initial
@@ -278,7 +303,8 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         project_free_vectors(var, w.constraints, *var.vel, true);
         result.iterations = iteration+1;
         ++result.evaluations;
-        result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt);
+        result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt,
+            iteration == 0 ? magnitude.get() : nullptr);
         var.l2_residual = result.residual;
         if (iteration == 0) {
             result.initial_residual = result.residual;
@@ -303,20 +329,23 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             // trial: viscous relaxation, pressure and aging must still occur.
             int free_motion = 0;
 #ifndef ACC
-            #pragma omp parallel for default(none) shared(var, w) reduction(|:free_motion)
+            #pragma omp parallel for default(none) shared(var, w) firstprivate(nn, ee) reduction(|:free_motion)
 #endif
-            #pragma acc parallel loop gang vector reduction(|:free_motion)
-            for (long long k=0; k<static_cast<long long>(var.nnode)*NDIMS; ++k) {
+            #pragma acc parallel loop gang vector firstprivate(nn, ee) reduction(|:free_motion)
+            for (long long k=0; k<static_cast<long long>(nn)*NDIMS; ++k) {
                 const int n = k/NDIMS, d = k%NDIMS;
                 free_motion |= (*var.vel)[n][d] != w.constraints.prescribed[n][d];
             }
+#ifdef USEMPI
+            if (var.mpi && var.mpi->in_kernel()) var.mpi->maximum(&free_motion, 1);
+#endif
             if (free_motion) {
                 const double warm_residual = result.residual;
 #ifndef ACC
-                #pragma omp parallel for default(none) shared(var, w)
+                #pragma omp parallel for default(none) shared(var, w) firstprivate(nn, ee)
 #endif
-                #pragma acc parallel loop gang vector async
-                for (int n=0; n<var.nnode; ++n)
+                #pragma acc parallel loop gang vector firstprivate(nn, ee) async
+                for (int n=0; n<nn; ++n)
                     for (int d=0; d<NDIMS; ++d)
                         (*var.vel)[n][d] = w.constraints.prescribed[n][d];
                 ++result.evaluations;
@@ -327,10 +356,10 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
                     result.residual = stationary_residual;
                 } else {
 #ifndef ACC
-                    #pragma omp parallel for default(none) shared(var, w)
+                    #pragma omp parallel for default(none) shared(var, w) firstprivate(nn, ee)
 #endif
-                    #pragma acc parallel loop gang vector async
-                    for (int n=0; n<var.nnode; ++n)
+                    #pragma acc parallel loop gang vector firstprivate(nn, ee) async
+                    for (int n=0; n<nn; ++n)
                         for (int d=0; d<NDIMS; ++d)
                             (*var.vel)[n][d] = w.old_velocity[n][d];
                     project_free_vectors(var, w.constraints, *var.vel, true);
@@ -354,22 +383,26 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             }
             // The accepted stress is the constitutive/NMD candidate, never the
             // solver's lagged stress. No second constitutive update follows.
-            for (int n=0; n<var.nnode; ++n)
+            for (int n=0; n<nn; ++n)
                 for (int d=0; d<NDIMS; ++d) (*var.force_residual)[n][d] = w.undamped[n][d];
             var.PT_force_residual_valid = true;
             // Preserve the legacy damped force field, but only once per solve.
             apply_damping(param, var, *var.force);
             #pragma acc wait
             if (initial) {
-                for (int n=0; n<var.nnode; ++n)
+                for (int n=0; n<nn; ++n)
                     for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = w.old_velocity[n][d];
                 // The correction velocity is numerical. Initial output and
                 // physical transport must see rates from the restored velocity.
+                mpi_sync(var, *var.vel, MpiEntity::Node);
                 update_strain_rate(var, *var.strain_rate);
                 compute_dvoldt(var, *var.ntmp, *var.etmp);
+                mpi_sync(var, *var.ntmp, MpiEntity::Node);
                 compute_edvoldt(var, *var.ntmp, *var.edvoldt);
                 #pragma acc wait
             }
+            // Trial evaluation synchronized the accepted velocity; initial
+            // equilibrium resynchronized it above after restoring old rates.
             return result;
         }
         if (result.residual < best*(1-1e-12)) {
@@ -377,6 +410,9 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             last_improvement = iteration;
         } else if (!stagnation_reported && param.control.PT_stagnation_window > 0 &&
                    iteration-last_improvement >= param.control.PT_stagnation_window) {
+#ifdef USEMPI
+            if (!var.mpi || var.mpi->is_root())
+#endif
             std::fprintf(stderr, "Warning: PT step=%d has not improved its best residual for %d iterations; "
                          "continuing (residual=%.17g, best=%.17g, threshold=%.17g).\n",
                          var.steps, param.control.PT_stagnation_window, result.residual, best, result.threshold);
@@ -387,7 +423,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         // Only a viscous rheology adds candidate-dependent viscosity to factors.
         if (iteration == 0 || (param.mat.rheol_type & MatProps::rh_viscous)) {
             if (iteration == 0 && !adaptive)
-                for (int e=0; e<var.nelem; ++e)
+                for (int e=0; e<ee; ++e)
                     for (int d=0; d<NSTR; ++d) w.lagged_stress[e][d] = (*var.stress)[e][d];
             compute_pt_factors(param, var, w.stress_fraction, w.mobility,
                                w.height, w.effective_viscosity);
@@ -399,10 +435,10 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             continue;
         }
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, w)
+        #pragma omp parallel for default(none) shared(var, w) firstprivate(nn, ee)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int e=0; e<var.nelem; ++e)
+        #pragma acc parallel loop gang vector firstprivate(nn, ee) async
+        for (int e=0; e<ee; ++e)
             for (int d=0; d<NSTR; ++d) {
                 w.lagged_stress[e][d] += w.stress_fraction[e]*((*var.stress)[e][d]-w.lagged_stress[e][d]);
                 (*var.stress)[e][d] = w.lagged_stress[e][d];
@@ -412,10 +448,10 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt, false);
         project_free_vectors(var, w.constraints, w.undamped);
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(var, w)
+        #pragma omp parallel for default(none) shared(var, w) firstprivate(nn, ee)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int n=0; n<var.nnode; ++n)
+        #pragma acc parallel loop gang vector firstprivate(nn, ee) async
+        for (int n=0; n<nn; ++n)
             for (int d=0; d<NDIMS; ++d)
                 (*var.vel)[n][d] += w.mobility[n]*w.undamped[n][d];
         #pragma acc wait
@@ -423,10 +459,12 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     // Failed candidates cannot become physical history. The caller stops before
     // transport, mesh motion, output or a new physical time step can consume them.
     w.start.restore(var);
-    for (int n=0; n<var.nnode; ++n)
+    for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) (*var.vel)[n][d] = w.old_velocity[n][d];
+    mpi_sync(var, *var.vel, MpiEntity::Node);
     update_strain_rate(var, *var.strain_rate);
     compute_dvoldt(var, *var.ntmp, *var.etmp);
+    mpi_sync(var, *var.ntmp, MpiEntity::Node);
     compute_edvoldt(var, *var.ntmp, *var.edvoldt);
     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
     return result;
@@ -437,11 +475,17 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
 
 PTResult run_physical_step_pt(const Param& param, Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::PhysicalPT, var)) return var.mpi->pt_result();
+#endif
     return solve_pt(param, var, false);
 }
 
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::InitialPT, var)) return var.mpi->pt_result();
+#endif
     // Instantaneous limit: no viscous relaxation and no RSF aging. Plastic
     // correction remains part of the skeleton's initial equilibrium state.
     if (!(param.mat.rheol_type & MatProps::rh_elastic))

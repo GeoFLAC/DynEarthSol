@@ -22,6 +22,8 @@
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - usempi = 1 : MPI timestep kernels; openacc=1 builds dynearthsol[23]d.mpi.gpu.
+##  - usemetis = 1 : optional METIS partitioner for usempi=1 (requires METIS 5).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
@@ -36,6 +38,8 @@ openmp = 1
 nprof = 0
 gprof = 0
 usemmg = 0
+usempi = 0
+usemetis = 0
 useexo = 0
 usegospl = 0
 hdf5 = 0
@@ -43,7 +47,7 @@ snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg usempi usemetis useexo usegospl nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -51,8 +55,8 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX BOOST_ROOT_DIR \
-             HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX MPI_CXX METIS_INCLUDE_DIR METIS_LIB_DIR \
+             BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
              PYTHON_VERSION PYTHON_INCLUDE_DIR PYTHON_LIB_DIR \
@@ -153,6 +157,24 @@ else
 			CXX = g++
 		endif
 	endif
+endif
+ifeq ($(usempi), 1)
+ifneq ($(filter-out 0,$(nprof)),)
+$(error usempi=1 currently supports builds without nprof)
+endif
+ifeq ($(usegospl), 1)
+$(error usempi=1 does not support GoSPL coupling yet; build usegospl=1 without usempi)
+endif
+MPI_CXX ?= mpicxx
+CXX = $(MPI_CXX)
+## Open MPI and MPICH spell the wrapper introspection differently.
+CXX_BACKEND := $(shell $(CXX) --showme:command 2>/dev/null || $(CXX) -show 2>/dev/null)
+suffix = .mpi
+ifeq ($(openacc), 1)
+suffix = .mpi.gpu
+endif
+else
+CXX_BACKEND = ${CXX}
 endif
 
 ifeq ($(hdf5), 1)
@@ -319,7 +341,7 @@ endif
 ## drown in them, and -Wno-unused-private-field, which only clang has.
 WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
 
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
@@ -430,7 +452,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
 	endif
 
-else ifneq (, $(findstring g++, $(CXX))) # if using any version of g++
+else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++17 $(WARNFLAGS) -Wno-unknown-pragmas
 	LDFLAGS = -lm
@@ -466,7 +488,7 @@ else ifneq (, $(findstring g++, $(CXX))) # if using any version of g++
 		CXXFLAGS += -DGPP1X
 	endif
 
-else ifneq (, $(findstring nvc++, $(CXX)))
+else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## No WARNFLAGS here: nvc++ rejects -Wno-unknown-pragmas outright ("Unknown switch"),
 	## and bare -Wall added nothing but a macro redefinition inside Boost's pgi.hpp, which is no longer included.
@@ -486,7 +508,7 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 	endif
 
 	ifeq ($(nofma), 1)
-		CXXFLAGS += -mno-fma
+		CXXFLAGS += -Mnofma
 	endif
 
 	ifeq ($(openacc), 1)
@@ -512,17 +534,20 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		## into our objects, mem:managed allocates it, and std::getline in
 		## libstdc++.so frees it with glibc (see Registry::scan_lines in options.hpp).
 		CXXFLAGS += -acc=gpu -cuda -DACC
-		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
+		ifeq ($(usempi), 1)
+			CXXFLAGS += -Kieee
+		endif
+		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
 
 		## Keep our symbols out of .dynsym
 		LDFLAGS += -Wl,--version-script=local-symbols.map
 		ifeq ($(nofma), 1)
-			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
+			CXXFLAGS += -gpu=cc$(GPU_CC),managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
 		else
-			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed
+			CXXFLAGS += -gpu=cc$(GPU_CC),managed
 			# CXXFLAGS += -gpu=managed
 		endif
 	endif
@@ -580,6 +605,8 @@ SRCS =	\
 	matprops.cxx \
 	mesh.cxx \
 	mmg_utils.cxx \
+	mpi_simulation.cxx \
+	mpi_partition.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -615,6 +642,15 @@ INCS =	\
 	matprops.hpp \
 	mesh.hpp \
 	mmg_utils.hpp \
+	mpi_simulation.hpp \
+	mpi_partition.hpp \
+	mpi_local_fields.hpp \
+	mpi_transport.hpp \
+	mpi_halo_kernels.hpp \
+	mpi_gpu_buffer.hpp \
+	mpi_acc.hpp \
+	exit_codes.hpp \
+	mpi_state.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
@@ -673,6 +709,25 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(usempi), 1)
+	CXXFLAGS += -DUSEMPI -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
+endif
+
+ifeq ($(usemetis), 1)
+ifneq ($(usempi), 1)
+$(error usemetis=1 requires usempi=1)
+endif
+	# Blank overrides use the compiler/linker's normal search paths.
+	METIS_INCLUDE_DIR ?=
+	METIS_LIB_DIR ?=
+	METIS_CXXFLAGS = -DUSEMETIS $(if $(strip $(METIS_INCLUDE_DIR)),-I$(METIS_INCLUDE_DIR))
+	CXXFLAGS += $(METIS_CXXFLAGS)
+	LDFLAGS += $(if $(strip $(METIS_LIB_DIR)),-L$(METIS_LIB_DIR)) -lmetis
+ifneq ($(strip $(METIS_LIB_DIR)),)
+	LDFLAGS += -Wl,-rpath,$(METIS_LIB_DIR)
+endif
+endif
+
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
@@ -680,6 +735,16 @@ endif
 
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
+ifeq ($(usempi), 1)
+ifneq ($(openacc), 1)
+	# MPI changes the DES executable, not this CPU-only eigensolver library.
+	C3X3_LIBNAME = 3x3
+endif
+ifeq ($(openacc), 1)
+	# Device routines must come from the GPU eigensolver archive.
+	C3X3_LIBNAME = 3x3.gpu
+endif
+endif
 ## GPU_CC goes to the sub-make as itself: it folds the capability into the one -gpu= it
 ## assembles, and its flag stamp covers CFLAGS, so a changed capability deletes the
 ## objects it invalidates.
@@ -749,10 +814,11 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS
+FEATURES = HDF5 USEMMG USEEXODUS USEMETIS
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
 FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+FEATURE_USEMETIS_FLAGS  = $(METIS_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
 FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
@@ -854,7 +920,7 @@ check-deps:
 		echo "g++ or nvc++, e.g. make CXX=g++."; exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	@test -f "$(OPENMP_INCLUDE_DIR)/omp.h" \
 	  && test -f "$(OPENMP_LIB_DIR)/libomp.dylib" || { \
 		echo "Missing: an OpenMP runtime -- Apple clang has the pragmas, ships none."; \
@@ -875,6 +941,12 @@ config:
 	@echo "platform           $(OSNAME) $(shell uname -m)"
 	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
 	@echo "openmp             $(strip $(openmp))"
+	@echo "usempi             $(strip $(usempi))"
+	@echo "usemetis           $(strip $(usemetis))"
+ifeq ($(usemetis), 1)
+	@echo "  metis include    $(if $(strip $(METIS_INCLUDE_DIR)),$(METIS_INCLUDE_DIR),compiler default)"
+	@echo "  metis lib dir    $(if $(strip $(METIS_LIB_DIR)),$(METIS_LIB_DIR),linker default)"
+endif
 ifeq ($(OSNAME), Darwin)
 	@echo "brew prefix        $(BREW_PREFIX)"
 ifeq ($(openmp), 1)

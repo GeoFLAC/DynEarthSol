@@ -17,6 +17,35 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
+  `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
+  geometry, mass and timestep bounds use compact spatial partitions with neighbor
+  halo exchanges. Ownership is rebalanced after every MMG remesh; partition traces
+  and logs expose element, node, marker and ghost loads. Rank zero retains the
+  global mesh for MMG, phase changes, marker/surface management and output.
+  Individual marker records stay on rank zero; compute ranks keep material counts.
+  Both PT relaxation methods, including initial equilibrium and failure rollback,
+  use the distributed compute meshes and collective convergence checks.
+  CPU halo and solver regression checks accompany the backend;
+  see `doc/mpi.md`.
+- Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
+  timestep fields with one device per rank and pinned host staging for halos.
+  Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
+  checkpoint and restart checks accompany the backend;
+  scientific equivalence and speedup must be verified for each workload.
+- MPI interior-node/halo overlap for thermal, force and mass assembly, selectable
+  with `DES_MPI_OVERLAP=0/1`. Mesh checks collect geometry only, and inactive
+  serpentinization/monitor paths avoid unused collections. Per-rank operation and
+  communication profiles expose rank loads and halo traffic.
+  Shared SoA halo packers have explicit OpenACC host/device test modes; host
+  checks alone do not verify full GPU solver behavior or NVLink transport.
+- Optional METIS partitioning (`usempi=1 usemetis=1`, runtime
+  `DES_MPI_PARTITIONER=metis`), using shared-node connectivity and a communication
+  volume objective. RCB remains the default. Resized inactive hydraulic scratch
+  state after remeshing to prevent out-of-bounds MPI packing/collection.
+- A scientific-example reproduction driver checks complete serial/MPI fields,
+  checkpoints and monitors. A separate current-format Maxwell case checks the
+  analytical constitutive response in 2D and 3D without the historical source patch.
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
@@ -73,6 +102,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- MPI reuses current root fields and material caches, skips repeated PT velocity
+  synchronization, and combines RSF diagnostics into one collective reduction.
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -161,6 +192,17 @@ For a release, the full auto-generated list of merged pull requests is in its
   Ubuntu 22.04, with gcc 11 or clang 14 ([#119]).
 
 ### Fixed
+
+- MPI builds without MMG skip its unpopulated mesh-size hints during partitioning,
+  avoiding a startup crash when selecting compact node fields.
+- PT running-scale roundoff estimates retain the original element forces before
+  boundary assembly reuses its temporary buffer, avoiding partition-dependent
+  thresholds.
+
+- GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
+  initial checkpoint, avoiding indeterminate metadata in managed root state.
+- The benchmark comparator resolves the requested frame through the frame list
+  when printing its step, allowing sparse restart outputs beginning above frame 0.
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.

@@ -12,6 +12,7 @@
 #include "markerset.hpp"
 #include "matprops.hpp"
 #include "output.hpp"
+#include "mpi_simulation.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
 
@@ -135,6 +136,9 @@ void Output::write_info(const Variables& var, double dt)
 
 void Output::_write(const Variables& var, bool disable_averaging)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var, is_averaged && !disable_averaging);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -358,61 +362,54 @@ void Output::write_exact_error(const Variables& var)
 
 void Output::average_fields(Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Average, var)) return;
+#endif
+    average_fields(var, average_interval, time0, coord0, strain0, stress_avg, delta_plstrain_avg);
+    // The writers and ~Output (via end()) read these buffers on the host.
+    #pragma acc wait
+}
+
+void Output::average_fields(const Variables& var, int interval, double& time0,
+                           array_t& coord0, tensor_t& strain0,
+                           tensor_t& stress_avg, double_vec& delta_plstrain_avg)
+{
+    if (interval <= 1) return;
+    const int coord_components = NDIMS, tensor_components = NSTR;
     // In the first time step of each interval, some old fields are
     // stored for later use.
     // It is guaranteed that remeshing won't occur within the interval.
     // In GPU builds the loops run on the device: a host loop here would pull
     // the managed fields off the device every step.
-    if (var.steps % average_interval == 1) {
+    if (var.steps % interval == 1) {
         time0 = var.time;
-
-        if (coord0.size() != var.coord->size()) {
-            double *tmp = new double[(var.coord)->num_elements()];
-            coord0.reset(tmp, var.coord->size());
-        }
-        if (strain0.size() != var.strain->size()) {
-            double *tmp = new double[(var.strain)->num_elements()];
-            strain0.reset(tmp, var.strain->size());
-        }
-        if (stress_avg.size() != var.stress->size()) {
-            double *tmp = new double[(var.stress)->num_elements()];
-            stress_avg.reset(tmp, var.stress->size());
-        }
-        delta_plstrain_avg.resize(var.delta_plstrain->size());
-
-        double *c0 = coord0.data();
-        const double *c = var.coord->data();
-        int n = coord0.num_elements();
+        const int nn = mpi_node_end(var), ne = mpi_element_end(var);
+        coord0.resize(nn, false);strain0.resize(ne, false);stress_avg.resize(ne, false);
+        delta_plstrain_avg.resize(ne);
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(c0, c, n)
+        #pragma omp parallel for default(none) shared(var, coord0) firstprivate(nn, coord_components) collapse(2)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int i=0; i<n; ++i) {
-            c0[i] = c[i];
-        }
-
-        double *e0 = strain0.data();
-        double *s_avg = stress_avg.data();
-        const double *e = var.strain->data();
-        const double *s = var.stress->data();
-        n = strain0.num_elements();
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(nn, coord_components) collapse(2)
+        for (int c=0; c<coord_components; ++c)
+            for (int n=0; n<nn; ++n) coord0[n][c] = (*var.coord)[n][c];
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(e0, s_avg, e, s, n)
+        #pragma omp parallel for default(none) shared(var, strain0, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int i=0; i<n; ++i) {
-            e0[i] = e[i];
-            s_avg[i] = s[i];
-        }
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        for (int c=0; c<tensor_components; ++c)
+            for (int e=0; e<ne; ++e) {
+                strain0[e][c] = (*var.strain)[e][c];
+                stress_avg[e][c] = (*var.stress)[e][c];
+            }
 
         // The rates are differences from the snapshots above, which hold the state
         // after this step, so the plastic increments count from the next step on.
         double *dp_avg = delta_plstrain_avg.data();
-        n = delta_plstrain_avg.size();
+        const int n = delta_plstrain_avg.size();
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(dp_avg, n)
+        #pragma omp parallel for default(none) shared(dp_avg) firstprivate(n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(n)
         for (int i=0; i<n; ++i) {
             dp_avg[i] = 0.0;
         }
@@ -420,36 +417,33 @@ void Output::average_fields(Variables& var)
     else {
         // Averaging stress & plastic strain
         // (PS: dt-weighted average would be better, but difficult to do)
-        double *s_avg = stress_avg.data();
-        const double *s = var.stress->data();
-        int n = stress_avg.num_elements();
+        const int ne = stress_avg.size();
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(s_avg, s, n)
+        #pragma omp parallel for default(none) shared(var, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int i=0; i<n; ++i) {
-            s_avg[i] += s[i];
-        }
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        for (int c=0; c<tensor_components; ++c)
+            for (int e=0; e<ne; ++e) stress_avg[e][c] += (*var.stress)[e][c];
 
         double *dp_avg = delta_plstrain_avg.data();
         const double *dp = var.delta_plstrain->data();
-        n = delta_plstrain_avg.size();
+        const int n = delta_plstrain_avg.size();
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(dp_avg, dp, n)
+        #pragma omp parallel for default(none) shared(dp_avg, dp) firstprivate(n)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(n)
         for (int i=0; i<n; ++i) {
             dp_avg[i] += dp[i];
         }
     }
-    // Drain the async loops above: the writers and ~Output (via end()) read these
-    // buffers on the host.
-    #pragma acc wait
 }
 
 
 void Output::write_checkpoint(const Param& param, const Variables& var)
 {
+#ifdef USEMPI
+    if (var.mpi) var.mpi->collect(var);
+#endif
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif

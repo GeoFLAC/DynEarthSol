@@ -12,6 +12,8 @@ struct EarthquakeState {
     std::vector<double> cumulative_moment_by_mat;
 };
 
+void compute_earthquake_metrics(const Variables&, double& speed, double& plastic_rate);
+
 void init_earthquake_state(const Param& param, EarthquakeState& state);
 
 void update_earthquake_tracking(const Param& param,

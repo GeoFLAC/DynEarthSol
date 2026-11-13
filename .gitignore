@@ -17,6 +17,9 @@ dynearthsol[23]d.*
 orig-*
 .vscode
 *.local
+*.dSYM/
+# Dated validation run reports are local records, kept under *.local/.
+/doc/validation-????-??-??.md
 *.qdrep
 *.sqlite
 *.csv

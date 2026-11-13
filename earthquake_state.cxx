@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include "earthquake_state.hpp"
+#include "mpi_simulation.hpp"
 
 #include "constants.hpp"
 #include "matprops.hpp"
@@ -17,13 +18,14 @@ double compute_max_plastic_strain_rate(const Variables& var)
 {
     const double inv_dt = 1.0 / std::max(var.dt, 1e-30);
     double max_depls = 0.0;
+    const int owned = mpi_element_end(var);
 
 #ifdef ACC
-    #pragma acc parallel loop reduction(max:max_depls)
+    #pragma acc parallel loop if(des_acc_offload()) reduction(max:max_depls) firstprivate(owned)
 #else
-    #pragma omp parallel for reduction(max:max_depls) default(none) shared(var)
+    #pragma omp parallel for reduction(max:max_depls) default(none) shared(var) firstprivate(owned)
 #endif
-    for (int e = 0; e < var.nelem; ++e) {
+    for (int e = 0; e < owned; ++e) {
         const double depls = std::fabs((*var.delta_plstrain)[e]);
         max_depls = std::max(max_depls, depls);
     }
@@ -33,13 +35,14 @@ double compute_max_plastic_strain_rate(const Variables& var)
 double compute_max_global_velocity_magnitude(const Variables& var)
 {
     double vmax = 0.0;
+    const int owned = mpi_node_end(var);
 
 #ifdef ACC
-    #pragma acc parallel loop reduction(max:vmax)
+    #pragma acc parallel loop if(des_acc_offload()) reduction(max:vmax) firstprivate(owned)
 #else
-    #pragma omp parallel for reduction(max:vmax) default(none) shared(var)
+    #pragma omp parallel for reduction(max:vmax) default(none) shared(var) firstprivate(owned)
 #endif
-    for (int n = 0; n < var.nnode; ++n) {
+    for (int n = 0; n < owned; ++n) {
 #ifdef THREED
         const double vx = (*var.vel)[n][0];
         const double vy = (*var.vel)[n][1];
@@ -103,6 +106,19 @@ std::vector<double> compute_seismic_moment_rate_by_material(const Variables& var
 
 } // namespace
 
+void compute_earthquake_metrics(const Variables& var, double& speed, double& plastic_rate)
+{
+    speed = compute_max_global_velocity_magnitude(var);
+    plastic_rate = compute_max_plastic_strain_rate(var);
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double maxima[] = {speed, plastic_rate};
+        var.mpi->maximum(maxima, 2);
+        speed = maxima[0]; plastic_rate = maxima[1];
+    }
+#endif
+}
+
 void init_earthquake_state(const Param& param, EarthquakeState& state)
 {
     state.in_earthquake_mode = false;
@@ -122,8 +138,11 @@ void update_earthquake_tracking(const Param& param,
         return;
     }
 
-    const double max_global_vel_mag = compute_max_global_velocity_magnitude(var);
-    const double max_plastic_strain_rate = compute_max_plastic_strain_rate(var);
+    double max_global_vel_mag, max_plastic_strain_rate;
+#ifdef USEMPI
+    if (!var.mpi || !var.mpi->metrics(var, max_global_vel_mag, max_plastic_strain_rate))
+#endif
+        compute_earthquake_metrics(var, max_global_vel_mag, max_plastic_strain_rate);
     const bool plastic_active = (max_plastic_strain_rate > 0.0);
 
     const double start_velocity_threshold =
@@ -173,6 +192,9 @@ void update_earthquake_tracking(const Param& param,
     }
 
     if (state.in_earthquake_mode && param.sim.seismic_moment_calculate_output) {
+#ifdef USEMPI
+        if (var.mpi) var.mpi->collect(var);
+#endif
         std::vector<double> rate = compute_seismic_moment_rate_by_material(var);
         const size_t n = std::min(rate.size(), state.cumulative_moment_by_mat.size());
         for (size_t i = 0; i < n; ++i)

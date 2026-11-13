@@ -3645,7 +3645,11 @@ void create_boundary_facets(Variables& var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
 #endif
-    #pragma acc parallel loop gang vector
+    // MPI mesh management runs on the root CPU; the compact GPU fields are
+    // populated after topology and boundary facets have been constructed.
+#if !defined(ACC) || !defined(USEMPI)
+    #pragma acc parallel loop if(des_acc_offload()) gang vector
+#endif
     for (int i=0; i<etop; ++i) {
         int e = (*var.bfacets[iboundz1])[i].first;
         int f = (*var.bfacets[iboundz1])[i].second;
@@ -3745,7 +3749,7 @@ void create_neighbor(Variables& var)
         shared(var, NODE_OF_FACET, ncontact) collapse(2)
 #endif
 #endif
-    #pragma acc parallel loop collapse(2) copy(ncontact) async
+    #pragma acc parallel loop if(des_acc_offload()) collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             // No "already set" early-exit: it would race the cross-row write below, and the
@@ -3913,7 +3917,7 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity,
     #pragma omp parallel for default(none) \
             shared(nodal, connectivity, nelem, elem, nnodes_per_elem)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload()) gang vector async
     for (int e = 0; e < nelem; ++e) {
         ConstConnAccessor conn = connectivity[e];
         double avg = 0.0;
