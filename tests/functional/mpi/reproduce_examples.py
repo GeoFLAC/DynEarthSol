@@ -26,7 +26,6 @@ import numpy as np
 from run_mpi import ROOT, compare_physical_hdf5, command_text
 from run_gpu_mpi import compare_fields, device_records
 
-YEAR_SECONDS = 365.2422 * 86400
 CASES = {
     "core-mmg": ("examples/core-complex-mmg.cfg", 2, 20000),
     "rsf-eq": ("examples/rate_and_state_friction/ep_rsf_eq.cfg", 2, 2000),
@@ -206,131 +205,6 @@ def analyze(reference, current, cfg, ndims, gpu=False):
                 reference=str(reference), current=str(current))
 
 
-def plot_case(name, report, directory, cfg):
-    os.environ.setdefault("MPLCONFIGDIR", str(directory / ".matplotlib"))
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    rows = report["physical"]["saved"]
-    monitor_series = []
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
-    if name.startswith("maxwell"):
-        t = np.array([r["step"] for r in rows]) * 1e9
-        axes[0].plot(t / 1e12, 2e8 * (-np.expm1(-t/1e12)) / 1e6, label="Analytical")
-        axes[0].plot(t / 1e12, [r["mean_stress_zz"]/1e6 for r in rows], ".", label="DES MPI")
-        axes[0].set(xlabel="Time / relaxation time", ylabel="Mean vertical stress (MPa)")
-        axes[1].plot(t[1:] / 1e12, np.abs((np.array([r["mean_stress_zz"] for r in rows[1:]]) -
-                                         2e8*(-np.expm1(-t[1:]/1e12))) / (2e8*(-np.expm1(-t[1:]/1e12)))))
-        axes[1].set(xlabel="Time / relaxation time", ylabel="Relative error", yscale="log")
-    elif cfg.has_section("monitor"):
-        for kind, style in (("reference", "-"), ("current", "--")):
-            path = Path(report[kind]) / (cfg["monitor"]["output_prefix"] + "_point_0.csv")
-            a = np.atleast_1d(np.genfromtxt(path, delimiter=",", names=True))
-            velocity = np.column_stack([a[k] for k in a.dtype.names if k.startswith("velocity_")])
-            coord = np.column_stack([a[k] for k in a.dtype.names if k.startswith("coord_")])
-            monitor_series.append((kind, style, a, velocity, coord))
-            label = "Parent CPU" if kind == "reference" else "MPI"
-            axes[0].semilogy(a["time_s"]/YEAR_SECONDS, np.maximum(np.linalg.norm(velocity, axis=1), 1e-12), style, label=label)
-            axes[1].plot(a["time_s"]/YEAR_SECONDS, np.linalg.norm(coord-coord[0], axis=1), style, label=label)
-        axes[0].set(xlabel="Time (yr)", ylabel="Monitor speed (m/s)")
-        axes[1].set(xlabel="Time (yr)", ylabel="Monitor displacement (m)")
-    else:
-        series = [(rows, report.get("current_label", "MPI"), "--")]
-        if "current_label" not in report:
-            old = physical_summary(Path(report["reference"]), cfg["sim"]["modelname"], 2)
-            series.insert(0, (old["saved"], "Parent CPU", "-"))
-        for saved, label, style in series:
-            t = [r["time_yr"] for r in saved]
-            axes[0].plot(t, [r["nelem"] for r in saved], style, label=label)
-            axes[1].plot(t, [r["max_plastic_strain"] for r in saved], style)
-        axes[0].set(xlabel="Time (yr)", ylabel="Elements")
-        axes[1].set(xlabel="Time (yr)", ylabel="Maximum plastic strain")
-    axes[0].legend()
-    for ax in axes:
-        ax.grid(alpha=0.3)
-    fig.suptitle(name)
-    fig.savefig(directory / "reproduction.png", dpi=160)
-    fig.savefig(directory / "reproduction.pdf")
-    plt.close(fig)
-    if monitor_series and "stress_2" in monitor_series[0][2].dtype.names:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 7), constrained_layout=True)
-        for kind, style, a, velocity, coord in monitor_series:
-            t = a["time_s"]/YEAR_SECONDS
-            label = "Parent CPU" if kind == "reference" else "MPI"
-            axes[0, 0].semilogy(t, np.maximum(np.linalg.norm(velocity, axis=1), 1e-12), style, label=label)
-            axes[0, 1].plot(t, a["stress_2"]/1e6, style)
-            axes[1, 0].plot(t, a["dynamic_friction"], style)
-            axes[1, 1].plot(t, coord[:, 0]-coord[0, 0], style)
-        axes[0, 0].set(ylabel="Local monitor speed (m/s)")
-        axes[0, 1].set(ylabel="Monitor shear stress (MPa)")
-        axes[1, 0].set(ylabel="Dynamic friction coefficient")
-        axes[1, 1].set(ylabel="Horizontal monitor displacement (m)")
-        axes[0, 0].legend()
-        for ax in axes.flat:
-            ax.set(xlabel="Time (yr)")
-            ax.grid(alpha=0.3)
-        fig.suptitle(name + ": loading, slip and recovery")
-        fig.savefig(directory / "monitor-history.png", dpi=160)
-        fig.savefig(directory / "monitor-history.pdf")
-        plt.close(fig)
-        a0, velocity0 = monitor_series[0][2:4]
-        speed0 = np.linalg.norm(velocity0, axis=1)
-        peak = int(np.argmax(speed0))
-        if speed0[peak] > 1e-6:
-            start = finish = peak
-            while start > 0 and speed0[start-1] > 1e-6:
-                start -= 1
-            while finish+1 < len(speed0) and speed0[finish+1] > 0.5e-6:
-                finish += 1
-            origin = a0["time_s"][peak]
-            limits = (a0["time_s"][start]-origin, a0["time_s"][finish]-origin)
-            margin = max(1, 0.1*(limits[1]-limits[0]))
-            fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
-            for kind, style, a, velocity, coord in monitor_series:
-                t = a["time_s"]-origin
-                label = "Parent CPU" if kind == "reference" else "MPI"
-                mask = (t >= limits[0]-margin) & (t <= limits[1]+margin)
-                axes[0].semilogy(t[mask], np.maximum(np.linalg.norm(velocity[mask], axis=1), 1e-12), style, label=label)
-                axes[1].plot(t[mask], a["stress_2"][mask]/1e6, style)
-            axes[0].set(ylabel="Local monitor speed (m/s)")
-            axes[1].set(ylabel="Monitor shear stress (MPa)")
-            for ax in axes:
-                ax.set(xlabel="Seconds relative to peak speed", xlim=(limits[0]-margin, limits[1]+margin))
-                ax.grid(alpha=0.3)
-            axes[0].legend()
-            fig.suptitle(name + ": largest monitored slip burst")
-            fig.savefig(directory / "earthquake-zoom.png", dpi=160)
-            fig.savefig(directory / "earthquake-zoom.pdf")
-            plt.close(fig)
-    if name in ("core-mmg", "evp-rifting"):
-        import matplotlib.tri as mtri
-        selected = [rows[0], rows[-1]]
-        data = []
-        for row in selected:
-            path = Path(report["current"]) / f"{cfg['sim']['modelname']}.save.{row['frame']:06d}.vtkhdf"
-            with h5py.File(path) as f:
-                grid = f["VTKHDF/grid"]
-                data.append((grid["Points"][()]/1000, grid["Connectivity"][()].reshape(-1, 3),
-                             grid["CellData/plastic strain"][()]))
-        aspect = max(np.ptp(d[0][:, 0])/np.ptp(d[0][:, 1]) for d in data)
-        xlimits = (min(d[0][:, 0].min() for d in data), max(d[0][:, 0].max() for d in data))
-        zlimits = (min(d[0][:, 1].min() for d in data), max(d[0][:, 1].max() for d in data))
-        height = max(4, min(9, 2*(9/aspect + 0.8)))
-        fig, axes = plt.subplots(2, 1, figsize=(11, height), constrained_layout=True)
-        norm = matplotlib.colors.PowerNorm(0.35, vmin=0, vmax=max(d[2].max() for d in data))
-        for ax, row, (points, connectivity, strain) in zip(axes, selected, data):
-            tri = mtri.Triangulation(points[:, 0], points[:, 1], connectivity)
-            color = ax.tripcolor(tri, facecolors=strain, norm=norm, cmap="magma", rasterized=True)
-            ax.set(xlabel="Distance (km)", ylabel="Elevation (km)",
-                   title=f"{row['time_yr']:,.0f} yr; {row['nelem']:,} elements", aspect="equal",
-                   xlim=xlimits, ylim=zlimits)
-        fig.colorbar(color, ax=axes, label="Accumulated plastic strain")
-        fig.suptitle(name + ": " + report.get("current_label", "MPI result"))
-        fig.savefig(directory / "plastic-strain.png", dpi=180, bbox_inches="tight")
-        fig.savefig(directory / "plastic-strain.pdf", bbox_inches="tight")
-        plt.close(fig)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", type=Path, required=True)
@@ -346,7 +220,6 @@ def main():
     parser.add_argument("--launcher", default="mpiexec")
     parser.add_argument("--timeout", type=float, default=7200, help="Seconds allowed per executable")
     parser.add_argument("--workdir", type=Path)
-    parser.add_argument("--plot", action="store_true")
     parser.add_argument("--gpu", action="store_true",help="Verify GPU MPI identities and compare physical fields within 1e-8")
     parser.add_argument("--gpu-reference", action="store_true",help="Compare GPU MPI against a one-GPU run; retain CPU comparisons separately")
     args = parser.parse_args()
@@ -403,8 +276,6 @@ def main():
                 report["analytical"] = check_maxwell(report["physical"])
             results["cases"][name] = report
             (directory / "comparison.json").write_text(json.dumps(report, indent=2)+"\n")
-            if args.plot:
-                plot_case(name, report, directory, cfg)
             (work / "results.json").write_text(json.dumps(results, indent=2)+"\n")
             print(f"Passed {name}: {len(report['frames']['save'])} frames, bit_exact={report['bit_exact']}", flush=True)
         results["completed"] = True

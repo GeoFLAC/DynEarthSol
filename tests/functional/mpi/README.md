@@ -3,8 +3,7 @@
 `run_mpi.py` runs short correctness checks.
 `reproduce_examples.py` runs the existing scientific examples and retains their
 configurations, checks every saved physical dataset/checkpoint against a parent
-serial executable, compares complete monitor CSV records, and optionally plots
-results. Both drivers require NumPy and h5py; plotting also needs Matplotlib.
+serial executable, compares complete monitor CSV records. Both drivers require NumPy and h5py.
 Use CPU HDF5/MMG executables built from the parent and changed sources.
 
 ## PT mechanics
@@ -13,7 +12,7 @@ Use CPU HDF5/MMG executables built from the parent and changed sources.
 python tests/functional/mpi/run_pt_mpi.py \
   --serial /path/to/current-master/dynearthsol2d --mpi ./dynearthsol2d.mpi \
   --serial3d /path/to/current-master/dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
-  --ranks 1 3 4 8 --plot --workdir benchmarks-cores/mpi-pt.local
+  --ranks 1 3 4 8 --workdir benchmarks-cores/mpi-pt.local
 ```
 
 Build all executables with HDF5 and MMG. The driver runs both upstream PT methods
@@ -39,9 +38,7 @@ The forced-remesh fixtures explicitly increase `PT_max_iter` from 5,000 to 50,00
 for MMG meshes, preserving their stopping tolerances. Configurations, process
 commands and logs are retained. The two remesh cases exercise boundary options
 0 and 11; with MMG enabled both use MMG. Mesh-quality loop-limit warnings in this
-fixture do not establish acceptable production mesh quality. `pt-creep.png`
-overlays the checked serial/MPI strain histories; it is a correctness figure,
-not a speedup measurement. `--threads 2` checks the hybrid execution path;
+fixture do not establish acceptable production mesh quality. `--threads 2` checks the hybrid execution path;
 ADR restart can lose byte equality with multiple OpenMP threads, as documented
 by upstream, so that failure must not be hidden by relaxing the restart checker.
 
@@ -92,7 +89,7 @@ python tests/functional/mpi/reproduce_examples.py \
   --serial /path/to/parent/dynearthsol2d --mpi ./dynearthsol2d.mpi \
   --serial3d /path/to/parent/dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
   --cases core-mmg rsf-eq maxwell-2d maxwell-3d \
-  --launcher 'mpiexec --bind-to none' --plot
+  --launcher 'mpiexec --bind-to none'
 ```
 
 Default mode is `full`: the original simulation duration, mesh, materials,
@@ -119,7 +116,7 @@ For a bounded regression first:
 python tests/functional/mpi/reproduce_examples.py \
   --serial /path/to/parent/dynearthsol2d --mpi ./dynearthsol2d.mpi \
   --cases core-mmg rsf-eq evp-rifting --mode regression \
-  --launcher 'mpiexec --bind-to none' --plot
+  --launcher 'mpiexec --bind-to none'
 ```
 
 Regression caps are 20,000 core-complex steps, 2,000 RSF steps, and 1,000 rifting
@@ -129,14 +126,10 @@ custom cap. Such runs verify agreement only over the completed interval; an
 RSF startup check is not a reproduction of earthquake cycles. `sampled_dynamic_frames`
 in the report counts saved frames with model-wide speed above 1e-6 m/s and
 nonzero plastic activity; it is not a complete event catalog or a recurrence test.
-The monitor plot is needed to inspect the evolution between full-field outputs.
+Inspect the retained monitor CSV for the evolution between full-field outputs.
 
 Results include `comparison.json`, a top-level `results.json`, commands, logs,
-all inputs/outputs, and (with `--plot`) `reproduction.png`/`.pdf`. Core-complex and
-rifting also produce `plastic-strain.png`/`.pdf`. RSF cases produce a four-panel
-`monitor-history.png`/`.pdf` showing speed, stress, friction and displacement;
-a dynamic burst also produces `earthquake-zoom.png`/`.pdf`. Monitor speed plots
-use the existing RSF plotting script's display floor of 1e-12 m/s on logarithmic axes. Every physical VTKHDF dataset must
+and all inputs/outputs. Every physical VTKHDF dataset must
 be finite and byte-identical, excluding wall-clock measurements. Saved frame
 sets, checkpoint frame sets, monitor records, completed steps and remesh counts
 must match. The normal `benchmarks-cores/compare.py` also checks the final saved
@@ -181,10 +174,8 @@ checks with `DES_MPI_PARTITIONER=metis` using a METIS-enabled executable.
 `DES_MPI_OVERLAP=0` and `1` select blocking and overlapped halo assembly; use the
 same reference and inputs for both. No extra simulation cfg parameter is needed.
 
-`plot_partitions.py RUN [RUN ...] --output FIGURES` reads actual partition traces
-and matching `run.log` files, checks unique complete ownership against per-rank
-counts, and draws 2D ownership maps and load/ghost bars. See
-[trace generation](../../../doc/mpi.md#inspecting-actual-partitions).
+To inspect actual ownership, write partition traces as described in
+[inspecting actual partitions](../../../doc/mpi.md#inspecting-actual-partitions).
 
 ## Accelerator halo checks
 

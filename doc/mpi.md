@@ -199,17 +199,13 @@ Set an output prefix before launching; its parent directory must exist:
 mkdir -p /tmp/des-partition-run
 DES_MPI_PARTITION_TRACE=/tmp/des-partition-run/partition OMP_NUM_THREADS=1 \
   mpiexec -n 4 ./dynearthsol2d.mpi model.cfg > /tmp/des-partition-run/run.log 2>&1
-python tests/functional/mpi/plot_partitions.py /tmp/des-partition-run \
-  --output /tmp/des-partition-figures
 ```
 
 Trace files `partition.0001.csv`, `.0002.csv`, etc. contain actual global IDs,
 owners, node positions, centroids and connectivity at each partition generation.
 `[mpi][partition]` log rows report step, owned nodes/elements/markers, ghosts and
-neighbors for every rank. The plotter validates complete, unique ownership and
-matches trace counts against log rows before making figures and metrics JSON.
-The plotter currently draws 2D triangular meshes; 3D traces need a separate viewer.
-Plots show count balance and ghost storage; they do not establish equal runtime.
+neighbors for every rank. Counts show balance and ghost storage; they do not
+establish equal runtime.
 
 `[mpi][kernel]` reports operation counts and root elapsed seconds including
 synchronization. Management operations have counters too. `[mpi][communication]`
@@ -296,8 +292,8 @@ Compare equal CPU budgets and retain the same geometry, initial state and physic
 outputs. Measure complete wall time including initialization, remeshing, output
 and MPI startup. Use warmups and repeated runs without competing jobs; record CPU
 placement and GPU identities. Local shared-memory measurements do not predict
-multi-node or adaptive-model speedup. Keep workload-specific measurement and
-plotting scripts with their results under ignored `*.local/` directories.
+multi-node or adaptive-model speedup. Keep workload-specific measurement
+scripts with their results under ignored `*.local/` directories.
 
 The [halo checks](../tests/functional/mpi/README.md#accelerator-halo-checks) exercise
 the shared SoA pack/unpack indexing and MPI post/wait helpers, including irregular

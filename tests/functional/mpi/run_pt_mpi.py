@@ -94,7 +94,6 @@ def main():
     parser.add_argument('--maxwell-steps', type=int, default=100)
     parser.add_argument('--rtol', type=float, default=1e-8)
     parser.add_argument('--atol', type=float, default=1e-12)
-    parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
     if min(args.ranks) < 1 or args.threads < 1 or args.rtol < 0 or args.atol < 0:
         parser.error('Ranks/threads must be positive and tolerances nonnegative')
@@ -189,35 +188,7 @@ def main():
         report['completed']=True
     finally:
         (work/'results.json').write_text(json.dumps(report,indent=2)+'\n')
-    if args.plot and 'maxwell' in args.cases:
-        plot_creep(work, args.ranks, args.options, args.dimensions)
     print('Passed. Results:',work/'results.json',flush=True)
-
-
-def plot_creep(work, ranks, options, dimensions=(2,3)):
-    os.environ.setdefault('MPLCONFIGDIR', str(work/'.matplotlib'))
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    sys.path.insert(0,str(ROOT))
-    from Dynearthsol import Dynearthsol
-    fig, axes = plt.subplots(1,len(dimensions),figsize=(5*len(dimensions),4),squeeze=False)
-    for ax, dim in zip(axes[0],dimensions):
-        for option in options:
-            for rank in (None,*ranks):
-                tag='serial' if rank is None else f'mpi{rank}'
-                model=Dynearthsol(str(work/f'maxwell-{dim}d-option{option}-{tag}'/'creep'))
-                strain=[float(np.mean(model.read_field(f,'strain')[:,dim-1])) for f in model.frames]
-                ax.plot(model.time,strain,label=f'PT {option}, {tag}',linestyle='-' if rank is None else '--')
-        analytic = json.loads((work/f'maxwell-{dim}d-option{options[0]}-serial'/'analytic.json').read_text())
-        ax.plot(model.time,[0]+[row['strain_zz'] for row in analytic['history']],
-                color='black',linestyle=':',linewidth=1.5,label='Analytical reference')
-        ax.set(title=f'{dim}D Maxwell creep',xlabel='Time (s)',ylabel='Mean vertical strain')
-        ax.legend(fontsize=7)
-        ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(work/'pt-creep.png',dpi=160)
-    plt.close(fig)
 
 
 if __name__ == '__main__':

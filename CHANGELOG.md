@@ -21,7 +21,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
   geometry, mass and timestep bounds use compact spatial partitions with neighbor
   halo exchanges. Ownership is rebalanced after every MMG remesh; partition traces
-  and figures expose element, node, marker and ghost loads. Rank zero retains the
+  and logs expose element, node, marker and ghost loads. Rank zero retains the
   global mesh for MMG, phase changes, marker/surface management and output.
   Individual marker records stay on rank zero; compute ranks keep material counts.
   Both PT relaxation methods, including initial equilibrium and failure rollback,
