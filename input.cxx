@@ -508,7 +508,10 @@ static void declare_parameters(opt::Registry &cfg,
          "alpha of control.has_highpass_damping (in 1/s). 0: 50 * c / L, where\n"
          "c = max boundary velocity (or control.characteristic_speed) * control.inertial_scaling\n"
          "is the pseudo wave speed and L the largest extent of the initial domain; this damps\n"
-         "the domain-scale modes about 8 times critically.\n")
+         "the domain-scale modes about 8 times critically. For motion slower than T_f the\n"
+         "force acts as an added mass alpha * T_f * mass, which slows the pseudo waves by\n"
+         "sqrt(1 + alpha * T_f) (~22 with the defaults): keep sqrt(alpha * T_f) much smaller\n"
+         "than control.inertial_scaling, so raising alpha or T_f has a cost.\n")
         ("control.highpass_damping_time", opt::value<double>(&p.control.highpass_damping_time)->default_value(0),
          "T_f of control.has_highpass_damping (in seconds). 0: 10 * L / c, ten wave crossings\n"
          "of the domain, which is 1e-4 of the time L / V to deform it by order 100 % at the\n"
