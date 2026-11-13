@@ -52,7 +52,9 @@ void handle_ats_output(const Param& param,
             frames_due_time = static_cast<int>(std::floor(elapsed_years / param.sim.output_time_interval_in_yr));
         }
 
-        const int frames_due = std::max(frames_due_step, frames_due_time);
+        // The due test compares seconds, the floor above years; rounding can
+        // leave the floor one short, so the frame written now always counts.
+        const int frames_due = std::max({frames_due_step, frames_due_time, next_regular_frame});
         following_regular_frame = frames_due + 1;
     }
     // Checkpoints below must carry the index for the next physical step.

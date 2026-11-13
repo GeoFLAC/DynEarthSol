@@ -180,6 +180,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   GVS also refreshes both from the accepted velocity. Large output intervals
   no longer overflow the regular frame-index product ([#135]).
 - Restart manifests report only the steps executed in the current run ([#135]).
+- A GVS run no longer writes a duplicate regular frame when the elapsed time
+  lands on an output time to within rounding ([#135]).
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
