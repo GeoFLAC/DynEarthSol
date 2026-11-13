@@ -1,0 +1,31 @@
+// Geodynamic World Builder world for gwb-core-complex.cfg: only the seed fault
+// of core-complex.cfg, as a GWB fault (weakzone_option = 936). DES sets the
+// temperature and the single material itself, so the world needs no thermal
+// parameters, plates or compositions.
+{
+  "version":"1.2",
+  "coordinate system":{"model":"cartesian"},
+  // A 2D DES model lies on this line of the world's map: DES x runs from
+  // (0,0) to (100 km,0), and the depth is -z.
+  "cross section":[[0,0],[100e3,0]],
+  "features":
+  [
+    // core-complex.cfg's planar weak zone: the plane through (50 km, 0)
+    // dipping 60 degrees toward -x, from 5 to 10 km depth, 1.2 km horizontal
+    // half-width.
+    // - A GWB fault starts at its min depth, so the trace in "coordinates" is
+    //   where the plane reaches 5 km: x = 50 - 5/tan 60 = 47.113 km. The trace
+    //   runs along y, far past the cross section.
+    // - "dip point" lies on the side the fault dips toward (-x here).
+    // - "thickness" is measured across the fault and centred on its plane:
+    //   2 x 1.2 km x sin 60 = 2.08 km.
+    // - A point lies in the fault only if its depth is within the segment
+    //   length plus the thickness, so the 12 km segment reaches past 10 km
+    //   and "max depth" ends the fault.
+    // A fault without temperature or composition models only marks where it
+    // is; DES gives its elements weakzone_plstrain.
+    {"model":"fault", "name":"seed fault", "min depth":5e3, "max depth":10e3,
+     "coordinates":[[47.113e3,-100e3],[47.113e3,100e3]], "dip point":[0,0],
+     "segments":[{"length":12e3, "thickness":[2.08e3], "angle":[60]}]}
+  ]
+}
