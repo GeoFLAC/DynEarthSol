@@ -821,11 +821,29 @@ static double recorded_plastic_increment(const double plastic[3]) {
 #endif
 }
 
+// Pure 2D (two principal stresses, not plane strain): the same invariant of
+// the two in-plane components.
+static double recorded_plastic_increment_2d(const double plastic[3]) {
+    const double mean=(plastic[0]+plastic[1])/2;
+    double squared=mean*mean;
+    for(int k=0;k<2;++k) squared+=(plastic[k]-mean)*(plastic[k]-mean);
+    return std::sqrt(squared/2);
+}
+
 // Plastic strain of a principal stress correction under the compliance of
 // set_mc_material: 3K = 65e9, lambda = K - 2G/3 = 15e9, 2G = 2e10.
 static void compliance_plastic(const double trial[3], const double result[3], double plastic[3]) {
     const double volume=(trial[0]+trial[1]+trial[2]-result[0]-result[1]-result[2])/65e9;
     for(int k=0;k<3;++k) plastic[k]=(trial[k]-result[k]-15e9*volume)/2e10;
+}
+
+// Pure 2D: the in-plane moduli a1 = K + 4G/3 = 35e9 and a2 = K - 2G/3 = 15e9
+// of set_mc_material, inverted (determinant a1^2 - a2^2 = 1e21).
+static void compliance_plastic_2d(const double trial[3], const double result[3], double plastic[3]) {
+    const double d0=trial[0]-result[0], d1=trial[1]-result[1];
+    plastic[0]=(35e9*d0-15e9*d1)/1e21;
+    plastic[1]=(35e9*d1-15e9*d0)/1e21;
+    plastic[2]=0;
 }
 
 // Elastic-plastic material with c=100 kPa, phi=30 deg, K=65/3 GPa, G=10 GPa.
@@ -1016,19 +1034,22 @@ static void test_mohr_coulomb_returns() {
 // Whether plastic is a nonnegative combination of the flows of the surfaces
 // active at result: shear faces (low, high) with flow -e_low + Npsi*e_high,
 // and tensile caps with flow e_k. In principal space three flows suffice.
+// nd = 2 (pure 2D) has the one face (0,1) and caps on p0, p1.
 static bool in_active_flow_cone(const double result[3], const double plastic[3],
                                 double amc, double anphi, double anpsi, double cap,
-                                double scale) {
+                                double scale, int nd=3) {
     double flows[6][3];
     int n=0;
     const int faces[3][2]={{0,2},{1,2},{0,1}};
     const double tol=1e-9*scale;
-    for(const auto& face : faces)
+    for(int i=nd==3 ? 0 : 2;i<3;++i) {
+        const auto& face=faces[i];
         if(std::fabs(result[face[0]]-anphi*result[face[1]]+amc)<=tol) {
             double* m=flows[n++];
             m[0]=m[1]=m[2]=0; m[face[0]]=-1; m[face[1]]=anpsi;
         }
-    for(int k=0;k<3;++k)
+    }
+    for(int k=0;k<nd;++k)
         if(result[k]>=cap-tol) {
             double* m=flows[n++];
             m[0]=m[1]=m[2]=0; m[k]=1;
@@ -1078,7 +1099,15 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
         check(what,ok,1);
     };
     auto& stress=f.m->stress;
+    // Pure 2D has two principal stresses, from the in-plane tensor.
+    const int nd=NDIMS==2 && !f.m->param.mat.is_plane_strain ? 2 : 3;
     const auto principal=[&](double r[3]) {
+        if(nd==2) {
+            const double mean=0.5*(stress[0][0]+stress[0][1]);
+            const double radius=std::hypot(0.5*(stress[0][0]-stress[0][1]),stress[0][2]);
+            r[0]=mean-radius; r[1]=mean+radius; r[2]=0;
+            return;
+        }
         r[0]=stress[0][0]; r[1]=stress[0][1]; r[2]=NDIMS==2 ? (*f.yy)[0] : stress[0][2];
     };
     f.set_principal(trial);
@@ -1087,15 +1116,19 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     double result[3];
     principal(result);
     double plastic[3];
-    compliance_plastic(trial,result,plastic);
-    const double recorded=recorded_plastic_increment(plastic);
+    if(nd==2) compliance_plastic_2d(trial,result,plastic);
+    else compliance_plastic(trial,result,plastic);
+    const double recorded=nd==2 ? recorded_plastic_increment_2d(plastic)
+                                : recorded_plastic_increment(plastic);
     const double history=(*f.pls)[0];
     double amc,anphi,anpsi,hardn,cap;
     f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
-    const double scale=std::max(std::fabs(amc),
-        std::max(std::fabs(result[0]),std::max(std::fabs(result[1]),std::fabs(result[2]))));
-    const double shear=result[0]-anphi*result[2]+amc, tension=cap-result[2];
-    flag("principal order kept",result[0]<=result[1]+1e-9*scale && result[1]<=result[2]+1e-9*scale);
+    double scale=std::fabs(amc);
+    for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
+    const double shear=result[0]-anphi*result[nd-1]+amc, tension=cap-result[nd-1];
+    bool ordered=true;
+    for(int k=0;k+1<nd;++k) ordered=ordered && result[k]<=result[k+1]+1e-9*scale;
+    flag("principal order kept",ordered);
     flag("inside the shear surface",shear>=-1e-9*scale);
     flag("inside the tensile cap",tension>=-1e-9*scale);
     flag("on the composite surface",std::min(shear,tension)<=1e-9*scale);
@@ -1104,14 +1137,14 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     flag("increment is the recorded plastic strain",std::fabs(increment-recorded)<=1e-6*recorded);
     flag("history reaches the expected range",history>=minimum_history);
     flag("plastic strain in the cone of active flows",
-         in_active_flow_cone(result,plastic,amc,anphi,anpsi,cap,scale));
+         in_active_flow_cone(result,plastic,amc,anphi,anpsi,cap,scale,nd));
     const double size=std::sqrt(plastic[0]*plastic[0]+plastic[1]*plastic[1]+plastic[2]*plastic[2]);
     flag("nonnegative plastic work",
          result[0]*plastic[0]+result[1]*plastic[1]+result[2]*plastic[2]>=-1e-9*scale*size);
     f.update();
     double again[3];
     principal(again);
-    for(int k=0;k<3;++k) flag("unloaded stress unchanged",std::fabs(again[k]-result[k])<=1e-9*scale);
+    for(int k=0;k<nd;++k) flag("unloaded stress unchanged",std::fabs(again[k]-result[k])<=1e-9*scale);
     flag("unloaded increment is zero",(*f.dpls)[0]<=1e-12*increment);
 }
 
@@ -1141,6 +1174,53 @@ static void test_pure_2d_softening_return() {
         check("pure 2D history is the increment",history,(*f.dpls)[0]);
         check("pure 2D stored history reproduces yield",(low-anphi*high+amc)/amc,0);
     }
+}
+
+// Pure 2D returns the closed form cannot give, checked by the properties of
+// check_law_return: softening past the segment (also from a history one ulp
+// short of the breakpoint), friction and dilation softening within the step,
+// and tension at the cap, its corner with the shear face and the cap-cap corner.
+static void test_pure_2d_law_returns() {
+    std::printf("[Pure 2D Mohr-Coulomb returns over the strength law]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    auto& p=f.m->param.mat;
+    p.is_plane_strain=false;
+    const double face[3]={-1e6,-1e5,0};
+    for(int dilation : {0,30}) {
+        p.pls0={0}; p.pls1={1e-8};
+        set_mc_material(f, dilation);
+        p.cohesion1={9e4};
+        f.set_material();
+        check_law_return(f,"pure 2D softening past the segment",face,1e-8);
+    }
+    p.pls0={0}; p.pls1={0.0009287493630057339};
+    set_mc_material(f, 0);
+    p.cohesion1={9e4};
+    f.set_material();
+    const double deep[3]={-1e8,-1e7,0};
+    check_law_return(f,"pure 2D softening past the segment from nonzero history",deep,
+                     p.pls1[0],0.0003829357836281204);
+    p.pls0={0}; p.pls1={1e-5};
+    set_mc_material(f, 10);
+    p.friction_angle1={20}; p.dilation_angle1={0};
+    f.set_material();
+    check_law_return(f,"pure 2D friction and dilation soften within the step",face);
+    // Tensile cap at zero: tension, the face-cap corner and the cap-cap corner.
+    for(int dilation : {0,30}) {
+        p.pls0={1}; p.pls1={2};
+        set_mc_material(f, dilation);
+        p.tension_max=0;
+        f.set_material();
+        const double tension[][3]={{-1e5,3e5,0},{-1e6,3e5,0},{-3e5,3e5,0},{2e5,3e5,0}};
+        for(const auto& trial : tension) check_law_return(f,"pure 2D tensile return",trial);
+        check("pure 2D biaxial tension returns to the cap corner",
+              std::fabs(f.m->stress[0][0])<=1e-9*3e5 && std::fabs(f.m->stress[0][1])<=1e-9*3e5,1);
+    }
+    // The default cap c/tan(phi) meets the face at p0 = p1 = c*sqrt(3).
+    set_mc_material(f, 0);
+    const double hydrostatic[3]={3e5,3.2e5,0};
+    check_law_return(f,"pure 2D face-cap apex",hydrostatic);
+    for(int d=0;d<2;++d) check("pure 2D apex stress",f.m->stress[0][d],1e5*std::sqrt(3.));
 }
 #endif
 
@@ -1393,6 +1473,7 @@ int main(int argc, char** argv) {
     test_rsf_law_returns();
 #ifndef THREED
     test_pure_2d_softening_return();
+    test_pure_2d_law_returns();
 #endif
     test_constraints();
     test_cancellation();

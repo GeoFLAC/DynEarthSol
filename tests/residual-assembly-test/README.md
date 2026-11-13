@@ -104,9 +104,11 @@ agree), rate-and-state softening to its residual cohesion, a single state update
 step, and friction softening whose stress lies on the face of the stored
 friction coefficient, and in 3D biaxial
 and triaxial tension, tension-shear corners and the cone apex. The pure 2D,
-two-principal-stress formulation has only its closed-form single-face return;
-a softening case with dilation 0 and 30 degrees checks that the strength
-rebuilt from the stored history keeps the result on yield.
+two-principal-stress formulation (not plane strain) runs the same property
+checks for softening past the segment, friction and dilation softening, and
+tension at the cap, the face-cap corner, the cap-cap corner and the apex; a
+softening case with dilation 0 and 30 degrees also checks that the strength
+rebuilt from the stored history keeps its single-face result on yield.
 
 `check.sh` also runs a non-finite trial in a separate process. It must report
 its cause and first element and exit with status 54 on every test backend.
@@ -121,7 +123,8 @@ in `s,d`; the 3D measure has `depls^2 = A*s^2 + B*d^2`.
 
 The closed form is kept only while the increment stays on the law's linear
 piece with fixed angles and tensile cap; plane-strain tension always uses the
-general return. Otherwise `consistent_return` solves
+general return. Pure 2D uses the same general return over its one shear face
+and two tensile caps. Otherwise `consistent_return` solves
 `depls = recorded(return at strength(plstrain + depls))`: for a fixed strength
 it takes the first active set of the three shear faces and three tensile caps
 (fewest first) with nonnegative multipliers, kept order and no violated
