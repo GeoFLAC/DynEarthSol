@@ -68,6 +68,15 @@ jobs:
     - name: test monitor CSV restart
       run: python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol2d --threads 1
 
+    - name: test 2d explicit and GVS restart continuation
+      env:
+        OMP_NUM_THREADS: 1
+      run: python3 check_remesh_restart.py ../../dynearthsol2d "$RUNNER_TEMP/remesh-restart-2d"
+
+    - name: test seismic moment from plastic strain
+      working-directory: ./tests/earthquake-moment-test
+      run: make ndims=2 check && make ndims=3 check
+
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
