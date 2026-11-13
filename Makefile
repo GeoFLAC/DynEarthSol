@@ -162,6 +162,9 @@ ifeq ($(usempi), 1)
 ifneq ($(filter-out 0,$(nprof)),)
 $(error usempi=1 currently supports builds without nprof)
 endif
+ifeq ($(usegospl), 1)
+$(error usempi=1 does not support GoSPL coupling yet; build usegospl=1 without usempi)
+endif
 MPI_CXX ?= mpicxx
 CXX = $(MPI_CXX)
 ## Open MPI and MPICH spell the wrapper introspection differently.

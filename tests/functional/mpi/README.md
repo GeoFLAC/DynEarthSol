@@ -47,9 +47,6 @@ by upstream, so that failure must not be hidden by relaxing the restart checker.
 
 ## Full NVIDIA GPU MPI checks
 
-For DES/GoSPL MPI coupling with independent rank counts, see the
-[coupling tests](../gospl/README.md#independent-mpi-coupling).
-
 `usempi=1 openacc=1 openmp=0 nofma=1` builds separate `.mpi.gpu` executables.
 Use an NVHPC-backed MPI wrapper and the architecture of the target device.
 Initialization, MMG and field/marker remapping remain root CPU operations;

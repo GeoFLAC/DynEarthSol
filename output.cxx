@@ -15,9 +15,6 @@
 #include "mpi_simulation.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
-#ifdef HAS_GOSPL_CPP_INTERFACE
-#include "gospl_driver/gospl-driver.hpp"
-#endif
 
 namespace {
 
@@ -486,19 +483,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_scalar(var.output_next_regular_frame, "PT next regular frame");
     }
     bin.write_scalar(var.nremesh_prior + var.nremesh, "nremesh");
-
-#ifdef HAS_GOSPL_CPP_INTERFACE
-    if(var.gospl_driver && var.gospl_driver->remote_backend()) {
-        auto state=var.gospl_driver->checkpoint_state();
-        auto token=var.gospl_driver->save_checkpoint(std::string(filename)+".gospl");
-        if(token.empty())die(EXIT_RUNTIME_GOSPL,"failed to checkpoint GoSPL worker");
-        bin.write_aux_array(state,"gospl coupling state",state.size());
-        const auto& coords=var.gospl_driver->surface_coords_start;
-        bin.write_scalar(int(coords.size()),"gospl surface reference size");
-        if(!coords.empty())bin.write_aux_array(coords,"gospl surface reference",coords.size());
-        bin.write_checkpoint_reference("gospl_generation",token);
-    }
-#endif
 
     bin.write_array(*var.segment, "segment", var.segment->size());
     bin.write_array(*var.segflag, "segflag", var.segflag->size());

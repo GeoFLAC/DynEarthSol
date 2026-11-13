@@ -169,13 +169,8 @@ defaults are not what you want.
     `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
     and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
     `dynearthsol-gospl` wrapper script.
-  * `usempi=1 usegospl=1` connects DES CPU/GPU ranks to an independent persistent
-    GoSPL MPI world, with separate rank counts. Use the
-    [MPI coupling launcher](doc/gospl-mpi-coupling.md) and reserve resources for
-    both models. Reviewers can follow the [short runnable checks](doc/mpi-quickstart.md)
-    for CPU MPI, one/two GPUs and a coarse coupled example. Coupled checkpoints
-    preserve the surface model and pending exchange; continuation keeps GoSPL's
-    rank count fixed while DES ranks may change.
+  * GoSPL coupling is not yet available in MPI builds; `make usempi=1 usegospl=1`
+    stops with an error.
   * The tutorial
     [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
@@ -366,7 +361,7 @@ adds NVIDIA GPU timestep executables with one GPU per rank, pinned host staging
 for halos and CPU mesh management. Full-field/checkpoint tests accompany the
 backend; verify scientific equivalence and performance for the intended case.
 The [reviewer quickstart](doc/mpi-quickstart.md) gives copyable build/run commands,
-small examples and expected results for CPU MPI, multiple GPUs and coupling.
+small examples and expected results for CPU MPI and multiple GPUs.
 
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.

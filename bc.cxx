@@ -1233,8 +1233,10 @@ namespace {
         }
 
         // Accumulate time and steps since last coupling
-        double dt_years = var.dt / YEAR2SEC;
-        var.gospl_driver->advance_clock(dt_years);
+        const double SEC_PER_YR = 3.1536e7;
+        double dt_years = var.dt / SEC_PER_YR;
+        var.gospl_driver->accumulated_dt += dt_years;
+        var.gospl_driver->step_counter++;
 
         // Check whether it's time to couple
         bool do_couple;
@@ -1245,10 +1247,6 @@ namespace {
 
         if (!do_couple)
             return;  // GoSPL idle this step
-
-        // The Python bridge reads coordinates/velocities and writes coordinates
-        // on the host. Finish OpenACC producers before that ownership change.
-        #pragma acc wait
 
         // ===== COUPLING STEP =====
         double total_dt = var.gospl_driver->accumulated_dt;
@@ -1276,11 +1274,16 @@ namespace {
                 coords[i * 3 + d] = (*var.coord)[n][d];
         }
 
-        // Persist this reference with the coupling clock. Mesh numbers include
-        // the preceding run so a continuation preserves remesh invalidation.
-        auto& surface_coords_start=var.gospl_driver->surface_coords_start;
-        auto& has_surface_start=var.gospl_driver->has_surface_start;
-        auto& nremesh_at_start=var.gospl_driver->nremesh_at_surface_start;
+        // Static storage for time-averaged velocity reference.
+        // Stored as static (not in GoSPLDriver) to avoid any allocation in
+        // GoSPLDriver's memory space, which is adjacent to PETSc-managed memory
+        // that can interfere with the C++ heap.
+        static std::vector<double> surface_coords_start;
+        static bool has_surface_start = false;
+        // var.nremesh when surface_coords_start was recorded. A remesh renumbers the nodes
+        // (renumbering_mesh), so top_nodes[i] may name a different node afterwards even
+        // when the surface node count is unchanged.
+        static int nremesh_at_start = -1;
 
         // Re-initialize GoSPL topography on the first coupling event only.
         // After that, GoSPL owns its topography (ASPECT-FastScape scheme).
@@ -1303,7 +1306,7 @@ namespace {
         // coupling event or after remeshing.
         if (var.gospl_driver->velocity_coupling) {
             std::vector<double> vx_yr(ntop), vy_yr(ntop), vz_yr(ntop);
-            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh_prior+var.nremesh;
+            bool use_time_avg = has_surface_start && nremesh_at_start == var.nremesh;
             for (std::size_t i = 0; i < ntop; ++i) {
                 int n = top_nodes[i];
                 if (use_time_avg) {
@@ -1315,13 +1318,13 @@ namespace {
 #endif
                     vz_yr[i] = (coords[i*3+NDIMS-1] - surface_coords_start[i*3+NDIMS-1]) / total_dt;
                 } else {
-                    vx_yr[i] = (*var.vel)[n][0]       * YEAR2SEC;
+                    vx_yr[i] = (*var.vel)[n][0]       * SEC_PER_YR;
 #ifdef THREED
-                    vy_yr[i] = (*var.vel)[n][1]        * YEAR2SEC;
+                    vy_yr[i] = (*var.vel)[n][1]        * SEC_PER_YR;
 #else
                     vy_yr[i] = 0.0;
 #endif
-                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * YEAR2SEC;
+                    vz_yr[i] = (*var.vel)[n][NDIMS-1]  * SEC_PER_YR;
                 }
             }
             int r = var.gospl_driver->set_surface_velocity(
@@ -1387,7 +1390,7 @@ namespace {
         // Done after GoSPL returns; surface_coords_start is a static vector allocated in
         // DES's own memory space (not adjacent to PETSc memory), so assignment is safe.
         surface_coords_start = coords;
-        nremesh_at_start = var.nremesh_prior+var.nremesh;
+        nremesh_at_start = var.nremesh;
         has_surface_start = true;
 
         var.gospl_driver->record_coupling(total_dt, min_dh, max_dh, sum_dh / ntop);

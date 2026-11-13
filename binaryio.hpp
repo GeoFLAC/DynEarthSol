@@ -39,7 +39,6 @@ private:
     void write_header(const char *name);
 
 public:
-    void write_checkpoint_reference(const std::string& name,const std::string& value);
     BinaryOutput(const char *filename, const bool rename_if_exists=false);
     ~BinaryOutput();
 
@@ -77,7 +76,6 @@ private:
     void seek_to_array(const char *name);
 
 public:
-    std::string read_checkpoint_reference(const std::string& name);
     BinaryInput(const char *filename);
     ~BinaryInput();
 
@@ -108,7 +106,6 @@ private:
     void write_header();
 
 public:
-    void write_checkpoint_reference(const std::string& name,const std::string& value);
     HDF5Output(const char *filename, const int hdf5_compression_level,
                const bool is_chkpt=false, const bool rename_if_exists=false);
     ~HDF5Output();
@@ -160,7 +157,6 @@ private:
     void read_header();
 
 public:
-    std::string read_checkpoint_reference(const std::string& name);
     HDF5Input(const char *filename);
     ~HDF5Input();
 

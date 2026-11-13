@@ -35,9 +35,6 @@
 #include "remeshing.hpp"
 #include "rheology.hpp"
 #include "pseudo_transient.hpp"
-#ifdef HAS_GOSPL_CPP_INTERFACE
-#include "gospl_driver/gospl-driver.hpp"
-#endif
 
 namespace {
 #ifdef ACC
@@ -489,11 +486,7 @@ struct MpiSimulation::Impl {
         if(rank==0){gn.add(master->coord);ge.add(master->volume);}
         gather_rows(true,ln,gn);gather_rows(false,le,ge);geometry_version=version;
     }
-    Fields surface_n(Variables& v,bool velocity=true) {
-        Fields f;f.add(v.coord);f.add(v.volume_n);
-        if(velocity && param.control.surface_process_option==11 && param.control.gospl_velocity_coupling)f.add(v.vel);
-        return f;
-    }
+    Fields surface_n(Variables& v) {Fields f;f.add(v.coord);f.add(v.volume_n);return f;}
     Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
     void boundary() {
         if(surface_version==version || root_version==version)return;
@@ -567,14 +560,13 @@ struct MpiSimulation::Impl {
             break;
         case MpiOp::Surface: {
             bool whole=v.steps%param.mesh.quality_check_step_interval==0 ||
-                (param.control.surface_process_option!=0 && param.control.surface_process_option!=1 &&
-                 param.control.surface_process_option!=11);
+                (param.control.surface_process_option!=0 && param.control.surface_process_option!=1);
             if(whole)full();else boundary();
             if(rank==0) surface_processes(param,*master,*master->coord,*master->stress,*master->strain,*master->strain_rate,
                 *master->plstrain,*master->volume,*master->volume_n,master->surfinfo,master->markersets,*master->elemmarkers,*master->markers_in_elem);
             if(whole)distribute(false);
-            else {Fields gn,ge;if(rank==0){gn=surface_n(*master,false);ge=surface_e(*master);}
-                scatter_surface(true,gn,surface_n(v,false));scatter_surface(false,ge,surface_e(v));}
+            else {Fields gn,ge;if(rank==0){gn=surface_n(*master);ge=surface_e(*master);}
+                scatter_surface(true,gn,surface_n(v));scatter_surface(false,ge,surface_e(v));}
             break;
         }
         case MpiOp::Remesh:full();if(rank==0)remesh(param,*master,int(arg));distribute(true);break;
@@ -719,13 +711,6 @@ bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
             v.steps!=0 && v.steps%10000==0;
         if(v.steps%m.param.mesh.quality_check_step_interval!=0 && !surface_report) {
             bool idle=m.param.control.surface_process_option==0;
-#ifdef HAS_GOSPL_CPP_INTERFACE
-            if(m.param.control.surface_process_option==11 && v.gospl_driver &&
-               !v.gospl_driver->coupling_due(v.dt/YEAR2SEC)) {
-                v.gospl_driver->advance_clock(v.dt/YEAR2SEC);
-                idle=true;
-            }
-#endif
             if(idle) {
                 std::fill(m.master->surfinfo.dh->begin(),m.master->surfinfo.dh->end(),0.0);
                 m.master->surfinfo.max_surf_vel=0;

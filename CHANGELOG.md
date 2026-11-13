@@ -17,14 +17,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
-- DES MPI/GoSPL coupling with independent rank counts and a persistent GoSPL
-  worker world. CPU and GPU DES ranks exchange surface data at coupling events;
-  idle steps retain mechanical surface corrections on compact partitions.
-  Owned/ghost PETSc surface mappings and end-to-end coupling checks cover the
-  existing MPI-enabled GoSPL; see `doc/gospl-mpi-coupling.md`.
-- Coupled continuation checkpoints preserve GoSPL's distributed state and DES's
-  pending exchange/velocity reference. Restarts may change DES rank count while
-  retaining the GoSPL partition; damaged or incompatible surface state is rejected.
 - Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
   `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
   geometry, mass and timestep bounds use compact spatial partitions with neighbor
@@ -112,8 +104,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - MPI reuses current root fields and material caches, skips repeated PT velocity
   synchronization, and combines RSF diagnostics into one collective reduction.
-- DES–GoSPL coupling seeds each rank's local surface vertices and avoids redundant
-  elevation copies and checkpoint serialization.
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -209,8 +199,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   boundary assembly reuses its temporary buffer, avoiding partition-dependent
   thresholds.
 
-- GoSPL coupling now uses DES's year length for elapsed time and surface
-  velocity conversion, and waits for GPU work before exchanging surface data.
 - GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
   initial checkpoint, avoiding indeterminate metadata in managed root state.
 - The benchmark comparator resolves the requested frame through the frame list

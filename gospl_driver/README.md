@@ -14,10 +14,6 @@ This file is the reference kept with the code.
 
 - `gospl-driver.hpp` - Header file for the GoSPL C++ interface wrapper
 - `gospl-driver.cxx` - Implementation of the GoSPL C++ interface wrapper
-- `run_coupled.py`, `mpi_worker.py`, `des_gospl_client.py` - Persistent independent
-  MPI worlds, with separate library environments and rank counts
-- `parallel_surface.py`, `checkpoint.py` - Distributed surface transfer and
-  coupled continuation state; see the [MPI coupling guide](../doc/gospl-mpi-coupling.md)
 - `examples/` - A ready-to-run Gaussian weak zone rift, a DES cfg and its GoSPL YAML
 
 ## Prerequisites
@@ -257,27 +253,7 @@ scheme.
    DES then sets   z_surface ← z_surface + Δh
 ```
 
-### MPI execution
-
-GoSPL already supports MPI. DES `usempi=1 usegospl=1` now connects to a separate,
-persistent GoSPL MPI world through `run_coupled.py`. DES and GoSPL rank counts
-are independent, for example DES 3 / GoSPL 2 or DES GPU 2 / GoSPL 1. The bridge
-adapts owned/ghost PETSc surface vectors; GoSPL's native solvers remain unchanged.
-See [execution, verification and scope](../doc/gospl-mpi-coupling.md).
-
 ### Known Limitations
-
-- **MPI coupling uses the independent-worker launcher.** Calling the legacy
-  embedded bridge directly from the DES MPI world would mix collective calls.
-  Use `run_coupled.py`, reserve resources for both worlds, and place both root
-  ranks on the launcher host. The current bounded checks cover 3D coupling on
-  one host. GPU acceleration of DES does not imply GoSPL/PETSc GPU acceleration.
-  The worker persists during one execution; automatic GoSPL continuation-state
-  restoration is not implemented by the launcher.
-
-- **Time units and GPU synchronization.** Coupling intervals and instantaneous
-  velocities use the same `YEAR2SEC` constant as DES output (365.2422 days).
-  Outstanding GPU work completes before the host reads or updates surface data.
 
 - **Coupling interval is a trigger, not a clamp.** In `gospl_coupling_mode = time`, `gospl_coupling_interval_in_yr` only gates *when* coupling fires (`accumulated_dt >= gospl_coupling_interval_in_yr`); the `dt` actually passed to GoSPL is `accumulated_dt` itself. If DES's adaptive `dt` exceeds the configured interval, coupling fires every DES step and GoSPL's Δt silently becomes DES's `dt` instead of the configured value — there is no sub-stepping or truncation back to the nominal interval.
 

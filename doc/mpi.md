@@ -21,9 +21,8 @@ the vendored CLI11 header; Boost is no longer required. Existing cfg files
 apply without new simulation parameters. One CPU rank uses the ordinary
 full-range kernels. A one-rank GPU run uses the same compact
 backend as multi-GPU runs. NVHPC profiling cannot currently be combined with
-`usempi=1`. `usempi=1 usegospl=1` couples to an independent persistent GoSPL
-MPI worker world; see [MPI coupling](gospl-mpi-coupling.md) for the launcher and
-separate DES/GoSPL rank counts. Serial/OpenMP and non-MPI OpenACC executables
+`usempi=1`. GoSPL coupling is not yet available with `usempi=1`; the Makefile
+rejects `usempi=1 usegospl=1`. Serial/OpenMP and non-MPI OpenACC executables
 remain separate.
 
 ## NVIDIA GPU MPI
@@ -281,13 +280,12 @@ built both dimensions as serial and MPI executables. Against master `6195cc2`,
 four parent/changed regressions and 34 MPI matrix comparisons were bit-exact.
 All 20 PT checks passed without changing the existing tolerances; six ADR field
 comparisons differed within `rtol=1e-8`, `atol=1e-12`. This verifies short CPU
-cases on one Mac; GPU and GoSPL coupling were not exercised there.
+cases on one Mac; GPU runs were not exercised there.
 
 GPU checks cover bounded fixed-mesh and remeshing cases with physical device
 identity and kernel execution checks. Adaptive CPU/GPU trajectories can produce
 different meshes; compare physical observables when topology or coordinates
 change. These checks do not establish universal scientific equivalence or speedup.
-See the [coupling scope](gospl-mpi-coupling.md#verification-scope) for GoSPL.
 
 Keep per-run logs, hashes, reports and hardware notes under an ignored `*.local/`
 directory. Version reusable commands, acceptance criteria and scoped conclusions.

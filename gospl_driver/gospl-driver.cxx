@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <limits>
 #include <sstream>
-#include <cstdlib>
 
 // Constructor
 GoSPLDriver::GoSPLDriver() : model_handle(-1), initialized(false), python_initialized(false),
@@ -29,76 +28,11 @@ GoSPLDriver::~GoSPLDriver() {
     cleanup();
 }
 
-namespace {
-PyObject* worker_call(const char* name, PyObject* args) {
-    PyObject* module=PyImport_ImportModule("des_gospl_client");
-    PyObject* function=module?PyObject_GetAttrString(module,name):nullptr;
-    PyObject* result=function?PyObject_CallObject(function,args):nullptr;
-    Py_XDECREF(function);Py_XDECREF(module);Py_DECREF(args);
-    if(!result)PyErr_Print();
-    return result;
-}
-}
-
-bool GoSPLDriver::remote_backend() const {return std::getenv("DES_GOSPL_ENDPOINT")!=nullptr;}
-
-std::string GoSPLDriver::save_checkpoint(const std::string& prefix) {
-    PyObject* result=worker_call("save_checkpoint",Py_BuildValue("(is)",model_handle,prefix.c_str()));
-    std::string token;
-    if(result && PyUnicode_Check(result))token=PyUnicode_AsUTF8(result);
-    Py_XDECREF(result);return token;
-}
-
-bool GoSPLDriver::prepare_restart(const std::string& prefix,const std::string& token) {
-    PyObject* result=worker_call("prepare_restart",Py_BuildValue("(sss)",prefix.c_str(),token.c_str(),"gospl_mesh.npz"));
-    bool ok=result && PyLong_Check(result) && PyLong_AsLong(result)==0;
-    Py_XDECREF(result);return ok;
-}
-
-std::vector<double> GoSPLDriver::checkpoint_state() const {
-    return {1.,accumulated_dt,double(step_counter),double(needs_elevation_reset),double(total_events),
-            double(has_surface_start),double(nremesh_at_surface_start),double(coupling_by_time),
-            double(coupling_frequency),coupling_interval_in_yr,double(velocity_coupling)};
-}
-
-bool GoSPLDriver::restore_checkpoint(const std::string& prefix,const std::string& token,
-                                    const std::vector<double>& state,const std::vector<double>& coords) {
-    if(state.size()!=11 || state[0]!=1 || coords.size()%3 || state[7]!=double(coupling_by_time) ||
-       state[8]!=double(coupling_frequency) || state[9]!=coupling_interval_in_yr || state[10]!=double(velocity_coupling)) {
-        std::cerr<<"GoSPL coupling checkpoint/configuration mismatch"<<std::endl;return false;
-    }
-    PyObject* result=worker_call("load_checkpoint",Py_BuildValue("(iss)",model_handle,prefix.c_str(),token.c_str()));
-    bool ok=result && PyLong_Check(result) && PyLong_AsLong(result)==0;
-    Py_XDECREF(result);if(!ok)return false;
-    accumulated_dt=state[1];step_counter=state[2];needs_elevation_reset=bool(state[3]);total_events=state[4];
-    has_surface_start=bool(state[5]);nremesh_at_surface_start=state[6];surface_coords_start=coords;
-    return true;
-}
-
 bool GoSPLDriver::init_python() {
     if (python_initialized) {
         return true;  // Already initialized
     }
     
-    // A remote GoSPL world must never import mpi4py/PETSc into the DES world.
-    // Register the client before the extension imports gospl_python_interface.
-    const char* remote = std::getenv("DES_GOSPL_ENDPOINT");
-#ifdef USEMPI
-    if (!remote) {
-        std::cerr << "MPI GoSPL coupling requires gospl_driver/run_coupled.py "
-                     "and an independent GoSPL worker world" << std::endl;
-        return false;
-    }
-#endif
-    if (remote) {
-        if (!Py_IsInitialized()) Py_Initialize();
-        PyObject* client = PyImport_ImportModule("des_gospl_client");
-        if (!client) { PyErr_Print(); return false; }
-        int status = PyDict_SetItemString(PyImport_GetModuleDict(), "gospl_python_interface", client);
-        Py_DECREF(client);
-        if (status != 0) { PyErr_Print(); return false; }
-    }
-
     // Initialize gospl extensions (this sets up Python)
     if (initialize_gospl_extensions() != 0) {
         std::cerr << "Failed to initialize gospl extensions" << std::endl;

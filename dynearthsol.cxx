@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <cmath>
 #ifdef USEMPI
 #include <exception>
 #include <new>
@@ -943,31 +942,6 @@ int main(int argc, const char* argv[])
             var.gospl_driver = nullptr;
             return -1;
         }
-
-        std::vector<double> gospl_state,gospl_surface;
-        std::string gospl_generation,gospl_checkpoint;
-        if(param.sim.is_restarting && var.time>0 && var.gospl_driver->remote_backend()) {
-            char name[256];
-#ifdef HDF5
-            std::snprintf(name,sizeof(name),"%s.chkpt.%06d.vtkhdf",param.sim.restarting_from_modelname.c_str(),param.sim.restarting_from_frame);
-            HDF5Input saved(name);
-#else
-            std::snprintf(name,sizeof(name),"%s.chkpt.%06d",param.sim.restarting_from_modelname.c_str(),param.sim.restarting_from_frame);
-            BinaryInput saved(name);
-#endif
-            if(!saved.has_array("gospl coupling state"))die(EXIT_IO_RESTART,"checkpoint has no GoSPL continuation state");
-            gospl_state.resize(11);saved.read_array(gospl_state,"gospl coupling state");
-            int reference_size=0;saved.read_scalar(reference_size,"gospl surface reference size");
-            if(reference_size<0 || reference_size%3)
-                die(EXIT_IO_RESTART,"invalid GoSPL surface reference size");
-            if(reference_size) {
-                gospl_surface.resize(reference_size);saved.read_array(gospl_surface,"gospl surface reference");
-            }
-            gospl_generation=saved.read_checkpoint_reference("gospl_generation");
-            gospl_checkpoint=std::string(name)+".gospl";
-            if(!var.gospl_driver->prepare_restart(gospl_checkpoint,gospl_generation))
-                die(EXIT_IO_RESTART,"cannot restore GoSPL checkpoint mesh");
-        }
         
         // Step 2: Generate GoSPL mesh from DynEarthSol surface nodes (or reuse existing on restart)
         std::string mesh_file = "gospl_mesh.npz";
@@ -1017,14 +991,6 @@ int main(int argc, const char* argv[])
             var.gospl_driver->coupling_frequency = param.control.gospl_coupling_frequency;
             var.gospl_driver->coupling_interval_in_yr  = param.control.gospl_coupling_interval_in_yr;
             var.gospl_driver->velocity_coupling  = param.control.gospl_velocity_coupling;
-            if(!gospl_generation.empty()) {
-                if(!var.gospl_driver->restore_checkpoint(gospl_checkpoint,gospl_generation,gospl_state,gospl_surface))
-                    die(EXIT_IO_RESTART,"cannot restore GoSPL continuation state");
-                const double clock=var.gospl_driver->get_current_time()+var.gospl_driver->accumulated_dt;
-                if(std::fabs(clock-var.time/YEAR2SEC)>1e-10*std::max(1.,std::fabs(clock)))
-                    die(EXIT_IO_RESTART,"DES and GoSPL checkpoint clocks differ");
-                std::cout<<"Restored GoSPL continuation at "<<clock<<" yr"<<std::endl;
-            }
             if (var.gospl_driver->coupling_by_time)
                 std::cout << "GoSPL coupling mode: every " << var.gospl_driver->coupling_interval_in_yr << " yr"
                           << (var.gospl_driver->velocity_coupling ? " [velocity coupling enabled]" : "") << std::endl;

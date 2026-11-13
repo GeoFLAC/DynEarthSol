@@ -54,21 +54,6 @@ public:
     int    step_counter;         // Steps accumulated since last coupling
     double accumulated_dt;       // Time (yr) accumulated since last coupling
 
-    bool coupling_due(double dt_yr) const {
-        return coupling_by_time ? accumulated_dt + dt_yr >= coupling_interval_in_yr
-                                : step_counter + 1 >= coupling_frequency;
-    }
-    void advance_clock(double dt_yr) { accumulated_dt += dt_yr; ++step_counter; }
-    std::vector<double> surface_coords_start;
-    bool has_surface_start = false;
-    int nremesh_at_surface_start = -1;
-    bool remote_backend() const;
-    std::string save_checkpoint(const std::string& prefix);
-    bool prepare_restart(const std::string& prefix, const std::string& generation);
-    bool restore_checkpoint(const std::string& prefix, const std::string& generation,
-                            const std::vector<double>& state, const std::vector<double>& coords);
-    std::vector<double> checkpoint_state() const;
-
     // Simple coupling scheme (ASPECT–FastScape style)
     bool needs_elevation_reset;  // true only at init (GoSPL re-inits hGlobal from DES once);
                                   // never re-armed after remeshing in the current implementation
