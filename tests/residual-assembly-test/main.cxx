@@ -1366,9 +1366,11 @@ static void test_rsf_law_returns() {
 }
 
 // A non-finite trial has no admissible return. update_stress must stop the
-// process with status 54; check.sh runs this case separately.
-static void test_rejected_mc_return() {
+// process with status 54; check.sh runs this case separately, in 2D both in
+// plane strain and in pure 2D.
+static void test_rejected_mc_return(bool pure_2d) {
     MaterialFixture f(MatProps::rh_ep, 0);
+    if (pure_2d) f.m->param.mat.is_plane_strain=false;
     set_mc_material(f, 0);
     const double trial[3]={std::nan(""),-1e6,-1e5};
     f.set_principal(trial);
@@ -1461,8 +1463,9 @@ static void test_darcy_gravity_limit() {
 }
 
 int main(int argc, char** argv) {
-    if(argc==2 && std::strcmp(argv[1],"--reject-mc-return")==0) {
-        test_rejected_mc_return();
+    if(argc==2 && (std::strcmp(argv[1],"--reject-mc-return")==0 ||
+                   std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0)) {
+        test_rejected_mc_return(NDIMS==2 && std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0);
         return 1;  // check.sh requires status 54 from update_stress
     }
     test_darcy_gravity_limit();

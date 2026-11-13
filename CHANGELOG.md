@@ -277,9 +277,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   where the closed form does not apply (friction or dilation softening, or a
   step that crosses a weakening breakpoint). In pure 2D with friction
   softening, every yielding element takes the general return: the 2D
-  accretionary-wedge example runs about 35% longer. A non-finite trial stops with
-  exit status 54, naming the step, the first element and the cause. Mesh
-  regularization of strong softening remains separate ([#136]).
+  accretionary-wedge example runs about 35% longer. A non-finite trial stops
+  with exit status 54 in 3D, plane strain and pure 2D, also within a PT
+  iteration, naming the step, the first element and the cause; an
+  elasto-visco-plastic element whose viscous stress is selected does not stop.
+  Mesh regularization of strong softening remains separate ([#136]).
 
 ## [2.0.2] - 2026-09-17
 
