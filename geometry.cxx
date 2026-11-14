@@ -1555,6 +1555,18 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
 #endif
 }
 
+double_vec dt_controls(const Param& param)
+{
+    // Checkpoint order; changing it requires a new dt-controls version.
+    const Control& c = param.control;
+    return {static_cast<double>(c.has_PT), c.fixed_dt, c.dt_fraction,
+            static_cast<double>(c.is_quasi_static), c.inertial_scaling,
+            c.characteristic_speed, static_cast<double>(c.use_global_velocity_scaling),
+            static_cast<double>(c.mass_scaling_reference_speed), c.rsf_dtheta_max,
+            static_cast<double>(c.has_thermal_diffusion),
+            static_cast<double>(c.has_hydraulic_diffusion)};
+}
+
 double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit)
 
