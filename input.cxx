@@ -2121,6 +2121,8 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.markers.replenishment_option = 1;
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
+        if (p.markers.init_marker_option == 2 && !(p.markers.init_marker_spacing > 0))
+            die(EXIT_CONFIG_VALUE, "markers.init_marker_spacing must be positive.");
 
         // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
         // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.

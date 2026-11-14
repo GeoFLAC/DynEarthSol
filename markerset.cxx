@@ -3,6 +3,7 @@
 #include <time.h> // for time()
 #include <assert.h>
 #include <set>
+#include <limits>
 #include <numeric>
 #include <random>
 
@@ -566,7 +567,8 @@ void MarkerSet::random_markers( const Param& param, Variables &var, int genesis 
 
 void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, int genesis )
 {
-    const int d = param.markers.init_marker_spacing * param.mesh.resolution;
+    // In metres: a sub-metre spacing is valid.
+    const double spacing = param.markers.init_marker_spacing * param.mesh.resolution;
 
     double domain_min[NDIMS], domain_max[NDIMS];
     {
@@ -583,16 +585,26 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, in
         // print(std::cout, domain_max, NDIMS);
     }
 
+    // The marker count and the array size over_alloc_ratio times it must fit an int.
+    double ngrid = 1;
+    for (int i=0; i<NDIMS; i++)
+        ngrid *= (domain_max[i] - domain_min[i]) / spacing + 1;
+    if (!(ngrid * over_alloc_ratio < std::numeric_limits<int>::max())) {
+        std::cerr << "Error: markers.init_marker_spacing = " << param.markers.init_marker_spacing
+                  << " (" << spacing << " m) gives " << ngrid << " markers. Raise markers.init_marker_spacing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
     const double xlength = domain_max[0] - domain_min[0];
-    const int nx = xlength / d + 1;
-    const double x0 = domain_min[0] + 0.5 * (xlength - (nx-1)*d);
+    const int nx = xlength / spacing + 1;
+    const double x0 = domain_min[0] + 0.5 * (xlength - (nx-1)*spacing);
     const double zlength = domain_max[NDIMS-1] - domain_min[NDIMS-1];
-    const int nz = zlength / d + 1;
-    const double z0 = domain_min[NDIMS-1] + 0.5 * (zlength - (nz-1)*d);
+    const int nz = zlength / spacing + 1;
+    const double z0 = domain_min[NDIMS-1] + 0.5 * (zlength - (nz-1)*spacing);
 #ifdef THREED
     const double ylength = domain_max[1] - domain_min[1];
-    const int ny = ylength / d + 1;
-    const double y0 = domain_min[1] + 0.5 * (ylength - (ny-1)*d);
+    const int ny = ylength / spacing + 1;
+    const double y0 = domain_min[1] + 0.5 * (ylength - (ny-1)*spacing);
 #else
     const int ny = 1;
 #endif
@@ -627,11 +639,11 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, in
         int iz = n / (nx * ny);
 
         // Physical coordinate of new marker
-        double x[NDIMS] = { x0 + ix*d,
+        double x[NDIMS] = { x0 + ix*spacing,
 #ifdef THREED
-                            y0 + iy*d,
+                            y0 + iy*spacing,
 #endif
-                            z0 + iz*d };
+                            z0 + iz*spacing };
         bool found = false;
 
         // Look for nearby elements.

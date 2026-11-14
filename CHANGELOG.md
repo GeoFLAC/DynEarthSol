@@ -251,6 +251,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   `resolution = 2.5e3`, and the four `benchmarks/1d-consolidation-*` cfgs use
   `meshing_option = 1` with `meshing_elem_shape = 1`, which is the uniform grid
   they asked for ([#138]).
+- `markers.init_marker_option = 2` places markers `init_marker_spacing * mesh.resolution`
+  metres apart, no longer rounded down to whole metres. A model small enough to
+  make that spacing under 1 m crashed at startup; a spacing that is not positive,
+  or that would place more markers than fit in memory, now stops with a message
+  ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
