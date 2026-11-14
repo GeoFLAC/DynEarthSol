@@ -494,7 +494,6 @@ const char* op_name(MpiOp op) {
         OP_NAME(SwapVolume);
         OP_NAME(Remesh);
         OP_NAME(PhaseChange);
-        OP_NAME(Hydrous);
         OP_NAME(Collect);
         OP_NAME(Geometry);
         OP_NAME(Boundary);
@@ -512,7 +511,7 @@ const char* op_name(MpiOp op) {
 // Management operations run on root's global mesh, not in compact kernels.
 bool management(MpiOp op) {
     return op == MpiOp::State || op == MpiOp::Remesh || op == MpiOp::Surface || op == MpiOp::PhaseChange ||
-           op == MpiOp::Hydrous || op == MpiOp::Report || op == MpiOp::Collect || op == MpiOp::Geometry ||
+           op == MpiOp::Report || op == MpiOp::Collect || op == MpiOp::Geometry ||
            op == MpiOp::Boundary || op == MpiOp::Sample;
 }
 
@@ -1307,13 +1306,6 @@ struct MpiSimulation::Impl {
             phase_inputs();
             if (rank == 0) phase_changes(param, *master);
             scatter_elemmarkers();
-            break;
-        case MpiOp::Hydrous:
-            full();
-            if (rank == 0)
-                advect_hydrous_markers(param, *master, arg, *master->markersets[master->hydrous_marker_index],
-                                       *master->hydrous_elemmarkers);
-            distribute(false);
             break;
         case MpiOp::Collect:
             full();

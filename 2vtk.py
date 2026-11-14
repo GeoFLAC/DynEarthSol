@@ -481,8 +481,6 @@ def process_single_frame(args):
         for markersetname in marker_sets:
             if markersetname == 'markerset':
                 filename = '{0}.{1}.vtp'.format(output_prefix, suffix)
-            elif markersetname == 'hydrous-markerset':
-                filename = '{0}.hyd-ms.{1}.vtp'.format(output_prefix, suffix)
             else:
                 filename = '{0}.{1}.{2}.vtp'.format(output_prefix, markersetname,
                                                     suffix)
@@ -647,7 +645,7 @@ def announce_model(batch, ndone, prefix, names):
           file=sys.stderr)
 
 
-VTU_NAMES = ('{0}.{1}.vtu', '{0}.{1}.vtp', '{0}.hyd-ms.{1}.vtp')
+VTU_NAMES = ('{0}.{1}.vtu', '{0}.{1}.vtp')
 VTKHDF_NAMES = ('{0}.{1}.vtkhdf',)
 
 

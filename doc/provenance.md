@@ -93,7 +93,7 @@ The other fields:
 | `compute_sec_per_step` | the compute time over `steps_this_run` |
 | `remeshings`, `remesh_sec_per_remesh` | this run's remesh count and average (the log's `Remeshing starts (#N` counts the model's) |
 | `outputs`, `output_sec_per_output` | the output count and average; the time includes checkpoints |
-| `phase_change_time`, `phase_changes`, `phase_change_sec_per_call` | the time phase changes took, with the hydrous markers and the serpentinization grid that serve them, their count and average; without a phase change, only the time |
+| `phase_change_time`, `phase_changes`, `phase_change_sec_per_call` | the time phase changes took, with the serpentinization grid that serves them, their count and average; without a phase change, only the time |
 | `surface_time`, `surface_process_calls`, `surface_sec_per_call` | the time surface processes took, their count and average |
 
 * As on screen, wall = init + compute + remesh + output + phase changes + surface processes.

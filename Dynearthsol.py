@@ -302,7 +302,7 @@ class Dynearthsol:
     def overwrite_field(self, frame, name, data):
         if frame != self._header_frame: self.read_header(frame)
         if frame != self._header_frame: read_header(frame)
-        if name.startswith(('markerset.', 'hydrous-markerset.')):
+        if name.startswith('markerset.'):
             dtype = data.dtype
             count = len(data)
             shape = (count,)
@@ -320,8 +320,7 @@ class Dynearthsol:
 
 
     def marker_sets(self, frame=None):
-        '''Names of the marker sets in this frame; "hydrous-markerset" is there
-        only with control.has_hydration_processes.'''
+        '''Names of the marker sets in this frame.'''
         if frame is None: frame = self._header_frame
         if frame != self._header_frame: self.read_header(frame)
         if self.format == 'binary':

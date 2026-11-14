@@ -585,11 +585,6 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
 
-        ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
-         "Does the model have hydration processes? It is required to model some types of phase changes.")
-        ("control.hydration_migration_speed", opt::value<double>(&p.control.hydration_migration_speed)->default_value(3e-9),
-         "The upward migration speed of hydrous fluid (in m/s).\n")
-
         ("control.has_PT", opt::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
         ("control.PT_use_running_scale", opt::value<bool>(&p.control.PT_use_running_scale)->default_value(false),

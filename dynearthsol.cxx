@@ -364,10 +364,6 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 
     // Replacing create_markers()
     var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("markerset")));
-    if (param.control.has_hydration_processes) {
-        var.hydrous_marker_index = var.markersets.size();
-        var.markersets.push_back(new MarkerSet(param, var, bin_save, bin_chkpt, std::string("hydrous-markerset")));
-    }
 
     allocate_variables(param, var);
 #ifdef USEMMG
@@ -1295,18 +1291,8 @@ int main(int argc, const char* argv[])
         #pragma acc wait
         monitor_write_if_due(param, var);
 
-        if (slow_step) {
-            if (param.control.has_hydration_processes) {
-                // Timed with the phase changes that release these markers; under MPI
-                // it includes the gather to rank zero and the redistribution.
-                const int64_t hydrous_start = get_nanoseconds();
-                advect_hydrous_markers(param, var, 10*var.dt,
-                                       *var.markersets[var.hydrous_marker_index],
-                                       *var.hydrous_elemmarkers);
-                var.func_time.phase_change_time += get_nanoseconds() - hydrous_start;
-            }
+        if (slow_step)
             var.dt = compute_dt(param, var);
-        }
 
         #pragma acc wait
 
@@ -1408,7 +1394,7 @@ int main(int argc, const char* argv[])
             << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
             << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
     }
-    // Hydrous markers and the serpentinization grid count here even without a phase change.
+    // The serpentinization grid counts here even without a phase change.
     if (var.nphasechange > 0 || var.func_time.phase_change_time > 0) {
         std::cout << "  PhaseChg: ";
         print_time_ns(var.func_time.phase_change_time);

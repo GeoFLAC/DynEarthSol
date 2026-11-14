@@ -124,8 +124,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** Seismic moment uses element plastic-strain increments in N m
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 - The time summary and the manifest time phase changes for every
-  `mat.phase_change_option`, not only option 3, together with hydrous markers and
-  the serpentinization grid, show surface processes on a new `Surface` line, and
+  `mat.phase_change_option`, not only option 3, together with the
+  serpentinization grid, show surface processes on a new `Surface` line, and
   count checkpoints as output. Under MPI the remesh, phase-change and surface times
   include the gather to rank zero and the redistribution, which `Compute` no
   longer contains.
@@ -136,7 +136,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   checkpoint written before this, even by one thread, stops the restart with
   exit 22 when an element with two top facets has different entries on them;
   other older checkpoints restart as before.
-
+- **Breaking.** Remove the experimental `control.has_hydration_processes` and
+  `control.hydration_migration_speed`, with the hydrous marker set they enabled;
+  delete them from existing inputs. The virtual grid of
+  `mat.phase_change_option = 3` models the water that serpentinizes the mantle.
+  `phase_change_option = 1` no longer turns mantle into serpentinite, a rule that
+  needed hydrous markers. A run with hydration stopped with a floating point
+  exception at its first remesh ([#138]).
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -312,8 +318,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   always used; it said km ([#113]).
 - GPU builds: the monitor could record stress and strain from before the
   step's rotation, and a remesh could free arrays a kernel was still reading
-  ([#114]).
-- `2vtk.py` converts the hydrous marker set of `hdf5=1` runs; it was skipped
   ([#114]).
 - An `info_display_step_interval` that is not a multiple of
   `quality_check_step_interval` is rounded up as the message says; the run
@@ -563,3 +567,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#138]: https://github.com/GeoFLAC/DynEarthSol/issues/138

@@ -3772,10 +3772,6 @@ void create_elemmarkers(const Param& param, Variables& var)
 #endif
     var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     var.markers_in_elem = new int_vec2D(var.nelem, int_vec(0));
-    if (param.control.has_hydration_processes) {
-        var.hydrous_elemmarkers = new Array2D<int,1>( var.nelem, 0 );
-        var.hydrous_markers_in_elem = new int_vec2D(var.nelem, int_vec(0));   
-    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -3786,10 +3782,6 @@ void create_elemmarkers(const Param& param, Variables& var)
 void create_markers(const Param& param, Variables& var)
 {
     var.markersets.push_back(new MarkerSet(param, var, std::string("markerset")));
-    if (param.control.has_hydration_processes) {
-        var.hydrous_marker_index = var.markersets.size();
-        var.markersets.push_back(new MarkerSet(std::string("hydrous-markerset")));
-    }
 }
 
 

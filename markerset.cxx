@@ -2,7 +2,6 @@
 #include <iostream> // for std::cerr
 #include <time.h> // for time()
 #include <assert.h>
-#include <unordered_map>
 #include <set>
 #include <numeric>
 #include <random>
@@ -105,12 +104,6 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin_save, T& bin_chk
             int mt = (*_mattype)[i];
             ++(*var.elemmarkers)[e][mt];
             (*var.markers_in_elem)[e].push_back(i);
-        }
-    else if (_name == "hydrous-markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            ++(*var.hydrous_elemmarkers)[e][0];
-            (*var.hydrous_markers_in_elem)[e].push_back(i);
         }
 }
 
@@ -1074,6 +1067,13 @@ namespace {
         const int k_neig = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
         int nmarkers = ms.get_nmarkers();
+        // An empty set has nothing to find, and its block size below would be zero.
+        if (nmarkers == 0) {
+#ifdef NPROF_DETAIL
+            nvtxRangePop();
+#endif
+            return;
+        }
 
         int markers_per_block_max = std::max(kdtree.max_batch_size(k_neig), 1);
         int markers_per_block = std::min(markers_per_block_max, nmarkers);
@@ -1973,10 +1973,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     // Re-create elemmarkers
     delete var.elemmarkers;
     delete var.markers_in_elem;
-    if (param.control.has_hydration_processes) {
-        delete var.hydrous_elemmarkers;
-        delete var.hydrous_markers_in_elem;
-    }
     create_elemmarkers( param, var );
 
     // Locating markers in new elements
@@ -2013,9 +2009,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
         find_markers_in_element(param, var, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem,
                                 kdtree, bary, old_coord, old_connectivity);
-        if (param.control.has_hydration_processes)
-            find_markers_in_element(param, var, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers, *var.hydrous_markers_in_elem,
-                                    kdtree, bary, old_coord, old_connectivity);
 
         #pragma acc wait
     }
@@ -2218,102 +2211,3 @@ void correct_inflow_band_marker_mattype(const Param& param, const Variables& var
         std::cout << "      [restore] corrected " << ncorr
                   << " stray marker mattype(s) in the inflow band (element-location rule).\n";
 }
-
-
-namespace {
-
-    Barycentric_transformation* get_bary_from_cache(std::unordered_map<int, Barycentric_transformation*> &cache,
-                                                    int el, const array_t &coordinate, conn_t::ConstAccessor conn,
-                                                    double_vec &volume)
-    {
-        Barycentric_transformation *bary;
-        auto search = cache.find(el);
-        if (search == cache.end()) {
-            ConstArrayIndirectAccessor coord = coordinate.view_const(conn);
-            bary = new Barycentric_transformation(coord, volume[el]);
-            cache[el] =  bary;
-        }
-        else {
-            bary = search->second;
-        }
-        return bary;
-    }
-}
-
-
-void advect_hydrous_markers(const Param& param, const Variables& var, double dt_subtotal,
-                            MarkerSet& hydms, Array2D<int,1>& hydem)
-{
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Hydrous, var, dt_subtotal)) return;
-#endif
-
-    std::unordered_map<int, Barycentric_transformation*> cache;
-    Barycentric_transformation *bary;
-
-    #pragma acc wait // here is not ACC parallelized yet
-
-    int last_marker = hydms.get_nmarkers();
-    int m = 0;
-    while (m < last_marker) {
-        // Find physical coordinate of the marker
-        int el = hydms.get_elem(m);
-        double x[NDIMS] = {0};
-        ConstConnAccessor conn = (*var.connectivity)[el];
-        for(int i=0; i<NDIMS; i++) {
-            for(int j=0; j<NODES_PER_ELEM; j++)
-                x[i] += hydms.get_eta(m)[j] * (*var.coord)[ conn[j] ][i];
-        }
-
-        // Advect the marker
-        x[NDIMS-1] += dt_subtotal * param.control.hydration_migration_speed;
-
-        // Transform back to barycentric coordinate
-        double r[NDIMS];
-        bary = get_bary_from_cache(cache, el, *var.coord, conn, *var.volume);
-        bary->transform(x, 0, r); // always (local) 0-th element for bary
-
-        if (bary->is_inside(r)) {
-            hydms.set_eta(m, r);
-            ++m;
-            goto next;
-        }
-        else {
-            // Marker has moved out of el. Find the new containing element.
-            for(int j=0; j<NODES_PER_ELEM; j++) {
-                const int npatch = var.support.size(conn[j]);
-                const int* supp = var.support.patch(conn[j]);
-                for (int k=0; k<npatch; k++) {
-                    int ee = supp[k];
-                    ConstConnAccessor conn2 = (*var.connectivity)[ee];
-                    bary = get_bary_from_cache(cache, ee, *var.coord, conn2, *var.volume);
-                    bary->transform(x, 0, r);
-                    if (bary->is_inside(r)) {
-                        hydms.set_elem(m, ee);
-                        hydms.set_eta(m, r);
-                        --hydem[el][0];
-                        ++hydem[ee][0];
-                        ++m;
-                        goto next;
-                    }
-                }
-            }
-            // Since no containing element has been found, delete this marker.
-            // Note m is not inc'd.
-            if (DEBUG) {
-                std::cout << m << "-th hydrous marker not in any element\n";
-            }
-            --last_marker;
-            hydms.remove_marker(m);
-            --hydem[el][0];
-        }
-    next:;
-    }
-
-    // clean up all Barycentric_transformation instances
-    for (auto i=cache.begin(); i!=cache.end(); ++i) {
-        delete i->second;
-    }
-}
-
-
