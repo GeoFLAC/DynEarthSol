@@ -2065,6 +2065,20 @@ void new_mesh_refined_zone(const Param& param, Variables& var)
     const double z0 = std::max(m.refined_zonez.first, d / Lz);
     const double z1 = std::min(m.refined_zonez.second, 1 - d / Lz);
 
+    // An empty zone gives the mesher coincident corners and zero-length segments.
+    auto check_width = [d](const char *axis, double lo, double hi, double length) {
+        if (lo < hi) return;
+        std::cerr << "Error: mesh.resolution = " << d << " leaves no refined zone along " << axis
+                  << ": the zone keeps one resolution from each end of mesh." << axis << "length = "
+                  << length << ". Lower mesh.resolution or widen mesh.refined_zone" << axis << ".\n";
+        die(EXIT_CONFIG_VALUE);
+    };
+    check_width("x", x0, x1, Lx);
+#ifdef THREED
+    check_width("y", y0, y1, Ly);
+#endif
+    check_width("z", z0, z1, Lz);
+
     const int npoints = 2 * 4 * (NDIMS - 1);
     double *points = new double[npoints*NDIMS];
 

@@ -245,7 +245,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
   ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
-
+- `mesh.meshing_option = 2` stops with a message naming the axis when `mesh.resolution`
+  leaves no refined zone (the zone keeps one resolution from each boundary), where
+  Triangle crashed in 2D. `benchmarks/core-complex_new_mesh.cfg` now sets
+  `resolution = 2.5e3`, and the four `benchmarks/1d-consolidation-*` cfgs use
+  `meshing_option = 1` with `meshing_elem_shape = 1`, which is the uniform grid
+  they asked for ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
