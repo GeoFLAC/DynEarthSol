@@ -17,6 +17,12 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Material-following monitor points use `monitor.point_type` (`particle` or
+  `grid`), retain their exact checkpoint location, and preserve CSV histories
+  through restart. `monitor.remesh_output` selects before/both remesh rows;
+  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column
+  ([#135]).
+- Native and HDF5 frames include nodal `displacement = coordinate - coord0` ([#135]).
 - Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
   `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
   geometry, mass and timestep bounds use compact spatial partitions with neighbor
@@ -46,6 +52,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A scientific-example reproduction driver checks complete serial/MPI fields,
   checkpoints and monitors. A separate current-format Maxwell case checks the
   analytical constitutive response in 2D and 3D without the historical source patch.
+
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
@@ -109,8 +116,14 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
+  the material through deformation, remeshing and restart; delete the retired
+  key from existing inputs ([#135]).
+- **Breaking.** Seismic moment uses element plastic-strain increments in N m
+  (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 - MPI reuses current root fields and material caches, skips repeated PT velocity
   synchronization, and combines RSF diagnostics into one collective reduction.
+
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -200,11 +213,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- Explicit/GVS output cadence and pending remesh stages survive restart.
+  Changed timestep controls refresh timestep and mass together; fixed-mesh
+  GVS also refreshes both from the accepted velocity. Large output intervals
+  no longer overflow the regular frame-index product ([#135]).
+- Restart manifests report only the steps executed in the current run ([#135]).
+- A GVS run no longer writes a duplicate regular frame when the elapsed time
+  lands on an output time to within rounding ([#135]).
 - MPI builds without MMG skip its unpopulated mesh-size hints during partitioning,
   avoiding a startup crash when selecting compact node fields.
-- PT running-scale roundoff estimates retain the original element forces before
-  boundary assembly reuses its temporary buffer, avoiding partition-dependent
-  thresholds.
 
 - GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
   initial checkpoint, avoiding indeterminate metadata in managed root state.
@@ -474,3 +491,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+[#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
