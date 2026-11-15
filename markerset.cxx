@@ -182,8 +182,8 @@ void MarkerSet::append_markers(AMD_vec &md)
     int nmarker = md.size();
     // Ensure sufficient array size
     while ( _nmarkers + nmarker > _reserved_space ) {
-        // Resize the marker-related arrays if necessary.
-        const int newsize = _reserved_space * over_alloc_ratio;
+        // Resize the marker-related arrays if necessary. An empty set must still grow.
+        const int newsize = std::max(1, static_cast<int>(_reserved_space * over_alloc_ratio));
         resize( newsize );
     }
 
@@ -232,8 +232,8 @@ void MarkerSet::append_marker(T eta, int el, int mt , double ti, double z, doubl
 {
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
-        // Resize the marker-related arrays if necessary.
-        const int newsize = _nmarkers * over_alloc_ratio;
+        // Resize the marker-related arrays if necessary. An empty set must still grow.
+        const int newsize = std::max(1, static_cast<int>(_nmarkers * over_alloc_ratio));
         resize( newsize );
     }
 

@@ -276,6 +276,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   (within 1 mm). It used to read past its list or shift the temperatures of every
   later node. A connectivity file whose node numbers are not in `[0, number of nodes)`,
   such as a 1-based one, is rejected the same way instead of overrunning the heap ([#138]).
+- A marker set that starts empty, as with `markers.markers_per_element = 0`, grows
+  when the first marker is added; it used to write through a null array and
+  crash at startup ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
