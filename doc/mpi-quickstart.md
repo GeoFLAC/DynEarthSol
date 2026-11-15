@@ -7,13 +7,18 @@ and submodules on a connected machine before staging the checkout.
 
 ## CPU MPI
 
-Prerequisites: C++17 compiler, MPI C++ wrapper, HDF5, Python with NumPy and h5py,
-and the repository submodules. MMG also needs CMake and a C compiler.
+Prerequisites: C++17 compiler, MPI C++ wrapper, METIS 5, HDF5, Python with NumPy
+and h5py, and the repository submodules. MMG also needs CMake and a C compiler.
+On Debian or Ubuntu, `libmetis-dev` provides METIS. If METIS is not on the
+compiler's default paths, add `METIS_INCLUDE_DIR=... METIS_LIB_DIR=...` to the
+`make` commands below.
 
 Native macOS CPU builds use Apple clang and an MPI wrapper backed by clang.
 Homebrew can provide the dependencies with
-`brew install cmake libomp open-mpi hdf5`; install NumPy and h5py in your Python
-environment. The Makefile detects Homebrew's OpenMP and HDF5 paths. The CPU
+`brew install cmake libomp open-mpi hdf5 metis`; install NumPy and h5py in your
+Python environment. The Makefile detects Homebrew's OpenMP and HDF5 paths; pass
+`METIS_INCLUDE_DIR="$(brew --prefix metis)/include"
+METIS_LIB_DIR="$(brew --prefix metis)/lib"` for METIS. The CPU
 commands below were checked on Apple Silicon; see the
 [verification scope](mpi.md#verification-scope).
 
