@@ -38,12 +38,13 @@ gprof = 0
 usemmg = 0
 useexo = 0
 usegospl = 0
+usegwb = 0
 hdf5 = 0
 snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl usegwb nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -57,7 +58,7 @@ KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX BOOST_ROOT_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
              PYTHON_VERSION PYTHON_INCLUDE_DIR PYTHON_LIB_DIR \
              EXO_INCLUDE EXO_LIB_DIR MMG_INCLUDE MMG_LIB_DIR \
-             GOSPL_EXT_DIR CONDA_ENV_PATH
+             GOSPL_EXT_DIR CONDA_ENV_PATH GWB_DIR GWB_LIB_DIR
 CMDLINE_VARS = $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v)))
 UNKNOWN_VARS = $(filter-out $(KNOWN_VARS),$(CMDLINE_VARS))
 ifneq ($(UNKNOWN_VARS),)
@@ -306,6 +307,22 @@ ifeq ($(usegospl), 1)
 		GOSPL_LDFLAGS += $(PYTHON_LIB_DIR)/libpython$(PYTHON_VERSION).dylib
 		GOSPL_RPATH = $(abspath $(PYTHON_LIB_DIR))
 	endif
+endif
+
+ifeq ($(usegwb), 1)
+	# Geodynamic World Builder (github.com/GeodynamicWorldBuilder/WorldBuilder) for
+	# ic.temperature_option, ic.mattype_option and ic.weakzone_option 936. Build it as a
+	# shared library and install it (README.md, "Optional packages"):
+	#   cmake .. -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$(GWB_DIR) && make install
+	# Its install puts the headers in include/ and the library in bin/.
+	GWB_DIR ?= $(HOME)/opt/WorldBuilder
+	GWB_LIB_DIR ?= $(GWB_DIR)/bin
+	GWB_CXXFLAGS = -I$(GWB_DIR)/include -DUSEGWB
+	GWB_LDFLAGS = -L$(GWB_LIB_DIR) -lWorldBuilder
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		GWB_LDFLAGS += -Wl,-rpath=$(GWB_LIB_DIR)
+	endif
+	GWB_RPATH = $(GWB_LIB_DIR)   # Darwin: added by install_name_tool after the link
 endif
 
 
@@ -590,7 +607,8 @@ SRCS =	\
 	runtime_info.cxx \
 	utils.cxx \
 	markerset.cxx \
-	knn.cxx
+	knn.cxx \
+	gwb.cxx
 
 ifeq ($(usegospl), 1)
 	SRCS += gospl_driver/gospl-driver.cxx
@@ -607,6 +625,7 @@ INCS =	\
 	earthquake_state.hpp \
 	fields.hpp \
 	geometry.hpp \
+	gwb.hpp \
 	ic.hpp \
 	ic-read-temp.hpp \
 	input.hpp \
@@ -676,6 +695,11 @@ endif
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
+endif
+
+ifeq ($(usegwb), 1)
+	CXXFLAGS += $(GWB_CXXFLAGS)
+	LDFLAGS += $(GWB_LDFLAGS)
 endif
 
 C3X3_DIR = 3x3-C
@@ -749,10 +773,11 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS
+FEATURES = HDF5 USEMMG USEEXODUS USEGWB
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
 FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+FEATURE_USEGWB_FLAGS    = $(GWB_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
 FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
@@ -890,6 +915,11 @@ endif
 	@echo "usemmg             $(strip $(usemmg))"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
+	@echo "usegwb             $(strip $(usegwb))"
+ifeq ($(usegwb), 1)
+	@echo "  gwb include      $(GWB_DIR)/include"
+	@echo "  gwb lib dir      $(GWB_LIB_DIR)"
+endif
 	@echo "openacc            $(strip $(openacc))"
 ifeq ($(openacc), 1)
 	@echo "  gpu target       cc$(GPU_CC)   ($(GPU_CC_NOTE))"
@@ -1002,8 +1032,9 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# Record each dependency's directory as an rpath, skipping any that is
 		@# already there: install_name_tool fails outright on a duplicate, and
 		@# with usegospl=1 OPENMP_RPATH and GOSPL_RPATH are both the env's lib.
-		@# An empty one (openmp=0, or no runtime found) drops out of the loop.
-		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH); do \
+		@# An empty one (openmp=0, or no runtime found) drops out of the loop, as does
+		@# GWB_RPATH without usegwb=1 (GWB's library names itself @rpath/...).
+		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(usegospl), 1)

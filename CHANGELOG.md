@@ -17,6 +17,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Material-following monitor points use `monitor.point_type` (`particle` or
+  `grid`), retain their exact checkpoint location, and preserve CSV histories
+  through restart. `monitor.remesh_output` selects before/both remesh rows;
+  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column
+  ([#135]).
+- Native and HDF5 frames include nodal `displacement = coordinate - coord0` ([#135]).
+
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
@@ -61,6 +68,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
   a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
   markers. `examples/subduction.cfg` runs it ([#110]).
+- Initial conditions from a [Geodynamic World Builder](https://geodynamicworldbuilder.github.io/)
+  world (`ic.gwb_filename`, build with `usegwb=1`): option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes
+  the temperature, each marker's material (GWB composition *i* is mattype *i*)
+  and a weak zone in the world's faults from it, uniform or, with
+  `ic.gwb_fault_is_gaussian`, a Gaussian across each fault; `examples/gwb-*.cfg`
+  show all three ([#117]).
 
 - The Docker images build `usemmg=1` and `hdf5=1` in the container, offline
   (`--network none`), and `docker run` mounts `./runs` for results, written as
@@ -72,6 +86,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   built from another `Dockerfile` or `ubuntu:22.04` ([#119]).
 
 ### Changed
+
+- **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
+  the material through deformation, remeshing and restart; delete the retired
+  key from existing inputs ([#135]).
+- **Breaking.** Seismic moment uses element plastic-strain increments in N m
+  (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -161,6 +181,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   Ubuntu 22.04, with gcc 11 or clang 14 ([#119]).
 
 ### Fixed
+
+- Explicit/GVS output cadence and pending remesh stages survive restart.
+  Changed timestep controls refresh timestep and mass together; fixed-mesh
+  GVS also refreshes both from the accepted velocity. Large output intervals
+  no longer overflow the regular frame-index product ([#135]).
+- Restart manifests report only the steps executed in the current run ([#135]).
+- A GVS run no longer writes a duplicate regular frame when the elapsed time
+  lands on an output time to within rounding ([#135]).
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
@@ -453,8 +481,9 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
-
+[#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136

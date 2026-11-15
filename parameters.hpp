@@ -416,6 +416,9 @@ struct IC {
     double_vec weakzone_segments_y_min;
     double_vec weakzone_segments_y_max;
 
+    std::string gwb_filename;   // Geodynamic World Builder world (temperature/mattype/weakzone_option 936)
+    bool gwb_fault_is_gaussian;   // weakzone_option 936: Gaussian across a fault, sigma weakzone_standard_deviation
+
     int temperature_option;
     std::string Temp_filename;
     std::string Nodes_filename;
@@ -554,9 +557,14 @@ enum MassScalingReferenceSpeed {
     mass_scaling_speed_bulk = 1
 };
 
-enum MonitorRebindMode {
-    monitor_rebind_initial_coord = 0,
-    monitor_rebind_pre_remesh_coord = 1
+enum MonitorPointType {
+    monitor_point_particle = 0,
+    monitor_point_grid = 1
+};
+
+enum MonitorRemeshOutput {
+    monitor_remesh_before = 0,
+    monitor_remesh_both = 1
 };
 
 struct Monitor {
@@ -566,7 +574,8 @@ struct Monitor {
 
     std::string points_unit;
     double points_scale_to_m;
-    int remesh_rebind_mode;
+    int point_type;
+    int remesh_output;
 
     double_vec points_x;
     double_vec points_y;

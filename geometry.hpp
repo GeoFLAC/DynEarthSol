@@ -103,6 +103,8 @@ void restore_stress_from_ref(const Param& param, const Variables& var,
                              const SurfaceTopo& topo, const RemeshScratch& rs,
                              tensor_t* stress, double_vec* stressyy);
 
+double_vec dt_controls(const Param& param);
+
 double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit = true);
 
