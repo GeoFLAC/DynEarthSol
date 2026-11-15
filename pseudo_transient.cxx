@@ -171,19 +171,15 @@ void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, dou
 double absolute_force_rms(const Variables& var, const VelocityConstraints& constraints,
                           array_t& magnitude)
 {
+    // magnitude holds the node sums recorded by update_force; boundary
+    // assembly has since reused tmp_result, so it is not read again here.
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, constraints, magnitude)
 #endif
     #pragma acc parallel loop gang vector
     for (int n=0; n<var.nnode; ++n) {
-        double assembled[NDIMS] = {};
-        const int* patch = var.support.patch(n);
-        const int* local = var.support.local(n);
-        for (int k=0; k<var.support.size(n); ++k) {
-            ConstElemCacheAccessor tr = (*var.tmp_result)[patch[k]];
-            for (int d=0; d<NDIMS; ++d)
-                assembled[d] += std::abs(tr[local[k]+NODES_PER_ELEM*d]);
-        }
+        double assembled[NDIMS];
+        for (int d=0; d<NDIMS; ++d) assembled[d] = magnitude[n][d];
         for (int i=0; i<NDIMS; ++i) {
             double value = 0;
             for (int j=0; j<NDIMS; ++j)
@@ -214,7 +210,7 @@ bool is_finite_candidate(const Variables& var)
 
 double evaluate_mechanical_trial(const Param& param, Variables& var,
                                  PTWorkspace& w, bool initial_equilibrium,
-                                 double displacement_dt)
+                                 double displacement_dt, array_t* magnitude = nullptr)
 {
     w.start.restore(var);
     update_strain_rate(var, *var.strain_rate);
@@ -229,7 +225,7 @@ double evaluate_mechanical_trial(const Param& param, Variables& var,
                    param.mat.is_plane_strain ? var.stressyy : nullptr);
     #pragma acc wait
     update_force(param, var, *var.force, *var.force_residual, *var.tmp_result,
-                 &w.undamped, displacement_dt, false);
+                 &w.undamped, displacement_dt, false, magnitude);
     project_free_vectors(var, w.constraints, w.undamped);
     return pt_residual_rms(var, w.constraints, w.undamped);
 }
@@ -266,8 +262,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     const double displacement_dt = !initial && param.control.has_moving_mesh ? var.dt : 0;
     const bool running_scale = !initial && param.control.PT_use_running_scale;
     double trial_reference = running_scale ? var.PT_initial_residual_max : 0;
-    std::unique_ptr<array_t> magnitude;
-    if (running_scale) magnitude.reset(new array_t(var.nnode));
+    array_t magnitude(var.nnode);
     double roundoff_floor = 0;
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
@@ -278,18 +273,22 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         project_free_vectors(var, w.constraints, *var.vel, true);
         result.iterations = iteration+1;
         ++result.evaluations;
-        result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt);
+        result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt,
+                                                    iteration == 0 ? &magnitude : nullptr);
         var.l2_residual = result.residual;
         if (iteration == 0) {
             result.initial_residual = result.residual;
             result.warm_initial_residual = result.residual;
-            result.threshold = param.control.PT_absolute_tolerance +
-                param.control.PT_relative_tolerance*result.warm_initial_residual;
+            // Neither criterion can ask for a residual below the rounding of
+            // the assembled forces: a step that starts or ends near
+            // equilibrium would otherwise never converge.
+            roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
+                absolute_force_rms(var, w.constraints, magnitude);
+            result.threshold = std::max(param.control.PT_absolute_tolerance +
+                param.control.PT_relative_tolerance*result.warm_initial_residual, roundoff_floor);
             if (running_scale) {
                 if (!var.PT_skip_scale_update)
                     trial_reference = std::max(trial_reference, result.warm_initial_residual);
-                roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
-                    absolute_force_rms(var, w.constraints, *magnitude);
                 result.threshold = std::max(1e-6*trial_reference, roundoff_floor);
             }
         }

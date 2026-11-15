@@ -169,6 +169,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- PT steps that start or end near equilibrium no longer stop with exit 54:
+  the default convergence threshold has the same rounding floor as
+  `PT_use_running_scale`, and that floor now ignores boundary tractions
+  ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
+
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
