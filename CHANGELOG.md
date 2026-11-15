@@ -265,6 +265,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - `ic.layer_mattypes` entries outside `[0, mat.num_materials-1]` are rejected at
   startup with a message; the default `[0,1]` with one material, for example, ran
   on corrupted marker counts and stopped later with NaN values ([#138]).
+- Every run bound references to null lookup tables at startup, which UBSan reports
+  as undefined behaviour; builds without `nprof` now bind them to an empty table
+  they never read ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 

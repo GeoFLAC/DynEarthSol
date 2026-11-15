@@ -190,6 +190,15 @@ double ref_pressure(const Param& param, double z)
 }
 
 
+// Only an NPROF build creates the lookup tables, and only there do the *_safe functions read them;
+// elsewhere they are null, and binding a reference to null is undefined even if it is never read.
+static const double_vec& table_or_empty(const double_vec *table)
+{
+    static const double_vec empty;
+    return table ? *table : empty;
+}
+
+
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
@@ -208,9 +217,9 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
   dppressure(*var.dppressure),
-  log_table(*var.log_table),
-  tan_table(*var.tan_table),
-  sin_table(*var.sin_table)
+  log_table(table_or_empty(var.log_table)),
+  tan_table(table_or_empty(var.tan_table)),
+  sin_table(table_or_empty(var.sin_table))
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
