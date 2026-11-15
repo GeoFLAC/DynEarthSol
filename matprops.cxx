@@ -31,7 +31,7 @@ namespace {
                             1571e3, 1671e3, 1771e3, 1871e3, 1971e3,
                             2071e3, 2171e3, 2271e3, 2371e3, 2471e3,
                             2571e3, 2671e3, 2741e3, 2771e3, 2871e3,
-                            2891e3 };
+                            prem_max_depth };
 
         // pressure in PREM table is given in kilobar, converted to 10^8 Pa
         const double
@@ -49,6 +49,10 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
+        // Deeper than prem_max_depth (or for a NaN depth) no row matches, n stays nlayers and the
+        // interpolation reads one past both tables. mesh.zlength is checked against the limit at
+        // input, but a run whose nodes later move deeper than that, such as a diverged one,
+        // overruns here.
         int n;
         for (n=1; n<nlayers; n++) {
             if (depth <= ref_depth[n]) break;
@@ -78,7 +82,7 @@ namespace {
                             1571e3, 1671e3, 1771e3, 1871e3, 1971e3,
                             2071e3, 2171e3, 2271e3, 2371e3, 2471e3,
                             2571e3, 2671e3, 2741e3, 2771e3, 2871e3,
-                            2891e3 };
+                            prem_max_depth };
 
         // pressure in PREM table is given in kilobar, converted to 10^8 Pa
         const double
@@ -96,6 +100,10 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
+        // Deeper than prem_max_depth (or for a NaN depth) no row matches, n stays nlayers and the
+        // interpolation reads one past both tables. mesh.zlength is checked against the limit at
+        // input, but a run whose nodes later move deeper than that, such as a diverged one,
+        // overruns here.
         int n;
         for (n=1; n<nlayers; n++) {
             if (depth <= ref_depth[n]) break;

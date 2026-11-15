@@ -259,6 +259,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Reading a 3D `.poly` file no longer overruns a stack buffer: a facet line of up
   to 4095 characters is accepted (one over 2549 used to corrupt the stack), and a
   longer one stops with a message ([#138]).
+- `control.ref_pressure_option` 1 and 2 stop at startup with a message when
+  `mesh.zlength` is deeper than the 2891 km of the PREM table; the run read past
+  the table ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 

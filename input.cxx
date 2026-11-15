@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -506,6 +507,7 @@ static void declare_parameters(opt::Registry &cfg,
          "0: using density of the mat.mattype_ref-th material to compute lithostatic pressure.\n"
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
+         "Options 1 and 2 need mesh.zlength <= 2891 km, the depth of the last row of the PREM table.\n"
          "Any other value is rejected at startup.\n")
         ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
@@ -2116,6 +2118,13 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {
             p.control.ref_pressure_option = 0;
             std::cerr << "Warning: mat.num_materials is 1, using simplest control.ref_pressure_option.\n";
+        }
+        if (p.control.ref_pressure_option != 0 && p.mesh.zlength > prem_max_depth) {
+            std::ostringstream msg;
+            msg << std::setprecision(10) << "control.ref_pressure_option " << p.control.ref_pressure_option
+                << " takes the PREM table, which ends at " << prem_max_depth << " m depth, but mesh.zlength = "
+                << p.mesh.zlength << " m. Lower mesh.zlength or use control.ref_pressure_option 0.";
+            die(EXIT_CONFIG_VALUE, msg.str().c_str());
         }
         if (p.mat.nmat == 1 && p.markers.replenishment_option != 1) {
             p.markers.replenishment_option = 1;
