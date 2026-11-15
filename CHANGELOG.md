@@ -256,6 +256,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   make that spacing under 1 m crashed at startup; a spacing that is not positive,
   or that would place more markers than fit in memory, now stops with a message
   ([#138]).
+- Reading a 3D `.poly` file no longer overruns a stack buffer: a facet line of up
+  to 4095 characters is accepted (one over 2549 used to corrupt the stack), and a
+  longer one stops with a message ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 

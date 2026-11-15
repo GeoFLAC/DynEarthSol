@@ -2317,12 +2317,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
 
     int lineno = 0;
     int n;
-    char buffer[2550];
+    char buffer[4096];
 
     // get header of node list
     int npoints;
     {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int dim, nattr, nbdrym;
         n = std::sscanf(buffer, "%d %d %d %d", &npoints, &dim, &nattr, &nbdrym);
@@ -2344,7 +2344,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     // get node list
     double *points = new double[npoints * NDIMS];
     for (int i=0; i<npoints; i++) {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int k;
         double *x = &points[i*NDIMS];
@@ -2368,7 +2368,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     // get header of segment (facet) list
     int n_init_segments;
     {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int has_bdryflag;
         n = std::sscanf(buffer, "%d %d", &n_init_segments, &has_bdryflag);
@@ -2390,7 +2390,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     auto facets = new tetgenio::facet[n_init_segments];
     int *init_segflags = new int[n_init_segments];
     for (int i=0; i<n_init_segments; i++) {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         auto &f = facets[i];
         int npolygons, nholes, bdryflag;
@@ -2422,9 +2422,9 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         f.numberofholes = 0;
 
         for (int j=0; j<npolygons; j++) {
-            my_fgets(buffer, 4096, fp, lineno, param.mesh.poly_filename);
+            my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
-            std::istringstream inbuf(std::string(buffer, 4096));
+            std::istringstream inbuf(buffer);
             int nvertex;
             inbuf >> nvertex;
             if (nvertex < NODES_PER_FACET || nvertex > 9999) {
