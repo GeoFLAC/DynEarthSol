@@ -274,7 +274,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - `ic.temperature_option = 90` stops with a message naming the node when a node of
   `ic.Nodes_filename` has no temperature, or more than one, in `ic.Temp_filename`
   (within 1 mm). It used to read past its list or shift the temperatures of every
-  later node ([#138]).
+  later node. A connectivity file whose node numbers are not in `[0, number of nodes)`,
+  such as a 1-based one, is rejected the same way instead of overrunning the heap ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 

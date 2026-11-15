@@ -114,11 +114,23 @@ void read_external_temperature_from_comsol(const Param &param,
                 continue;
             std::istringstream iss(eline);
 
-            int n0, n1, n2, n3 = 0;
+            int n0 = 0, n1 = 0, n2 = 0, n3 = 0;
             if (NDIMS == 3)
                 iss>>n0>>n1>>n2>>n3;
             else
                 iss>>n0>>n1>>n2;
+            // The node numbers index the node list and the support arrays below, counting from 0.
+            const int nodes[4] = {n0, n1, n2, n3};
+            bool is_bad = iss.fail();
+            for (int l=0; l<NODES_PER_ELEM; ++l)
+                if (nodes[l] < 0 || nodes[l] >= nnodes) is_bad = true;
+            if (is_bad) {
+                std::cerr << "Error: element " << e << " of '" << param.ic.Connectivity_filename
+                          << "' is not " << NODES_PER_ELEM << " node numbers in [0, " << nnodes - 1
+                          << "], the nodes of '" << param.ic.Nodes_filename << "' counted from 0: \""
+                          << eline << "\"\n";
+                die(EXIT_CONFIG_DATA);
+            }
             n0s.push_back(n0);
             n1s.push_back(n1);
             n2s.push_back(n2);
