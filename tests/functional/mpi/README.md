@@ -20,8 +20,7 @@ in both dimensions. It reuses the upstream force/RMS and held-load/reload oracle
 100-step analytical Maxwell creep, hydrostatic initialization, running-scale
 history across MMG remeshing, pending-remesh
 restart, dynamic timestep and 2D oblique-boundary checks. Forced iteration-cap
-failures must terminate the MPI job with status 54. Run with
-`DES_MPI_PARTITIONER=metis` to repeat with METIS-enabled executables.
+failures must terminate the MPI job with status 54.
 
 Every saved/checkpoint dataset is compared with the current-master serial run.
 Integer topology/state and layouts require exact equality; floating fields require
@@ -169,8 +168,7 @@ global management state. Ownership is rebuilt after every MMG remesh. See the
 [architecture guide](../../../doc/mpi.md) for central operations and scaling limits.
 
 `run_mpi.py` defaults to ranks 1/2/3/4/6/8 and also checks hybrid OpenMP,
-averaging across remeshing and empty partitions. Repeat the same physical-field
-checks with `DES_MPI_PARTITIONER=metis` using a METIS-enabled executable.
+averaging across remeshing and empty partitions.
 `DES_MPI_OVERLAP=0` and `1` select blocking and overlapped halo assembly; use the
 same reference and inputs for both. No extra simulation cfg parameter is needed.
 

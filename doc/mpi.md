@@ -98,42 +98,36 @@ equilibrium and restart checks. See [the test guide](../tests/functional/mpi/REA
 
 ## Ownership, halos and remeshing
 
-### Optional METIS partitioning
+### METIS partitioning
 
-RCB is still the default. Build METIS support explicitly, then select it through
-the MPI environment (no new simulation cfg parameter):
+Every MPI build partitions the mesh with METIS, so `usempi=1` needs METIS 5:
 
 ```sh
-make ndims=2 usempi=1 usemetis=1 usemmg=1 hdf5=1
-DES_MPI_PARTITIONER=metis OMP_NUM_THREADS=1 \
-  mpiexec -n 4 ./dynearthsol2d.mpi model.cfg
+make ndims=2 usempi=1 usemmg=1 hdf5=1
+OMP_NUM_THREADS=1 mpiexec -n 4 ./dynearthsol2d.mpi model.cfg
 ```
 
-METIS 5 headers/libraries are required. `METIS_INCLUDE_DIR` and `METIS_LIB_DIR`
-override compiler/linker default paths; `make config` prints them. Repeat the
-build with `ndims=3` for 3D. Requesting METIS from a build without it fails clearly;
-unknown partitioner names fail too. One-rank execution uses the original kernels
-without partitioning. Tiny meshes with no more elements than ranks use an
-explicitly logged RCB fallback, preserving empty-partition support.
+`METIS_INCLUDE_DIR` and `METIS_LIB_DIR` override compiler/linker default paths;
+`make config` prints them. Repeat the build with `ndims=3` for 3D. One-rank
+execution uses the original kernels without partitioning. Tiny meshes with no more
+elements than ranks use an explicitly logged recursive coordinate bisection,
+preserving empty-partition support.
 
 The METIS graph connects elements sharing any vertex, matching DES node-star
 dependencies more closely than a face-only graph. K-way partitioning uses the
 communication-volume objective, seed 0 and a 3% element-balance tolerance. Node
-ownership and halo construction then use the same code as RCB. The graph objective
+ownership and halo construction then use the same code as for tiny meshes. The graph objective
 is a proxy: actual halo bytes also depend on node ownership and exchanged fields.
 METIS does not currently use measured constitutive/marker weights or migrate
-incrementally. It is rebuilt after each MMG remesh, as RCB is.
+incrementally. It is rebuilt after each MMG remesh.
 
-Use the same parent/MPI correctness checks for each partitioner, selecting
-`DES_MPI_PARTITIONER=rcb` or `metis` before launching the
-[regression driver](../tests/functional/mpi/README.md). RCB remains the default.
 A smaller halo alone does not establish a faster run; include partition rebuilds,
 initialization, output and timestep costs when assessing the target workload.
 
-### Default geometric partitioning
+### Geometric partitioning of tiny meshes
 
-Recursive coordinate bisection splits element centroids along the longest spatial
-axis. Element counts differ by at most one, including non-power-of-two process
+For a mesh with no more elements than ranks, recursive coordinate bisection splits
+element centroids along the longest spatial axis. Element counts differ by at most one, including non-power-of-two process
 counts and empty partitions. Interior nodes belong to the incident element rank;
 shared nodes are assigned to an incident rank with the smallest current node load.
 This balances element counts first. It does not guarantee equal node counts,
@@ -303,7 +297,7 @@ routing. Use the full solver CPU/GPU checks for timestep and MMG transitions.
 ## Remeshing limits
 
 Partitioning assigns ownership; remeshing changes vertices/connectivity. The
-production backend uses optional METIS or RCB partitioning and sequential
+production backend uses METIS partitioning and sequential
 MMG2D/MMG3D on root. Parallel remeshers are not integrated. Root memory and the
 remeshing pause therefore remain scaling limits.
 

@@ -384,7 +384,7 @@ static void test_body_force() {
                      &m->force_undamped,0,false,magnitude);
         for (int n=0;n<m->var.nnode;++n)
             for (int d=0;d<NDIMS;++d)
-                check("element magnitude survives boundary scratch",(*magnitude)[n][d],
+                check("node force magnitude survives boundary scratch",(*magnitude)[n][d],
                       d==NDIMS-1 ? weight*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
         delete magnitude;
         const double rho = wet ? 2200 : 2500;

@@ -73,12 +73,12 @@ jobs:
       - name: build MPI as C++17
         run: |
           for nd in 2 3; do
-            make -j4 ndims=$nd usempi=1 usemetis=1 openmp=1 hdf5=1
+            make -j4 ndims=$nd usempi=1 openmp=1 hdf5=1
           done
 
       - name: build MPI as C++20 without first-party deprecations
         run: |
-          bash .github/workflows/scripts/cxx20-check.sh usempi=1 usemetis=1 openmp=1 hdf5=1
+          bash .github/workflows/scripts/cxx20-check.sh usempi=1 openmp=1 hdf5=1
 
       # Explicit host mode validates transport/indexing, not GPU execution.
       - name: check host halo kernels in both standards

@@ -100,7 +100,7 @@ def main():
         command += ['--mca','ras','gridengine']
     for name in ('JOB_ID', 'OMP_NUM_THREADS', 'OMP_DYNAMIC', 'OPENBLAS_NUM_THREADS',
                  'PATH', 'LD_LIBRARY_PATH', 'PYTHONHOME', 'PYTHONPATH',
-                 'DES_MPI_OVERLAP', 'DES_MPI_PARTITIONER'):
+                 'DES_MPI_OVERLAP'):
         if name in os.environ:
             command += ['-x', name]
     command += ['-n', str(args.n),

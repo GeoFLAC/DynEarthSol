@@ -39,9 +39,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   communication profiles expose rank loads and halo traffic.
   Shared SoA halo packers have explicit OpenACC host/device test modes; host
   checks alone do not verify full GPU solver behavior or NVLink transport.
-- Optional METIS partitioning (`usempi=1 usemetis=1`, runtime
-  `DES_MPI_PARTITIONER=metis`), using shared-node connectivity and a communication
-  volume objective. RCB remains the default. Resized inactive hydraulic scratch
+- MPI builds (`usempi=1`) require METIS 5 and partition every mesh with it,
+  using shared-node connectivity and a communication volume objective; meshes with
+  no more elements than ranks use recursive coordinate bisection. Resized inactive hydraulic scratch
   state after remeshing to prevent out-of-bounds MPI packing/collection.
 - A scientific-example reproduction driver checks complete serial/MPI fields,
   checkpoints and monitors. A separate current-format Maxwell case checks the

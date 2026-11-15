@@ -395,7 +395,7 @@ make openacc=1 GPU_CC=90
 The experimental [MPI backends](doc/mpi.md) use spatial partitions, compact
 local meshes and neighbor halo exchanges. They rebuild ownership after every MMG
 remesh. Rank zero retains a global mesh for MMG, marker management and output.
-RCB remains the default; `usemetis=1` adds an optional METIS partitioner. The guide
+METIS partitions the mesh, so MPI builds need METIS 5. The guide
 covers correctness checks and scaling limits. The existing MMG policy
 and field transfer remain in use.
 Thermal, force and mass assembly support interior-node/halo overlap; per-rank

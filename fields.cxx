@@ -628,7 +628,7 @@ static double rho(const conn_t &var_connectivity, \
 */
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force, array_t* element_force_magnitude)
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force, array_t* node_force_magnitude)
 {
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Force, var, 0.0)) return;
@@ -641,7 +641,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #endif
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result,element_force_magnitude) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result,node_force_magnitude) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
     {
 #ifndef ACC
@@ -728,13 +728,13 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                 const int i = lpatch[k];
                 for (int j=0;j<NDIMS;j++)
                 {
-                    if (element_force_magnitude) magnitude[j] += std::abs(tr[i+NODES_PER_ELEM*j]);
+                    if (node_force_magnitude) magnitude[j] += std::abs(tr[i+NODES_PER_ELEM*j]);
                     f[j] -= tr[i+NODES_PER_ELEM*j];
                     f_residual[j] = tr[i+NODES_PER_ELEM*j];
                 }
             }
-            if (element_force_magnitude)
-                for (int d=0; d<NDIMS; ++d) (*element_force_magnitude)[n][d] = magnitude[d];
+            if (node_force_magnitude)
+                for (int d=0; d<NDIMS; ++d) (*node_force_magnitude)[n][d] = magnitude[d];
         }
 #ifdef USEMPI
         }

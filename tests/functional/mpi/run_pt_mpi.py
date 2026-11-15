@@ -103,7 +103,7 @@ def main():
     env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), PYTHONPATH=str(ROOT))
     launcher = shlex.split(args.launcher)
     report = dict(completed=False, rtol=args.rtol, atol=args.atol, threads=args.threads,
-                  partitioner=os.environ.get('DES_MPI_PARTITIONER', 'rcb'), checks=[])
+                  partitioner='metis', checks=[])
     executables = {2: (args.serial.resolve(), args.mpi.resolve()),
                    3: (args.serial3d.resolve(), args.mpi3d.resolve())}
     report['executables'] = {str(p):hashlib.sha256(p.read_bytes()).hexdigest()

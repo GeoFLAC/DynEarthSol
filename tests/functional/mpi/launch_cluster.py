@@ -100,7 +100,7 @@ def main():
                '--wdir', str(cwd)]
     for name in ('PATH', 'LD_LIBRARY_PATH', 'OPAL_PREFIX', 'UCX_TLS', 'OMPI_MCA_pml',
                  'OMPI_MCA_coll_hcoll_enable', 'OMP_NUM_THREADS', 'OMP_DYNAMIC',
-                 'DES_MPI_OVERLAP', 'DES_MPI_PARTITIONER'):
+                 'DES_MPI_OVERLAP'):
         if name in os.environ:
             command += ['-x', name]
     command += ['-n', str(a.n), a.python, str(script), '--rank', str(executable),
