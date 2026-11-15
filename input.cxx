@@ -847,7 +847,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("ic.num_mattype_layers", opt::value<int>(&p.ic.num_mattype_layers)->default_value(2),
          "Number of material layers")
         ("ic.layer_mattypes", opt::list()->default_value("[0,1]"),
-         "Material type of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2...")
+         "Material type of each material layer '[d0, d1, d2, ...]', each in [0, mat.num_materials-1]")
         ("ic.mattype_layer_depths", opt::list()->default_value("[0.5]"),
          "Depths of the interfaces of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2..., (in unit of zlength)")
 
@@ -2085,6 +2085,18 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                           << ") must be within [0, mat.num_materials-1] = [0, "
                           << p.mat.nmat - 1 << "].\n";
                 die(EXIT_CONFIG_VALUE);
+            }
+        }
+        // Each layer's mattype is counted into the per-material marker arrays, like the base ones above.
+        if (p.ic.mattype_option == 1) {
+            for (std::size_t i = 0; i < p.ic.layer_mattypes.size(); ++i) {
+                const int mt = p.ic.layer_mattypes[i];
+                if (mt < 0 || mt >= p.mat.nmat) {
+                    std::cerr << "Error: ic.layer_mattypes[" << i << "] (" << mt
+                              << ") must be within [0, mat.num_materials-1] = [0, "
+                              << p.mat.nmat - 1 << "].\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
             }
         }
         // The continental geotherm indexes rho0 and therm_cond with it.

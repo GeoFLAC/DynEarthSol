@@ -262,6 +262,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - `control.ref_pressure_option` 1 and 2 stop at startup with a message when
   `mesh.zlength` is deeper than the 2891 km of the PREM table; the run read past
   the table ([#138]).
+- `ic.layer_mattypes` entries outside `[0, mat.num_materials-1]` are rejected at
+  startup with a message; the default `[0,1]` with one material, for example, ran
+  on corrupted marker counts and stopped later with NaN values ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
