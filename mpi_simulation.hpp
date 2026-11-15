@@ -14,6 +14,8 @@ enum class MpiEntity { Node, Element };
 enum class MpiEntity { Node, Element };
 // Call before parsing parameters: managed allocations must use this rank's GPU.
 void mpi_select_device();
+// World rank set by the MPI launcher, readable before MPI_Init; 0 if unknown.
+int mpi_launcher_rank();
 enum class MpiOp {
     State, Temperature, PorePressure, StrainRate, Stress, Force, Velocity,
     Coordinate, Rotation, Volume, Dvoldt, Edvoldt, Nmd, Mass, TimeStep,

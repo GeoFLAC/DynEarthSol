@@ -251,6 +251,14 @@ struct Command {
 };
 }
 
+int mpi_launcher_rank() {
+    for (const char* name : {"OMPI_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK", "SLURM_PROCID"}) {
+        const char* value = std::getenv(name);
+        if (value) return std::atoi(value);
+    }
+    return 0;
+}
+
 void mpi_select_device() {
 #ifdef ACC
     if(selected_device>=0)return;

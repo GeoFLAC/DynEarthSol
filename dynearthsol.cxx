@@ -850,7 +850,23 @@ int main(int argc, const char* argv[])
     mpi_select_device();
 #endif
     Param param;
+#ifdef USEMPI
+    // Every rank reads the input before MPI_Init; only the first reports
+    // warnings. Errors stop every rank with the same message from rank 0.
+    std::streambuf* cout_buffer = std::cout.rdbuf();
+    std::streambuf* cerr_buffer = std::cerr.rdbuf();
+    if (mpi_launcher_rank() != 0) {
+        std::cout.rdbuf(nullptr);
+        std::cerr.rdbuf(nullptr);
+    }
+#endif
     get_input_parameters(argv[1], param);
+#ifdef USEMPI
+    std::cout.rdbuf(cout_buffer);
+    std::cout.clear();
+    std::cerr.rdbuf(cerr_buffer);
+    std::cerr.clear();
+#endif
 
 #ifdef USEMPI
     MpiSimulation mpi(param);
