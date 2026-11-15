@@ -632,7 +632,8 @@ static void rotate_stress2d(const double p[3], int n1, int n2, int n3,
 // Why no admissible Mohr-Coulomb state was found; failure_mode = -reason.
 enum ReturnRejection {
     reject_nonfinite = 1,    // trial stress is not finite
-    reject_no_return = 2,    // no set of shear faces and tensile caps satisfies KKT
+    reject_no_return = 2,    // no set of shear faces and tensile caps gives nonnegative
+                             // multipliers and a stress inside every surface
     reject_no_root = 3,      // the law has more pieces than consistent_return searches
     reject_reason_count = 4
 };
