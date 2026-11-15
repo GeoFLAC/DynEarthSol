@@ -112,4 +112,10 @@ template<int N> inline void mpi_begin_gather(const Variables& var,Array2D<double
     if(var.mpi && var.mpi->in_kernel())var.mpi->begin_exchange(MpiEntity::Element,{{values.data(),columns}});
 #endif
 }
+// Completes an overlapped gather before its second pass; no-op otherwise.
+inline void mpi_finish_gather(const Variables& var) {
+#ifdef USEMPI
+    if(var.mpi && var.mpi->in_kernel() && var.mpi->overlap())var.mpi->finish_exchange();
+#endif
+}
 #endif

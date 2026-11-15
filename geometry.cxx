@@ -1952,7 +1952,6 @@ void compute_mass(const Param &param, const Variables &var,
             tr[4] = ym; 
         }
 
-#ifdef USEMPI
 #ifndef ACC
         #pragma omp master
 #endif
@@ -1968,7 +1967,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
                 #pragma omp master
 #endif
-                { var.mpi->finish_exchange(); }
+                mpi_finish_gather(var);
 #ifndef ACC
                 #pragma omp barrier
 #endif
@@ -1980,34 +1979,25 @@ void compute_mass(const Param &param, const Variables &var,
             #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
-#else
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-        for (int n=mpi_nb; n<mpi_ne;n++) {
-#endif
-            volume_n[n]=0;
-            mass[n]=0;
-            tmass[n]=0;
-            hmass[n]=0;
-            ymass[n]=0;
+                volume_n[n]=0;
+                mass[n]=0;
+                tmass[n]=0;
+                hmass[n]=0;
+                ymass[n]=0;
         
-            const int npatch = var.support.size(n);
-            const int* patch = var.support.patch(n);
-            for (int i=0; i<npatch; ++i) {
-                ConstElemCacheAccessor tr = tmp_result[patch[i]];
-                volume_n[n] += tr[0];
-                mass[n] += tr[1];
-                if (param.control.has_thermal_diffusion)
-                    tmass[n] += tr[2];
-                hmass[n] += tr[3];
-                ymass[n] += tr[4];
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                for (int i=0; i<npatch; ++i) {
+                    ConstElemCacheAccessor tr = tmp_result[patch[i]];
+                    volume_n[n] += tr[0];
+                    mass[n] += tr[1];
+                    if (param.control.has_thermal_diffusion)
+                        tmass[n] += tr[2];
+                    hmass[n] += tr[3];
+                    ymass[n] += tr[4];
+                }
             }
         }
-#ifdef USEMPI
-        }
-#endif
     }
 
 #ifdef NPROF_DETAIL

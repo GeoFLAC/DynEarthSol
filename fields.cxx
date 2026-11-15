@@ -204,7 +204,6 @@ void update_temperature(const Param &param, const Variables &var,
             }
         }
 
-#ifdef USEMPI
 #ifndef ACC
         #pragma omp master
 #endif
@@ -220,7 +219,7 @@ void update_temperature(const Param &param, const Variables &var,
 #ifndef ACC
                 #pragma omp master
 #endif
-                { var.mpi->finish_exchange(); }
+                mpi_finish_gather(var);
 #ifndef ACC
                 #pragma omp barrier
 #endif
@@ -232,33 +231,24 @@ void update_temperature(const Param &param, const Variables &var,
             #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
-#else
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-        for (int n=mpi_nb; n<mpi_ne;n++) {
-#endif
-            if ((*var.bcflag)[n] & BOUNDZ1)
-                temperature[n] = param.bc.surface_temperature;
-            else {
-                double tdot = 0;
+                if ((*var.bcflag)[n] & BOUNDZ1)
+                    temperature[n] = param.bc.surface_temperature;
+                else {
+                    double tdot = 0;
 
-                // Same element order, so bit-identical; saves ~100 probes/node in 3D.
-                const int npatch = var.support.size(n);
-                const int* patch = var.support.patch(n);
-                const int* lpatch = var.support.local(n);
-                for (int k=0; k<npatch; ++k)
-                    tdot += tmp_result[patch[k]][lpatch[k]];
-                // Combining temperature update and bc in the same loop for efficiency,
-                // since only the top boundary has Dirichlet bc, and all the other boundaries
-                // have no heat flux bc.
-                temperature[n] -= var.dt * tdot / (*var.tmass)[n];
+                    // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                    const int npatch = var.support.size(n);
+                    const int* patch = var.support.patch(n);
+                    const int* lpatch = var.support.local(n);
+                    for (int k=0; k<npatch; ++k)
+                        tdot += tmp_result[patch[k]][lpatch[k]];
+                    // Combining temperature update and bc in the same loop for efficiency,
+                    // since only the top boundary has Dirichlet bc, and all the other boundaries
+                    // have no heat flux bc.
+                    temperature[n] -= var.dt * tdot / (*var.tmass)[n];
+                }
             }
         }
-#ifdef USEMPI
-        }
-#endif
     }
 
     // Combining temperature update and bc in the same loop for efficiency,
@@ -680,7 +670,6 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             }
         }
 
-#ifdef USEMPI
 #ifndef ACC
         #pragma omp master
 #endif
@@ -696,7 +685,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 #ifndef ACC
                 #pragma omp master
 #endif
-                { var.mpi->finish_exchange(); }
+                mpi_finish_gather(var);
 #ifndef ACC
                 #pragma omp barrier
 #endif
@@ -708,37 +697,28 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
-#else
-#ifndef ACC
-        #pragma omp for
-#endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-        for (int n=mpi_nb; n<mpi_ne;n++) {
-#endif
-            double magnitude[NDIMS] = {};
-            ArrayAccessor f = force[n];
-            f = 0;
-            ArrayAccessor f_residual = force_residual[n];
-            f_residual = 0;
-            const int npatch = var.support.size(n);
-            const int* patch = var.support.patch(n);
-            const int* lpatch = var.support.local(n);
-            for (int k=0;k<npatch;++k) {
-                ConstElemCacheAccessor tr = tmp_result[patch[k]];
-                const int i = lpatch[k];
-                for (int j=0;j<NDIMS;j++)
-                {
-                    if (node_force_magnitude) magnitude[j] += std::abs(tr[i+NODES_PER_ELEM*j]);
-                    f[j] -= tr[i+NODES_PER_ELEM*j];
-                    f_residual[j] = tr[i+NODES_PER_ELEM*j];
+                double magnitude[NDIMS] = {};
+                ArrayAccessor f = force[n];
+                f = 0;
+                ArrayAccessor f_residual = force_residual[n];
+                f_residual = 0;
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                const int* lpatch = var.support.local(n);
+                for (int k=0;k<npatch;++k) {
+                    ConstElemCacheAccessor tr = tmp_result[patch[k]];
+                    const int i = lpatch[k];
+                    for (int j=0;j<NDIMS;j++)
+                    {
+                        if (node_force_magnitude) magnitude[j] += std::abs(tr[i+NODES_PER_ELEM*j]);
+                        f[j] -= tr[i+NODES_PER_ELEM*j];
+                        f_residual[j] = tr[i+NODES_PER_ELEM*j];
+                    }
                 }
+                if (node_force_magnitude)
+                    for (int d=0; d<NDIMS; ++d) (*node_force_magnitude)[n][d] = magnitude[d];
             }
-            if (node_force_magnitude)
-                for (int d=0; d<NDIMS; ++d) (*node_force_magnitude)[n][d] = magnitude[d];
         }
-#ifdef USEMPI
-        }
-#endif
     }
 
     apply_stress_bcs(param, var, force, displacement_dt);
