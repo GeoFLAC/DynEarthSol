@@ -38,216 +38,397 @@
 
 namespace {
 #ifdef ACC
-int selected_device=-1;
-void prefetch_managed(void* pointer,std::size_t bytes) {
-    if(!pointer || !bytes)return;
+int selected_device = -1;
+void prefetch_managed(void* pointer, std::size_t bytes) {
+    if (!pointer || !bytes) return;
     cudaPointerAttributes info{};
-    const cudaError_t status=cudaPointerGetAttributes(&info,pointer);
-    if(status!=cudaSuccess){cudaGetLastError();return;}
-    if(info.type==cudaMemoryTypeManaged)
-        mpi_cuda_check(cudaMemPrefetchAsync(pointer,bytes,selected_device,0));
+    const cudaError_t status = cudaPointerGetAttributes(&info, pointer);
+    if (status != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
+    if (info.type == cudaMemoryTypeManaged)
+        mpi_cuda_check(cudaMemPrefetchAsync(pointer, bytes, selected_device, 0));
 }
 #endif
+
+// A list of field arrays packed into one message, column by column.
 struct Fields {
-    struct Field { double* data; int stride, columns; };
-    std::array<Field,64> fields;
-    int n=0,columns=0;
-    void add(double_vec* v) { if(v) add(v->data(),v->size(),1); }
-    template<int N> void add(Array2D<double,N>* v) { if(v) add(v->data(),v->size(),N); }
-    void add(double* data,int rows,int cols) {
-        if(n==int(fields.size())) die(EXIT_INTERNAL_ASSERT,"too many MPI fields");
-        fields[n++]={data,rows,cols};columns+=cols;
+    struct Field {
+        double* data;
+        int stride, columns;
+    };
+    std::array<Field,64> list;
+    int nfields = 0, columns = 0;
+    void add(double_vec* values) {
+        if (values) add(values->data(), values->size(), 1);
+    }
+    template<int N> void add(Array2D<double,N>* values) {
+        if (values) add(values->data(), values->size(), N);
+    }
+    void add(double* data, int rows, int cols) {
+        if (nfields == int(list.size())) die(EXIT_INTERNAL_ASSERT, "too many MPI fields");
+        list[nfields++] = {data, rows, cols};
+        columns += cols;
     }
 };
-Fields node_fields(Variables& v) {
-    Fields f;
-#define F(x) f.add(v.x);
-    MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
-#undef F
-    return f;
+
+Fields node_fields(Variables& var) {
+    Fields fields;
+#define ADD_FIELD(x) fields.add(var.x);
+    MPI_NODE_VECTORS(ADD_FIELD)
+    MPI_NODE_ARRAYS(ADD_FIELD)
+#undef ADD_FIELD
+    return fields;
 }
-Fields element_fields(Variables& v) {
-    Fields f;
-#define F(x) f.add(v.x);
-    MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-#undef F
-    return f;
+
+Fields element_fields(Variables& var) {
+    Fields fields;
+#define ADD_FIELD(x) fields.add(var.x);
+    MPI_ELEMENT_VECTORS(ADD_FIELD)
+    MPI_ELEMENT_ARRAYS(ADD_FIELD)
+#undef ADD_FIELD
+    return fields;
 }
-void pack(const Fields& f,const int_vec& rows,double_vec& out) {
-    out.resize(std::size_t(rows.size())*f.columns); std::size_t k=0;
-    if(rows.empty())return;
-    for(int i=0;i<f.n;++i) {
-        mpi_pack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows.data(),rows.size(),out.data()+k);
-        k+=std::size_t(rows.size())*f.fields[i].columns;
+
+void pack(const Fields& fields, const int_vec& rows, double_vec& out) {
+    out.resize(std::size_t(rows.size()) * fields.columns);
+    std::size_t offset = 0;
+    if (rows.empty()) return;
+    for (int i=0; i<fields.nfields; ++i) {
+        const auto& field = fields.list[i];
+        mpi_pack_columns(field.data, field.stride, field.columns, rows.data(), rows.size(), out.data() + offset);
+        offset += std::size_t(rows.size()) * field.columns;
     }
 }
-void unpack(const Fields& f,const int* rows,int nrows,const double* in) {
-    std::size_t k=0;
-    if(!nrows)return;
-    for(int i=0;i<f.n;++i) {
-        mpi_unpack_columns(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,rows,nrows,in+k);
-        k+=std::size_t(nrows)*f.fields[i].columns;
+
+void unpack(const Fields& fields, const int* rows, int nrows, const double* in) {
+    std::size_t offset = 0;
+    if (!nrows) return;
+    for (int i=0; i<fields.nfields; ++i) {
+        const auto& field = fields.list[i];
+        mpi_unpack_columns(field.data, field.stride, field.columns, rows, nrows, in + offset);
+        offset += std::size_t(nrows) * field.columns;
     }
 }
+
 #ifdef ACC
-void pack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& out) {
-    out.resize(std::size_t(rows.size())*f.columns);std::size_t offset=0;
-    if(rows.empty())return;
-    for(int i=0;i<f.n;++i) {
-        mpi_pack_columns<true>(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
-                                rows.data(),rows.size(),out.device()+offset);
-        offset+=std::size_t(rows.size())*f.fields[i].columns;
+void pack_device(const Fields& fields, const int_vec& rows, MpiGpuBuffer& out) {
+    out.resize(std::size_t(rows.size()) * fields.columns);
+    std::size_t offset = 0;
+    if (rows.empty()) return;
+    for (int i=0; i<fields.nfields; ++i) {
+        const auto& field = fields.list[i];
+        mpi_pack_columns<true>(field.data, field.stride, field.columns,
+                               rows.data(), rows.size(), out.device() + offset);
+        offset += std::size_t(rows.size()) * field.columns;
     }
     out.download();
 }
-void unpack_device(const Fields& f,const int_vec& rows,MpiGpuBuffer& in) {
-    if(rows.empty())return;
-    in.upload();std::size_t offset=0;
-    for(int i=0;i<f.n;++i) {
-        mpi_unpack_columns<true>(f.fields[i].data,f.fields[i].stride,f.fields[i].columns,
-                                  rows.data(),rows.size(),in.device()+offset);
-        offset+=std::size_t(rows.size())*f.fields[i].columns;
+
+void unpack_device(const Fields& fields, const int_vec& rows, MpiGpuBuffer& in) {
+    if (rows.empty()) return;
+    in.upload();
+    std::size_t offset = 0;
+    for (int i=0; i<fields.nfields; ++i) {
+        const auto& field = fields.list[i];
+        mpi_unpack_columns<true>(field.data, field.stride, field.columns,
+                                 rows.data(), rows.size(), in.device() + offset);
+        offset += std::size_t(rows.size()) * field.columns;
     }
 }
 #endif
-int count(std::size_t n) {
-    if(n>INT_MAX) die(EXIT_RUNTIME_RESOURCE,"MPI message exceeds INT_MAX entries");
-    return n;
-}
-void metadata(MpiState& a,Variables& v) {
-#define F(x) a.value(v.x)
-    F(time); F(last_remesh_time); F(dt); F(steps); F(nremesh); F(max_vbc_val);
-    F(max_global_vel_mag); F(global_dt_min); F(compensation_pressure); F(bottom_temperature);
-    F(nnode); F(nelem); F(vbc_val_z1_loading_period);
-    F(PT_initial_residual_max); F(PT_skip_scale_update); F(PT_force_residual_valid);
-    F(info_display_next_step);
-    for(int i=0;i<nbdrytypes;++i) {
-        a.value(v.vbc_types[i]);a.value(v.vbc_values[i]);a.value(v.stress_bc_values[i]);
-        a.value(v.bnodes[i]);a.value(v.bfacets[i]);
-    }
-    for(int i=0;i<nbdrytypes_hydro;++i) { a.value(v.hbc_types[i]);a.value(v.stress_bc_types[i]); }
-    for(int i=0;i<nbdrytypes*nbdrytypes;++i) a.value(v.edge_slot[i]);
-    F(bnormals);F(bcflag);F(edge_vec);F(vbc_vertical_div_x0);F(vbc_vertical_div_x1);
-    F(vbc_vertical_ratio_x0);F(vbc_vertical_ratio_x1);a.value(v.surfinfo.max_surf_vel);
-#undef F
-}
-void local_archive(MpiState& a,Variables& v) {
-    metadata(a,v);
-#define F(x) a.value(v.x);
-    MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
-    MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers)
-    F(top_elems) F(ntop_elems) F(surfinfo.top_nodes) F(surfinfo.ntop)
-#undef F
-    a.value(v.support.arr_data);a.value(v.support.idx_data);a.value(v.support.lidx_data);v.support.rebind();
-}
-void release(Variables& v) {
-    delete v.mat;v.mat=nullptr;
-#define F(x) delete v.x;v.x=nullptr;
-    MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
-    MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers) F(bnormals) F(bcflag)
-    F(top_elems) F(surfinfo.top_nodes)
-    F(ntmp) F(etmp) F(etmp_int) F(tmp_result)
-#undef F
-    for(int i=0;i<nbdrytypes;++i) {delete v.bnodes[i];delete v.bfacets[i];v.bnodes[i]=nullptr;v.bfacets[i]=nullptr;}
-}
-template<class T> void select(const std::vector<T>* src,std::vector<T>*& dst,const int_vec& ids) {
-    if(!src) {delete dst;dst=nullptr;return;}
-    if(!dst) dst=new std::vector<T>;
-    dst->resize(ids.size());
-    for(int i=0;i<int(ids.size());++i) (*dst)[i]=(*src)[ids[i]];
-}
-template<class T,int N> void select(const Array2D<T,N>* src,Array2D<T,N>*& dst,const int_vec& ids) {
-    if(!src) {delete dst;dst=nullptr;return;}
-    if(!dst) dst=new Array2D<T,N>;
-    dst->resize(ids.size(),false);
-    for(int d=0;d<N;++d) for(int i=0;i<int(ids.size());++i) (*dst)[i][d]=(*src)[ids[i]][d];
-}
-template<class T,int N> void copy(const Array2D<T,N>* src,Array2D<T,N>*& dst) {
-    if(!src) {delete dst;dst=nullptr;return;}
-    if(!dst) dst=new Array2D<T,N>;
-    dst->resize(src->size(),false);
-    std::copy(src->data(),src->data()+src->num_elements(),dst->data());
+
+int count(std::size_t entries) {
+    if (entries > INT_MAX) die(EXIT_RUNTIME_RESOURCE, "MPI message exceeds INT_MAX entries");
+    return entries;
 }
 
-void make_local(const Variables& g,const MpiPartition& p,Variables& v) {
-#define F(x) v.x=g.x
-    F(time);F(last_remesh_time);F(dt);F(steps);F(nremesh);F(max_vbc_val);
-    F(max_global_vel_mag);F(global_dt_min);F(compensation_pressure);F(bottom_temperature);
-    F(PT_initial_residual_max);F(PT_skip_scale_update);F(PT_force_residual_valid);
-    F(info_display_next_step);F(vbc_val_z1_loading_period);F(edge_vec);F(vbc_vertical_div_x0);F(vbc_vertical_div_x1);
-    F(vbc_vertical_ratio_x0);F(vbc_vertical_ratio_x1);F(surfinfo.max_surf_vel);
-#undef F
-    v.nnode=p.nodes.size();v.nelem=p.elements.size();
-#define F(x) select(g.x,v.x,p.nodes);
-    MPI_NODE_VECTORS(F) MPI_NODE_ARRAYS(F)
-#undef F
-#define F(x) select(g.x,v.x,p.elements);
-    MPI_ELEMENT_VECTORS(F) MPI_ELEMENT_ARRAYS(F)
-    F(connectivity) F(elemmarkers)
-#undef F
-    for(int e=0;e<v.nelem;++e) for(int j=0;j<NODES_PER_ELEM;++j)
-        (*v.connectivity)[e][j]=p.node_local.at((*v.connectivity)[e][j]);
-    select(g.bcflag,v.bcflag,p.nodes);copy(g.bnormals,v.bnormals);
-    for(int i=0;i<nbdrytypes;++i) {
-        v.vbc_types[i]=g.vbc_types[i];v.vbc_values[i]=g.vbc_values[i];v.stress_bc_values[i]=g.stress_bc_values[i];
-        if(!v.bnodes[i]) v.bnodes[i]=new int_vec;
-        v.bnodes[i]->clear();
-        for(int n:*g.bnodes[i]) {auto at=p.node_local.find(n);if(at!=p.node_local.end()) v.bnodes[i]->push_back(at->second);}
-        if(!v.bfacets[i]) v.bfacets[i]=new std::vector<std::pair<int,int>>;
-        v.bfacets[i]->clear();
-        for(auto facet:*g.bfacets[i]) {auto at=p.element_local.find(facet.first);
-            if(at!=p.element_local.end()) v.bfacets[i]->emplace_back(at->second,facet.second);}
+void metadata(MpiState& state, Variables& var) {
+#define ARCHIVE(x) state.value(var.x)
+    ARCHIVE(time);
+    ARCHIVE(last_remesh_time);
+    ARCHIVE(dt);
+    ARCHIVE(steps);
+    ARCHIVE(nremesh);
+    ARCHIVE(max_vbc_val);
+    ARCHIVE(max_global_vel_mag);
+    ARCHIVE(global_dt_min);
+    ARCHIVE(compensation_pressure);
+    ARCHIVE(bottom_temperature);
+    ARCHIVE(nnode);
+    ARCHIVE(nelem);
+    ARCHIVE(vbc_val_z1_loading_period);
+    ARCHIVE(PT_initial_residual_max);
+    ARCHIVE(PT_skip_scale_update);
+    ARCHIVE(PT_force_residual_valid);
+    ARCHIVE(info_display_next_step);
+    for (int i=0; i<nbdrytypes; ++i) {
+        state.value(var.vbc_types[i]);
+        state.value(var.vbc_values[i]);
+        state.value(var.stress_bc_values[i]);
+        state.value(var.bnodes[i]);
+        state.value(var.bfacets[i]);
     }
-    for(int i=0;i<nbdrytypes_hydro;++i) {v.hbc_types[i]=g.hbc_types[i];v.stress_bc_types[i]=g.stress_bc_types[i];}
-    std::copy(g.edge_slot,g.edge_slot+nbdrytypes*nbdrytypes,v.edge_slot);
-    // Copy each support in GLOBAL element order, including full stars of owned nodes.
-    v.support.idx_data.assign(v.nnode+1,0);v.support.arr_data.clear();v.support.lidx_data.clear();
-    for(int n=0;n<v.nnode;++n) {
-        int gn=p.nodes[n];const int* patch=g.support.patch(gn);const int* loc=g.support.local(gn);
-        for(int i=0;i<g.support.size(gn);++i) {
-            auto at=p.element_local.find(patch[i]);
-            if(at!=p.element_local.end()) {v.support.arr_data.push_back(at->second);v.support.lidx_data.push_back(loc[i]);}
-            else if(n<p.owned_nodes) die(EXIT_INTERNAL_ASSERT,"owned node has an incomplete support");
+    for (int i=0; i<nbdrytypes_hydro; ++i) {
+        state.value(var.hbc_types[i]);
+        state.value(var.stress_bc_types[i]);
+    }
+    for (int i=0; i<nbdrytypes*nbdrytypes; ++i) state.value(var.edge_slot[i]);
+    ARCHIVE(bnormals);
+    ARCHIVE(bcflag);
+    ARCHIVE(edge_vec);
+    ARCHIVE(vbc_vertical_div_x0);
+    ARCHIVE(vbc_vertical_div_x1);
+    ARCHIVE(vbc_vertical_ratio_x0);
+    ARCHIVE(vbc_vertical_ratio_x1);
+    state.value(var.surfinfo.max_surf_vel);
+#undef ARCHIVE
+}
+
+void local_archive(MpiState& state, Variables& var) {
+    metadata(state, var);
+#define ARCHIVE(x) state.value(var.x);
+    MPI_NODE_VECTORS(ARCHIVE)
+    MPI_NODE_ARRAYS(ARCHIVE)
+    MPI_ELEMENT_VECTORS(ARCHIVE)
+    MPI_ELEMENT_ARRAYS(ARCHIVE)
+    ARCHIVE(connectivity)
+    ARCHIVE(elemmarkers)
+    ARCHIVE(top_elems)
+    ARCHIVE(ntop_elems)
+    ARCHIVE(surfinfo.top_nodes)
+    ARCHIVE(surfinfo.ntop)
+#undef ARCHIVE
+    state.value(var.support.arr_data);
+    state.value(var.support.idx_data);
+    state.value(var.support.lidx_data);
+    var.support.rebind();
+}
+
+void release(Variables& var) {
+    delete var.mat;
+    var.mat = nullptr;
+#define RELEASE(x)        \
+    delete var.x;         \
+    var.x = nullptr;
+    MPI_NODE_VECTORS(RELEASE)
+    MPI_NODE_ARRAYS(RELEASE)
+    MPI_ELEMENT_VECTORS(RELEASE)
+    MPI_ELEMENT_ARRAYS(RELEASE)
+    RELEASE(connectivity)
+    RELEASE(elemmarkers)
+    RELEASE(bnormals)
+    RELEASE(bcflag)
+    RELEASE(top_elems)
+    RELEASE(surfinfo.top_nodes)
+    RELEASE(ntmp)
+    RELEASE(etmp)
+    RELEASE(etmp_int)
+    RELEASE(tmp_result)
+#undef RELEASE
+    for (int i=0; i<nbdrytypes; ++i) {
+        delete var.bnodes[i];
+        delete var.bfacets[i];
+        var.bnodes[i] = nullptr;
+        var.bfacets[i] = nullptr;
+    }
+}
+
+template<class T> void select(const std::vector<T>* src, std::vector<T>*& dst, const int_vec& ids) {
+    if (!src) {
+        delete dst;
+        dst = nullptr;
+        return;
+    }
+    if (!dst) dst = new std::vector<T>;
+    dst->resize(ids.size());
+    for (int i=0; i<int(ids.size()); ++i) (*dst)[i] = (*src)[ids[i]];
+}
+
+template<class T, int N> void select(const Array2D<T,N>* src, Array2D<T,N>*& dst, const int_vec& ids) {
+    if (!src) {
+        delete dst;
+        dst = nullptr;
+        return;
+    }
+    if (!dst) dst = new Array2D<T,N>;
+    dst->resize(ids.size(), false);
+    for (int d=0; d<N; ++d) {
+        for (int i=0; i<int(ids.size()); ++i) (*dst)[i][d] = (*src)[ids[i]][d];
+    }
+}
+
+template<class T, int N> void copy(const Array2D<T,N>* src, Array2D<T,N>*& dst) {
+    if (!src) {
+        delete dst;
+        dst = nullptr;
+        return;
+    }
+    if (!dst) dst = new Array2D<T,N>;
+    dst->resize(src->size(), false);
+    std::copy(src->data(), src->data() + src->num_elements(), dst->data());
+}
+
+// Build the compact state of one partition from the root's global mesh.
+void make_local(const Variables& global, const MpiPartition& partition, Variables& var) {
+#define COPY(x) var.x = global.x
+    COPY(time);
+    COPY(last_remesh_time);
+    COPY(dt);
+    COPY(steps);
+    COPY(nremesh);
+    COPY(max_vbc_val);
+    COPY(max_global_vel_mag);
+    COPY(global_dt_min);
+    COPY(compensation_pressure);
+    COPY(bottom_temperature);
+    COPY(PT_initial_residual_max);
+    COPY(PT_skip_scale_update);
+    COPY(PT_force_residual_valid);
+    COPY(info_display_next_step);
+    COPY(vbc_val_z1_loading_period);
+    COPY(edge_vec);
+    COPY(vbc_vertical_div_x0);
+    COPY(vbc_vertical_div_x1);
+    COPY(vbc_vertical_ratio_x0);
+    COPY(vbc_vertical_ratio_x1);
+    COPY(surfinfo.max_surf_vel);
+#undef COPY
+    var.nnode = partition.nodes.size();
+    var.nelem = partition.elements.size();
+#define SELECT_NODES(x) select(global.x, var.x, partition.nodes);
+    MPI_NODE_VECTORS(SELECT_NODES)
+    MPI_NODE_ARRAYS(SELECT_NODES)
+#undef SELECT_NODES
+#define SELECT_ELEMENTS(x) select(global.x, var.x, partition.elements);
+    MPI_ELEMENT_VECTORS(SELECT_ELEMENTS)
+    MPI_ELEMENT_ARRAYS(SELECT_ELEMENTS)
+    SELECT_ELEMENTS(connectivity)
+    SELECT_ELEMENTS(elemmarkers)
+#undef SELECT_ELEMENTS
+    for (int e=0; e<var.nelem; ++e) {
+        for (int j=0; j<NODES_PER_ELEM; ++j)
+            (*var.connectivity)[e][j] = partition.node_local.at((*var.connectivity)[e][j]);
+    }
+    select(global.bcflag, var.bcflag, partition.nodes);
+    copy(global.bnormals, var.bnormals);
+    for (int i=0; i<nbdrytypes; ++i) {
+        var.vbc_types[i] = global.vbc_types[i];
+        var.vbc_values[i] = global.vbc_values[i];
+        var.stress_bc_values[i] = global.stress_bc_values[i];
+        if (!var.bnodes[i]) var.bnodes[i] = new int_vec;
+        var.bnodes[i]->clear();
+        for (int n : *global.bnodes[i]) {
+            auto at = partition.node_local.find(n);
+            if (at != partition.node_local.end()) var.bnodes[i]->push_back(at->second);
         }
-        v.support.idx_data[n+1]=v.support.arr_data.size();
+        if (!var.bfacets[i]) var.bfacets[i] = new std::vector<std::pair<int,int>>;
+        var.bfacets[i]->clear();
+        for (auto facet : *global.bfacets[i]) {
+            auto at = partition.element_local.find(facet.first);
+            if (at != partition.element_local.end()) var.bfacets[i]->emplace_back(at->second, facet.second);
+        }
     }
-    v.support.rebind();
-    if(!v.top_elems)v.top_elems=new int_vec;
-    v.top_elems->clear();
-    if(g.top_elems)for(int id:*g.top_elems) {
-        auto at=p.element_local.find(id);
-        if(at!=p.element_local.end())v.top_elems->push_back(at->second);
+    for (int i=0; i<nbdrytypes_hydro; ++i) {
+        var.hbc_types[i] = global.hbc_types[i];
+        var.stress_bc_types[i] = global.stress_bc_types[i];
     }
-    v.ntop_elems=v.top_elems->size();
-    if(!v.surfinfo.top_nodes)v.surfinfo.top_nodes=new int_vec;
-    v.surfinfo.top_nodes->clear();
-    if(g.surfinfo.top_nodes)for(int id:*g.surfinfo.top_nodes) {
-        auto at=p.node_local.find(id);
-        if(at!=p.node_local.end())v.surfinfo.top_nodes->push_back(at->second);
+    std::copy(global.edge_slot, global.edge_slot + nbdrytypes*nbdrytypes, var.edge_slot);
+    // Copy each support in GLOBAL element order, including full stars of owned nodes.
+    var.support.idx_data.assign(var.nnode+1, 0);
+    var.support.arr_data.clear();
+    var.support.lidx_data.clear();
+    for (int n=0; n<var.nnode; ++n) {
+        int global_node = partition.nodes[n];
+        const int* patch = global.support.patch(global_node);
+        const int* local_index = global.support.local(global_node);
+        for (int i=0; i<global.support.size(global_node); ++i) {
+            auto at = partition.element_local.find(patch[i]);
+            if (at != partition.element_local.end()) {
+                var.support.arr_data.push_back(at->second);
+                var.support.lidx_data.push_back(local_index[i]);
+            }
+            else if (n < partition.owned_nodes) die(EXIT_INTERNAL_ASSERT, "owned node has an incomplete support");
+        }
+        var.support.idx_data[n+1] = var.support.arr_data.size();
     }
-    v.surfinfo.ntop=v.surfinfo.top_nodes->size();
+    var.support.rebind();
+    if (!var.top_elems) var.top_elems = new int_vec;
+    var.top_elems->clear();
+    if (global.top_elems) {
+        for (int id : *global.top_elems) {
+            auto at = partition.element_local.find(id);
+            if (at != partition.element_local.end()) var.top_elems->push_back(at->second);
+        }
+    }
+    var.ntop_elems = var.top_elems->size();
+    if (!var.surfinfo.top_nodes) var.surfinfo.top_nodes = new int_vec;
+    var.surfinfo.top_nodes->clear();
+    if (global.surfinfo.top_nodes) {
+        for (int id : *global.surfinfo.top_nodes) {
+            auto at = partition.node_local.find(id);
+            if (at != partition.node_local.end()) var.surfinfo.top_nodes->push_back(at->second);
+        }
+    }
+    var.surfinfo.ntop = var.surfinfo.top_nodes->size();
 }
+
 const char* op_name(MpiOp op) {
-    switch(op) {
-#define F(x) case MpiOp::x:return #x
-        F(State);F(Temperature);F(PorePressure);F(StrainRate);F(Stress);F(Force);F(Velocity);
-        F(Coordinate);F(Rotation);F(Volume);F(Dvoldt);F(Edvoldt);F(Nmd);F(Mass);F(TimeStep);
-        F(OldMeanStress);F(VelocityBC);F(Residual);F(PhysicalPT);F(InitialPT);F(Surface);F(SurfaceIdle);F(SwapVolume);
-        F(Remesh);F(PhaseChange);F(Hydrous);F(Collect);F(Geometry);F(Boundary);F(Sample);F(Average);F(Metrics);
-        F(Report);F(Stop);F(Count);
-#undef F
-    } return "unknown";
+    switch (op) {
+#define OP_NAME(x) case MpiOp::x: return #x
+        OP_NAME(State);
+        OP_NAME(Temperature);
+        OP_NAME(PorePressure);
+        OP_NAME(StrainRate);
+        OP_NAME(Stress);
+        OP_NAME(Force);
+        OP_NAME(Velocity);
+        OP_NAME(Coordinate);
+        OP_NAME(Rotation);
+        OP_NAME(Volume);
+        OP_NAME(Dvoldt);
+        OP_NAME(Edvoldt);
+        OP_NAME(Nmd);
+        OP_NAME(Mass);
+        OP_NAME(TimeStep);
+        OP_NAME(OldMeanStress);
+        OP_NAME(VelocityBC);
+        OP_NAME(Residual);
+        OP_NAME(PhysicalPT);
+        OP_NAME(InitialPT);
+        OP_NAME(Surface);
+        OP_NAME(SurfaceIdle);
+        OP_NAME(SwapVolume);
+        OP_NAME(Remesh);
+        OP_NAME(PhaseChange);
+        OP_NAME(Hydrous);
+        OP_NAME(Collect);
+        OP_NAME(Geometry);
+        OP_NAME(Boundary);
+        OP_NAME(Sample);
+        OP_NAME(Average);
+        OP_NAME(Metrics);
+        OP_NAME(Report);
+        OP_NAME(Stop);
+        OP_NAME(Count);
+#undef OP_NAME
+    }
+    return "unknown";
 }
+
+// Management operations run on root's global mesh, not in compact kernels.
 bool management(MpiOp op) {
-    return op==MpiOp::State || op==MpiOp::Remesh || op==MpiOp::Surface || op==MpiOp::PhaseChange ||
-           op==MpiOp::Hydrous || op==MpiOp::Report || op==MpiOp::Collect || op==MpiOp::Geometry || op==MpiOp::Boundary || op==MpiOp::Sample;
+    return op == MpiOp::State || op == MpiOp::Remesh || op == MpiOp::Surface || op == MpiOp::PhaseChange ||
+           op == MpiOp::Hydrous || op == MpiOp::Report || op == MpiOp::Collect || op == MpiOp::Geometry ||
+           op == MpiOp::Boundary || op == MpiOp::Sample;
 }
+
+// Root broadcasts one command per operation; workers mirror its scalars.
 struct Command {
-    int operation,steps;
-    double time,dt,max_vbc,max_vel,global_dt,surface_vel,argument;
-    bool hydraulic,body_adjustment;
+    int operation, steps;
+    double time, dt, max_vbc, max_vel, global_dt, surface_vel, argument;
+    bool hydraulic, body_adjustment;
 };
 }
 
@@ -261,519 +442,967 @@ int mpi_launcher_rank() {
 
 void mpi_select_device() {
 #ifdef ACC
-    if(selected_device>=0)return;
-    const char* local=std::getenv("OMPI_COMM_WORLD_LOCAL_RANK");
-    if(!local)local=std::getenv("MPI_LOCALRANKID");
-    if(!local)local=std::getenv("PMI_LOCAL_RANK");
-    const int index=local?std::atoi(local):0;
-    const int devices=acc_get_num_devices(acc_device_nvidia);
-    if(index<0 || index>=devices)
-        die(EXIT_RUNTIME_RESOURCE,"GPU MPI requires one visible NVIDIA device per local rank");
-    acc_set_device_num(index,acc_device_nvidia);
-    acc_init(acc_device_nvidia);selected_device=index;
+    if (selected_device >= 0) return;
+    const char* local = std::getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+    if (!local) local = std::getenv("MPI_LOCALRANKID");
+    if (!local) local = std::getenv("PMI_LOCAL_RANK");
+    const int index = local ? std::atoi(local) : 0;
+    const int devices = acc_get_num_devices(acc_device_nvidia);
+    if (index < 0 || index >= devices)
+        die(EXIT_RUNTIME_RESOURCE, "GPU MPI requires one visible NVIDIA device per local rank");
+    acc_set_device_num(index, acc_device_nvidia);
+    acc_init(acc_device_nvidia);
+    selected_device = index;
 #endif
 }
 
 struct MpiSimulation::Impl {
-    explicit Impl(Param& p):param(p) {local.func_time={};packing.func_time={};}
-    ~Impl() { release(local);release(packing); }
+    explicit Impl(Param& parameters) : param(parameters) {
+        local.func_time = {};
+        packing.func_time = {};
+    }
+    ~Impl() {
+        release(local);
+        release(packing);
+    }
     Param& param;
-    Variables* master=nullptr;
-    Variables local{},packing{};
+    Variables* master = nullptr;
+    Variables local{}, packing{};
     MpiPartition part;
     std::vector<MpiPartition> parts; // only rank zero retains global partition maps
     struct Buffers {
-        double_vec send,recv;
+        double_vec send, recv;
 #ifdef ACC
-        MpiGpuBuffer gpu_send,gpu_recv;
+        MpiGpuBuffer gpu_send, gpu_recv;
 #endif
     };
     std::vector<Buffers> peer;
     std::vector<MPI_Request> requests;
     std::vector<MpiPeerBuffer> transfers;
-    int rank=0,size=1,global_n=0,global_e=0,generation=0;
-    bool active=false,inside=false;
-    MpiOp current=MpiOp::State;
-    double scalar=0,measurements[2]={};
+    int rank = 0, size = 1, global_n = 0, global_e = 0, generation = 0;
+    bool active = false, inside = false;
+    MpiOp current = MpiOp::State;
+    double scalar = 0, measurements[2] = {};
     PTResult pt;
-    std::uint64_t version=0,root_version=0,surface_version=~std::uint64_t(0);
-    std::uint64_t calls[int(MpiOp::Count)]={},payload_bytes=0,state_bytes=0,root_bytes=0,all_payload_bytes=0;
-    double elapsed[int(MpiOp::Count)]={},communication_s=0;
-    double operation_comm[int(MpiOp::Count)]={},wait_s=0,interior_window_s=0;
+    std::uint64_t version = 0, root_version = 0, surface_version = ~std::uint64_t(0);
+    std::uint64_t calls[int(MpiOp::Count)] = {}, payload_bytes = 0, state_bytes = 0, root_bytes = 0, all_payload_bytes = 0;
+    double elapsed[int(MpiOp::Count)] = {}, communication_s = 0;
+    double operation_comm[int(MpiOp::Count)] = {}, wait_s = 0, interior_window_s = 0;
     double_vec rank_profile;
-    bool overlap_enabled=true,pending_active=false;
-    int pending=0;
-    bool pending_nodes=false;
+    bool overlap_enabled = true, pending_active = false;
+    int pending = 0;
+    bool pending_nodes = false;
     Fields pending_fields;
-    double posted_at=0;
-    std::uint64_t geometry_version=~std::uint64_t(0),overlap_calls=0;
+    double posted_at = 0;
+    std::uint64_t geometry_version = ~std::uint64_t(0), overlap_calls = 0;
     std::vector<unsigned char> bytes;
-    double_vec send,recv,scatter;
-    int_vec counts,offsets,queries_n,queries_e;
+    double_vec send, recv, scatter;
+    int_vec counts, offsets, queries_n, queries_e;
     array_t average_coord;
-    tensor_t average_strain,average_stress;
+    tensor_t average_strain, average_stress;
     double_vec average_plastic;
-    double average_time=0;
+    double average_time = 0;
 
-    void command(const Command& c) {
-        local.steps=c.steps;local.time=c.time;local.dt=c.dt;local.max_vbc_val=c.max_vbc;
-        local.max_global_vel_mag=c.max_vel;local.global_dt_min=c.global_dt;
-        local.surfinfo.max_surf_vel=c.surface_vel;
-        param.control.has_hydraulic_diffusion=c.hydraulic;
-        param.ic.has_body_force_adjustment=c.body_adjustment;
+    void command(const Command& received) {
+        local.steps = received.steps;
+        local.time = received.time;
+        local.dt = received.dt;
+        local.max_vbc_val = received.max_vbc;
+        local.max_global_vel_mag = received.max_vel;
+        local.global_dt_min = received.global_dt;
+        local.surfinfo.max_surf_vel = received.surface_vel;
+        param.control.has_hydraulic_diffusion = received.hydraulic;
+        param.ic.has_body_force_adjustment = received.body_adjustment;
     }
+
     void trace() {
-        if(rank!=0)return;
-        const char* path=std::getenv("DES_MPI_PARTITION_TRACE");
+        if (rank != 0) return;
+        const char* path = std::getenv("DES_MPI_PARTITION_TRACE");
         std::ofstream file;
-        if(path) {
-            std::ostringstream name;name<<path<<"."<<std::setw(4)<<std::setfill('0')<<generation<<".csv";
-            file.open(name.str());if(!file) die(EXIT_IO_OPEN,"cannot create MPI partition trace");
-            file<<"entity,id,owner,x,z";
+        if (path) {
+            std::ostringstream name;
+            name << path << "." << std::setw(4) << std::setfill('0') << generation << ".csv";
+            file.open(name.str());
+            if (!file) die(EXIT_IO_OPEN, "cannot create MPI partition trace");
+            file << "entity,id,owner,x,z";
 #ifdef THREED
-            file<<",y";
+            file << ",y";
 #endif
-            for(int j=0;j<NODES_PER_ELEM;++j) file<<",n"<<j;
-            file<<"\n"<<std::setprecision(17);
+            for (int j=0; j<NODES_PER_ELEM; ++j) file << ",n" << j;
+            file << "\n" << std::setprecision(17);
         }
-        for(int r=0;r<size;++r) {
-            const auto& p=parts[r];
-            std::cout<<"[mpi][partition] generation="<<generation<<" step="<<master->steps<<" rank="<<r
-                     <<" owned_nodes="<<p.owned_nodes<<" owned_elements="<<p.owned_elements
-                     <<" owned_markers="<<p.owned_markers<<" ghost_nodes="<<p.nodes.size()-p.owned_nodes
-                     <<" ghost_elements="<<p.elements.size()-p.owned_elements<<" neighbors="<<p.halos.size()
-                     <<" interior_nodes="<<p.interior_nodes.size()<<" interface_nodes="<<p.interface_nodes.size()<<'\n';
-            if(!file)continue;
-            for(int i=0;i<p.owned_nodes;++i) {int n=p.nodes[i];file<<"node,"<<n<<','<<r<<','<<(*master->coord)[n][0]<<','<<(*master->coord)[n][NDIMS-1];
+        for (int r=0; r<size; ++r) {
+            const auto& partition = parts[r];
+            std::cout << "[mpi][partition] generation=" << generation << " step=" << master->steps << " rank=" << r
+                      << " owned_nodes=" << partition.owned_nodes << " owned_elements=" << partition.owned_elements
+                      << " owned_markers=" << partition.owned_markers
+                      << " ghost_nodes=" << partition.nodes.size() - partition.owned_nodes
+                      << " ghost_elements=" << partition.elements.size() - partition.owned_elements
+                      << " neighbors=" << partition.halos.size()
+                      << " interior_nodes=" << partition.interior_nodes.size()
+                      << " interface_nodes=" << partition.interface_nodes.size() << '\n';
+            if (!file) continue;
+            for (int i=0; i<partition.owned_nodes; ++i) {
+                int n = partition.nodes[i];
+                file << "node," << n << ',' << r << ',' << (*master->coord)[n][0] << ',' << (*master->coord)[n][NDIMS-1];
 #ifdef THREED
-                file<<','<<(*master->coord)[n][1];
+                file << ',' << (*master->coord)[n][1];
 #endif
-                for(int j=0;j<NODES_PER_ELEM;++j) file<<',';
-                file<<'\n';}
-            for(int i=0;i<p.owned_elements;++i) {int e=p.elements[i];double x[NDIMS]={};
-                for(int j=0;j<NODES_PER_ELEM;++j) for(int d=0;d<NDIMS;++d) x[d]+=(*master->coord)[(*master->connectivity)[e][j]][d]/NODES_PER_ELEM;
-                file<<"element,"<<e<<','<<r<<','<<x[0]<<','<<x[NDIMS-1];
+                for (int j=0; j<NODES_PER_ELEM; ++j) file << ',';
+                file << '\n';
+            }
+            for (int i=0; i<partition.owned_elements; ++i) {
+                int e = partition.elements[i];
+                double center[NDIMS] = {};
+                for (int j=0; j<NODES_PER_ELEM; ++j) {
+                    for (int d=0; d<NDIMS; ++d)
+                        center[d] += (*master->coord)[(*master->connectivity)[e][j]][d] / NODES_PER_ELEM;
+                }
+                file << "element," << e << ',' << r << ',' << center[0] << ',' << center[NDIMS-1];
 #ifdef THREED
-                file<<','<<x[1];
+                file << ',' << center[1];
 #endif
-                for(int j=0;j<NODES_PER_ELEM;++j) file<<','<<(*master->connectivity)[e][j];
-                file<<'\n';}
+                for (int j=0; j<NODES_PER_ELEM; ++j) file << ',' << (*master->connectivity)[e][j];
+                file << '\n';
+            }
         }
     }
+
     void distribute(bool rebalance) {
         #pragma acc wait
-        const double start=MPI_Wtime();
-        if(rank==0) {
+        const double start = MPI_Wtime();
+        if (rank == 0) {
             // Only root management changes marker composition. Refresh here,
             // before rebuilding the compact caches from the new marker counts.
             master->mat->refresh_elem_cache();
             // Marker operations stay on the management mesh. Compute ranks
             // need material counts, not copies of the individual records.
-            if(rebalance && !master->markersets.empty())
+            if (rebalance && !master->markersets.empty())
                 master->markersets[0]->check_marker_elem_consistency(*master);
             // Serial remeshing leaves this inactive hydraulic scratch array at
             // its old size. Compact selection/collection still visits it.
-            if(!param.control.has_hydraulic_diffusion && master->old_mean_stress)
-                master->old_mean_stress->resize(master->nelem,0.0);
-            global_n=master->nnode;global_e=master->nelem;
-            if(rebalance || parts.empty()) {parts=mpi_partition_mesh(*master,size);++generation;trace();}
-        }
-        int extent[]={global_n,global_e};
-        MPI_Bcast(extent,2,MPI_INT,0,MPI_COMM_WORLD);global_n=extent[0];global_e=extent[1];
-        for(int r=0;r<size;++r) {
-            std::uint64_t n=0;
-            if(rank==0 && r) {
-                make_local(*master,parts[r],packing);MpiState a(bytes,true);parts[r].archive(a);local_archive(a,packing);n=bytes.size();
-                MPI_Send(&n,1,MPI_UINT64_T,r,20,MPI_COMM_WORLD);MPI_Send(bytes.data(),count(n),MPI_BYTE,r,21,MPI_COMM_WORLD);state_bytes+=n;
+            if (!param.control.has_hydraulic_diffusion && master->old_mean_stress)
+                master->old_mean_stress->resize(master->nelem, 0.0);
+            global_n = master->nnode;
+            global_e = master->nelem;
+            if (rebalance || parts.empty()) {
+                parts = mpi_partition_mesh(*master, size);
+                ++generation;
+                trace();
             }
-            if(rank==r) {
-                if(r) {
-                    MPI_Recv(&n,1,MPI_UINT64_T,0,20,MPI_COMM_WORLD,MPI_STATUS_IGNORE);bytes.resize(n);
-                    MPI_Recv(bytes.data(),count(n),MPI_BYTE,0,21,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-                    MpiState a(bytes,false);part.archive(a);local_archive(a,local);a.finish();
+        }
+        int extent[] = {global_n, global_e};
+        MPI_Bcast(extent, 2, MPI_INT, 0, MPI_COMM_WORLD);
+        global_n = extent[0];
+        global_e = extent[1];
+        for (int r=0; r<size; ++r) {
+            std::uint64_t nbytes = 0;
+            if (rank == 0 && r) {
+                // Root builds, serializes and sends the compact state of rank r.
+                make_local(*master, parts[r], packing);
+                MpiState state(bytes, true);
+                parts[r].archive(state);
+                local_archive(state, packing);
+                nbytes = bytes.size();
+                MPI_Send(&nbytes, 1, MPI_UINT64_T, r, 20, MPI_COMM_WORLD);
+                MPI_Send(bytes.data(), count(nbytes), MPI_BYTE, r, 21, MPI_COMM_WORLD);
+                state_bytes += nbytes;
+            }
+            if (rank == r) {
+                if (r) {
+                    MPI_Recv(&nbytes, 1, MPI_UINT64_T, 0, 20, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    bytes.resize(nbytes);
+                    MPI_Recv(bytes.data(), count(nbytes), MPI_BYTE, 0, 21, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MpiState state(bytes, false);
+                    part.archive(state);
+                    local_archive(state, local);
+                    state.finish();
                 } else {
-                    part=parts[0];make_local(*master,part,local);
+                    part = parts[0];
+                    make_local(*master, part, local);
                 }
-                if(!local.ntmp) local.ntmp=new double_vec;
-                if(!local.etmp) local.etmp=new double_vec;
-                if(!local.etmp_int) local.etmp_int=new int_vec;
-                if(!local.tmp_result) local.tmp_result=new elem_cache;
-                local.ntmp->resize(local.nnode);local.etmp->resize(local.nelem);
-                local.etmp_int->resize(local.nelem);local.tmp_result->resize(local.nelem,false);
-                if(!local.mat) local.mat=new MatProps(param,local);else local.mat->refresh_elem_cache();
-                local.mpi=master?master->mpi:local.mpi;
+                if (!local.ntmp) local.ntmp = new double_vec;
+                if (!local.etmp) local.etmp = new double_vec;
+                if (!local.etmp_int) local.etmp_int = new int_vec;
+                if (!local.tmp_result) local.tmp_result = new elem_cache;
+                local.ntmp->resize(local.nnode);
+                local.etmp->resize(local.nelem);
+                local.etmp_int->resize(local.nelem);
+                local.tmp_result->resize(local.nelem, false);
+                if (!local.mat) local.mat = new MatProps(param, local);
+                else local.mat->refresh_elem_cache();
+                local.mpi = master ? master->mpi : local.mpi;
             }
         }
-        double hydro=rank==0?master->mat->hydro_diff_max:0;
-        MPI_Bcast(&hydro,1,MPI_DOUBLE,0,MPI_COMM_WORLD);local.mat->hydro_diff_max=hydro;
-        peer.resize(part.halos.size());requests.resize(2*part.halos.size());transfers.resize(part.halos.size());
+        double hydro_diff_max = rank == 0 ? master->mat->hydro_diff_max : 0;
+        MPI_Bcast(&hydro_diff_max, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        local.mat->hydro_diff_max = hydro_diff_max;
+        peer.resize(part.halos.size());
+        requests.resize(2*part.halos.size());
+        transfers.resize(part.halos.size());
 #ifdef ACC
         // Host MMG/management may resize every array. Rebind the compact state
         // first, then place managed payloads on this rank's GPU before timesteps.
-        Fields nf=node_fields(local),ef=element_fields(local);
-        for(const Fields* f:{&nf,&ef})for(int i=0;i<f->n;++i)
-            prefetch_managed(f->fields[i].data,std::size_t(f->fields[i].stride)*f->fields[i].columns*sizeof(double));
-        prefetch_managed(local.connectivity->data(),local.connectivity->num_elements()*sizeof(int));
-        prefetch_managed(local.bcflag->data(),local.bcflag->size()*sizeof(uint));
-        for(const int_vec* ids:{&local.support.arr_data,&local.support.idx_data,&local.support.lidx_data,
-                               &part.interior_nodes,&part.interface_nodes,local.top_elems,local.surfinfo.top_nodes})
-            prefetch_managed(const_cast<int*>(ids->data()),ids->size()*sizeof(int));
+        Fields local_node_fields = node_fields(local);
+        Fields local_element_fields = element_fields(local);
+        for (const Fields* fields : {&local_node_fields, &local_element_fields}) {
+            for (int i=0; i<fields->nfields; ++i) {
+                const auto& field = fields->list[i];
+                prefetch_managed(field.data, std::size_t(field.stride) * field.columns * sizeof(double));
+            }
+        }
+        prefetch_managed(local.connectivity->data(), local.connectivity->num_elements() * sizeof(int));
+        prefetch_managed(local.bcflag->data(), local.bcflag->size() * sizeof(uint));
+        for (const int_vec* ids : {&local.support.arr_data, &local.support.idx_data, &local.support.lidx_data,
+                                   &part.interior_nodes, &part.interface_nodes, local.top_elems, local.surfinfo.top_nodes})
+            prefetch_managed(const_cast<int*>(ids->data()), ids->size() * sizeof(int));
         mpi_cuda_check(cudaDeviceSynchronize());
 #endif
         // Redistribution finishes a mutating command; root stays current when
         // execute() advances the command version on return.
-        root_version=version+1;surface_version=geometry_version=~std::uint64_t(0);
-        communication_s+=MPI_Wtime()-start;
+        root_version = version + 1;
+        surface_version = geometry_version = ~std::uint64_t(0);
+        communication_s += MPI_Wtime() - start;
     }
-    void gather_rows(bool nodes,const Fields& from,const Fields& to,bool surface=false,const int_vec* query=nullptr) {
+
+    // Collect owned rows (all, surface only, or queried IDs) of each rank onto root.
+    void gather_rows(bool nodes, const Fields& from, const Fields& to, bool surface=false, const int_vec* query=nullptr) {
         #pragma acc wait
-        int_vec rows,global_rows;
-        const int_vec* local_rows=nodes?&part.node_rows:&part.element_rows;
-        if(surface) local_rows=nodes?&part.surface_owned_nodes:&part.surface_owned_elements;
-        if(query) {
-            const auto& map=nodes?part.node_local:part.element_local;
-            const int owned=nodes?part.owned_nodes:part.owned_elements;
-            for(int id:*query) {auto at=map.find(id);if(at!=map.end() && at->second<owned) rows.push_back(at->second);}
-            local_rows=&rows;
+        int_vec rows, global_rows;
+        const int_vec* local_rows = nodes ? &part.node_rows : &part.element_rows;
+        if (surface) local_rows = nodes ? &part.surface_owned_nodes : &part.surface_owned_elements;
+        if (query) {
+            const auto& local_ids = nodes ? part.node_local : part.element_local;
+            const int owned = nodes ? part.owned_nodes : part.owned_elements;
+            for (int id : *query) {
+                auto at = local_ids.find(id);
+                if (at != local_ids.end() && at->second < owned) rows.push_back(at->second);
+            }
+            local_rows = &rows;
         }
-        pack(from,*local_rows,send);
-        if(rank==0) {
-            counts.assign(size,0);offsets.assign(size,0);
-            for(int r=0;r<size;++r) {
-                const auto& p=parts[r];int n=nodes?p.owned_nodes:p.owned_elements;
-                if(surface && !query) {
-                    const auto& selected=nodes?p.surface_owned_nodes:p.surface_owned_elements;
-                    const auto& ids=nodes?p.nodes:p.elements;n=selected.size();
-                    for(int i:selected)global_rows.push_back(ids[i]);
+        pack(from, *local_rows, send);
+        if (rank == 0) {
+            counts.assign(size, 0);
+            offsets.assign(size, 0);
+            for (int r=0; r<size; ++r) {
+                const auto& partition = parts[r];
+                int nrows = nodes ? partition.owned_nodes : partition.owned_elements;
+                if (surface && !query) {
+                    const auto& selected = nodes ? partition.surface_owned_nodes : partition.surface_owned_elements;
+                    const auto& ids = nodes ? partition.nodes : partition.elements;
+                    nrows = selected.size();
+                    for (int i : selected) global_rows.push_back(ids[i]);
                 }
-                if(query) {n=0;const auto& map=nodes?p.node_local:p.element_local;const int owned=nodes?p.owned_nodes:p.owned_elements;
-                    for(int id:*query) {auto at=map.find(id);if(at!=map.end() && at->second<owned) {++n;global_rows.push_back(id);}}}
-                counts[r]=count(std::size_t(n)*from.columns);
-                if(r)offsets[r]=offsets[r-1]+counts[r-1];
+                if (query) {
+                    nrows = 0;
+                    const auto& local_ids = nodes ? partition.node_local : partition.element_local;
+                    const int owned = nodes ? partition.owned_nodes : partition.owned_elements;
+                    for (int id : *query) {
+                        auto at = local_ids.find(id);
+                        if (at != local_ids.end() && at->second < owned) {
+                            ++nrows;
+                            global_rows.push_back(id);
+                        }
+                    }
+                }
+                counts[r] = count(std::size_t(nrows) * from.columns);
+                if (r) offsets[r] = offsets[r-1] + counts[r-1];
             }
-            recv.resize(std::size_t(offsets.back())+counts.back());
+            recv.resize(std::size_t(offsets.back()) + counts.back());
         }
-        double start=MPI_Wtime();
-        MPI_Gatherv(send.data(),count(send.size()),MPI_DOUBLE,recv.data(),counts.data(),offsets.data(),MPI_DOUBLE,0,MPI_COMM_WORLD);
-        communication_s+=MPI_Wtime()-start;
-        std::size_t row_start=0;
-        if(rank==0) for(int r=0;r<size;++r) {
-            const auto& ids=nodes?parts[r].nodes:parts[r].elements;
-            const int n=counts[r]/from.columns;
-            if(n)unpack(to,surface||query?global_rows.data()+row_start:ids.data(),n,recv.data()+offsets[r]);
-            row_start+=n;
-            if(r)root_bytes+=std::uint64_t(counts[r])*sizeof(double);
+        double start = MPI_Wtime();
+        MPI_Gatherv(send.data(), count(send.size()), MPI_DOUBLE, recv.data(), counts.data(), offsets.data(),
+                    MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        communication_s += MPI_Wtime() - start;
+        std::size_t row_start = 0;
+        if (rank == 0) {
+            for (int r=0; r<size; ++r) {
+                const auto& ids = nodes ? parts[r].nodes : parts[r].elements;
+                const int nrows = counts[r] / from.columns;
+                if (nrows) unpack(to, surface || query ? global_rows.data() + row_start : ids.data(), nrows,
+                                  recv.data() + offsets[r]);
+                row_start += nrows;
+                if (r) root_bytes += std::uint64_t(counts[r]) * sizeof(double);
+            }
         }
     }
-    void scatter_surface(bool nodes,const Fields& from,const Fields& to) {
+
+    // Send root's surface rows back to every rank that holds them.
+    void scatter_surface(bool nodes, const Fields& from, const Fields& to) {
         #pragma acc wait
-        const auto& own=nodes?part.surface_nodes:part.surface_elements;
-        if(rank==0) {
-            counts.assign(size,0);offsets.assign(size,0);scatter.clear();
-            for(int r=0;r<size;++r) {
-                const auto& p=parts[r];const auto& rows=nodes?p.surface_nodes:p.surface_elements;const auto& ids=nodes?p.nodes:p.elements;
-                int_vec global;for(int i:rows)global.push_back(ids[i]);pack(from,global,send);
-                offsets[r]=scatter.size();counts[r]=count(send.size());scatter.insert(scatter.end(),send.begin(),send.end());
-                if(r)root_bytes+=send.size()*sizeof(double);
+        const auto& local_rows = nodes ? part.surface_nodes : part.surface_elements;
+        if (rank == 0) {
+            counts.assign(size, 0);
+            offsets.assign(size, 0);
+            scatter.clear();
+            for (int r=0; r<size; ++r) {
+                const auto& partition = parts[r];
+                const auto& rows = nodes ? partition.surface_nodes : partition.surface_elements;
+                const auto& ids = nodes ? partition.nodes : partition.elements;
+                int_vec global_rows;
+                for (int i : rows) global_rows.push_back(ids[i]);
+                pack(from, global_rows, send);
+                offsets[r] = scatter.size();
+                counts[r] = count(send.size());
+                scatter.insert(scatter.end(), send.begin(), send.end());
+                if (r) root_bytes += send.size() * sizeof(double);
             }
         }
-        recv.resize(std::size_t(own.size())*to.columns);double start=MPI_Wtime();
-        MPI_Scatterv(scatter.data(),counts.data(),offsets.data(),MPI_DOUBLE,recv.data(),count(recv.size()),MPI_DOUBLE,0,MPI_COMM_WORLD);
-        communication_s+=MPI_Wtime()-start;unpack(to,own.data(),own.size(),recv.data());
+        recv.resize(std::size_t(local_rows.size()) * to.columns);
+        double start = MPI_Wtime();
+        MPI_Scatterv(scatter.data(), counts.data(), offsets.data(), MPI_DOUBLE, recv.data(), count(recv.size()),
+                     MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        communication_s += MPI_Wtime() - start;
+        unpack(to, local_rows.data(), local_rows.size(), recv.data());
     }
+
     void full() {
-        if(root_version==version)return;
-        Fields gn,ge;if(rank==0) {gn=node_fields(*master);ge=element_fields(*master);}
-        gather_rows(true,node_fields(local),gn);gather_rows(false,element_fields(local),ge);
-        if(rank==0) master->mat->hydro_diff_max=local.mat->hydro_diff_max;
-        root_version=version;
-    }
-    void geometry() {
-        if(geometry_version==version || root_version==version)return;
-        Fields gn,ge,ln,le;ln.add(local.coord);le.add(local.volume);
-        if(rank==0){gn.add(master->coord);ge.add(master->volume);}
-        gather_rows(true,ln,gn);gather_rows(false,le,ge);geometry_version=version;
-    }
-    Fields surface_n(Variables& v) {Fields f;f.add(v.coord);f.add(v.volume_n);return f;}
-    Fields surface_e(Variables& v) {Fields f;f.add(v.volume);f.add(v.plstrain);f.add(v.stress);f.add(v.strain);f.add(v.strain_rate);return f;}
-    void boundary() {
-        if(surface_version==version || root_version==version)return;
-        Fields gn,ge;if(rank==0){gn=surface_n(*master);ge=surface_e(*master);}
-        gather_rows(true,surface_n(local),gn,true);gather_rows(false,surface_e(local),ge,true);surface_version=version;
-    }
-    void query() {
-        if(root_version==version)return;
-        if(rank==0) {MpiState a(bytes,true);a.value(queries_n);a.value(queries_e);}
-        std::uint64_t n=bytes.size();MPI_Bcast(&n,1,MPI_UINT64_T,0,MPI_COMM_WORLD);
-        if(rank) bytes.resize(n);
-        MPI_Bcast(bytes.data(),count(n),MPI_BYTE,0,MPI_COMM_WORLD);
-        if(rank){MpiState a(bytes,false);a.value(queries_n);a.value(queries_e);a.finish();}
-        Fields gn,ge;if(rank==0){gn=node_fields(*master);ge=element_fields(*master);}
-        gather_rows(true,node_fields(local),gn,false,&queries_n);gather_rows(false,element_fields(local),ge,false,&queries_e);
-    }
-    void collect_averages() {
-        if(param.mesh.quality_check_step_interval<=1)return;
-        Fields gn,ge,ln,le;ln.add(&average_coord);le.add(&average_strain);le.add(&average_stress);le.add(&average_plastic);
-        if(rank==0) {
-            Output& o=*master->output;o.time0=average_time;o.coord0.resize(global_n,false);
-            o.strain0.resize(global_e,false);o.stress_avg.resize(global_e,false);o.delta_plstrain_avg.resize(global_e);
-            gn.add(&o.coord0);ge.add(&o.strain0);ge.add(&o.stress_avg);ge.add(&o.delta_plstrain_avg);
+        if (root_version == version) return;
+        Fields root_node_fields, root_element_fields;
+        if (rank == 0) {
+            root_node_fields = node_fields(*master);
+            root_element_fields = element_fields(*master);
         }
-        gather_rows(true,ln,gn);gather_rows(false,le,ge);
+        gather_rows(true, node_fields(local), root_node_fields);
+        gather_rows(false, element_fields(local), root_element_fields);
+        if (rank == 0) master->mat->hydro_diff_max = local.mat->hydro_diff_max;
+        root_version = version;
     }
-    void execute(MpiOp op,double arg) {
-        current=op;inside=true;double started=MPI_Wtime(),comm_before=communication_s;Variables& v=local;
+
+    void geometry() {
+        if (geometry_version == version || root_version == version) return;
+        Fields root_node_fields, root_element_fields, local_node_fields, local_element_fields;
+        local_node_fields.add(local.coord);
+        local_element_fields.add(local.volume);
+        if (rank == 0) {
+            root_node_fields.add(master->coord);
+            root_element_fields.add(master->volume);
+        }
+        gather_rows(true, local_node_fields, root_node_fields);
+        gather_rows(false, local_element_fields, root_element_fields);
+        geometry_version = version;
+    }
+
+    Fields surface_node_fields(Variables& var) {
+        Fields fields;
+        fields.add(var.coord);
+        fields.add(var.volume_n);
+        return fields;
+    }
+
+    Fields surface_element_fields(Variables& var) {
+        Fields fields;
+        fields.add(var.volume);
+        fields.add(var.plstrain);
+        fields.add(var.stress);
+        fields.add(var.strain);
+        fields.add(var.strain_rate);
+        return fields;
+    }
+
+    void boundary() {
+        if (surface_version == version || root_version == version) return;
+        Fields root_node_fields, root_element_fields;
+        if (rank == 0) {
+            root_node_fields = surface_node_fields(*master);
+            root_element_fields = surface_element_fields(*master);
+        }
+        gather_rows(true, surface_node_fields(local), root_node_fields, true);
+        gather_rows(false, surface_element_fields(local), root_element_fields, true);
+        surface_version = version;
+    }
+
+    void query() {
+        if (root_version == version) return;
+        if (rank == 0) {
+            MpiState state(bytes, true);
+            state.value(queries_n);
+            state.value(queries_e);
+        }
+        std::uint64_t nbytes = bytes.size();
+        MPI_Bcast(&nbytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        if (rank) bytes.resize(nbytes);
+        MPI_Bcast(bytes.data(), count(nbytes), MPI_BYTE, 0, MPI_COMM_WORLD);
+        if (rank) {
+            MpiState state(bytes, false);
+            state.value(queries_n);
+            state.value(queries_e);
+            state.finish();
+        }
+        Fields root_node_fields, root_element_fields;
+        if (rank == 0) {
+            root_node_fields = node_fields(*master);
+            root_element_fields = element_fields(*master);
+        }
+        gather_rows(true, node_fields(local), root_node_fields, false, &queries_n);
+        gather_rows(false, element_fields(local), root_element_fields, false, &queries_e);
+    }
+
+    void collect_averages() {
+        if (param.mesh.quality_check_step_interval <= 1) return;
+        Fields root_node_fields, root_element_fields, local_node_fields, local_element_fields;
+        local_node_fields.add(&average_coord);
+        local_element_fields.add(&average_strain);
+        local_element_fields.add(&average_stress);
+        local_element_fields.add(&average_plastic);
+        if (rank == 0) {
+            Output& output = *master->output;
+            output.time0 = average_time;
+            output.coord0.resize(global_n, false);
+            output.strain0.resize(global_e, false);
+            output.stress_avg.resize(global_e, false);
+            output.delta_plstrain_avg.resize(global_e);
+            root_node_fields.add(&output.coord0);
+            root_element_fields.add(&output.strain0);
+            root_element_fields.add(&output.stress_avg);
+            root_element_fields.add(&output.delta_plstrain_avg);
+        }
+        gather_rows(true, local_node_fields, root_node_fields);
+        gather_rows(false, local_element_fields, root_element_fields);
+    }
+
+    void execute(MpiOp op, double arg) {
+        current = op;
+        inside = true;
+        double started = MPI_Wtime();
+        double comm_before = communication_s;
+        Variables& var = local;
         MpiAccScope offload(!management(op));
-        switch(op) {
-        case MpiOp::State:distribute(true);break;
-        case MpiOp::Temperature:update_temperature(param,v,*v.temperature,*v.tmp_result);exchange(MpiEntity::Node,{{v.temperature->data(),1}});break;
-        case MpiOp::PorePressure:update_pore_pressure(param,v,*v.ppressure,*v.dppressure,*v.ntmp,*v.tmp_result,*v.stress,*v.old_mean_stress);
-            exchange(MpiEntity::Node,{{v.ppressure->data(),1},{v.dppressure->data(),1}});break;
-        case MpiOp::StrainRate:update_strain_rate(v,*v.strain_rate);break;
-        case MpiOp::Dvoldt:compute_dvoldt(v,*v.ntmp,*v.etmp);exchange(MpiEntity::Node,{{v.ntmp->data(),1}});break;
-        case MpiOp::Edvoldt:compute_edvoldt(v,*v.ntmp,*v.edvoldt);break;
-        case MpiOp::Stress:update_stress(param,v,*v.stress,*v.stressyy,*v.dpressure,*v.viscosity,*v.strain,*v.plstrain,
-            *v.delta_plstrain,*v.strain_rate,*v.ppressure,*v.dppressure,*v.vel,*v.dyn_fric_coeff,*v.state_variable);break;
-        case MpiOp::Nmd:NMD_stress(v,*v.stress,*v.ntmp,*v.etmp);break;
-        case MpiOp::Force:update_force(param,v,*v.force,*v.force_residual,*v.tmp_result);break;
-        case MpiOp::Velocity:update_velocity(v,*v.vel);exchange(MpiEntity::Node,{{v.vel->data(),NDIMS}});break;
-        case MpiOp::VelocityBC:apply_vbcs(param,v,*v.vel);exchange(MpiEntity::Node,{{v.vel->data(),NDIMS}});break;
-        case MpiOp::Coordinate:update_coordinate(v,*v.coord);exchange(MpiEntity::Node,{{v.coord->data(),NDIMS}});break;
-        case MpiOp::Rotation:rotate_stress(v,*v.stress,*v.strain,arg);break;
-        case MpiOp::Volume:compute_volume(v,*v.volume);exchange(MpiEntity::Element,{{v.volume->data(),1}});break;
-        case MpiOp::Mass:compute_mass(param,v,arg,*v.volume_n,*v.mass,*v.tmass,*v.hmass,*v.ymass,*v.tmp_result);
-            exchange(MpiEntity::Node,{{v.volume_n->data(),1},{v.mass->data(),1},{v.tmass->data(),1},{v.hmass->data(),1},{v.ymass->data(),1}});break;
-        case MpiOp::OldMeanStress:update_old_mean_stress(param,v,*v.stress,*v.old_mean_stress);break;
-        case MpiOp::TimeStep:scalar=compute_dt(param,v,arg!=0);if(rank==0){master->max_global_vel_mag=v.max_global_vel_mag;master->global_dt_min=v.global_dt_min;}break;
-        case MpiOp::Residual:scalar=calculate_residual_force(v,*v.force_residual);if(rank==0)master->l2_residual=scalar;break;
-        case MpiOp::PhysicalPT:
-        case MpiOp::InitialPT:
-            pt = op==MpiOp::InitialPT ? run_initial_equilibrium_pt(param,v) : run_physical_step_pt(param,v);
-            if(rank==0) {
-                master->l2_residual=v.l2_residual;
-                master->PT_initial_residual_max=v.PT_initial_residual_max;
-                master->PT_skip_scale_update=v.PT_skip_scale_update;
-                master->PT_force_residual_valid=v.PT_force_residual_valid;
+        switch (op) {
+        case MpiOp::State:
+            distribute(true);
+            break;
+        case MpiOp::Temperature:
+            update_temperature(param, var, *var.temperature, *var.tmp_result);
+            exchange(MpiEntity::Node, {{var.temperature->data(), 1}});
+            break;
+        case MpiOp::PorePressure:
+            update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result,
+                                 *var.stress, *var.old_mean_stress);
+            exchange(MpiEntity::Node, {{var.ppressure->data(), 1}, {var.dppressure->data(), 1}});
+            break;
+        case MpiOp::StrainRate:
+            update_strain_rate(var, *var.strain_rate);
+            break;
+        case MpiOp::Dvoldt:
+            compute_dvoldt(var, *var.ntmp, *var.etmp);
+            exchange(MpiEntity::Node, {{var.ntmp->data(), 1}});
+            break;
+        case MpiOp::Edvoldt:
+            compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            break;
+        case MpiOp::Stress:
+            update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure, *var.viscosity, *var.strain,
+                          *var.plstrain, *var.delta_plstrain, *var.strain_rate, *var.ppressure, *var.dppressure,
+                          *var.vel, *var.dyn_fric_coeff, *var.state_variable);
+            break;
+        case MpiOp::Nmd:
+            NMD_stress(var, *var.stress, *var.ntmp, *var.etmp);
+            break;
+        case MpiOp::Force:
+            update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
+            break;
+        case MpiOp::Velocity:
+            update_velocity(var, *var.vel);
+            exchange(MpiEntity::Node, {{var.vel->data(), NDIMS}});
+            break;
+        case MpiOp::VelocityBC:
+            apply_vbcs(param, var, *var.vel);
+            exchange(MpiEntity::Node, {{var.vel->data(), NDIMS}});
+            break;
+        case MpiOp::Coordinate:
+            update_coordinate(var, *var.coord);
+            exchange(MpiEntity::Node, {{var.coord->data(), NDIMS}});
+            break;
+        case MpiOp::Rotation:
+            rotate_stress(var, *var.stress, *var.strain, arg);
+            break;
+        case MpiOp::Volume:
+            compute_volume(var, *var.volume);
+            exchange(MpiEntity::Element, {{var.volume->data(), 1}});
+            break;
+        case MpiOp::Mass:
+            compute_mass(param, var, arg, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass,
+                         *var.tmp_result);
+            exchange(MpiEntity::Node, {{var.volume_n->data(), 1}, {var.mass->data(), 1}, {var.tmass->data(), 1},
+                                       {var.hmass->data(), 1}, {var.ymass->data(), 1}});
+            break;
+        case MpiOp::OldMeanStress:
+            update_old_mean_stress(param, var, *var.stress, *var.old_mean_stress);
+            break;
+        case MpiOp::TimeStep:
+            scalar = compute_dt(param, var, arg != 0);
+            if (rank == 0) {
+                master->max_global_vel_mag = var.max_global_vel_mag;
+                master->global_dt_min = var.global_dt_min;
             }
             break;
-        case MpiOp::SwapVolume:std::swap(v.volume,v.volume_old);if(rank==0)std::swap(master->volume,master->volume_old);break;
+        case MpiOp::Residual:
+            scalar = calculate_residual_force(var, *var.force_residual);
+            if (rank == 0) master->l2_residual = scalar;
+            break;
+        case MpiOp::PhysicalPT:
+        case MpiOp::InitialPT:
+            pt = op == MpiOp::InitialPT ? run_initial_equilibrium_pt(param, var) : run_physical_step_pt(param, var);
+            if (rank == 0) {
+                master->l2_residual = var.l2_residual;
+                master->PT_initial_residual_max = var.PT_initial_residual_max;
+                master->PT_skip_scale_update = var.PT_skip_scale_update;
+                master->PT_force_residual_valid = var.PT_force_residual_valid;
+            }
+            break;
+        case MpiOp::SwapVolume:
+            std::swap(var.volume, var.volume_old);
+            if (rank == 0) std::swap(master->volume, master->volume_old);
+            break;
         case MpiOp::SurfaceIdle:
             // Even without erosion, the original surface path corrects stress
             // for the volume change since the preceding coordinate update.
-            correct_surface_element(v,*v.volume,*v.volume_n,*v.stress,*v.strain,*v.strain_rate,*v.plstrain);
-            exchange(MpiEntity::Element,{{v.volume->data(),1},{v.plstrain->data(),1},
-                {v.stress->data(),NSTR},{v.strain->data(),NSTR},{v.strain_rate->data(),NSTR}});
-            exchange(MpiEntity::Node,{{v.volume_n->data(),1}});
-            v.surfinfo.max_surf_vel=0;
+            correct_surface_element(var, *var.volume, *var.volume_n, *var.stress, *var.strain, *var.strain_rate,
+                                    *var.plstrain);
+            exchange(MpiEntity::Element, {{var.volume->data(), 1}, {var.plstrain->data(), 1},
+                {var.stress->data(), NSTR}, {var.strain->data(), NSTR}, {var.strain_rate->data(), NSTR}});
+            exchange(MpiEntity::Node, {{var.volume_n->data(), 1}});
+            var.surfinfo.max_surf_vel = 0;
             break;
         case MpiOp::Surface: {
-            bool whole=v.steps%param.mesh.quality_check_step_interval==0 ||
-                (param.control.surface_process_option!=0 && param.control.surface_process_option!=1);
-            if(whole)full();else boundary();
-            if(rank==0) surface_processes(param,*master,*master->coord,*master->stress,*master->strain,*master->strain_rate,
-                *master->plstrain,*master->volume,*master->volume_n,master->surfinfo,master->markersets,*master->elemmarkers,*master->markers_in_elem);
-            if(whole)distribute(false);
-            else {Fields gn,ge;if(rank==0){gn=surface_n(*master);ge=surface_e(*master);}
-                scatter_surface(true,gn,surface_n(v));scatter_surface(false,ge,surface_e(v));}
+            bool whole = var.steps % param.mesh.quality_check_step_interval == 0 ||
+                (param.control.surface_process_option != 0 && param.control.surface_process_option != 1);
+            if (whole) full();
+            else boundary();
+            if (rank == 0)
+                surface_processes(param, *master, *master->coord, *master->stress, *master->strain,
+                                  *master->strain_rate, *master->plstrain, *master->volume, *master->volume_n,
+                                  master->surfinfo, master->markersets, *master->elemmarkers,
+                                  *master->markers_in_elem);
+            if (whole) distribute(false);
+            else {
+                Fields root_node_fields, root_element_fields;
+                if (rank == 0) {
+                    root_node_fields = surface_node_fields(*master);
+                    root_element_fields = surface_element_fields(*master);
+                }
+                scatter_surface(true, root_node_fields, surface_node_fields(var));
+                scatter_surface(false, root_element_fields, surface_element_fields(var));
+            }
             break;
         }
-        case MpiOp::Remesh:full();if(rank==0)remesh(param,*master,int(arg));distribute(true);break;
-        case MpiOp::PhaseChange:full();if(rank==0)phase_changes(param,*master);distribute(false);break;
-        case MpiOp::Hydrous:full();if(rank==0)advect_hydrous_markers(param,*master,arg,*master->markersets[master->hydrous_marker_index],*master->hydrous_elemmarkers);distribute(false);break;
-        case MpiOp::Collect:full();if(arg!=0)collect_averages();break;
-        case MpiOp::Geometry:geometry();break;
-        case MpiOp::Boundary:boundary();break;
-        case MpiOp::Sample:query();break;
-        case MpiOp::Average:Output::average_fields(v,param.mesh.quality_check_step_interval,
-            average_time,average_coord,average_strain,average_stress,average_plastic);break;
-        case MpiOp::Metrics:compute_earthquake_metrics(v,measurements[0],measurements[1]);break;
+        case MpiOp::Remesh:
+            full();
+            if (rank == 0) remesh(param, *master, int(arg));
+            distribute(true);
+            break;
+        case MpiOp::PhaseChange:
+            full();
+            if (rank == 0) phase_changes(param, *master);
+            distribute(false);
+            break;
+        case MpiOp::Hydrous:
+            full();
+            if (rank == 0)
+                advect_hydrous_markers(param, *master, arg, *master->markersets[master->hydrous_marker_index],
+                                       *master->hydrous_elemmarkers);
+            distribute(false);
+            break;
+        case MpiOp::Collect:
+            full();
+            if (arg != 0) collect_averages();
+            break;
+        case MpiOp::Geometry:
+            geometry();
+            break;
+        case MpiOp::Boundary:
+            boundary();
+            break;
+        case MpiOp::Sample:
+            query();
+            break;
+        case MpiOp::Average:
+            Output::average_fields(var, param.mesh.quality_check_step_interval,
+                                   average_time, average_coord, average_strain, average_stress, average_plastic);
+            break;
+        case MpiOp::Metrics:
+            compute_earthquake_metrics(var, measurements[0], measurements[1]);
+            break;
         case MpiOp::Report: {
-            MPI_Reduce(&payload_bytes,&all_payload_bytes,1,MPI_UINT64_T,MPI_SUM,0,MPI_COMM_WORLD);
+            MPI_Reduce(&payload_bytes, &all_payload_bytes, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
             double sample[3*int(MpiOp::Count)+3];
-            for(int i=0;i<int(MpiOp::Count);++i) {sample[3*i]=double(calls[i]);sample[3*i+1]=elapsed[i];sample[3*i+2]=operation_comm[i];}
-            sample[3*int(MpiOp::Count)]=wait_s;sample[3*int(MpiOp::Count)+1]=interior_window_s;
-            sample[3*int(MpiOp::Count)+2]=double(overlap_calls);
-            if(rank==0)rank_profile.resize(size*(3*int(MpiOp::Count)+3));
-            MPI_Gather(sample,3*int(MpiOp::Count)+3,MPI_DOUBLE,rank_profile.data(),3*int(MpiOp::Count)+3,MPI_DOUBLE,0,MPI_COMM_WORLD);
+            for (int i=0; i<int(MpiOp::Count); ++i) {
+                sample[3*i] = double(calls[i]);
+                sample[3*i+1] = elapsed[i];
+                sample[3*i+2] = operation_comm[i];
+            }
+            sample[3*int(MpiOp::Count)] = wait_s;
+            sample[3*int(MpiOp::Count)+1] = interior_window_s;
+            sample[3*int(MpiOp::Count)+2] = double(overlap_calls);
+            if (rank == 0) rank_profile.resize(size*(3*int(MpiOp::Count)+3));
+            MPI_Gather(sample, 3*int(MpiOp::Count)+3, MPI_DOUBLE, rank_profile.data(), 3*int(MpiOp::Count)+3,
+                       MPI_DOUBLE, 0, MPI_COMM_WORLD);
             break;
         }
-        default:die(EXIT_INTERNAL_ASSERT,"unknown MPI operation");
+        default:
+            die(EXIT_INTERNAL_ASSERT, "unknown MPI operation");
         }
         // Every command boundary permits host-side scalar/cache changes, output
         // or state redistribution. No outstanding GPU producer may cross it.
         #pragma acc wait
         // Scalar diagnostics do not invalidate current copies of field arrays.
-        switch(op) {
-        case MpiOp::Collect:case MpiOp::Geometry:case MpiOp::Boundary:case MpiOp::Sample:
-        case MpiOp::Average:case MpiOp::Metrics:case MpiOp::TimeStep:case MpiOp::Residual:case MpiOp::Report:break;
-        default:++version;
+        switch (op) {
+        case MpiOp::Collect:
+        case MpiOp::Geometry:
+        case MpiOp::Boundary:
+        case MpiOp::Sample:
+        case MpiOp::Average:
+        case MpiOp::Metrics:
+        case MpiOp::TimeStep:
+        case MpiOp::Residual:
+        case MpiOp::Report:
+            break;
+        default:
+            ++version;
         }
-        ++calls[int(op)];elapsed[int(op)]+=MPI_Wtime()-started;
-        operation_comm[int(op)]+=communication_s-comm_before;inside=false;
+        ++calls[int(op)];
+        elapsed[int(op)] += MPI_Wtime() - started;
+        operation_comm[int(op)] += communication_s - comm_before;
+        inside = false;
     }
-    void begin_exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
-        if(pending_active)die(EXIT_INTERNAL_ASSERT,"overlapping halo buffers reused before completion");
-        const bool nodes=entity==MpiEntity::Node;Fields f;
-        for(auto a:arrays) f.add(a.first,nodes?local.nnode:local.nelem,a.second);
+
+    void begin_exchange(MpiEntity entity, std::initializer_list<std::pair<double*,int>> arrays) {
+        if (pending_active) die(EXIT_INTERNAL_ASSERT, "overlapping halo buffers reused before completion");
+        const bool nodes = entity == MpiEntity::Node;
+        Fields fields;
+        for (auto array : arrays) fields.add(array.first, nodes ? local.nnode : local.nelem, array.second);
         #pragma acc wait
-        double start=MPI_Wtime();
-        for(int i=0;i<int(part.halos.size());++i) {
-            const auto& h=part.halos[i];const auto& receiving=nodes?h.recv_nodes:h.recv_elements;
+        double start = MPI_Wtime();
+        for (int i=0; i<int(part.halos.size()); ++i) {
+            const auto& halo = part.halos[i];
+            const auto& receiving = nodes ? halo.recv_nodes : halo.recv_elements;
 #ifdef ACC
-            const auto& sending=nodes?h.send_nodes:h.send_elements;
-            const int ns=count(std::size_t(sending.size())*f.columns),nr=count(std::size_t(receiving.size())*f.columns);
-            peer[i].gpu_recv.resize(nr);pack_device(f,sending,peer[i].gpu_send);
-            transfers[i]={h.rank,peer[i].gpu_send.host(),peer[i].gpu_recv.host(),ns,nr};
-            payload_bytes+=std::uint64_t(ns)*sizeof(double);
+            const auto& sending = nodes ? halo.send_nodes : halo.send_elements;
+            const int send_count = count(std::size_t(sending.size()) * fields.columns);
+            const int recv_count = count(std::size_t(receiving.size()) * fields.columns);
+            peer[i].gpu_recv.resize(recv_count);
+            pack_device(fields, sending, peer[i].gpu_send);
+            transfers[i] = {halo.rank, peer[i].gpu_send.host(), peer[i].gpu_recv.host(), send_count, recv_count};
+            payload_bytes += std::uint64_t(send_count) * sizeof(double);
 #else
-            peer[i].recv.resize(std::size_t(receiving.size())*f.columns);
-            pack(f,nodes?h.send_nodes:h.send_elements,peer[i].send);
-            transfers[i]={h.rank,peer[i].send.data(),peer[i].recv.data(),count(peer[i].send.size()),count(peer[i].recv.size())};
-            payload_bytes+=peer[i].send.size()*sizeof(double);
+            peer[i].recv.resize(std::size_t(receiving.size()) * fields.columns);
+            pack(fields, nodes ? halo.send_nodes : halo.send_elements, peer[i].send);
+            transfers[i] = {halo.rank, peer[i].send.data(), peer[i].recv.data(),
+                            count(peer[i].send.size()), count(peer[i].recv.size())};
+            payload_bytes += peer[i].send.size() * sizeof(double);
 #endif
         }
-        pending=mpi_post_buffers(transfers.data(),transfers.size(),nodes?30:31,requests.data());
-        pending_nodes=nodes;pending_fields=f;pending_active=true;posted_at=MPI_Wtime();
-        communication_s+=MPI_Wtime()-start;
+        pending = mpi_post_buffers(transfers.data(), transfers.size(), nodes ? 30 : 31, requests.data());
+        pending_nodes = nodes;
+        pending_fields = fields;
+        pending_active = true;
+        posted_at = MPI_Wtime();
+        communication_s += MPI_Wtime() - start;
     }
+
     void finish_exchange() {
-        if(!pending_active)die(EXIT_INTERNAL_ASSERT,"halo completion without a posted exchange");
-        const double started=MPI_Wtime();interior_window_s+=started-posted_at;
-        mpi_finish_buffers(pending,requests.data());wait_s+=MPI_Wtime()-started;
-        for(int i=0;i<int(part.halos.size());++i) {
+        if (!pending_active) die(EXIT_INTERNAL_ASSERT, "halo completion without a posted exchange");
+        const double started = MPI_Wtime();
+        interior_window_s += started - posted_at;
+        mpi_finish_buffers(pending, requests.data());
+        wait_s += MPI_Wtime() - started;
+        for (int i=0; i<int(part.halos.size()); ++i) {
 #ifdef ACC
-            unpack_device(pending_fields,pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements,peer[i].gpu_recv);
+            unpack_device(pending_fields, pending_nodes ? part.halos[i].recv_nodes : part.halos[i].recv_elements,
+                          peer[i].gpu_recv);
 #else
-            const auto& rows=pending_nodes?part.halos[i].recv_nodes:part.halos[i].recv_elements;
-            unpack(pending_fields,rows.data(),rows.size(),peer[i].recv.data());
+            const auto& rows = pending_nodes ? part.halos[i].recv_nodes : part.halos[i].recv_elements;
+            unpack(pending_fields, rows.data(), rows.size(), peer[i].recv.data());
 #endif
         }
-        communication_s+=MPI_Wtime()-started;pending_active=false;
+        communication_s += MPI_Wtime() - started;
+        pending_active = false;
     }
-    void exchange(MpiEntity entity,std::initializer_list<std::pair<double*,int>> arrays) {
-        begin_exchange(entity,arrays);finish_exchange();
+
+    void exchange(MpiEntity entity, std::initializer_list<std::pair<double*,int>> arrays) {
+        begin_exchange(entity, arrays);
+        finish_exchange();
     }
 };
 
-MpiSimulation::MpiSimulation(Param& p):impl_(new Impl(p)) {
-    int provided;MPI_Init_thread(nullptr,nullptr,MPI_THREAD_FUNNELED,&provided);
-    if(provided<MPI_THREAD_FUNNELED)die(EXIT_RUNTIME_RESOURCE,"MPI_THREAD_FUNNELED required");
-    MPI_Comm_rank(MPI_COMM_WORLD,&impl_->rank);MPI_Comm_size(MPI_COMM_WORLD,&impl_->size);
+MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
+    int provided;
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, &provided);
+    if (provided < MPI_THREAD_FUNNELED) die(EXIT_RUNTIME_RESOURCE, "MPI_THREAD_FUNNELED required");
+    MPI_Comm_rank(MPI_COMM_WORLD, &impl_->rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &impl_->size);
 #ifdef ACC
-    MPI_Comm local;MPI_Comm_split_type(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,impl_->rank,MPI_INFO_NULL,&local);
-    int local_rank,local_size;MPI_Comm_rank(local,&local_rank);MPI_Comm_size(local,&local_size);
-    if(selected_device!=local_rank)die(EXIT_CONFIG_VALUE,"GPU device selection differs from MPI's local rank");
-    int current=-1;mpi_cuda_check(cudaGetDevice(&current));
-    if(current!=selected_device)die(EXIT_INTERNAL_ASSERT,"CUDA/OpenACC device selection differs");
-    cudaDeviceProp device{};mpi_cuda_check(cudaGetDeviceProperties(&device,current));
-    std::vector<char> ids(16*local_size);
-    MPI_Allgather(device.uuid.bytes,16,MPI_BYTE,ids.data(),16,MPI_BYTE,local);
-    for(int i=0;i<local_size;++i)for(int j=i+1;j<local_size;++j)
-        if(std::memcmp(ids.data()+16*i,ids.data()+16*j,16)==0)
-            die(EXIT_CONFIG_VALUE,"GPU MPI ranks selected the same physical GPU");
-    MPI_Comm_free(&local);
-    char hostname[MPI_MAX_PROCESSOR_NAME];int length;MPI_Get_processor_name(hostname,&length);
-    const char* hex="0123456789abcdef";char uuid[33]={};
-    for(int i=0;i<16;++i){unsigned char b=static_cast<unsigned char>(device.uuid.bytes[i]);uuid[2*i]=hex[b>>4];uuid[2*i+1]=hex[b&15];}
-    std::ostringstream identity;identity<<"[mpi][device] rank="<<impl_->rank<<" host="<<hostname
-        <<" local_rank="<<local_rank<<" device="<<current<<" uuid="<<uuid
-        <<" fields=managed halo_transport=host_staged\n";
-    std::cout<<identity.str()<<std::flush;
-#endif
-    if(is_root()) {
-        const char* option=std::getenv("DES_MPI_OVERLAP");
-        if(option && std::string(option)!="0" && std::string(option)!="1")die(EXIT_CONFIG_VALUE,"DES_MPI_OVERLAP must be 0 or 1");
-        impl_->overlap_enabled=!option || std::string(option)=="1";
+    MPI_Comm local;
+    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, impl_->rank, MPI_INFO_NULL, &local);
+    int local_rank, local_size;
+    MPI_Comm_rank(local, &local_rank);
+    MPI_Comm_size(local, &local_size);
+    if (selected_device != local_rank) die(EXIT_CONFIG_VALUE, "GPU device selection differs from MPI's local rank");
+    int current = -1;
+    mpi_cuda_check(cudaGetDevice(&current));
+    if (current != selected_device) die(EXIT_INTERNAL_ASSERT, "CUDA/OpenACC device selection differs");
+    cudaDeviceProp device{};
+    mpi_cuda_check(cudaGetDeviceProperties(&device, current));
+    std::vector<char> uuids(16*local_size);
+    MPI_Allgather(device.uuid.bytes, 16, MPI_BYTE, uuids.data(), 16, MPI_BYTE, local);
+    for (int i=0; i<local_size; ++i) {
+        for (int j=i+1; j<local_size; ++j) {
+            if (std::memcmp(uuids.data() + 16*i, uuids.data() + 16*j, 16) == 0)
+                die(EXIT_CONFIG_VALUE, "GPU MPI ranks selected the same physical GPU");
+        }
     }
-    MPI_Bcast(&impl_->overlap_enabled,1,MPI_C_BOOL,0,MPI_COMM_WORLD);
-    impl_->local.mpi=this;
-    if(is_root())std::cout<<"[mpi] compact spatial partitions; ranks="<<impl_->size<<"; neighbor halos; centralized mesh management\n";
+    MPI_Comm_free(&local);
+    char hostname[MPI_MAX_PROCESSOR_NAME];
+    int length;
+    MPI_Get_processor_name(hostname, &length);
+    const char* hex = "0123456789abcdef";
+    char uuid[33] = {};
+    for (int i=0; i<16; ++i) {
+        unsigned char byte = static_cast<unsigned char>(device.uuid.bytes[i]);
+        uuid[2*i] = hex[byte >> 4];
+        uuid[2*i+1] = hex[byte & 15];
+    }
+    std::ostringstream identity;
+    identity << "[mpi][device] rank=" << impl_->rank << " host=" << hostname
+             << " local_rank=" << local_rank << " device=" << current << " uuid=" << uuid
+             << " fields=managed halo_transport=host_staged\n";
+    std::cout << identity.str() << std::flush;
+#endif
+    if (is_root()) {
+        const char* option = std::getenv("DES_MPI_OVERLAP");
+        if (option && std::string(option) != "0" && std::string(option) != "1")
+            die(EXIT_CONFIG_VALUE, "DES_MPI_OVERLAP must be 0 or 1");
+        impl_->overlap_enabled = !option || std::string(option) == "1";
+    }
+    MPI_Bcast(&impl_->overlap_enabled, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+    impl_->local.mpi = this;
+    if (is_root())
+        std::cout << "[mpi] compact spatial partitions; ranks=" << impl_->size
+                  << "; neighbor halos; centralized mesh management\n";
 }
+
 MpiSimulation::~MpiSimulation() {
-    if(is_root()){Command c{};c.operation=int(MpiOp::Stop);MPI_Bcast(&c,sizeof(c),MPI_BYTE,0,MPI_COMM_WORLD);}
+    if (is_root()) {
+        Command stop{};
+        stop.operation = int(MpiOp::Stop);
+        MPI_Bcast(&stop, sizeof(stop), MPI_BYTE, 0, MPI_COMM_WORLD);
+    }
     MPI_Finalize();
 }
-bool MpiSimulation::is_root()const{return impl_->rank==0;}
-bool MpiSimulation::distributed()const{
-    if(!impl_->active)return false;
+
+bool MpiSimulation::is_root() const {
+    return impl_->rank == 0;
+}
+
+bool MpiSimulation::distributed() const {
+    if (!impl_->active) return false;
 #ifdef ACC
     return true; // A single GPU exercises the same compact backend without halos.
 #else
-    return impl_->size>1;
+    return impl_->size > 1;
 #endif
 }
-bool MpiSimulation::in_kernel()const{return impl_->inside && !management(impl_->current);}
-int MpiSimulation::owned_nodes()const{return impl_->part.owned_nodes;}
-int MpiSimulation::owned_elements()const{return impl_->part.owned_elements;}
-int MpiSimulation::global_nodes()const{return impl_->global_n;}
-double MpiSimulation::result()const{return impl_->scalar;}
-PTResult MpiSimulation::pt_result()const{return impl_->pt;}
-void MpiSimulation::attach(Variables& v){impl_->master=&v;impl_->active=true;synchronize(v);}
-void MpiSimulation::synchronize(Variables& v){dispatch(MpiOp::State,v);}
-bool MpiSimulation::dispatch(MpiOp op,const Variables& v,double arg) {
-    auto& m=*impl_;if(!distributed() || m.inside || m.master!=&v)return false;
+
+bool MpiSimulation::in_kernel() const {
+    return impl_->inside && !management(impl_->current);
+}
+
+int MpiSimulation::owned_nodes() const {
+    return impl_->part.owned_nodes;
+}
+
+int MpiSimulation::owned_elements() const {
+    return impl_->part.owned_elements;
+}
+
+int MpiSimulation::global_nodes() const {
+    return impl_->global_n;
+}
+
+double MpiSimulation::result() const {
+    return impl_->scalar;
+}
+
+PTResult MpiSimulation::pt_result() const {
+    return impl_->pt;
+}
+
+void MpiSimulation::attach(Variables& var) {
+    impl_->master = &var;
+    impl_->active = true;
+    synchronize(var);
+}
+
+void MpiSimulation::synchronize(Variables& var) {
+    dispatch(MpiOp::State, var);
+}
+
+bool MpiSimulation::dispatch(MpiOp op, const Variables& var, double arg) {
+    auto& impl = *impl_;
+    if (!distributed() || impl.inside || impl.master != &var) return false;
     // Keep marker maintenance and requested surface reports on root. Other
     // erosion-free steps use the existing compact mechanical correction.
-    if(op==MpiOp::Surface) {
-        const bool surface_report=NDIMS==2 && m.param.control.is_reporting_terrigenous_info &&
-            v.steps!=0 && v.steps%10000==0;
-        if(v.steps%m.param.mesh.quality_check_step_interval!=0 && !surface_report) {
-            bool idle=m.param.control.surface_process_option==0;
-            if(idle) {
-                std::fill(m.master->surfinfo.dh->begin(),m.master->surfinfo.dh->end(),0.0);
-                m.master->surfinfo.max_surf_vel=0;
-                op=MpiOp::SurfaceIdle;
+    if (op == MpiOp::Surface) {
+        const bool surface_report = NDIMS == 2 && impl.param.control.is_reporting_terrigenous_info &&
+            var.steps != 0 && var.steps % 10000 == 0;
+        if (var.steps % impl.param.mesh.quality_check_step_interval != 0 && !surface_report) {
+            bool idle = impl.param.control.surface_process_option == 0;
+            if (idle) {
+                std::fill(impl.master->surfinfo.dh->begin(), impl.master->surfinfo.dh->end(), 0.0);
+                impl.master->surfinfo.max_surf_vel = 0;
+                op = MpiOp::SurfaceIdle;
             }
         }
     }
-    Command c{};c.operation=int(op);c.steps=v.steps;c.time=v.time;c.dt=v.dt;c.max_vbc=v.max_vbc_val;
-    c.max_vel=v.max_global_vel_mag;c.global_dt=v.global_dt_min;c.surface_vel=v.surfinfo.max_surf_vel;c.argument=arg;
-    c.hydraulic=m.param.control.has_hydraulic_diffusion;c.body_adjustment=m.param.ic.has_body_force_adjustment;
-    MPI_Bcast(&c,sizeof(c),MPI_BYTE,0,MPI_COMM_WORLD);m.command(c);m.execute(op,arg);return true;
+    Command command{};
+    command.operation = int(op);
+    command.steps = var.steps;
+    command.time = var.time;
+    command.dt = var.dt;
+    command.max_vbc = var.max_vbc_val;
+    command.max_vel = var.max_global_vel_mag;
+    command.global_dt = var.global_dt_min;
+    command.surface_vel = var.surfinfo.max_surf_vel;
+    command.argument = arg;
+    command.hydraulic = impl.param.control.has_hydraulic_diffusion;
+    command.body_adjustment = impl.param.ic.has_body_force_adjustment;
+    MPI_Bcast(&command, sizeof(command), MPI_BYTE, 0, MPI_COMM_WORLD);
+    impl.command(command);
+    impl.execute(op, arg);
+    return true;
 }
-int MpiSimulation::worker_loop()try {
-    for(;;){Command c{};MPI_Bcast(&c,sizeof(c),MPI_BYTE,0,MPI_COMM_WORLD);if(MpiOp(c.operation)==MpiOp::Stop)return 0;
-        impl_->command(c);impl_->execute(MpiOp(c.operation),c.argument);}
-}catch(const std::bad_alloc&){die(EXIT_RUNTIME_RESOURCE,"MPI worker allocation failed");}
-catch(const std::exception& e){std::cerr<<e.what()<<'\n';die(EXIT_INTERNAL_UNREACHABLE,"MPI worker exception");}
-void MpiSimulation::exchange(MpiEntity e,std::initializer_list<std::pair<double*,int>> f){impl_->exchange(e,f);}
-void MpiSimulation::begin_exchange(MpiEntity e,std::initializer_list<std::pair<double*,int>> f){
-    impl_->begin_exchange(e,f);
-    if(!impl_->overlap_enabled)impl_->finish_exchange();else ++impl_->overlap_calls;
+
+int MpiSimulation::worker_loop() try {
+    for (;;) {
+        Command command{};
+        MPI_Bcast(&command, sizeof(command), MPI_BYTE, 0, MPI_COMM_WORLD);
+        if (MpiOp(command.operation) == MpiOp::Stop) return 0;
+        impl_->command(command);
+        impl_->execute(MpiOp(command.operation), command.argument);
+    }
 }
-void MpiSimulation::finish_exchange(){impl_->finish_exchange();}
-bool MpiSimulation::overlap()const{return impl_->overlap_enabled;}
-MpiNodeRows MpiSimulation::gather_rows(int pass)const {
-    const auto& rows=pass==0?impl_->part.interior_nodes:impl_->part.interface_nodes;
-    return {rows.data(),int(rows.size())};
+catch (const std::bad_alloc&) {
+    die(EXIT_RUNTIME_RESOURCE, "MPI worker allocation failed");
 }
-void MpiSimulation::collect(const Variables& v,bool a){dispatch(MpiOp::Collect,v,a?1:0);}
-void MpiSimulation::geometry(const Variables& v){dispatch(MpiOp::Geometry,v);}
-void MpiSimulation::boundary(const Variables& v){dispatch(MpiOp::Boundary,v);}
-void MpiSimulation::sample(const Variables& v,const int_vec& nodes,const int_vec& elements){impl_->queries_n=nodes;impl_->queries_e=elements;dispatch(MpiOp::Sample,v);}
-bool MpiSimulation::metrics(const Variables& v,double& s,double& p){if(!dispatch(MpiOp::Metrics,v))return false;s=impl_->measurements[0];p=impl_->measurements[1];return true;}
-void MpiSimulation::minimum(double* data,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,data,n,MPI_DOUBLE,MPI_MIN,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
-double MpiSimulation::maximum(double v){maximum(&v,1);return v;}
-double MpiSimulation::sum(double v){sum(&v,1);return v;}
-void MpiSimulation::sum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
-void MpiSimulation::maximum(double* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
-int MpiSimulation::sum(int v){int r;double t=MPI_Wtime();MPI_Allreduce(&v,&r,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;return r;}
-void MpiSimulation::maximum(int* v,int n){double t=MPI_Wtime();MPI_Allreduce(MPI_IN_PLACE,v,n,MPI_INT,MPI_MAX,MPI_COMM_WORLD);impl_->communication_s+=MPI_Wtime()-t;}
+catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    die(EXIT_INTERNAL_UNREACHABLE, "MPI worker exception");
+}
+
+void MpiSimulation::exchange(MpiEntity entity, std::initializer_list<std::pair<double*,int>> arrays) {
+    impl_->exchange(entity, arrays);
+}
+
+void MpiSimulation::begin_exchange(MpiEntity entity, std::initializer_list<std::pair<double*,int>> arrays) {
+    impl_->begin_exchange(entity, arrays);
+    if (!impl_->overlap_enabled) impl_->finish_exchange();
+    else ++impl_->overlap_calls;
+}
+
+void MpiSimulation::finish_exchange() {
+    impl_->finish_exchange();
+}
+
+bool MpiSimulation::overlap() const {
+    return impl_->overlap_enabled;
+}
+
+MpiNodeRows MpiSimulation::gather_rows(int pass) const {
+    const auto& rows = pass == 0 ? impl_->part.interior_nodes : impl_->part.interface_nodes;
+    return {rows.data(), int(rows.size())};
+}
+
+void MpiSimulation::collect(const Variables& var, bool averages) {
+    dispatch(MpiOp::Collect, var, averages ? 1 : 0);
+}
+
+void MpiSimulation::geometry(const Variables& var) {
+    dispatch(MpiOp::Geometry, var);
+}
+
+void MpiSimulation::boundary(const Variables& var) {
+    dispatch(MpiOp::Boundary, var);
+}
+
+void MpiSimulation::sample(const Variables& var, const int_vec& nodes, const int_vec& elements) {
+    impl_->queries_n = nodes;
+    impl_->queries_e = elements;
+    dispatch(MpiOp::Sample, var);
+}
+
+bool MpiSimulation::metrics(const Variables& var, double& speed, double& plastic_rate) {
+    if (!dispatch(MpiOp::Metrics, var)) return false;
+    speed = impl_->measurements[0];
+    plastic_rate = impl_->measurements[1];
+    return true;
+}
+
+void MpiSimulation::minimum(double* data, int count) {
+    double start = MPI_Wtime();
+    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    impl_->communication_s += MPI_Wtime() - start;
+}
+
+double MpiSimulation::maximum(double value) {
+    maximum(&value, 1);
+    return value;
+}
+
+double MpiSimulation::sum(double value) {
+    sum(&value, 1);
+    return value;
+}
+
+void MpiSimulation::sum(double* data, int count) {
+    double start = MPI_Wtime();
+    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    impl_->communication_s += MPI_Wtime() - start;
+}
+
+void MpiSimulation::maximum(double* data, int count) {
+    double start = MPI_Wtime();
+    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    impl_->communication_s += MPI_Wtime() - start;
+}
+
+int MpiSimulation::sum(int value) {
+    int total;
+    double start = MPI_Wtime();
+    MPI_Allreduce(&value, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    impl_->communication_s += MPI_Wtime() - start;
+    return total;
+}
+
+void MpiSimulation::maximum(int* data, int count) {
+    double start = MPI_Wtime();
+    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    impl_->communication_s += MPI_Wtime() - start;
+}
+
 void MpiSimulation::report() {
-    if(impl_->master) dispatch(MpiOp::Report,*impl_->master);
-    const auto& m=*impl_;std::cout<<std::fixed<<std::setprecision(9);
-    for(int i=0;i<int(MpiOp::Count);++i)if(m.calls[i])std::cout<<"[mpi][kernel] name="<<op_name(MpiOp(i))<<" calls="<<m.calls[i]<<" seconds="<<m.elapsed[i]<<'\n';
-    std::cout<<"[mpi][communication] seconds="<<m.communication_s<<" halo_sent_bytes="<<m.all_payload_bytes
-             <<" root_collection_bytes="<<m.root_bytes<<" state_bytes="<<m.state_bytes<<'\n';
-    const int stride=3*int(MpiOp::Count)+3;
-    for(int r=0;r<m.size && !m.rank_profile.empty();++r) {
-        const double* p=m.rank_profile.data()+r*stride;
-        for(int i=0;i<int(MpiOp::Count);++i)if(p[3*i])
-            std::cout<<"[mpi][rank-profile] rank="<<r<<" operation="<<op_name(MpiOp(i))<<" calls="<<p[3*i]
-                     <<" elapsed_s="<<p[3*i+1]<<" communication_s="<<p[3*i+2]
-                     <<" outside_communication_s="<<std::max(0.0,p[3*i+1]-p[3*i+2])<<'\n';
-        std::cout<<"[mpi][overlap] rank="<<r<<" calls="<<p[stride-1]<<" wait_s="<<p[stride-3]
-                 <<" work_window_s="<<p[stride-2]<<'\n';
+    if (impl_->master) dispatch(MpiOp::Report, *impl_->master);
+    const auto& impl = *impl_;
+    std::cout << std::fixed << std::setprecision(9);
+    for (int i=0; i<int(MpiOp::Count); ++i) {
+        if (impl.calls[i])
+            std::cout << "[mpi][kernel] name=" << op_name(MpiOp(i)) << " calls=" << impl.calls[i]
+                      << " seconds=" << impl.elapsed[i] << '\n';
+    }
+    std::cout << "[mpi][communication] seconds=" << impl.communication_s << " halo_sent_bytes=" << impl.all_payload_bytes
+              << " root_collection_bytes=" << impl.root_bytes << " state_bytes=" << impl.state_bytes << '\n';
+    const int stride = 3*int(MpiOp::Count)+3;
+    for (int r=0; r<impl.size && !impl.rank_profile.empty(); ++r) {
+        const double* profile = impl.rank_profile.data() + r*stride;
+        for (int i=0; i<int(MpiOp::Count); ++i) {
+            if (profile[3*i])
+                std::cout << "[mpi][rank-profile] rank=" << r << " operation=" << op_name(MpiOp(i))
+                          << " calls=" << profile[3*i]
+                          << " elapsed_s=" << profile[3*i+1] << " communication_s=" << profile[3*i+2]
+                          << " outside_communication_s=" << std::max(0.0, profile[3*i+1] - profile[3*i+2]) << '\n';
+        }
+        std::cout << "[mpi][overlap] rank=" << r << " calls=" << profile[stride-1] << " wait_s=" << profile[stride-3]
+                  << " work_window_s=" << profile[stride-2] << '\n';
     }
 }
 #endif
