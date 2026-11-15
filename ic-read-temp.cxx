@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -65,9 +66,23 @@ void read_external_temperature_from_comsol(const Param &param,
             nzs.push_back(z);
 
             /* Assign temperature to the nodes according to the order in node-coord profile.*/
+            int nmatch = 0;
             for (size_t j=0; j<xs.size();++j) {
-                if (abs(nxs[ni]-xs[j])<0.001 && abs(nys[ni]-ys[j])<0.001 && abs(nzs[ni]-zs[j])<0.001)
+                if (std::abs(nxs[ni]-xs[j])<0.001 && std::abs(nys[ni]-ys[j])<0.001 && std::abs(nzs[ni]-zs[j])<0.001) {
                     nTs.push_back(Ts[j]);
+                    ++nmatch;
+                }
+            }
+            // Below, nTs[n] is the temperature of node n: one match per node keeps the two aligned.
+            if (nmatch != 1) {
+                std::cerr << "Error: node " << ni << " (" << nxs[ni] << ", " << nys[ni]
+#ifdef THREED
+                          << ", " << nzs[ni]
+#endif
+                          << ") of '" << param.ic.Nodes_filename << "' matches " << nmatch
+                          << " temperatures in '" << param.ic.Temp_filename
+                          << "' within 1 mm; it needs exactly 1.\n";
+                die(EXIT_CONFIG_DATA);
             }
             ++ni;
         }

@@ -271,6 +271,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Terrigenous deposition (`control.surface_process_option = 102`) no longer reads
   past its arrays when a basin stays open to the right edge of the model, and no
   longer leaks a few bytes at every step that finds no basin ([#138]).
+- `ic.temperature_option = 90` stops with a message naming the node when a node of
+  `ic.Nodes_filename` has no temperature, or more than one, in `ic.Temp_filename`
+  (within 1 mm). It used to read past its list or shift the temperatures of every
+  later node ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
