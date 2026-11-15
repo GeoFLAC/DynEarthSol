@@ -100,8 +100,13 @@ static void declare_parameters(opt::Registry &cfg,
          "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
         ("monitor.points_unit", opt::value<std::string>(&p.monitor.points_unit)->default_value("m"),
          "Unit of monitor.points_x/z in 2D, or monitor.points_x/y/z in 3D: mm, cm, m, km.")
-        ("monitor.remesh_rebind_mode", opt::value<std::string>()->default_value("pre_remesh_coord"),
-         "Rebind mode after remesh: initial_coord or pre_remesh_coord.")
+        ("monitor.point_type", opt::value<std::string>()->default_value("particle"),
+         "Each point follows the material through deformation, remeshing and restart. particle: values "
+         "interpolated at the point; grid: values of the node and element nearest it.")
+        ("monitor.remesh_output", opt::value<std::string>()->default_value("before"),
+         "Rows at a remesh, marked in the last CSV column, row. before: the state before each remesh "
+         "(row 1) unless that step already has a regular row (row 0); both: also the remapped state "
+         "after it (row 2).")
         ("monitor.output_prefix", opt::value<std::string>(&p.monitor.output_prefix)->default_value("monitor"),
          "Prefix of monitoring output files.")
         ("monitor.write_header", opt::value<bool>(&p.monitor.write_header)->default_value(true),
@@ -1597,14 +1602,21 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
 #endif
         }
 
-        const std::string rebind_mode = vm.str("monitor.remesh_rebind_mode");
-        if (rebind_mode == "initial_coord")
-            p.monitor.remesh_rebind_mode = monitor_rebind_initial_coord;
-        else if (rebind_mode == "pre_remesh_coord")
-            p.monitor.remesh_rebind_mode = monitor_rebind_pre_remesh_coord;
-        else {
-            die(EXIT_CONFIG_VALUE, "monitor.remesh_rebind_mode must be initial_coord or pre_remesh_coord.");
-        }
+        const std::string point_type = vm.str("monitor.point_type");
+        if (point_type == "particle")
+            p.monitor.point_type = monitor_point_particle;
+        else if (point_type == "grid")
+            p.monitor.point_type = monitor_point_grid;
+        else
+            die(EXIT_CONFIG_VALUE, "monitor.point_type must be particle or grid.");
+
+        const std::string remesh_output = vm.str("monitor.remesh_output");
+        if (remesh_output == "before")
+            p.monitor.remesh_output = monitor_remesh_before;
+        else if (remesh_output == "both")
+            p.monitor.remesh_output = monitor_remesh_both;
+        else
+            die(EXIT_CONFIG_VALUE, "monitor.remesh_output must be before or both.");
 
         const bool any_monitor_output =
             p.monitor.output_coord ||
