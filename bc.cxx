@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1539,11 +1540,9 @@ namespace {
         return;
     }
 
-    int* find_basin(const double_vec& depth_tmp,const int ntop, const int option) {
+    std::array<int,2> find_basin(const double_vec& depth_tmp,const int ntop, const int option) {
 
-        int *basin = new int[2];
-        basin[0] = -1;
-        basin[1] = -1;
+        std::array<int,2> basin = {-1, -1};
 
         double boundary[ntop-1];
         for (int i=0;i<(ntop-1);i++)
@@ -1555,7 +1554,8 @@ namespace {
             for (int i=0;i<(ntop-1);i++) {
                 if (boundary[i] <= 0. && depth_tmp[i] < 0.) {
                     basin[0] = i+1;
-                    for (int j=i+1;j<ntop;j++) {
+                    // boundary[j] pairs nodes j and j+1, so j stops one node short of the last
+                    for (int j=i+1;j<ntop-1;j++) {
                         if (boundary[j] <= 0. && depth_tmp[j+1] < 0.) {
                             basin[1] = j;
                             flag = true;
@@ -1681,7 +1681,7 @@ namespace {
                 for (int j=0;j<ntop;j++)
                     depth_tmp[j] = top_depth[j] - dh_tmp[j];
 
-                int *basin = find_basin(depth_tmp,ntop,iside);
+                const std::array<int,2> basin = find_basin(depth_tmp,ntop,iside);
 
                 // check if basin exist
                 if (basin[0] == -1 || basin[1] == -1) {
@@ -1730,8 +1730,6 @@ namespace {
 
                 for (int j=0; j<nbasin; j++)
                     dh_tmp[basin[0]+j] += dh_basin[j];
-
-                delete [] basin;
             } while (itry < iter);
             if (itry == 0) break;
         }
