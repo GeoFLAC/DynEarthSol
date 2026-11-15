@@ -119,7 +119,8 @@ BinaryOutput::BinaryOutput(const char *filename, const bool rename_if_exists)
     }
 
     header = new char[headerlen]();
-    hd_pos = std::strcat(header, revision_str.c_str());
+    std::strcat(header, revision_str.c_str());
+    hd_pos = header + std::strlen(header);  // the end of the text, where write_header appends
     eof_pos = headerlen;
 
     std::fseek(f, eof_pos, SEEK_SET);
@@ -163,7 +164,8 @@ void BinaryOutput::write_header(const char *name)
                   << " eof_position=" << eof_pos << '\n';
         die(EXIT_INTERNAL_ASSERT);
     }
-    hd_pos = std::strncat(hd_pos, buffer, len);
+    std::memcpy(hd_pos, buffer, len);
+    hd_pos += len;
 }
 
 template <typename T>
