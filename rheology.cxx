@@ -7,6 +7,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "geometry.hpp"
 #include "matprops.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
@@ -848,12 +849,19 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         param.control.rsf_slip_rate_projection_option ==
             rsf_slip_rate_projection_maximum_shear;
 
+    // From this call's strain_rate, so every caller of update_stress gets it fresh.
+    // ntmp and etmp are free here: compute_edvoldt() has consumed ntmp, and
+    // NMD_stress() overwrites both afterwards.
+    const bool mixed_visc = param.control.is_using_mixed_visc_strain_rate;
+    if (mixed_visc)
+        compute_visc_edot(var, *var.ntmp, *var.etmp, *var.visc_edot);
+
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity)
+                     needs_projected_velocity, mixed_visc)
 #endif
     #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
@@ -978,7 +986,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         case MatProps::rh_viscous:
             {
                 double bulkm = var.mat->bulkm(e);
-                viscosity[e] = var.mat->visc(e);
+                viscosity[e] = mixed_visc ? var.mat->visc(e, (*var.visc_edot)[e]) : var.mat->visc(e);
                 double total_dv = trace(es);
                 double pressure = 0;
                 if (trial_reference_geometry && has_hydraulic_diffusion) {
@@ -994,7 +1002,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             {
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                viscosity[e] = var.mat->visc(e);
+                viscosity[e] = mixed_visc ? var.mat->visc(e, (*var.visc_edot)[e]) : var.mat->visc(e);
                 double dv = trial_reference_geometry ? trace(edot)*var.dt
                     : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, s,
@@ -1030,7 +1038,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double depls = 0;
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                viscosity[e] = var.mat->visc(e);
+                viscosity[e] = mixed_visc ? var.mat->visc(e, (*var.visc_edot)[e]) : var.mat->visc(e);
                 double dv = trial_reference_geometry ? trace(edot)*var.dt
                     : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology
@@ -1123,7 +1131,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double depls = 0;
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                viscosity[e] = var.mat->visc(e);
+                viscosity[e] = mixed_visc ? var.mat->visc(e, (*var.visc_edot)[e]) : var.mat->visc(e);
                 double dv = trial_reference_geometry ? trace(edot)*var.dt
                     : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 // stress due to maxwell rheology

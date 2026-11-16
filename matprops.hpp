@@ -23,6 +23,8 @@ public:
     double shearm(int e) const;
     #pragma acc routine seq
     double visc(int e) const;
+    #pragma acc routine seq
+    double visc(int e, double edot) const;  // edot: the strain-rate invariant to use
 
     #pragma acc routine seq
     double rho(int e) const;

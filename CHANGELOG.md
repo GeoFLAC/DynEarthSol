@@ -21,6 +21,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   removes the strain-rate noise that slipping faults radiate in quasi-static
   runs; its parameters are derived from the model unless set.
 
+- Optional neighbour-averaged strain rate for the creep law
+  (`control.is_using_mixed_visc_strain_rate`, default off) keeps a power-law
+  viscosity from freezing element-to-element strain-rate roughness; the stress
+  update still uses each element's own strain rate.
+
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.

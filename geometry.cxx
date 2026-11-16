@@ -332,6 +332,39 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 }
 
 
+void compute_visc_edot(const Variables &var, double_vec &nd, double_vec &etmp,
+                       double_vec &visc_edot)
+{
+    // visc_edot is the strain-rate invariant of each element averaged over its
+    // neighbours, by the round trip of compute_dvoldt() and compute_edvoldt():
+    // volume-weighted onto the nodes, then the mean of the element's nodes.
+    // It must be recomputed from the current strain_rate before update_stress()
+    // reads it; nd and etmp are scratch.
+    #pragma omp parallel for default(none) shared(var, etmp)
+    for (int e=0; e<var.nelem; e++)
+        etmp[e] = second_invariant((*var.strain_rate)[e]) * (*var.volume)[e];
+
+    #pragma omp parallel for default(none) shared(var, nd, etmp)
+    for (int n=0; n<var.nnode; n++) {
+        const int npatch = var.support.size(n);
+        const int* patch = var.support.patch(n);
+        double acc = 0.;
+        for (int i=0; i<npatch; ++i)
+            acc += etmp[patch[i]];
+        nd[n] = acc / (*var.volume_n)[n];
+    }
+
+    #pragma omp parallel for default(none) shared(var, nd, visc_edot)
+    for (int e=0; e<var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double acc = 0;
+        for (int i=0; i<NODES_PER_ELEM; ++i)
+            acc += nd[conn[i]];
+        visc_edot[e] = acc / NODES_PER_ELEM;
+    }
+}
+
+
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp, double_vec* stressyy)
 {
 #ifdef NPROF

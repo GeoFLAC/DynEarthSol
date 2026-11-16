@@ -339,6 +339,12 @@ double MatProps::shearm(int e) const
 
 double MatProps::visc(int e) const
 {
+    return visc(e, second_invariant(strain_rate[e]));
+}
+
+
+double MatProps::visc(int e, double edot) const
+{
     const double min_strain_rate = 1e-30;
 
     // average temperature of this element
@@ -353,8 +359,6 @@ double MatProps::visc(int e) const
     ConstTensorAccessor s = stress[e];
     double s0 = trace(s) / NDIMS;
 
-    // strain-rate
-    double edot = second_invariant(strain_rate[e]);
     // min strain rate to prevent viscosity -> inf
     edot = std::max(edot, min_strain_rate);
 

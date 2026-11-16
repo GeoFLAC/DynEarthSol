@@ -527,6 +527,14 @@ static void declare_parameters(opt::Registry &cfg,
          "Any other value is rejected at startup.\n")
         ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
+        ("control.is_using_mixed_visc_strain_rate", opt::value<bool>(&p.control.is_using_mixed_visc_strain_rate)->default_value(false),
+         "Evaluate the creep-law viscosity from the strain-rate invariant averaged over the\n"
+         "neighbouring elements, by the nodal round trip of the mixed discretization (volume-\n"
+         "weighted onto the nodes, then the mean of the element's nodes), instead of from the\n"
+         "element's own strain rate. The averaging spans about two elements, so it vanishes\n"
+         "as the mesh is refined. On linear elements a power-law creep amplifies the element-\n"
+         "to-element strain-rate roughness and freezes it into the viscosity; this damps that.\n"
+         "The stress update still uses each element's own strain rate.\n")
 
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
@@ -1772,6 +1780,11 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                     "the pseudo-transient iterations exclude artificial damping.");
             }
         }
+#ifdef ACC
+        if ( p.control.is_using_mixed_visc_strain_rate ) {
+            die(EXIT_CONFIG_VALUE, "control.is_using_mixed_visc_strain_rate is not implemented for GPU builds.");
+        }
+#endif
         // ref_pressure() is 'acc routine seq' and cannot reject an option itself; it
         // returns 0. Keep this range in step with its branches and the help above.
         if (p.control.ref_pressure_option < 0 || p.control.ref_pressure_option > 2) {

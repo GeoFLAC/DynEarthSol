@@ -21,6 +21,7 @@ void allocate_variables(const Param &param, Variables& var)
     var.hmass = new double_vec(n);
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
+    var.visc_edot = new double_vec(e);
 
     var.old_mean_stress = new double_vec(e, 0);
 
@@ -119,6 +120,8 @@ void reallocate_variables(const Param& param, Variables& var)
   
     delete var.edvoldt;
     var.edvoldt = new double_vec(e);
+    delete var.visc_edot;
+    var.visc_edot = new double_vec(e);
 
 
     delete var.dpressure;

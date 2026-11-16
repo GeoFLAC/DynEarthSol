@@ -233,6 +233,7 @@ struct Control {
     double highpass_damping_time;
     int ref_pressure_option;
     bool is_using_mixed_stress;
+    bool is_using_mixed_visc_strain_rate;
 
     int surface_process_option;
     double surface_diffusivity;
@@ -916,6 +917,7 @@ struct Variables {
     double_vec *hmass;
     double_vec *ymass; // Young's modulus for nodes
     double_vec *edvoldt;
+    double_vec *visc_edot;  // strain-rate invariant read by the creep law (control.is_using_mixed_visc_strain_rate)
     double_vec *temperature, *plstrain, *delta_plstrain;
     // R2 baseline (mark_quiet_required): plstrain minus its growth since the last remesh, so a
     // fossil band stays frozen. Includes the prescribed weak zone (init, restart re-seed).
