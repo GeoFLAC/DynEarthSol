@@ -17,7 +17,7 @@ OMP_NUM_THREADS=1 mpiexec -n 4 ../dynearthsol2d.mpi test-tiny.cfg
 ```
 
 `MPI_CXX=/path/to/mpicxx` selects the wrapper. Configuration parsing uses
-the vendored CLI11 header; Boost is no longer required. Existing cfg files
+the vendored CLI11 header, so Boost is not needed. Existing cfg files
 apply without new simulation parameters. One CPU rank uses the ordinary
 full-range kernels. A one-rank GPU run uses the same compact
 backend as multi-GPU runs. NVHPC profiling cannot currently be combined with
@@ -182,8 +182,8 @@ element summation order is unchanged. Overlap is enabled by default.
 `DES_MPI_OVERLAP=0` uses a blocking exchange
 and one owned-node pass. Other exchanges still complete before dependent work.
 MPI progress during computation depends on the MPI implementation; posting a
-transfer does not by itself prove simultaneous data movement. Full-field
-`MPI_Allgatherv` is no longer used on each regular timestep operation.
+transfer does not by itself prove simultaneous data movement. Regular
+timesteps do not gather full fields with `MPI_Allgatherv`.
 
 ## Inspecting actual partitions
 

@@ -227,8 +227,8 @@ def main():
                 cfg["mat"]["hydraulic_perm"]="[1e-20]"
             if name=="pt-hydraulic":
                 # The physical-step solver must converge, including its
-                # initial equilibrium; a four-iteration legacy smoke case
-                # no longer exercises a valid PT solve.
+                # initial equilibrium, so the case starts from the
+                # hydrostatic-equilibrium cfg.
                 cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
                 cfg.optionxform = str
                 cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
