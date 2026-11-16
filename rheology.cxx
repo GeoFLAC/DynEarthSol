@@ -1389,8 +1389,7 @@ static void elasto_plastic2d(double bulkm, double shearm,
     }
 
     // A shear face or edge return that finishes below the tensile cap is the
-    // closed form of the uncut-trial return. Tension (the former geoFLAC
-    // clipping, which recorded no plastic strain) always goes to
+    // closed form of the uncut-trial return. Tension always goes to
     // consistent_return, with associated flow on the cap and its plastic
     // strain in history, as in 3D.
     StrengthCurve curve = start_curve(law);
