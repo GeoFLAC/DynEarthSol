@@ -657,41 +657,85 @@ struct StrengthLaw {
     double slip_rate, state_variable, dyn_fric_coeff;   // rsf only
     int state_model;
     bool frozen_history;
+    const MatProps::StrengthPiece* piece;   // the piece at pls, if already prepared
 };
 
 struct Strength {
     double amc, anphi, anpsi, ten_max;
 };
 
+// The strength law along this step's plastic increment delta, one linear
+// piece of the weakening law at a time: each piece is prepared once and
+// reused for every trial increment on it. The law declares through the piece
+// which strength parameters change with delta; the returns below never ask
+// which material or friction law produced it.
+struct StrengthCurve {
+    const StrengthLaw& law;
+    MatProps::StrengthPiece piece;
+    double from;   // increment at which the piece starts
+};
+
 #pragma acc routine seq
-static Strength strength_at(const StrengthLaw& law, double delta)
+static void prepare_piece(StrengthCurve& curve, double from)
 {
-    Strength r = {law.amc, law.anphi, law.anpsi, law.ten_max};
-    if (delta == 0) return r;
-    double hardn;
+    const StrengthLaw& law = curve.law;
     if (law.rsf)
-        law.mat->rsf_strength(law.e, law.pls+delta, law.slip_rate, law.state_variable,
-                              law.dyn_fric_coeff, law.state_model, law.frozen_history,
-                              r.amc, r.anphi, r.anpsi, hardn, r.ten_max);
+        law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate, law.state_variable,
+                                    law.dyn_fric_coeff, law.state_model, law.frozen_history,
+                                    curve.piece);
     else
-        law.mat->plastic_props(law.e, law.pls+delta, r.amc, r.anphi, r.anpsi, hardn, r.ten_max);
+        law.mat->strength_piece(law.e, law.pls+from, curve.piece);
+    curve.from = from;
+}
+
+// The curve at delta = 0, from the piece the caller prepared if there is one.
+#pragma acc routine seq
+static StrengthCurve start_curve(const StrengthLaw& law)
+{
+    StrengthCurve curve = {law, {}, 0};
+    if (law.piece) {
+        curve.piece = *law.piece;
+        law.mat->complete_piece(law.e, curve.piece);
+    }
+    else prepare_piece(curve, 0);
+    return curve;
+}
+
+// Strength after a plastic increment delta on the prepared piece; at delta =
+// 0 it equals plastic_props at pls.
+#pragma acc routine seq
+static Strength strength_at(const StrengthCurve& curve, double delta)
+{
+    Strength r;
+    curve.law.mat->piece_strength(curve.piece, delta - curve.from,
+                                  r.amc, r.anphi, r.anpsi, r.ten_max);
     return r;
 }
 
 static constexpr double no_break = std::numeric_limits<double>::max();
 
-// Plastic increment at which the law's linear piece containing delta ends.
-// Rounded up so that pls + increment reaches the breakpoint: next-pls alone
-// can land one ulp short, and the next piece would then start on this one.
+// Plastic increment at which the prepared piece ends. Rounded up so that pls
+// + increment reaches the breakpoint: next-pls alone can land one ulp short,
+// and the next piece would then start on this one.
 #pragma acc routine seq
-static double next_break(const StrengthLaw& law, double delta)
+static double next_break(const StrengthCurve& curve)
 {
-    const double next = law.mat->next_weakening_break(law.e, law.pls+delta);
+    const double next = curve.piece.end;
     if (next == no_break) return no_break;
-    double increment = next - law.pls;
-    while (law.pls + increment < next)
+    const double pls = curve.law.pls;
+    double increment = next - pls;
+    while (pls + increment < next)
         increment += std::numeric_limits<double>::epsilon()*next;
     return increment;
+}
+
+// The closed-form returns hold friction and dilation fixed, so they apply
+// only where neither changes along the piece. Elsewhere their result is the
+// starting guess of consistent_return.
+#pragma acc routine seq
+static bool closed_form_applies(const StrengthCurve& curve)
+{
+    return !curve.piece.angles_change();
 }
 
 // The closed-form returns use the law's linear piece at pls: a fixed cohesion
@@ -699,12 +743,13 @@ static double next_break(const StrengthLaw& law, double delta)
 // while the increment stays on that piece and the cap of the stored history
 // still bounds it, or still holds it when it was returned to the cap.
 #pragma acc routine seq
-static bool closed_form_consistent(const StrengthLaw& law, const double p[3], double depls,
+static bool closed_form_consistent(const StrengthCurve& curve, const double p[3], double depls,
                                    int nd = 3)
 {
     if (depls == 0) return true;
-    if (!(depls <= next_break(law, 0))) return false;
-    const Strength end = strength_at(law, depls);
+    if (!(depls <= next_break(curve))) return false;
+    const StrengthLaw& law = curve.law;
+    const Strength end = strength_at(curve, depls);
     const double tolerance = return_tolerance(p, end.amc, nd);
     const double top = p[nd-1];
     const bool on_cap = top >= law.ten_max - tolerance;
@@ -779,22 +824,25 @@ static bool solve_small(int n, double m[3][3], double b[3], double x[3])
 // and whose stress keeps the trial order and satisfies every surface. This
 // covers faces, edges, the tensile cap, its edge and apex, and their corners
 // (in pure 2D, nd = 2: the face, the cap, and the face-cap and cap-cap corners).
+// nd is a template argument so that the loops over principal stresses and
+// surfaces unroll; fixed_strength_return below dispatches on it.
 #pragma acc routine seq
-static bool fixed_strength_return(const double trial[3], double a1, double a2,
-                                  const Strength& r, bool plane_strain, int nd,
-                                  double p[3], double& depls)
+template <int ND>
+static bool fixed_strength_return_nd(const double trial[3], double a1, double a2,
+                                     const Strength& r, bool plane_strain,
+                                     double p[3], double& depls)
 {
     double grad[6][3], flow[6][3], response[6][3], offset[6], violation[6];
-    const int surfaces = return_surface_count(nd);
-    const double tolerance = return_tolerance(trial, r.amc, nd);
+    const int surfaces = return_surface_count(ND);
+    const double tolerance = return_tolerance(trial, r.amc, ND);
     bool admissible = true;
     for (int s = 0; s < surfaces; ++s) {
-        offset[s] = return_surface(s, r, nd, grad[s], flow[s]);
+        offset[s] = return_surface(s, r, ND, grad[s], flow[s]);
         double volume = 0;
-        for (int k = 0; k < nd; ++k) volume += flow[s][k];
+        for (int k = 0; k < ND; ++k) volume += flow[s][k];
         violation[s] = -offset[s];
         for (int k = 0; k < 3; ++k) response[s][k] = 0;
-        for (int k = 0; k < nd; ++k) {
+        for (int k = 0; k < ND; ++k) {
             response[s][k] = a2*volume + (a1-a2)*flow[s][k];
             violation[s] += grad[s][k]*trial[k];
         }
@@ -805,7 +853,7 @@ static bool fixed_strength_return(const double trial[3], double a1, double a2,
         depls = 0;
         return true;
     }
-    for (int size = 1; size <= nd; ++size)
+    for (int size = 1; size <= ND; ++size)
         for (int mask = 1; mask < (1 << surfaces); ++mask) {
             int active[3], n = 0;
             for (int s = 0; s < surfaces && n <= 3; ++s)
@@ -819,7 +867,7 @@ static bool fixed_strength_return(const double trial[3], double a1, double a2,
                 b[i] = violation[active[i]];
                 for (int j = 0; j < n; ++j) {
                     m[i][j] = 0;
-                    for (int k = 0; k < nd; ++k) m[i][j] += grad[active[i]][k]*response[active[j]][k];
+                    for (int k = 0; k < ND; ++k) m[i][j] += grad[active[i]][k]*response[active[j]][k];
                 }
             }
             if (!solve_small(n, m, b, x)) continue;
@@ -837,10 +885,10 @@ static bool fixed_strength_return(const double trial[3], double a1, double a2,
                     plastic[k] += x[i]*flow[active[i]][k];
                 }
             }
-            for (int k = 0; k+1 < nd; ++k) ok = ok && candidate[k] <= candidate[k+1]+tolerance;
+            for (int k = 0; k+1 < ND; ++k) ok = ok && candidate[k] <= candidate[k+1]+tolerance;
             for (int s = 0; s < surfaces; ++s) {
                 double f = -offset[s];
-                for (int k = 0; k < nd; ++k) f += grad[s][k]*candidate[k];
+                for (int k = 0; k < ND; ++k) f += grad[s][k]*candidate[k];
                 ok = ok && f <= tolerance;
             }
             if (!ok) continue;
@@ -851,69 +899,153 @@ static bool fixed_strength_return(const double trial[3], double a1, double a2,
     return false;
 }
 
+#pragma acc routine seq
+static bool fixed_strength_return(const double trial[3], double a1, double a2,
+                                  const Strength& r, bool plane_strain, int nd,
+                                  double p[3], double& depls)
+{
+    return nd == 3 ? fixed_strength_return_nd<3>(trial, a1, a2, r, plane_strain, p, depls)
+                   : fixed_strength_return_nd<2>(trial, a1, a2, r, plane_strain, p, depls);
+}
+
+// A fixed-strength return at plastic increment delta and its residual
+// g = recorded - delta.
+struct ReturnPoint {
+    double delta, g, recorded, p[3];
+};
+
+#pragma acc routine seq
+static bool evaluate_return(const double trial[3], double a1, double a2,
+                            const StrengthCurve& curve, bool plane_strain, int nd,
+                            double delta, ReturnPoint& r)
+{
+    r.delta = delta;
+    if (!fixed_strength_return(trial, a1, a2, strength_at(curve, delta), plane_strain, nd,
+                               r.p, r.recorded))
+        return false;
+    r.g = r.recorded - delta;
+    return true;
+}
+
+#pragma acc routine seq
+static int accept_return(const ReturnPoint& r, double p[3], double& depls)
+{
+    for (int k = 0; k < 3; ++k) p[k] = r.p[k];
+    depls = r.recorded;
+    return 0;
+}
+
+// Converged once g is below the relative 1e-12 of the yield checks
+// (return_tolerance): the strength then misses the recorded increment by far
+// less than those checks resolve.
+#pragma acc routine seq
+static bool root_found(const ReturnPoint& r)
+{
+    return std::fabs(r.g) <= 1e-12*std::max(r.delta, r.recorded);
+}
+
 // Backward-Euler return for the whole strength law: the plastic increment
 // delta whose fixed-strength return at strength(pls+delta) records delta.
-// g(delta) = recorded - delta is continuous with g(0) >= 0. The law's linear
-// pieces are searched in order; where it stays constant the root is exact.
+// g(delta) = recorded - delta is continuous, and g(0) > 0 when the trial
+// yields. The law's linear pieces are searched in order; where it stays
+// constant the root is exact.
+//
+// On each piece, secant steps come first: the strength changes little within
+// one step, so g is nearly linear and they usually converge in a few
+// evaluations. On the first piece they start from guess, the closed-form
+// increment with friction and dilation held fixed, when it lies on that
+// piece; g(0) is then evaluated only if needed. A root the secant steps do
+// not reach is bracketed and found by Illinois regula falsi.
 #pragma acc routine seq
 static int consistent_return(const double trial[3], double a1, double a2,
-                             const StrengthLaw& law, bool plane_strain, int nd,
-                             double p[3], double& depls)
+                             StrengthCurve& curve, bool plane_strain, int nd,
+                             double guess, double p[3], double& depls)
 {
     if (!finite3(trial)) return reject_nonfinite;
-    double lo = 0, glo, recorded, candidate[3];
-    if (!fixed_strength_return(trial, a1, a2, strength_at(law, 0), plane_strain, nd,
-                               candidate, recorded))
-        return reject_no_return;
-    glo = recorded;
-    for (int piece = 0; piece < 128; ++piece) {
-        const double hi = next_break(law, lo);
-        if (!(glo > 0) || hi == no_break) {
-            // Root at lo, or a constant strength beyond lo: recorded(lo) is the root.
-            for (int k = 0; k < 3; ++k) p[k] = candidate[k];
-            depls = recorded;
-            return 0;
-        }
-        double hi_candidate[3], hi_recorded;
-        if (!fixed_strength_return(trial, a1, a2, strength_at(law, hi), plane_strain, nd,
-                                   hi_candidate, hi_recorded))
+    ReturnPoint lo;           // the largest increment known to have g > 0
+    bool have_lo = false;
+    double hi = next_break(curve);
+    bool from_guess = guess > 0 && hi != no_break && guess < hi;
+    if (!from_guess) {
+        if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, lo))
             return reject_no_return;
-        const double ghi = hi_recorded - hi;
-        if (ghi > 0) {
-            lo = hi;
-            glo = ghi;
-            recorded = hi_recorded;
-            for (int k = 0; k < 3; ++k) candidate[k] = hi_candidate[k];
-            continue;
-        }
-        // Illinois regula falsi on [lo, hi], g(lo) > 0 >= g(hi).
-        double a = lo, ga = glo, b = hi, gb = ghi;
-        for (int k = 0; k < 3; ++k) p[k] = hi_candidate[k];
-        depls = hi_recorded;
-        int side = 0;
-        for (int it = 0; it < 200 && gb != 0; ++it) {
-            double x = (a*gb - b*ga)/(gb - ga);
-            if (!(x > a && x < b)) x = 0.5*(a+b);
-            double x_candidate[3], x_recorded;
-            if (!fixed_strength_return(trial, a1, a2, strength_at(law, x), plane_strain, nd,
-                                       x_candidate, x_recorded))
+        have_lo = true;
+    }
+    for (int piece = 0; piece < 128; ++piece) {
+        if (have_lo && (!(lo.g > 0) || hi == no_break))
+            // Root at lo, or a constant strength beyond lo: recorded(lo) is the root.
+            return accept_return(lo, p, depls);
+
+        // Secant steps. The first point is the guess or lo; the next goes to
+        // its recorded increment, where g = 0 if the strength did not change.
+        ReturnPoint x, prev, b;
+        bool have_prev = have_lo, bracketed = false;
+        if (have_lo) prev = lo;
+        double next = from_guess ? guess : lo.recorded;
+        from_guess = false;
+        for (int step = 0; step < 5 && next > (have_lo ? lo.delta : 0) && next < hi; ++step) {
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, next, x))
                 return reject_no_return;
-            const double gx = x_recorded - x;
-            for (int k = 0; k < 3; ++k) p[k] = x_candidate[k];
-            depls = x_recorded;
-            if (std::fabs(gx) <= 1e-14*std::max(x, x_recorded) || b-a <= 1e-15*b) break;
-            if (gx > 0) {
-                a = x; ga = gx;
-                if (side == 1) gb *= 0.5;
+            if (root_found(x)) return accept_return(x, p, depls);
+            if (x.g < 0) {
+                b = x;
+                bracketed = true;
+                break;
+            }
+            lo = x;
+            have_lo = true;
+            if (!have_prev) {
+                prev = x;
+                have_prev = true;
+                next = x.recorded;
+                continue;
+            }
+            const double slope = (x.g - prev.g)/(x.delta - prev.delta);
+            prev = x;
+            if (!(slope < 0)) break;
+            next = x.delta - x.g/slope;
+        }
+        if (!have_lo) {
+            // The guess overshot the root: bracket it from 0.
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, lo))
+                return reject_no_return;
+            have_lo = true;
+            if (!(lo.g > 0)) return accept_return(lo, p, depls);
+        }
+        if (!bracketed) {
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
+                return reject_no_return;
+            if (b.g > 0) {
+                lo = b;
+                prepare_piece(curve, hi);
+                hi = next_break(curve);
+                continue;
+            }
+        }
+        // Illinois regula falsi on [lo, b], g(lo) > 0 >= g(b).
+        ReturnPoint a = lo;
+        int side = 0;
+        for (int it = 0; it < 200 && b.g != 0; ++it) {
+            double xd = (a.delta*b.g - b.delta*a.g)/(b.g - a.g);
+            if (!(xd > a.delta && xd < b.delta)) xd = 0.5*(a.delta + b.delta);
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, xd, x))
+                return reject_no_return;
+            if (root_found(x) || b.delta - a.delta <= 1e-15*b.delta)
+                return accept_return(x, p, depls);
+            if (x.g > 0) {
+                const double gb = b.g;
+                a = x;
+                if (side == 1) b.g = 0.5*gb;
                 side = 1;
             }
             else {
-                b = x; gb = gx;
-                if (side == -1) ga *= 0.5;
+                const double ga = a.g;
+                b = x;
+                if (side == -1) a.g = 0.5*ga;
                 side = -1;
             }
         }
-        return 0;
+        return accept_return(b.g == 0 ? b : x, p, depls);
     }
     return reject_no_root;
 }
@@ -1004,6 +1136,7 @@ static void elasto_plastic(double bulkm, double shearm,
 
     bool shear_failure = h < 0;
     const double trial[3] = {p[0], p[1], p[2]};
+    StrengthCurve curve = start_curve(law);
     bool closed_form = true;
     // Test the uncut trial first: shear flow may return below the tensile cap.
     if ((ft >= 0 && fs < 0) || shear_failure) {
@@ -1075,8 +1208,11 @@ static void elasto_plastic(double bulkm, double shearm,
 #endif
     }
 
-    if (!closed_form || !closed_form_consistent(law, p, depls, NDIMS)) {
-        const int rejection = consistent_return(trial, a1, a2, law, false, NDIMS, p, depls);
+    if (!closed_form || !closed_form_applies(curve) ||
+        !closed_form_consistent(curve, p, depls, NDIMS)) {
+        const double guess = closed_form ? depls : 0;
+        const int rejection = consistent_return(trial, a1, a2, curve, false, NDIMS, guess,
+                                                p, depls);
         if (rejection) {
             failure_mode = -rejection;
             return;
@@ -1257,14 +1393,16 @@ static void elasto_plastic2d(double bulkm, double shearm,
     // clipping, which recorded no plastic strain) always goes to
     // consistent_return, with associated flow on the cap and its plastic
     // strain in history, as in 3D.
+    StrengthCurve curve = start_curve(law);
     bool closed_form = false;
     if (fs < 0) {
         failure_mode = 10;
         closed_form = shear_return(trial, p, depls, a1, a2, anphi, anpsi, amc,
                                    shear_hardening, ten_max, true);
     }
-    if (!closed_form || !closed_form_consistent(law, p, depls)) {
-        const int rejection = consistent_return(trial, a1, a2, law, true, 3, p, depls);
+    if (!closed_form || !closed_form_applies(curve) || !closed_form_consistent(curve, p, depls)) {
+        const double guess = closed_form ? depls : 0;
+        const int rejection = consistent_return(trial, a1, a2, curve, true, 3, guess, p, depls);
         if (rejection) {
             failure_mode = -rejection;
             return;
@@ -1497,11 +1635,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double depls = 0;
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max);
+                // The piece of the weakening law at pls gives the strength
+                // here and is reused by the plastic returns.
+                MatProps::StrengthPiece piece;
+                var.mat->strength_here(e, plstrain[e], piece);
+                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
+                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false};
+                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         &piece};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1536,11 +1678,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                         plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
                 double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max);
+                // The piece of the weakening law at pls gives the strength
+                // here and is reused by the plastic returns.
+                MatProps::StrengthPiece piece;
+                var.mat->strength_here(e, plstrain[e], piece);
+                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
+                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false};
+                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         &piece};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1603,7 +1749,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
-                                         param.mat.state_var_model, initial_equilibrium};
+                                         param.mat.state_var_model, initial_equilibrium, nullptr};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1666,7 +1812,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
-                                         param.mat.state_var_model, initial_equilibrium};
+                                         param.mat.state_var_model, initial_equilibrium, nullptr};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
