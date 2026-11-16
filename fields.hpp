@@ -61,8 +61,8 @@ void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 // Optional caller-owned nnode-sized output includes physical loads but excludes
 // artificial damping. It must not alias force, force_residual or assembly inputs.
 // damp_force=false skips artificial damping; existing callers retain damped force.
-// node_force_magnitude optionally receives the sum of absolute element force
-// contributions at each owner node, before boundary assembly reuses tmp_result.
+// node_force_magnitude optionally receives, at each node, the sum of the
+// absolute element force contributions, before boundary assembly reuses tmp_result.
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
     elem_cache& tmp_result, array_t* force_undamped = nullptr, double displacement_dt = 0, bool damp_force = true,
     array_t* node_force_magnitude = nullptr);

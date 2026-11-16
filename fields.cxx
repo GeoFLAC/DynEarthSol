@@ -618,7 +618,8 @@ static double rho(const conn_t &var_connectivity, \
 */
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force, array_t* node_force_magnitude)
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force,
+                  array_t* node_force_magnitude)
 {
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::Force, var, 0.0)) return;

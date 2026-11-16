@@ -194,6 +194,8 @@ void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, dou
 double absolute_force_rms(const Variables& var, const VelocityConstraints& constraints,
                           array_t& magnitude)
 {
+    // magnitude holds the node sums recorded by update_force; boundary
+    // assembly has since reused tmp_result, so it is not read again here.
     const int nn = mpi_node_end(var);
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, constraints, magnitude) firstprivate(nn)
@@ -291,8 +293,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     const double displacement_dt = !initial && param.control.has_moving_mesh ? var.dt : 0;
     const bool running_scale = !initial && param.control.PT_use_running_scale;
     double trial_reference = running_scale ? var.PT_initial_residual_max : 0;
-    std::unique_ptr<array_t> magnitude;
-    if (running_scale) magnitude.reset(new array_t(var.nnode));
+    array_t magnitude(var.nnode);
     double roundoff_floor = 0;
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
@@ -304,18 +305,21 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         result.iterations = iteration+1;
         ++result.evaluations;
         result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt,
-            iteration == 0 ? magnitude.get() : nullptr);
+                                                    iteration == 0 ? &magnitude : nullptr);
         var.l2_residual = result.residual;
         if (iteration == 0) {
             result.initial_residual = result.residual;
             result.warm_initial_residual = result.residual;
-            result.threshold = param.control.PT_absolute_tolerance +
-                param.control.PT_relative_tolerance*result.warm_initial_residual;
+            // Neither criterion can ask for a residual below the rounding of
+            // the assembled forces: a step that starts or ends near
+            // equilibrium would otherwise never converge.
+            roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
+                absolute_force_rms(var, w.constraints, magnitude);
+            result.threshold = std::max(param.control.PT_absolute_tolerance +
+                param.control.PT_relative_tolerance*result.warm_initial_residual, roundoff_floor);
             if (running_scale) {
                 if (!var.PT_skip_scale_update)
                     trial_reference = std::max(trial_reference, result.warm_initial_residual);
-                roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
-                    absolute_force_rms(var, w.constraints, *magnitude);
                 result.threshold = std::max(1e-6*trial_reference, roundoff_floor);
             }
         }
