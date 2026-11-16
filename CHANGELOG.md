@@ -189,6 +189,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Restart manifests report only the steps executed in the current run ([#135]).
 - A GVS run no longer writes a duplicate regular frame when the elapsed time
   lands on an output time to within rounding ([#135]).
+- PT steps that start or end near equilibrium no longer stop with exit 54:
+  the default convergence threshold has the same rounding floor as
+  `PT_use_running_scale`, and that floor now ignores boundary tractions
+  ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.

@@ -571,14 +571,15 @@ static double rho(const conn_t &var_connectivity, \
 */
 
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,
-                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force)
+                  elem_cache& tmp_result, array_t* force_undamped, double displacement_dt, bool damp_force,
+                  array_t* node_force_magnitude)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
-    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result)
+    #pragma omp parallel default(none) shared(var,param,force,force_residual,tmp_result,node_force_magnitude)
 #endif
     {
 #ifndef ACC
@@ -629,6 +630,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             const int npatch = var.support.size(n);
             const int* patch = var.support.patch(n);
             const int* lpatch = var.support.local(n);
+            double magnitude[NDIMS] = {};
             for (int k=0;k<npatch;++k) {
                 ConstElemCacheAccessor tr = tmp_result[patch[k]];
                 const int i = lpatch[k];
@@ -636,8 +638,11 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                 {
                     f[j] -= tr[i+NODES_PER_ELEM*j];
                     f_residual[j] = tr[i+NODES_PER_ELEM*j];
+                    if (node_force_magnitude) magnitude[j] += std::abs(tr[i+NODES_PER_ELEM*j]);
                 }
             }
+            if (node_force_magnitude)
+                for (int d=0; d<NDIMS; ++d) (*node_force_magnitude)[n][d] = magnitude[d];
         }
     }
 
