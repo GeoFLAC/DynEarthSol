@@ -134,7 +134,7 @@ what radiates pseudo-elastic waves; the regularization spreads it over $\tau/\De
   \label{fig:element}
 \end{figure}
 
-\subsection{Why it gives the band a width}
+\subsection{Why it gives the band a width}\label{sec:width}
 In a band of width $W_\perp$ (measured across it) carrying a slip rate $V$, the plastic strain rate
 is of order $V/W_\perp$, so by Eq.~\eqref{eq:over} the band carries an overstress of order
 $G\tau V/W_\perp$: the narrower the band, the stronger it is. Softening favours narrowing; the
@@ -144,10 +144,11 @@ strength the softening removes, $\Delta c$:
   W_\perp \sim \frac{G\,\tau\,V}{\Delta c}.
   \label{eq:width}
 \end{equation}
-For the core complex ($G=30$\,GPa, $V\approx4\times10^{-9}$\,m/s of slip on a $60^\circ$ fault for
-$2\times10^{-9}$\,m/s of total extension, $\Delta c=40$\,MPa) and $\tau=3.3\times10^8$\,s this gives
-$\approx1.0$\,km; the converged band is 1.15\,km across the fault (1.34\,km horizontally). The
-estimate is a scaling, calibrated on this one case.
+For the core complex ($G=30$\,GPa, $\Delta c=40$\,MPa, $\tau=3.3\times10^8$\,s and the measured
+slip rate on the main fault, $V\approx2\times10^{-9}$\,m/s, Table~\ref{tab:dlhp}) the right-hand side
+is $\approx0.5$\,km, while the converged band is 1.15\,km across the fault (1.34\,km horizontally).
+Eq.~\eqref{eq:width} is therefore a scaling only: its prefactor, $\approx2.3$, was measured on this
+one case, and the width to quote is the measured one.
 
 The measured overstress supports the scaling (Fig.~\ref{fig:overstress}): across all three $\tau$
 and all three meshes, the overstress in the active band at 50\,kyr is $0.42\pm0.07$ times
@@ -310,9 +311,10 @@ regularizations act on the flow itself, at every stage.
 \label{sec:recipe}
 
 \begin{enumerate}
-\item \emph{Pick a target width $W$, then set} $\tau\approx W\Delta c/(GV)$, with $\Delta c$ the
-  cohesion lost by softening (\code{cohesion0} $-$ \code{cohesion1}), $G$ the shear modulus and $V$
-  the expected fault slip rate. $\tau=3.3\times10^8$\,s gives $W\approx1$\,km for the core complex.
+\item \emph{Pick a target width $W$, then set} $\tau\approx W\Delta c/(2.3\,GV)$, with $\Delta c$ the
+  cohesion lost by softening (\code{cohesion0} $-$ \code{cohesion1}), $G$ the shear modulus, $V$
+  the expected fault slip rate and 2.3 the prefactor measured in Sect.~\ref{sec:width}.
+  $\tau=3.3\times10^8$\,s gives $W=1.15$\,km for the core complex.
   Equivalently, choose a viscoplastic viscosity $\eta_{vp}=G\tau$.
 \item \emph{Give every place a fault may start elements of about $W/5$}: a refined zone covering the
   weak zone from $t=0$ (\code{mesh.meshing\_option} = 2), plus MMG refinement on plastic strain
@@ -526,7 +528,7 @@ and is not affected.
   $\sig=(1-w)\sig^{tr}+w\sig^{RI}$ with $w=\Delta t/(\tau+\Delta t)$, and scales the plastic-strain
   increment by $w$. It reuses the existing return map and is bit-identical at $\tau=0$.
 \item It makes plastic flow rate strengthening with $\eta_{vp}=G\tau$, which gives shear bands a width
-  $W\sim G\tau V/\Delta c$; the measured overstress follows $G\tau V/W$ with one constant across
+  $W\approx2.3\,G\tau V/\Delta c$ (prefactor measured on the core complex); the measured overstress follows $G\tau V/W$ with one constant across
   $\tau$ and meshes.
 \item On the core complex with a thin seed and a wide refined zone, $\tau=3.3\times10^8$\,s gives a
   mesh-independent main fault (1.34 and 1.35\,km at 250 and 167\,m) and keeps the core-complex
