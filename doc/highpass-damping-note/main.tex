@@ -151,22 +151,31 @@ an inertial part (in phase with $\dot{\mathbf v}$). For a mode of frequency $\om
 Figure~\ref{fig:hp} plots both for the defaults.
 
 \begin{itemize}
-\item \emph{Fast motion} ($\omega T_f\gg1$): $\zeta\approx\alpha/2\omega$ and no added mass --- an
-  ordinary mass-proportional damping of all elastic modes. The slowest elastic mode of the domain,
-  $\omega_1\approx\pi c/L$, gets $\zeta\approx 50/2\pi\approx8$: strongly overdamped, so the
-  domain does not ring. Mesh-scale modes, $\omega_h\approx 2c/h$, get
+\item \emph{Fast motion} ($\omega T_f\gg1$): $\zeta\approx\alpha/2\omega$ and a small added mass
+  --- an ordinary mass-proportional damping of the elastic modes. For mesh-scale modes the added
+  mass is negligible ($\Delta M/M\approx\alpha T_f\,(h/20L)^2\approx10^{-4}$ at $h/L=1/100$), but
+  not for the slowest elastic mode of the domain, $\omega_1\approx\pi c/L$: there
+  $\omega_1T_f=10\pi\approx31$ and $\Delta M/M=500/987\approx0.5$, which lowers $\omega_1$ by
+  19\,\% and its damping ratio from $50/2\pi\approx8$ to $\approx6.5$. It is still strongly
+  overdamped, so the domain does not ring. Mesh-scale modes, $\omega_h\approx 2c/h$, get
   $\zeta_h\approx\alpha h/4c=12.5\,h/L$ (0.13 at $h/L=1/100$, 0.02 at $1/600$): they are not
   overdamped, but they lose a fraction $1-e^{-\alpha\Delta t}$ of their amplitude every step and
-  disappear within $1/\alpha$ --- 20--30 steps in the rift, a few hundred steps in the core complex.
+  disappear within $1/\alpha$, i.e.\ $1/(\alpha\Delta t)$ steps. With the logged $\Delta t$ this is
+  15--20 steps in the rift (range 9--31), about 25 in the 1\,km core complex and about 130 in the
+  167\,m one (range 40--550). $\Delta t$ is set by the smallest elements, which in the refined runs
+  are much smaller than the nominal resolution, so a CFL estimate from the resolution gives too few
+  steps.
 \item \emph{Steady motion} ($\omega\to0$): $H\to0$, $\mathbf v=\vbar$ and the force vanishes.
   Steady fault slip, viscous creep and rigid-body motion are \emph{not} damped. This is the
   essential difference from a plain mass damping $-\alpha M\mathbf v$, which would act as a drag on
   the tectonic velocity itself.
 \item \emph{Slowly accelerating motion} ($\omega T_f\ll1$): $\mathbf v-\vbar\approx T_f\dot{\mathbf v}$,
   so the force is $-\alpha T_f M\dot{\mathbf v}$, an added mass $\alpha T_f M$ (500\,$M$ with the
-  defaults). It slows the pseudo waves for such motion by $\sqrt{1+\alpha T_f}\approx22$. The
-  scheme stays quasi-static as long as $\sqrt{\alpha T_f}$ is much smaller than the inertial
-  scaling ($22\ll10^5$), which is the condition stated in the option's help text.
+  defaults). It slows motion below the cutoff, the drift toward equilibrium, by
+  $\sqrt{1+\alpha T_f}\approx22$; the pseudo waves themselves lie above $1/T_f$ and are not
+  slowed. The scheme stays quasi-static as long as the slowed speed $c/\sqrt{1+\alpha T_f}$ is
+  still much larger than the tectonic velocity, $\sqrt{1+\alpha T_f}\ll c/V$ ($22\ll10^5$; $c/V$
+  is the inertial scaling), which is the condition stated in the option's help text.
 \end{itemize}
 The filter time $T_f=10L/c$ is ten wave crossings of the domain, so the cutoff $1/T_f$ lies an
 order of magnitude below the slowest elastic mode; it is also $10^{-4}$ of the time $L/V$ to deform
@@ -174,8 +183,13 @@ the domain by order 100\,\%. Tectonic loading thus sits far below the cutoff and
 above it.
 
 The damping costs nothing in time step (it is a force, and the exact exponential factor keeps it
-stable for any $\alpha\Delta t$), and its own computational cost is one extra nodal array update per
-step. Measured wall times are unchanged within run-to-run scatter (Table~\ref{tab:riftfine}).
+stable for any $\alpha\Delta t$), and its own computational cost is two nodal loops per step. We
+measured it by restarting the fine rift from the same checkpoint (0.6\,Myr, 4380 nodes) for
+20\,000 steps without remeshing or output, on 4 threads, three times each: 0.777\,ms per step with
+damping against 0.758\,ms without (+2.5\,\%, scatter below 1\,\%). The whole-run wall times of
+Table~\ref{tab:riftfine} differ for another reason: the runs develop different meshes, and the
+original needed 7.36\,M steps to reach 1\,Myr against 6.78\,M for the damped run, with the same
+number of remeshings (73 and 74).
 
 \begin{figure}[t]
   \centering
@@ -262,7 +276,8 @@ $h=3.4$\,km in the column, defined as $\sqrt{2\times\text{area}}$):
   \caption{The averaging operator measured on the fine rift mesh at 0.6\,Myr.
   \textbf{A}: transfer function --- the fraction of a sinusoid's amplitude kept, against its
   wavelength in element sizes, for one, two and three passes. The dotted line marks the width of
-  the low-viscosity column ($\approx12$\,km $\approx3.5\,h$). \textbf{B, C}: the weights with which
+  the low-viscosity column: a 12\,km ($\approx3.5\,h$) wide feature is half a wavelength of a
+  sinusoid with $\lambda\approx24$\,km $\approx7\,h$. \textbf{B, C}: the weights with which
   the surrounding elements enter the averaged strain rate of the element marked by the cross, for
   one pass (the element, its edge and vertex neighbours) and two passes (normalized to the
   largest weight; grey lines are the mesh).}
@@ -292,9 +307,12 @@ from 0.6\,Myr for 20\,000 steps with 0, 1, 2 and 3 passes (a temporary option, s
 
 One pass removes 92\,\% of the viscosity speckle. A second pass removes almost nothing more ---
 the viscosity is already smooth, and the strain-rate speckle that remains is not driven by the
-viscosity (Sect.~\ref{sec:restart}) --- but it shifts the large-scale viscosity profile by as much
-as switching the averaging off. The reason is visible in Fig.~\ref{fig:kernel}A: the column is
-only $\approx3.5\,h$ wide, where a second pass already removes two thirds of the amplitude. One
+viscosity (Sect.~\ref{sec:restart}) --- but it shifts the large-scale viscosity profile by 0.031,
+more than half the 0.052 of switching the averaging off (Table~\ref{tab:passes}). That measurement
+is what decides. The transfer function only shows that the cost is not negligible: the column is
+$\approx12$\,km $\approx3.5\,h$ wide, half a wavelength of a sinusoid with $\lambda\approx7\,h$
+(dotted line in Fig.~\ref{fig:kernel}A), where one pass keeps $\approx0.85$ of the amplitude and two
+keep $\approx0.7$ (Table~\ref{tab:gain}). One
 pass is the smallest operator that removes the $2h$ mode, it is the operator DES already uses for
 NMD, and it leaves resolved structure ($\ge10h$) nearly intact. We therefore keep one pass and no
 pass-count option.
@@ -466,8 +484,8 @@ Reading Table~\ref{tab:cclo} and Figs.~\ref{fig:cclo}--\ref{fig:cclosr}:
 
 \paragraph{Recommendation for $\alpha$ and $T_f$.} Keep the defaults $\alpha=50\,c/L$,
 $T_f=10\,L/c$. They depend on the domain and the loading, not on the mesh, so they need no
-re-tuning with resolution; the added mass they imply ($\sqrt{500}\approx22$) is far inside the
-quasi-static limit; and over the range we tested they give the quietest slip rate without moving
+re-tuning with resolution; the slow-down they imply for sub-cutoff motion ($\sqrt{501}\approx22$) is far below
+$c/V=10^5$; and over the range we tested they give the quietest slip rate without moving
 the fault or the converged slip rate. Judge any change by convergent quantities (slip rate, plastic
 integral, fault position), not by band width. Lower $\alpha$ only to clean up strain-rate
 maps at coarse resolution, accepting a noisier slip rate.
@@ -690,7 +708,9 @@ still use the element's own strain rate. It does nothing in purely elasto-plasti
 \paragraph{Unexplained residual strain-rate checkerboard} in the low-viscosity column of the fine
 rift, after damping and averaging (Sect.~\ref{sec:restart}).
 
-\paragraph{Platforms.} Both options are CPU-only (OpenMP); GPU (OpenACC) builds refuse them. The
+\paragraph{Platforms.} Both options are CPU-only (OpenMP); GPU (OpenACC) builds refuse them for
+now. The damping's two loops are pointwise over nodes and GPU builds use managed memory, so a port
+needs only the OpenACC loop directives, and a test on a GPU. The
 damping requires \code{control.is\_quasi\_static} and is refused with \code{control.has\_PT}.
 
 \paragraph{Output averaging.} The default \code{sim.is\_outputting\_averaged\_fields = yes}
