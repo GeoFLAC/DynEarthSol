@@ -658,6 +658,9 @@ struct StrengthLaw {
     int state_model;
     bool frozen_history;
     const MatProps::StrengthPiece* piece;   // the piece at pls, if already prepared
+    // control.iterative_return_mapping_option 0: friction and dilation stay at
+    // their values at pls, and only cohesion follows the increment.
+    bool start_angles;
 };
 
 struct Strength {
@@ -673,7 +676,29 @@ struct StrengthCurve {
     const StrengthLaw& law;
     MatProps::StrengthPiece piece;
     double from;   // increment at which the piece starts
+    // Friction and dilation at delta = 0, for law.start_angles.
+    double start_friction, start_dilation;
+    MatProps::AngleFactors start_factors;
 };
+
+// For law.start_angles: the angles of every piece are those at delta = 0.
+#pragma acc routine seq
+static void hold_start_angles(StrengthCurve& curve)
+{
+    MatProps::StrengthPiece& piece = curve.piece;
+    if (curve.from == 0) {
+        curve.start_friction = piece.friction;
+        curve.start_dilation = piece.dilation;
+        curve.start_factors = piece.factors;
+    }
+    else {
+        piece.friction = curve.start_friction;
+        piece.dilation = curve.start_dilation;
+        piece.factors = curve.start_factors;
+    }
+    piece.dfriction = piece.ddilation = 0;
+    curve.law.mat->piece_strength(piece, 0, piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+}
 
 #pragma acc routine seq
 static void prepare_piece(StrengthCurve& curve, double from)
@@ -686,6 +711,7 @@ static void prepare_piece(StrengthCurve& curve, double from)
     else
         law.mat->strength_piece(law.e, law.pls+from, curve.piece);
     curve.from = from;
+    if (law.start_angles) hold_start_angles(curve);
 }
 
 // The curve at delta = 0, from the piece the caller prepared if there is one.
@@ -696,6 +722,7 @@ static StrengthCurve start_curve(const StrengthLaw& law)
     if (law.piece) {
         curve.piece = *law.piece;
         law.mat->complete_piece(law.e, curve.piece);
+        if (law.start_angles) hold_start_angles(curve);
     }
     else prepare_piece(curve, 0);
     return curve;
@@ -730,8 +757,8 @@ static double next_break(const StrengthCurve& curve)
 }
 
 // The closed-form returns hold friction and dilation fixed, so they apply
-// only where neither changes along the piece. Elsewhere their result is the
-// starting guess of consistent_return.
+// only where neither changes along the piece (always with law.start_angles).
+// Elsewhere their result is the starting guess of consistent_return.
 #pragma acc routine seq
 static bool closed_form_applies(const StrengthCurve& curve)
 {
@@ -948,7 +975,9 @@ static bool root_found(const ReturnPoint& r)
 // delta whose fixed-strength return at strength(pls+delta) records delta.
 // g(delta) = recorded - delta is continuous, and g(0) > 0 when the trial
 // yields. The law's linear pieces are searched in order; where it stays
-// constant the root is exact.
+// constant the root is exact. With law.start_angles only cohesion and the
+// tensile cap change with delta, so the search runs only for returns the
+// closed forms do not give: corners, the tensile cap and breakpoints.
 //
 // On each piece, secant steps come first: the strength changes little within
 // one step, so g is nearly linear and they usually converge in a few
@@ -1468,6 +1497,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         needs_slip_rate &&
         param.control.rsf_slip_rate_projection_option ==
             rsf_slip_rate_projection_maximum_shear;
+    const bool start_angles = param.control.iterative_return_mapping_option == 0;
 
     // Count, lowest element*reject_reason_count+reason, and the set of reasons.
     int rejected_returns = 0;
@@ -1478,7 +1508,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity) reduction(+:rejected_returns) \
+                     needs_projected_velocity, start_angles) reduction(+:rejected_returns) \
         reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
     #pragma acc parallel loop gang vector async reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
@@ -1642,7 +1672,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const double hardn = piece.dcohesion, ten_max = piece.ten_max;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
-                                         &piece};
+                                         &piece, start_angles};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1685,7 +1715,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const double hardn = piece.dcohesion, ten_max = piece.ten_max;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
-                                         &piece};
+                                         &piece, start_angles};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1748,7 +1778,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
-                                         param.mat.state_var_model, initial_equilibrium, nullptr};
+                                         param.mat.state_var_model, initial_equilibrium, nullptr,
+                                         start_angles};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
@@ -1763,10 +1794,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (failure_mode < 0) rejection = -failure_mode;
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
-                // The return used the friction of the stored history; store
-                // that coefficient. The state was already advanced this step,
-                // and frozen initial-equilibrium friction stays as stored.
-                if (depls > 0 && !initial_equilibrium)
+                // The iterative return used the friction of the stored
+                // history; store that coefficient. The state was already
+                // advanced this step, and frozen initial-equilibrium friction
+                // stays as stored. Option 0 used the stored coefficient.
+                if (depls > 0 && !initial_equilibrium && !start_angles)
                     var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
                                                      state_variable[e], dyn_fric_coeff[e],
                                                      param.mat.state_var_model);
@@ -1811,7 +1843,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 const StrengthLaw law = {var.mat, e, plstrain[e],
                                          amc, anphi, anpsi, ten_max, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
-                                         param.mat.state_var_model, initial_equilibrium, nullptr};
+                                         param.mat.state_var_model, initial_equilibrium, nullptr,
+                                         start_angles};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1843,10 +1876,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     if (failure_mode < 0) rejection = -failure_mode;
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
-                    // The return used the friction of the stored history; store
-                    // that coefficient. The state was already advanced this step,
-                    // and frozen initial-equilibrium friction stays as stored.
-                    if (depls > 0 && !initial_equilibrium)
+                    // The iterative return used the friction of the stored
+                    // history; store that coefficient. The state was already
+                    // advanced this step, and frozen initial-equilibrium friction
+                    // stays as stored. Option 0 used the stored coefficient.
+                    if (depls > 0 && !initial_equilibrium && !start_angles)
                         var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
                                                          state_variable[e], dyn_fric_coeff[e],
                                                          param.mat.state_var_model);

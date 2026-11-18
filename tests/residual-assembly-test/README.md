@@ -110,6 +110,13 @@ tension at the cap, the face-cap corner, the cap-cap corner and the apex; a
 softening case with dilation 0 and 30 degrees also checks that the strength
 rebuilt from the stored history keeps its single-face result on yield.
 
+The Mohr-Coulomb tests run twice, with `control.iterative_return_mapping_option`
+0 and 1. Where friction or dilation weakens, option 1 is checked against the
+strength of the stored history as above. Option 0 is checked against the
+friction and dilation at the start of the step, without the second update,
+which may yield again because the stored history has weakened them; its
+rate-and-state case stores the coefficient of the start of the step.
+
 `check.sh` also runs a non-finite trial in a separate process. It must report
 its cause and first element and exit with status 54 on every test backend.
 The material kernel completes before the host checks this return status.
@@ -125,7 +132,9 @@ The closed form is kept only while the increment stays on the law's linear
 piece with fixed angles and tensile cap; plane-strain tension always uses the
 general return. Pure 2D uses the same general return over its one shear face
 and two tensile caps. Otherwise `consistent_return` solves
-`depls = recorded(return at strength(plstrain + depls))`: for a fixed strength
+`depls = recorded(return at strength(plstrain + depls))`; with option 0 the
+strength holds friction and dilation at their values at `plstrain`, so only
+cohesion and the tensile cap change with `depls`: for a fixed strength
 it takes the first active set of the three shear faces and three tensile caps
 (fewest first) with nonnegative multipliers, kept order and no violated
 surface, and it searches the law's linear pieces in order, so a cohesion drop

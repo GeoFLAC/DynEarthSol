@@ -289,27 +289,34 @@ For a release, the full auto-generated list of merged pull requests is in its
   results are unchanged ([#136]).
 - An elastic trial at or above the tensile cap can return by shear when that
   return finishes below the cap. When the closed-form returns do not apply,
-  the return covers the whole strength law: a cohesion drop faster than
-  elastic unloading continues to the residual strength, friction and dilation
-  softening and the cohesion-dependent tensile cap use the stored history,
+  the return searches the shear faces and tensile caps for the active set: a
+  cohesion drop faster than elastic unloading continues to the residual
+  strength, the cohesion-dependent tensile cap uses the stored history, and
   3D biaxial and triaxial tension, tension-shear corners and the cone apex,
   and the pure 2D face-cap and cap-cap corners, return to the composite
   surface. Pure 2D (`mat.is_plane_strain = no`, the default) uses the same
-  returns in the same order as 3D and plane strain. Rate-and-state models use the same
-  piecewise cohesion law, including its residual value, with the step's slip
-  rate and state held fixed during the return; the stored friction
-  coefficient is that of the final plastic history. Plane-strain tension no longer
-  clips principal stresses: it returns from the elastic trial with associated
-  flow on the tensile cap and records that plastic strain, as in 3D, so
-  plane-strain results with tensile failure change. Other results change only
-  where the closed form does not apply (friction or dilation softening, or a
-  step that crosses a weakening breakpoint). In pure 2D with friction
-  softening, every yielding element takes the general return: the 2D
-  accretionary-wedge example runs about 35% longer. A non-finite trial stops
-  with exit status 54 in 3D, plane strain and pure 2D, also within a PT
-  iteration, naming the step, the first element and the cause; an
-  elasto-visco-plastic element whose viscous stress is selected does not stop.
-  Mesh regularization of strong softening remains separate ([#136]).
+  returns in the same order as 3D and plane strain. Friction and dilation
+  stay at their values at the start of the step, as before. Rate-and-state
+  models use the same piecewise cohesion law, including its residual value,
+  with the step's slip rate and state held fixed during the return.
+  Plane-strain tension no longer clips principal stresses: it returns from the
+  elastic trial with associated flow on the tensile cap and records that
+  plastic strain, as in 3D, so plane-strain results with tensile failure
+  change. Other results change only where the closed form does not apply
+  (corners, tension, or a step that crosses a weakening breakpoint). A
+  non-finite trial stops with exit status 54 in 3D, plane strain and pure 2D,
+  on the CPU and the GPU, also within a PT iteration, naming the step, the
+  first element and the cause; an elasto-visco-plastic element whose viscous
+  stress is selected does not stop. Mesh regularization of strong softening
+  remains separate ([#136]).
+- New option `control.iterative_return_mapping_option` (default 0). With 1
+  (experimental), the return iterates until cohesion, friction and dilation
+  all match the plastic strain at the end of the step (backward Euler), and
+  rate-and-state models store the friction coefficient of the final plastic
+  history. This depends less on the step size but costs more where friction
+  or dilation weakens: on one thread the 2D accretionary-wedge example runs
+  about 6% longer than before with the default and about 13% longer with 1.
+  Both give the same result when only cohesion weakens ([#136]).
 
 ## [2.0.2] - 2026-09-17
 

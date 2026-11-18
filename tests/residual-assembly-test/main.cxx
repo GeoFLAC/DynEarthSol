@@ -498,6 +498,10 @@ static void test_constraints() {
 }
 
 
+// control.iterative_return_mapping_option of the material fixtures; main runs
+// the Mohr-Coulomb tests with each option.
+static int return_mapping_option = 0;
+
 // One-material element fields for constitutive updates on the test mesh.
 struct MaterialFixture {
     Fixture* m;
@@ -542,6 +546,7 @@ struct MaterialFixture {
         p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e8;
         m->param.control.has_hydraulic_diffusion=true;
         m->param.control.is_using_mixed_stress=true;
+        m->param.control.iterative_return_mapping_option=return_mapping_option;
         m->var.mat=new MatProps(m->param,m->var);
     }
     ~MaterialFixture() {
@@ -861,7 +866,8 @@ static void set_mc_material(MaterialFixture& f, double dilation) {
 }
 
 static void check_law_return(MaterialFixture& f, const char* name, const double trial[3],
-                             double minimum_history=0, double initial_history=0);
+                             double minimum_history=0, double initial_history=0,
+                             bool start_angles=false);
 
 static void test_mohr_coulomb_returns() {
     std::printf("[Mohr-Coulomb returns]\n");
@@ -1030,7 +1036,9 @@ static void test_mohr_coulomb_returns() {
 // history, checked against the law at the stored history: inside the shear
 // surface and tensile cap and on one of them, principal order kept, history
 // equal to the measure of the plastic strain implied by isotropic compliance,
-// and no change from a second, unloaded update.
+// and no change from a second, unloaded update. With start_angles (option 0
+// with friction or dilation weakening and constant cohesion) the strength is
+// the one at the initial history instead, and a second update may yield again.
 // Whether plastic is a nonnegative combination of the flows of the surfaces
 // active at result: shear faces (low, high) with flow -e_low + Npsi*e_high,
 // and tensile caps with flow e_k. In principal space three flows suffice.
@@ -1092,7 +1100,8 @@ static bool in_active_flow_cone(const double result[3], const double plastic[3],
 }
 
 static void check_law_return(MaterialFixture& f, const char* name, const double trial[3],
-                             double minimum_history, double initial_history) {
+                             double minimum_history, double initial_history,
+                             bool start_angles) {
     const auto flag=[name](const char* property, bool ok) {
         char what[256];
         std::snprintf(what,sizeof what,"%s: %s",name,property);
@@ -1122,7 +1131,8 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
                                 : recorded_plastic_increment(plastic);
     const double history=(*f.pls)[0];
     double amc,anphi,anpsi,hardn,cap;
-    f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+    f.m->var.mat->plastic_props(0,start_angles ? initial_history : history,
+                                amc,anphi,anpsi,hardn,cap);
     double scale=std::fabs(amc);
     for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
     const double shear=result[0]-anphi*result[nd-1]+amc, tension=cap-result[nd-1];
@@ -1141,6 +1151,7 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     const double size=std::sqrt(plastic[0]*plastic[0]+plastic[1]*plastic[1]+plastic[2]*plastic[2]);
     flag("nonnegative plastic work",
          result[0]*plastic[0]+result[1]*plastic[1]+result[2]*plastic[2]>=-1e-9*scale*size);
+    if(start_angles) return;
     f.update();
     double again[3];
     principal(again);
@@ -1204,7 +1215,8 @@ static void test_pure_2d_law_returns() {
     set_mc_material(f, 10);
     p.friction_angle1={20}; p.dilation_angle1={0};
     f.set_material();
-    check_law_return(f,"pure 2D friction and dilation soften within the step",face);
+    check_law_return(f,"pure 2D friction and dilation soften within the step",face,0,0,
+                     return_mapping_option==0);
     // Tensile cap at zero: tension, the face-cap corner and the cap-cap corner.
     for(int dilation : {0,30}) {
         p.pls0={1}; p.pls1={2};
@@ -1251,13 +1263,16 @@ static void test_mohr_coulomb_law_returns() {
     check_law_return(f,"softening past the segment from nonzero history",deep,
                      p.pls1[0],0.0003829357836281204);
     // Friction 30 -> 20 deg and dilation 10 -> 0 deg over 1e-5: the step
-    // ends inside the segment with strength and flow of the stored history.
+    // ends inside the segment with strength and flow of the stored history
+    // (option 1) or of the start of the step (option 0).
     p.pls0={0}; p.pls1={1e-5};
     set_mc_material(f, 10);
     p.friction_angle1={20}; p.dilation_angle1={0};
     f.set_material();
-    check_law_return(f,"friction and dilation soften within the step",face);
-    check_law_return(f,"friction and dilation soften within the step, edge",edge);
+    const bool start_angles=return_mapping_option==0;
+    check_law_return(f,"friction and dilation soften within the step",face,0,0,start_angles);
+    check_law_return(f,"friction and dilation soften within the step, edge",edge,0,0,
+                     start_angles);
     // Tension past the cap 0 with an endpoint friction angle 1e-8 deg away
     // from constant: the two returns differ by O(1e-8), not by a jump.
     for(int type=0;type<2;++type) {
@@ -1271,7 +1286,8 @@ static void test_mohr_coulomb_law_returns() {
             p.friction_angle0={phi}; p.friction_angle1={phi-(perturbed ? 1e-8 : 0)};
             p.tension_max=0;
             f.set_material();
-            check_law_return(f,"tension with a constant or nearly constant friction angle",trial);
+            check_law_return(f,"tension with a constant or nearly constant friction angle",trial,
+                             0,0,perturbed && start_angles);
             returned[perturbed][0]=f.m->stress[0][0];
             returned[perturbed][1]=f.m->stress[0][1];
             returned[perturbed][2]=NDIMS==2 ? (*f.yy)[0] : f.m->stress[0][2];
@@ -1331,9 +1347,11 @@ static void test_rsf_law_returns() {
     }
     check("rate-and-state state advanced once per step",state[1],state[0]);
     // Friction 30 -> 20 deg (within the step and past pls1): the returned
-    // stress and the stored friction coefficient follow the final history.
-    // With a = b = 0 the coefficient is tan(phi(pls)); with the aging law the
-    // stress must lie on the face that the stored coefficient defines.
+    // stress and the stored friction coefficient follow the final history
+    // (option 1) or the start of the step (option 0). With a = b = 0 the
+    // coefficient is tan(phi(pls)); with the aging law the stress must lie on
+    // the face that the stored coefficient defines.
+    const bool start_angles=return_mapping_option==0;
     const double face[3]={-1e6,-5e5,-1e5};
     for(double end : {1e-5,1e-8}) for(int aging=0;aging<2;++aging) {
         p.pls0={0}; p.pls1={end};
@@ -1342,7 +1360,7 @@ static void test_rsf_law_returns() {
         p.direct_a={aging ? 0.01 : 0.}; p.evolution_b={aging ? 0.015 : 0.};
         p.state_var_model=aging;
         f.set_material();
-        if(!aging) check_law_return(f,"rate-and-state friction softening",face);
+        if(!aging) check_law_return(f,"rate-and-state friction softening",face,0,0,start_angles);
         // One update: the next one would recompute the coefficient anyway.
         f.set_principal(face);
         f.friction->assign(f.m->var.nelem,0.6);
@@ -1350,11 +1368,13 @@ static void test_rsf_law_returns() {
         f.update();
         const double history=(*f.pls)[0], mu=(*f.friction)[0];
         double amc,anphi,anpsi,hardn,cap;
-        f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+        f.m->var.mat->plastic_props(0,start_angles ? 0 : history,amc,anphi,anpsi,hardn,cap);
         const double cohesion=amc/(2*std::sqrt(anphi));
         const double static_mu=std::tan(std::asin((anphi-1)/(anphi+1)));
         check("rate-and-state friction softening yields",history>0,1);
-        if(!aging) check("stored friction coefficient of the final history",mu,static_mu);
+        if(!aging) check(start_angles ? "stored friction coefficient of the start of the step"
+                                      : "stored friction coefficient of the final history",
+                         mu,static_mu);
         else check("stored friction coefficient differs from the static one",
                    std::fabs(mu-static_mu)>1e-3,1);
         const double sine=std::sin(std::atan(mu)), nphi=(1+sine)/(1-sine);
@@ -1471,13 +1491,18 @@ int main(int argc, char** argv) {
     test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();
-    test_mohr_coulomb_returns();
-    test_mohr_coulomb_law_returns();
-    test_rsf_law_returns();
+    for(int option : {0,1}) {
+        return_mapping_option=option;
+        std::printf("[control.iterative_return_mapping_option = %d]\n",option);
+        test_mohr_coulomb_returns();
+        test_mohr_coulomb_law_returns();
+        test_rsf_law_returns();
 #ifndef THREED
-    test_pure_2d_softening_return();
-    test_pure_2d_law_returns();
+        test_pure_2d_softening_return();
+        test_pure_2d_law_returns();
 #endif
+    }
+    return_mapping_option=0;
     test_constraints();
     test_cancellation();
     test_traction();
