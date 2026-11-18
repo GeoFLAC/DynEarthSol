@@ -527,18 +527,16 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
-         "2: using simple deposition. "
          "11: using GoSPL landscape evolution model. "
          "101: custom function. "
-         "102: using simple deposition and diffusion.")
+         "102: diffusion plus terrigenous and, when their rates are positive, hemipelagic and pelagic "
+         "deposition (2D only).")
         ("control.surface_diffusivity", opt::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
          "Standard diffusition coefficient of surface topography (m^2/s)")
         ("control.surf_diff_ratio_terrig", opt::value<double>(&p.control.surf_diff_ratio_terrig)->default_value(1.),
          "Ratio between terrigenous and standard Diffusition coefficients.")
         ("control.surf_diff_ratio_marine", opt::value<double>(&p.control.surf_diff_ratio_marine)->default_value(1.),
          "Ratio between marine and standard Diffusition coefficients.")
-        ("control.surf_depo_universal", opt::value<double>(&p.control.surf_depo_universal)->default_value(0.),
-         "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",opt::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
         ("control.surface_process_gospl_config_file", opt::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),

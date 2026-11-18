@@ -239,7 +239,6 @@ struct Control {
     double surface_diffusivity;
     double surf_diff_ratio_terrig;
     double surf_diff_ratio_marine;
-    double surf_depo_universal;
     double surf_base_level;
     std::string surface_process_gospl_config_file;
     int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
@@ -785,7 +784,6 @@ struct SurfaceInfo {
     double diff_ratio_marine;
     double terrig_diffusivity;
     double terrig_dpeth_coeff;
-    double depo_universal;
     double ero_rate;
     double max_surf_vel;
 
