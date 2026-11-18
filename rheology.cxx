@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
+#include <limits>
 #include <iostream>
 
 #include "3x3-C/dsyevc3.h"
@@ -431,6 +433,653 @@ static void viscous(double bulkm, double viscosity, double total_dv,
     }
 }
 
+// The stored plastic history is also the independent variable of hardening.
+#pragma acc routine seq
+static double plastic_increment(const double plastic[3], bool plane_strain)
+{
+    if (plane_strain)
+        return 0.5 * (std::max(plastic[0], std::max(plastic[1], plastic[2])) -
+                      std::min(plastic[0], std::min(plastic[1], plastic[2])));
+    double mean = 0;
+    for (int k = 0; k < NDIMS; ++k) mean += plastic[k];
+    mean /= NDIMS;
+    double squared = mean*mean;
+    for (int k = 0; k < NDIMS; ++k) squared += (plastic[k]-mean)*(plastic[k]-mean);
+    return std::sqrt(0.5*squared);
+}
+
+#pragma acc routine seq
+static bool admissible_shear(const double p[3], double increment, double anphi,
+                             double amc, double hardening, double ten_max, double tolerance)
+{
+    const double strength = amc + hardening*increment;
+    return std::isfinite(increment) && std::isfinite(strength) && strength >= 0 &&
+        std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) &&
+        p[0] <= p[1]+tolerance && p[1] <= p[2]+tolerance && p[2] <= ten_max+tolerance &&
+        std::fabs(p[0]-anphi*p[2]+strength) <= tolerance;
+}
+
+// Solve both adjacent faces. Hardening is per unit stored plastic increment,
+// rather than per unit sum of face multipliers.
+#pragma acc routine seq
+static bool shear_edge_return(const double trial[3], double p[3], double& depls,
+                              double a1, double a2, double anphi, double anpsi,
+                              double amc, double hardening, double ten_max,
+                              bool plane_strain, double tolerance)
+{
+    for (int edge = 0; edge < 2; ++edge) {
+        const int low[2] = {0, edge == 0 ? 1 : 0};
+        const int high[2] = {2, edge == 0 ? 2 : 1};
+        double flow[2][3], response[2][3];
+        for (int j = 0; j < 2; ++j)
+            for (int k = 0; k < 3; ++k) {
+                flow[j][k] = (k == high[j] ? anpsi : 0) - (k == low[j] ? 1 : 0);
+                response[j][k] = a2*(anpsi-1) + (a1-a2)*flow[j][k];
+            }
+        double matrix[2][2], rhs[2];
+        for (int i = 0; i < 2; ++i) {
+            rhs[i] = anphi*trial[high[i]] - trial[low[i]] - amc;
+            for (int j = 0; j < 2; ++j)
+                matrix[i][j] = anphi*response[j][high[i]] - response[j][low[i]];
+        }
+        const double determinant = matrix[0][0]*matrix[1][1] - matrix[0][1]*matrix[1][0];
+        if (!(determinant > 0) || !std::isfinite(determinant)) continue;
+        double multiplier[2];
+        if (hardening == 0) {
+            multiplier[0] = (rhs[0]*matrix[1][1] - rhs[1]*matrix[0][1])/determinant;
+            multiplier[1] = (rhs[1]*matrix[0][0] - rhs[0]*matrix[1][0])/determinant;
+        }
+        else {
+            // Isotropic elasticity gives a symmetric 2x2 matrix. In sum/difference
+            // coordinates, d is fixed and E*s + H*depls(s,d) = R remains scalar.
+            const double difference = (rhs[0]-rhs[1])/(matrix[0][0]-matrix[0][1]);
+            const double elastic = 0.5*(matrix[0][0]+matrix[0][1]);
+            const double r = 0.5*(rhs[0]+rhs[1])/elastic;
+            const double h = hardening/elastic;
+            double sum;
+            if (plane_strain) {
+                const double a = edge == 0 ? 0.5*anpsi+0.25 : 0.5+0.25*anpsi;
+                const double b = edge == 0 ? 0.25 : 0.25*anpsi;
+                if (!(1+h*a > 0)) continue;
+                sum = (r-h*b*std::fabs(difference))/(1+h*a);
+            }
+            else {
+                // depls^2 = A*s^2 + B*d^2. Solve its positive quadratic root;
+                // reject loss of the local softening tangent instead of rotating
+                // a crossed single-face correction back into the mesh.
+                double along[3], across[3];
+                for (int k = 0; k < 3; ++k) {
+                    along[k] = 0.5*(flow[0][k]+flow[1][k]);
+                    across[k] = 0.5*(flow[0][k]-flow[1][k]);
+                }
+                const double qa = plastic_increment(along,false);
+                const double qb = plastic_increment(across,false);
+                const double a = qa*qa, c = qb*qb*difference*difference;
+                if (hardening < 0 && !(1-a*h*h > 0)) continue;
+                const double squared = a*r*r+c;
+                const double discriminant = squared-a*h*h*c;
+                if (!(discriminant >= 0)) continue;
+                const double denominator = std::sqrt(discriminant)+a*r*h;
+                if (!(denominator > 0)) continue;
+                sum = r-h*squared/denominator;
+            }
+            multiplier[0] = 0.5*(sum+difference);
+            multiplier[1] = 0.5*(sum-difference);
+        }
+        if (!std::isfinite(multiplier[0]) || !std::isfinite(multiplier[1]) ||
+            multiplier[0] < 0 || multiplier[1] < 0) continue;
+        double candidate[3], plastic[3];
+        for (int k = 0; k < 3; ++k) {
+            candidate[k] = trial[k]-multiplier[0]*response[0][k]-multiplier[1]*response[1][k];
+            plastic[k] = multiplier[0]*flow[0][k]+multiplier[1]*flow[1][k];
+        }
+        const double increment = plastic_increment(plastic,plane_strain);
+        if (!admissible_shear(candidate,increment,anphi,amc,hardening,ten_max,tolerance)) continue;
+        const int repeated = edge == 0 ? 0 : 1;
+        candidate[repeated] = candidate[repeated+1] =
+            0.5*(candidate[repeated]+candidate[repeated+1]);
+        for (int k = 0; k < 3; ++k) p[k] = candidate[k];
+        depls = increment;
+        return true;
+    }
+    return false;
+}
+
+// Absolute tolerance of the yield, ordering and tensile-cap checks over the
+// nd principal stresses in use (2 in pure 2D, else 3).
+#pragma acc routine seq
+static double return_tolerance(const double p[3], double amc, int nd = 3)
+{
+    double scale = std::fabs(amc);
+    for (int k = 0; k < nd; ++k) scale = std::max(scale, std::fabs(p[k]));
+    return 1e-12*scale;
+}
+
+// Rejected candidates never replace the caller's stress or plastic increment.
+#pragma acc routine seq
+static bool shear_return(const double trial[3], double p[3], double& depls,
+                         double a1, double a2, double anphi, double anpsi,
+                         double amc, double hardening, double ten_max,
+                         bool plane_strain)
+{
+    const double tolerance = return_tolerance(trial, amc);
+    const double fs = trial[0]-trial[2]*anphi+amc;
+    const double unit[3] = {-1,0,anpsi};
+    const double unit_increment = plastic_increment(unit,plane_strain);
+    const double denominator = a1-a2*anpsi+a1*anphi*anpsi-a2*anphi+hardening*unit_increment;
+    if (denominator > 0 && std::isfinite(denominator)) {
+        const double alam = fs/denominator;
+        const double candidate[3] = {trial[0]-alam*(a1-a2*anpsi),
+                                    trial[1]-alam*(a2-a2*anpsi),
+                                    trial[2]-alam*(a2-a1*anpsi)};
+        const double increment = std::fabs(alam)*unit_increment;
+        if (alam <= 0 && admissible_shear(candidate,increment,anphi,amc,hardening,ten_max,tolerance)) {
+            for (int k = 0; k < 3; ++k) p[k] = candidate[k];
+            depls = increment;
+            return true;
+        }
+    }
+    return shear_edge_return(trial,p,depls,a1,a2,anphi,anpsi,amc,hardening,ten_max,
+                             plane_strain,tolerance);
+}
+
+// Pure 2D (two principal stresses): the single shear face. The strength
+// changes by hardening*depls, with depls = |alam|*u the recorded measure, so
+// the hardening term carries u. Accepted only below the tensile cap and in
+// principal order; the caller otherwise uses consistent_return.
+#pragma acc routine seq
+static bool shear_return2d(const double trial[3], double p[3], double& depls,
+                           double a1, double a2, double anphi, double anpsi,
+                           double amc, double hardening, double ten_max)
+{
+    /* plastic strain in the principal directions: alam and -alam*anpsi, so
+     * depls = sqrt(((d1-dm)^2 + (d2-dm)^2 + dm^2)/2) with dm = (d1+d2)/2
+     * reduces to |alam|*u. */
+    const double u = std::sqrt((3 + 2*anpsi + 3*anpsi*anpsi) / 8);
+    const double denominator = a1 - a2*anpsi + a1*anphi*anpsi - a2*anphi + hardening*u;
+    if (!(denominator > 0) || !std::isfinite(denominator)) return false;
+    const double fs = trial[0] - trial[1]*anphi + amc;
+    const double alam = fs / denominator;
+    const double candidate[2] = {trial[0] - alam * (a1 - a2 * anpsi),
+                                 trial[1] - alam * (a2 - a1 * anpsi)};
+    const double increment = std::fabs(alam) * u;
+    const double tolerance = return_tolerance(trial, amc, 2);
+    if (!(alam <= 0) || !std::isfinite(candidate[0]) || !std::isfinite(candidate[1]) ||
+        !(candidate[0] <= candidate[1] + tolerance) ||
+        !(candidate[1] <= ten_max + tolerance) ||
+        !(amc + hardening*increment >= 0))
+        return false;
+    p[0] = candidate[0];
+    p[1] = candidate[1];
+    depls = increment;
+    return true;
+}
+
+#pragma acc routine seq
+template <typename T>
+static void rotate_stress2d(const double p[3], int n1, int n2, int n3,
+                                double cos2t, double sin2t, T s, double &syy)
+{
+    const double dc2 = (p[n1] - p[n2]) * cos2t;
+    const double dss = p[n1] + p[n2];
+    s[0] = 0.5 * (dss + dc2);
+    s[1] = 0.5 * (dss - dc2);
+    s[2] = 0.5 * (p[n1] - p[n2]) * sin2t;
+    syy = p[n3];
+}
+
+
+// Why no admissible Mohr-Coulomb state was found; failure_mode = -reason.
+enum ReturnRejection {
+    reject_nonfinite = 1,    // trial stress is not finite
+    reject_no_return = 2,    // no set of shear faces and tensile caps gives nonnegative
+                             // multipliers and a stress inside every surface
+    reject_no_root = 3,      // the law has more pieces than consistent_return searches
+    reject_reason_count = 4
+};
+
+#pragma acc routine seq
+static bool finite3(const double p[3])
+{
+    return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+}
+
+// Strength after a plastic increment delta: plastic_props at pls+delta.
+// Rate-and-state strength (rsf) evaluates the same
+// piecewise cohesion, friction, dilation and cap law with this step's slip
+// rate, state and friction coefficient held fixed.
+struct StrengthLaw {
+    const MatProps* mat;
+    int e;
+    double pls;
+    double amc, anphi, anpsi, ten_max;   // at delta = 0
+    bool rsf;
+    double slip_rate, state_variable, dyn_fric_coeff;   // rsf only
+    int state_model;
+    bool frozen_history;
+    const MatProps::StrengthPiece* piece;   // the piece at pls, if already prepared
+    // control.iterative_return_mapping_option 0: friction and dilation stay at
+    // their values at pls, and only cohesion follows the increment.
+    bool start_angles;
+};
+
+struct Strength {
+    double amc, anphi, anpsi, ten_max;
+};
+
+// The strength law along this step's plastic increment delta, one linear
+// piece of the weakening law at a time: each piece is prepared once and
+// reused for every trial increment on it. The law declares through the piece
+// which strength parameters change with delta; the returns below never ask
+// which material or friction law produced it.
+struct StrengthCurve {
+    const StrengthLaw& law;
+    MatProps::StrengthPiece piece;
+    double from;   // increment at which the piece starts
+    // Friction and dilation at delta = 0, for law.start_angles.
+    double start_friction, start_dilation;
+    MatProps::AngleFactors start_factors;
+};
+
+// For law.start_angles: the angles of every piece are those at delta = 0.
+#pragma acc routine seq
+static void hold_start_angles(StrengthCurve& curve)
+{
+    MatProps::StrengthPiece& piece = curve.piece;
+    if (curve.from == 0) {
+        curve.start_friction = piece.friction;
+        curve.start_dilation = piece.dilation;
+        curve.start_factors = piece.factors;
+    }
+    else {
+        piece.friction = curve.start_friction;
+        piece.dilation = curve.start_dilation;
+        piece.factors = curve.start_factors;
+    }
+    piece.dfriction = piece.ddilation = 0;
+    curve.law.mat->piece_strength(piece, 0, piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+}
+
+#pragma acc routine seq
+static void prepare_piece(StrengthCurve& curve, double from)
+{
+    const StrengthLaw& law = curve.law;
+    if (law.rsf)
+        law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate, law.state_variable,
+                                    law.dyn_fric_coeff, law.state_model, law.frozen_history,
+                                    curve.piece);
+    else
+        law.mat->strength_piece(law.e, law.pls+from, curve.piece);
+    curve.from = from;
+    if (law.start_angles) hold_start_angles(curve);
+}
+
+// The curve at delta = 0, from the piece the caller prepared if there is one.
+#pragma acc routine seq
+static StrengthCurve start_curve(const StrengthLaw& law)
+{
+    StrengthCurve curve = {law, {}, 0};
+    if (law.piece) {
+        curve.piece = *law.piece;
+        law.mat->complete_piece(law.e, curve.piece);
+        if (law.start_angles) hold_start_angles(curve);
+    }
+    else prepare_piece(curve, 0);
+    return curve;
+}
+
+// Strength after a plastic increment delta on the prepared piece; at delta =
+// 0 it equals plastic_props at pls.
+#pragma acc routine seq
+static Strength strength_at(const StrengthCurve& curve, double delta)
+{
+    Strength r;
+    curve.law.mat->piece_strength(curve.piece, delta - curve.from,
+                                  r.amc, r.anphi, r.anpsi, r.ten_max);
+    return r;
+}
+
+static constexpr double no_break = std::numeric_limits<double>::max();
+
+// Plastic increment at which the prepared piece ends. Rounded up so that pls
+// + increment reaches the breakpoint: next-pls alone can land one ulp short,
+// and the next piece would then start on this one.
+#pragma acc routine seq
+static double next_break(const StrengthCurve& curve)
+{
+    const double next = curve.piece.end;
+    if (next == no_break) return no_break;
+    const double pls = curve.law.pls;
+    double increment = next - pls;
+    while (pls + increment < next)
+        increment += std::numeric_limits<double>::epsilon()*next;
+    return increment;
+}
+
+// The closed-form returns hold friction and dilation fixed, so they apply
+// only where neither changes along the piece (always with law.start_angles).
+// Elsewhere their result is the starting guess of consistent_return.
+#pragma acc routine seq
+static bool closed_form_applies(const StrengthCurve& curve)
+{
+    return !curve.piece.angles_change();
+}
+
+// The closed-form returns use the law's linear piece at pls: a fixed cohesion
+// slope and fixed friction, dilation and tensile cap. Keep their result only
+// while the increment stays on that piece and the cap of the stored history
+// still bounds it, or still holds it when it was returned to the cap.
+#pragma acc routine seq
+static bool closed_form_consistent(const StrengthCurve& curve, const double p[3], double depls,
+                                   int nd = 3)
+{
+    if (depls == 0) return true;
+    if (!(depls <= next_break(curve))) return false;
+    const StrengthLaw& law = curve.law;
+    const Strength end = strength_at(curve, depls);
+    const double tolerance = return_tolerance(p, end.amc, nd);
+    const double top = p[nd-1];
+    const bool on_cap = top >= law.ten_max - tolerance;
+    return end.anphi == law.anphi && end.anpsi == law.anpsi &&
+        top <= end.ten_max + tolerance &&
+        (!on_cap || top >= end.ten_max - tolerance);
+}
+
+// Surface s of the ordered region of nd principal stresses, grad.p - offset
+// <= 0, with plastic flow direction flow. For nd = 3, 0..2 are Mohr-Coulomb
+// faces with (low, high) = (0,2), (1,2), (0,1) and 3..5 the tensile caps on
+// p2, p1, p0. For nd = 2 (pure 2D), 0 is the face (0,1) and 1..2 the caps on
+// p1, p0.
+#pragma acc routine seq
+static int return_surface_count(int nd)
+{
+    return nd == 3 ? 6 : 3;
+}
+
+#pragma acc routine seq
+static double return_surface(int s, const Strength& r, int nd, double grad[3], double flow[3])
+{
+    const int faces = nd == 3 ? 3 : 1;
+    for (int k = 0; k < 3; ++k) grad[k] = flow[k] = 0;
+    if (s < faces) {
+        const int low = s == 1 ? 1 : 0;
+        const int high = nd == 2 ? 1 : (s == 2 ? 1 : 2);
+        grad[high] = r.anphi;
+        grad[low] = -1;
+        flow[high] = r.anpsi;
+        flow[low] = -1;
+        return r.amc;
+    }
+    const int cap = nd-1 - (s-faces);
+    grad[cap] = flow[cap] = 1;
+    return r.ten_max;
+}
+
+// Gaussian elimination with partial pivoting; false if (near) singular.
+#pragma acc routine seq
+static bool solve_small(int n, double m[3][3], double b[3], double x[3])
+{
+    double scale = 0;
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) scale = std::max(scale, std::fabs(m[i][j]));
+    if (!(scale > 0)) return false;
+    for (int c = 0; c < n; ++c) {
+        int pivot = c;
+        for (int r = c+1; r < n; ++r)
+            if (std::fabs(m[r][c]) > std::fabs(m[pivot][c])) pivot = r;
+        if (!(std::fabs(m[pivot][c]) > 1e-12*scale)) return false;
+        for (int k = 0; k < n; ++k) {
+            const double t = m[c][k]; m[c][k] = m[pivot][k]; m[pivot][k] = t;
+        }
+        const double t = b[c]; b[c] = b[pivot]; b[pivot] = t;
+        for (int r = c+1; r < n; ++r) {
+            const double factor = m[r][c]/m[c][c];
+            for (int k = c; k < n; ++k) m[r][k] -= factor*m[c][k];
+            b[r] -= factor*b[c];
+        }
+    }
+    for (int r = n-1; r >= 0; --r) {
+        double v = b[r];
+        for (int k = r+1; k < n; ++k) v -= m[r][k]*x[k];
+        x[r] = v/m[r][r];
+    }
+    return true;
+}
+
+// Return for a fixed strength (Koiter's rule on the composite surface): the
+// first active set, fewest surfaces first, whose multipliers are nonnegative
+// and whose stress keeps the trial order and satisfies every surface. This
+// covers faces, edges, the tensile cap, its edge and apex, and their corners
+// (in pure 2D, nd = 2: the face, the cap, and the face-cap and cap-cap corners).
+// nd is a template argument so that the loops over principal stresses and
+// surfaces unroll; fixed_strength_return below dispatches on it.
+#pragma acc routine seq
+template <int ND>
+static bool fixed_strength_return_nd(const double trial[3], double a1, double a2,
+                                     const Strength& r, bool plane_strain,
+                                     double p[3], double& depls)
+{
+    double grad[6][3], flow[6][3], response[6][3], offset[6], violation[6];
+    const int surfaces = return_surface_count(ND);
+    const double tolerance = return_tolerance(trial, r.amc, ND);
+    bool admissible = true;
+    for (int s = 0; s < surfaces; ++s) {
+        offset[s] = return_surface(s, r, ND, grad[s], flow[s]);
+        double volume = 0;
+        for (int k = 0; k < ND; ++k) volume += flow[s][k];
+        violation[s] = -offset[s];
+        for (int k = 0; k < 3; ++k) response[s][k] = 0;
+        for (int k = 0; k < ND; ++k) {
+            response[s][k] = a2*volume + (a1-a2)*flow[s][k];
+            violation[s] += grad[s][k]*trial[k];
+        }
+        admissible = admissible && violation[s] <= tolerance;
+    }
+    if (admissible) {
+        for (int k = 0; k < 3; ++k) p[k] = trial[k];
+        depls = 0;
+        return true;
+    }
+    for (int size = 1; size <= ND; ++size)
+        for (int mask = 1; mask < (1 << surfaces); ++mask) {
+            int active[3], n = 0;
+            for (int s = 0; s < surfaces && n <= 3; ++s)
+                if (mask & (1 << s)) {
+                    if (n < 3) active[n] = s;
+                    ++n;
+                }
+            if (n != size) continue;
+            double m[3][3], b[3], x[3];
+            for (int i = 0; i < n; ++i) {
+                b[i] = violation[active[i]];
+                for (int j = 0; j < n; ++j) {
+                    m[i][j] = 0;
+                    for (int k = 0; k < ND; ++k) m[i][j] += grad[active[i]][k]*response[active[j]][k];
+                }
+            }
+            if (!solve_small(n, m, b, x)) continue;
+            double largest = 0;
+            for (int i = 0; i < n; ++i) largest = std::max(largest, std::fabs(x[i]));
+            bool ok = std::isfinite(largest);
+            for (int i = 0; i < n; ++i) ok = ok && x[i] >= -1e-12*largest;
+            if (!ok) continue;
+            double candidate[3], plastic[3];
+            for (int k = 0; k < 3; ++k) {
+                candidate[k] = trial[k];
+                plastic[k] = 0;
+                for (int i = 0; i < n; ++i) {
+                    candidate[k] -= x[i]*response[active[i]][k];
+                    plastic[k] += x[i]*flow[active[i]][k];
+                }
+            }
+            for (int k = 0; k+1 < ND; ++k) ok = ok && candidate[k] <= candidate[k+1]+tolerance;
+            for (int s = 0; s < surfaces; ++s) {
+                double f = -offset[s];
+                for (int k = 0; k < ND; ++k) f += grad[s][k]*candidate[k];
+                ok = ok && f <= tolerance;
+            }
+            if (!ok) continue;
+            for (int k = 0; k < 3; ++k) p[k] = candidate[k];
+            depls = plastic_increment(plastic, plane_strain);
+            return true;
+        }
+    return false;
+}
+
+#pragma acc routine seq
+static bool fixed_strength_return(const double trial[3], double a1, double a2,
+                                  const Strength& r, bool plane_strain, int nd,
+                                  double p[3], double& depls)
+{
+    return nd == 3 ? fixed_strength_return_nd<3>(trial, a1, a2, r, plane_strain, p, depls)
+                   : fixed_strength_return_nd<2>(trial, a1, a2, r, plane_strain, p, depls);
+}
+
+// A fixed-strength return at plastic increment delta and its residual
+// g = recorded - delta.
+struct ReturnPoint {
+    double delta, g, recorded, p[3];
+};
+
+#pragma acc routine seq
+static bool evaluate_return(const double trial[3], double a1, double a2,
+                            const StrengthCurve& curve, bool plane_strain, int nd,
+                            double delta, ReturnPoint& r)
+{
+    r.delta = delta;
+    if (!fixed_strength_return(trial, a1, a2, strength_at(curve, delta), plane_strain, nd,
+                               r.p, r.recorded))
+        return false;
+    r.g = r.recorded - delta;
+    return true;
+}
+
+#pragma acc routine seq
+static int accept_return(const ReturnPoint& r, double p[3], double& depls)
+{
+    for (int k = 0; k < 3; ++k) p[k] = r.p[k];
+    depls = r.recorded;
+    return 0;
+}
+
+// Converged once g is below the relative 1e-12 of the yield checks
+// (return_tolerance): the strength then misses the recorded increment by far
+// less than those checks resolve.
+#pragma acc routine seq
+static bool root_found(const ReturnPoint& r)
+{
+    return std::fabs(r.g) <= 1e-12*std::max(r.delta, r.recorded);
+}
+
+// Backward-Euler return for the whole strength law: the plastic increment
+// delta whose fixed-strength return at strength(pls+delta) records delta.
+// g(delta) = recorded - delta is continuous, and g(0) > 0 when the trial
+// yields. The law's linear pieces are searched in order; where it stays
+// constant the root is exact. With law.start_angles only cohesion and the
+// tensile cap change with delta, so the search runs only for returns the
+// closed forms do not give: corners, the tensile cap and breakpoints.
+//
+// On each piece, secant steps come first: the strength changes little within
+// one step, so g is nearly linear and they usually converge in a few
+// evaluations. On the first piece they start from guess, the closed-form
+// increment with friction and dilation held fixed, when it lies on that
+// piece; g(0) is then evaluated only if needed. A root the secant steps do
+// not reach is bracketed and found by Illinois regula falsi.
+#pragma acc routine seq
+static int consistent_return(const double trial[3], double a1, double a2,
+                             StrengthCurve& curve, bool plane_strain, int nd,
+                             double guess, double p[3], double& depls)
+{
+    if (!finite3(trial)) return reject_nonfinite;
+    ReturnPoint lo;           // the largest increment known to have g > 0
+    bool have_lo = false;
+    double hi = next_break(curve);
+    bool from_guess = guess > 0 && hi != no_break && guess < hi;
+    if (!from_guess) {
+        if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, lo))
+            return reject_no_return;
+        have_lo = true;
+    }
+    for (int piece = 0; piece < 128; ++piece) {
+        if (have_lo && (!(lo.g > 0) || hi == no_break))
+            // Root at lo, or a constant strength beyond lo: recorded(lo) is the root.
+            return accept_return(lo, p, depls);
+
+        // Secant steps. The first point is the guess or lo; the next goes to
+        // its recorded increment, where g = 0 if the strength did not change.
+        ReturnPoint x, prev, b;
+        bool have_prev = have_lo, bracketed = false;
+        if (have_lo) prev = lo;
+        double next = from_guess ? guess : lo.recorded;
+        from_guess = false;
+        for (int step = 0; step < 5 && next > (have_lo ? lo.delta : 0) && next < hi; ++step) {
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, next, x))
+                return reject_no_return;
+            if (root_found(x)) return accept_return(x, p, depls);
+            if (x.g < 0) {
+                b = x;
+                bracketed = true;
+                break;
+            }
+            lo = x;
+            have_lo = true;
+            if (!have_prev) {
+                prev = x;
+                have_prev = true;
+                next = x.recorded;
+                continue;
+            }
+            const double slope = (x.g - prev.g)/(x.delta - prev.delta);
+            prev = x;
+            if (!(slope < 0)) break;
+            next = x.delta - x.g/slope;
+        }
+        if (!have_lo) {
+            // The guess overshot the root: bracket it from 0.
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, lo))
+                return reject_no_return;
+            have_lo = true;
+            if (!(lo.g > 0)) return accept_return(lo, p, depls);
+        }
+        if (!bracketed) {
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
+                return reject_no_return;
+            if (b.g > 0) {
+                lo = b;
+                prepare_piece(curve, hi);
+                hi = next_break(curve);
+                continue;
+            }
+        }
+        // Illinois regula falsi on [lo, b], g(lo) > 0 >= g(b).
+        ReturnPoint a = lo;
+        int side = 0;
+        for (int it = 0; it < 200 && b.g != 0; ++it) {
+            double xd = (a.delta*b.g - b.delta*a.g)/(b.g - a.g);
+            if (!(xd > a.delta && xd < b.delta)) xd = 0.5*(a.delta + b.delta);
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, xd, x))
+                return reject_no_return;
+            if (root_found(x) || b.delta - a.delta <= 1e-15*b.delta)
+                return accept_return(x, p, depls);
+            if (x.g > 0) {
+                const double gb = b.g;
+                a = x;
+                if (side == 1) b.g = 0.5*gb;
+                side = 1;
+            }
+            else {
+                const double ga = a.g;
+                b = x;
+                if (side == -1) a.g = 0.5*ga;
+                side = -1;
+            }
+        }
+        return accept_return(b.g == 0 ? b : x, p, depls);
+    }
+    return reject_no_root;
+}
+
+
 #pragma acc routine seq
 template <typename T>
 static void elasto_plastic(double bulkm, double shearm,
@@ -439,14 +1088,16 @@ static void elasto_plastic(double bulkm, double shearm,
                            const double* de, double& depls, T s,
                            int &failure_mode,
                            bool has_hydraulic_diffusion,
-                           double &dpp)
+                           double &dpp, const StrengthLaw& law)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion)
      *
      * failure_mode --
+     *  <0: no admissible return, -ReturnRejection
      *   0: no failure
      *   1: tensile failure
      *  10: shear failure
+     *  30: return for the whole strength law (see consistent_return)
      */
 
     // elastic trial stress
@@ -464,8 +1115,8 @@ static void elasto_plastic(double bulkm, double shearm,
     //
     // transform to principal stress coordinate system
     //
-    // eigenvalues (principal stresses)
-    double p[NDIMS];
+    // eigenvalues (principal stresses); p[2] is unused in 2D
+    double p[3] = {0, 0, 0};
 #ifdef THREED
     // eigenvectors
     double v[3][3];
@@ -482,6 +1133,11 @@ static void elasto_plastic(double bulkm, double shearm,
             return;   // no failure, and not close enough to it to need checking
     }
 
+    for (int i = 0; i < NSTR; ++i)
+        if (!std::isfinite(s[i])) {
+            failure_mode = -reject_nonfinite;
+            return;
+        }
     principal_stresses3(s, p, v);
 #else
     // In 2D, we only construct the eigenvectors from
@@ -505,44 +1161,34 @@ static void elasto_plastic(double bulkm, double shearm,
     double h = p[NDIMS-1] - ten_max + pa * (p[0] - ps);
     double a1 = bulkm + 4. / 3 * shearm;
     double a2 = bulkm - 2. / 3 * shearm;
+    const double shear_hardening = 2*std::sqrt(anphi)*hardn;
 
+    bool shear_failure = h < 0;
+    const double trial[3] = {p[0], p[1], p[2]};
+    StrengthCurve curve = start_curve(law);
+    bool closed_form = true;
+    // Test the uncut trial first: shear flow may return below the tensile cap.
+    if ((ft >= 0 && fs < 0) || shear_failure) {
+        double candidate[3], increment;
+#ifdef THREED
+        const bool sheared = shear_return(trial, candidate, increment, a1, a2, anphi, anpsi,
+                                          amc, shear_hardening, ten_max, false);
+#else
+        const bool sheared = shear_return2d(trial, candidate, increment, a1, a2, anphi, anpsi,
+                                            amc, shear_hardening, ten_max);
+#endif
+        if (sheared) {
+            for (int k = 0; k < NDIMS; ++k) p[k] = candidate[k];
+            depls = increment;
+            shear_failure = true;
+        }
+        else if (shear_failure)
+            closed_form = false;
+    }
     double alam;
-    if (h < 0) {
+    if (shear_failure) {
         // shear failure
         failure_mode = 10;
-
-        alam = fs / (a1 - a2*anpsi + a1*anphi*anpsi - a2*anphi + 2*std::sqrt(anphi)*hardn);
-        p[0] -= alam * (a1 - a2 * anpsi);
-#ifdef THREED
-        p[1] -= alam * (a2 - a2 * anpsi);
-#endif
-        p[NDIMS-1] -= alam * (a2 - a1 * anpsi);
-
-        // 2nd invariant of plastic strain
-#ifdef THREED
-        /* // plastic strain in the principal directions, depls2 is always 0
-         * double depls1 = alam;
-         * double depls3 = -alam * anpsi;
-         * double deplsm = (depls1 + depls3) / 3;
-         * depls = std::sqrt(((depls1-deplsm)*(depls1-deplsm) +
-         *                    (-deplsm)*(-deplsm) +
-         *                    (depls3-deplsm)*(depls3-deplsm) +
-         *                    deplsm*deplsm) / 2);
-         */
-        // the equations above can be reduce to:
-        depls = std::fabs(alam) * std::sqrt((7 + 4*anpsi + 7*anpsi*anpsi) / 18);
-#else
-        /* // plastic strain in the principal directions
-         * double depls1 = alam;
-         * double depls2 = -alam * anpsi;
-         * double deplsm = (depls1 + depls2) / 2;
-         * depls = std::sqrt(((depls1-deplsm)*(depls1-deplsm) +
-         *                    (depls2-deplsm)*(depls2-deplsm) +
-         *                    deplsm*deplsm) / 2);
-         */
-        // the equations above can be reduce to:
-        depls = std::fabs(alam) * std::sqrt((3 + 2*anpsi + 3*anpsi*anpsi) / 8);
-#endif
     }
     else {
         // tensile failure
@@ -566,6 +1212,13 @@ static void elasto_plastic(double bulkm, double shearm,
          *                    deplsm*deplsm) / 2);
          */
         depls = std::fabs(alam) * std::sqrt(7. / 18);
+
+        // Biaxial tension (p[1] stays above the cap) and a return past the
+        // shear strength need a corner return.
+        const double tolerance = return_tolerance(p, amc);
+        if (p[1] > p[2]+tolerance ||
+            p[0]-anphi*p[2]+amc+shear_hardening*depls < -tolerance)
+            closed_form = false;
 #else
         /* double depls1 = 0;
          * double depls3 = alam;
@@ -575,7 +1228,25 @@ static void elasto_plastic(double bulkm, double shearm,
          *                    deplsm*deplsm) / 2);
          */
         depls = std::fabs(alam) * std::sqrt(3. / 8);
+
+        // A return past the shear strength needs the face-cap corner.
+        const double tolerance = return_tolerance(p, amc, 2);
+        if (p[0] > p[1]+tolerance ||
+            p[0]-anphi*p[1]+amc+shear_hardening*depls < -tolerance)
+            closed_form = false;
 #endif
+    }
+
+    if (!closed_form || !closed_form_applies(curve) ||
+        !closed_form_consistent(curve, p, depls, NDIMS)) {
+        const double guess = closed_form ? depls : 0;
+        const int rejection = consistent_return(trial, a1, a2, curve, false, NDIMS, guess,
+                                                p, depls);
+        if (rejection) {
+            failure_mode = -rejection;
+            return;
+        }
+        failure_mode = 30;
     }
 
     // rotate the principal stresses back to global axes
@@ -614,7 +1285,7 @@ static void elasto_plastic2d(double bulkm, double shearm,
                              T s, double &syy,
                              int &failure_mode,
                              bool has_hydraulic_diffusion,
-                             double &dpp)
+                             double &dpp, const StrengthLaw& law)
 {
     /* Elasto-plasticity (Mohr-Coulomb criterion) */
 
@@ -625,13 +1296,12 @@ static void elasto_plastic2d(double bulkm, double shearm,
      * Here, the code is adopted to pure 2D or 3D plane strain.
      *
      * failure_mode --
+     *  <0: no admissible return, -ReturnRejection
      *   0: no failure
-     *   1: tensile failure, all PSs exceed tensile limit
-     *   2: tensile failure, 2 PSs exceed tensile limit
-     *   3: tensile failure, 1 PS exceeds tensile limit
-     *  10: pure shear failure
-     *  11, 12, 13: tensile + shear failure
-     *  20, 21, 22, 23: shear + tensile failure
+     *  10: shear failure (closed-form face or edge return)
+     *  30: return for the whole strength law from the uncut trial
+     *      (see consistent_return): tension, tension-shear corners and
+     *      shear returns the closed form does not cover
      */
 
     depls = 0;
@@ -640,6 +1310,7 @@ static void elasto_plastic2d(double bulkm, double shearm,
     // elastic trial stress
     double a1 = bulkm + 4. / 3 * shearm;
     double a2 = bulkm - 2. / 3 * shearm;
+    const double shear_hardening = 2*std::sqrt(anphi)*hardn;
     double sxx = s[0] + de[1]*a2 + de[0]*a1;
     double szz = s[1] + de[0]*a2 + de[1]*a1;
     double sxz = s[2] + de[2]*2*shearm;
@@ -652,6 +1323,12 @@ static void elasto_plastic2d(double bulkm, double shearm,
         syy += dpp;
         szz += dpp;
     }
+    if (!std::isfinite(sxx) || !std::isfinite(szz) || !std::isfinite(sxz) ||
+        !std::isfinite(syy)) {
+        failure_mode = -reject_nonfinite;
+        return;
+    }
+
     //
     // transform to principal stress coordinate system
     //
@@ -729,97 +1406,70 @@ static void elasto_plastic2d(double bulkm, double shearm,
 #endif
     }
 
-    // Possible tensile failure scenarios
-    // 1. S1 (least tensional or greatest compressional principal stress) > ten_max:
-    //    all three principal stresses must be greater than ten_max.
-    //    Assign ten_max to all three and don't do anything further.
-    if( p[0] >= ten_max ) {
-        s[0] = s[1] = syy = ten_max;
-        s[2] = 0.0;
-        failure_mode = 1;
-        return;
-    }
-
-    // 2. S2 (intermediate principal stress) > ten_max:
-    //    S2 and S3 must be greater than ten_max.
-    //    Assign ten_max to these two and continue to the shear failure block.
-    if( p[1] >= ten_max ) {
-        p[1] = p[2] = ten_max;
-        failure_mode = 2;
-    }
-
-    // 3. S3 (most tensional or least compressional principal stress) > ten_max:
-    //    Only this must be greater than ten_max.
-    //    Assign ten_max to S3 and continue to the shear failure block.
-    else if( p[2] >= ten_max ) {
-        p[2] = ten_max;
-        failure_mode = 3;
-    }
-
-
-    // shear yield criterion
-    double fs = p[0] - p[2] * anphi + amc;
-    if (fs >= 0.0) {
-        // Tensile failure case S2 or S3 could have happened!!
-        // XXX: Need to rationalize why exit without doing anything further.
+    const double trial[3] = {p[0], p[1], p[2]};
+    const double fs = p[0] - p[2]*anphi + amc;
+    const double ft = p[2] - ten_max;
+    if (fs >= 0 && ft < 0) {
+        // Elastic: keep the trial tensor instead of rebuilding it.
         s[0] = sxx;
         s[1] = szz;
         s[2] = sxz;
         return;
     }
 
-    failure_mode += 10;
-
-    // shear failure
-    const double alams = fs / (a1 - a2*anpsi + a1*anphi*anpsi - a2*anphi + hardn);
-    p[0] -= alams * (a1 - a2 * anpsi);
-    p[1] -= alams * (a2 - a2 * anpsi);
-    p[2] -= alams * (a2 - a1 * anpsi);
-
-    // 2nd invariant of plastic strain
-    depls = 0.5 * std::fabs(alams + alams * anpsi);
-
-    //***********************************
-    // The following seems redundant but... this is how it goes in geoFLAC.
-    //
-    // Possible tensile failure scenarios
-    // 1. S1 (least tensional or greatest compressional principal stress) > ten_max:
-    //    all three principal stresses must be greater than ten_max.
-    //    Assign ten_max to all three and don't do anything further.
-    if( p[0] >= ten_max ) {
-        s[0] = s[1] = syy = ten_max;
-        s[2] = 0.0;
-        failure_mode += 20;
-        return;
+    // A shear face or edge return that finishes below the tensile cap is the
+    // closed form of the uncut-trial return. Tension always goes to
+    // consistent_return, with associated flow on the cap and its plastic
+    // strain in history, as in 3D.
+    StrengthCurve curve = start_curve(law);
+    bool closed_form = false;
+    if (fs < 0) {
+        failure_mode = 10;
+        closed_form = shear_return(trial, p, depls, a1, a2, anphi, anpsi, amc,
+                                   shear_hardening, ten_max, true);
     }
-
-    // 2. S2 (intermediate principal stress) > ten_max:
-    //    S2 and S3 must be greater than ten_max.
-    //    Assign ten_max to these two and continue to the shear failure block.
-    if( p[1] >= ten_max ) {
-        p[1] = p[2] = ten_max;
-        failure_mode += 20;
+    if (!closed_form || !closed_form_applies(curve) || !closed_form_consistent(curve, p, depls)) {
+        const double guess = closed_form ? depls : 0;
+        const int rejection = consistent_return(trial, a1, a2, curve, true, 3, guess, p, depls);
+        if (rejection) {
+            failure_mode = -rejection;
+            return;
+        }
+        failure_mode = 30;
     }
-
-    // 3. S3 (most tensional or least compressional principal stress) > ten_max:
-    //    Only this must be greater than ten_max.
-    //    Assign ten_max to S3 and continue to the shear failure block.
-    else if( p[2] >= ten_max ) {
-        p[2] = ten_max;
-        failure_mode += 20;
-    }
-    //***********************************
-
 
     // rotate the principal stresses back to global axes
-    {
-        double dc2 = (p[n1] - p[n2]) * cos2t;
-        double dss = p[n1] + p[n2];
-        s[0] = 0.5 * (dss + dc2);
-        s[1] = 0.5 * (dss - dc2);
-        s[2] = 0.5 * (p[n1] - p[n2]) * sin2t;
-        syy = p[n3];
+    rotate_stress2d(p, n1, n2, n3, cos2t, sin2t, s, syy);
+}
+
+static const char* rejection_text(int reason)
+{
+    switch (reason) {
+    case reject_nonfinite:
+        return "non-finite trial stress";
+    case reject_no_return:
+        return "no set of shear faces and tensile caps gives an admissible return";
+    case reject_no_root:
+        return "the strength law has more linear pieces than the return searches";
+    default:
+        return "unknown";
     }
+}
+
+static void report_rejected_returns(const Variables& var, int count,
+                                    long long first, int reasons)
+{
+    const long long element = first / reject_reason_count;
+    const int reason = int(first % reject_reason_count);
+    std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
+              << " elements at step " << var.steps << ".\n"
+              << "  First element " << element << ": " << rejection_text(reason) << ".\n";
+    for (int r = 1; r < reject_reason_count; ++r)
+        if (r != reason && (reasons & (1 << r)))
+            std::cerr << "  Also: " << rejection_text(r) << ".\n";
+    die(EXIT_RUNTIME_NONCONVERGENCE,
+        reasons & (1 << reject_nonfinite) ? "Non-finite stress: check the time step." :
+            "Please report this stress state.");
 }
 
 void update_stress(const Param& param, Variables& var, tensor_t& stress,
@@ -847,17 +1497,24 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         needs_slip_rate &&
         param.control.rsf_slip_rate_projection_option ==
             rsf_slip_rate_projection_maximum_shear;
+    const bool start_angles = param.control.iterative_return_mapping_option == 0;
 
+    // Count, lowest element*reject_reason_count+reason, and the set of reasons.
+    int rejected_returns = 0;
+    long long first_rejection = LLONG_MAX;
+    int rejection_reasons = 0;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity)
+                     needs_projected_velocity, start_angles) reduction(+:rejected_returns) \
+        reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
-    #pragma acc parallel loop gang vector async // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop gang vector async reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
     for (int e = 0; e < var.nelem; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
+        int rejection = 0;
 
         // Centroid interpolations, each gated on the branch that reads it: ungated they cost
         // 2 + NDIMS nodal gathers per element per step in every run. The `ppressure` LEVEL
@@ -1007,20 +1664,27 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double depls = 0;
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max);
+                // The piece of the weakening law at pls gives the strength
+                // here and is reused by the plastic returns.
+                MatProps::StrengthPiece piece;
+                var.mat->strength_here(e, plstrain[e], piece);
+                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
+                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
+                const StrengthLaw law = {var.mat, e, plstrain[e],
+                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         &piece, start_angles};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp, law);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp, law);
                 }
+                if (failure_mode < 0) rejection = -failure_mode;
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
             }
@@ -1043,9 +1707,15 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                         plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
                 double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max);
+                // The piece of the weakening law at pls gives the strength
+                // here and is reused by the plastic returns.
+                MatProps::StrengthPiece piece;
+                var.mat->strength_here(e, plstrain[e], piece);
+                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
+                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
+                const StrengthLaw law = {var.mat, e, plstrain[e],
+                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         &piece, start_angles};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1055,12 +1725,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp, law);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp, law);
                 }
                 double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
@@ -1073,6 +1743,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 else {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
+                    // Only a stored plastic stress must be admissible.
+                    if (failure_mode < 0) rejection = -failure_mode;
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
                     if (var.mat->is_plane_strain) syy = spyy;
@@ -1103,19 +1775,33 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
                                        var.dt, param.mat.state_var_model, initial_equilibrium);
+                const StrengthLaw law = {var.mat, e, plstrain[e],
+                                         amc, anphi, anpsi, ten_max, true, slip_rate,
+                                         state_variable[e], dyn_fric_coeff[e],
+                                         param.mat.state_var_model, initial_equilibrium, nullptr,
+                                         start_angles};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, s, syy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp, law);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, s, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp, law);
                 }
+                if (failure_mode < 0) rejection = -failure_mode;
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
+                // The iterative return used the friction of the stored
+                // history; store that coefficient. The state was already
+                // advanced this step, and frozen initial-equilibrium friction
+                // stays as stored. Option 0 used the stored coefficient.
+                if (depls > 0 && !initial_equilibrium && !start_angles)
+                    var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
+                                                     state_variable[e], dyn_fric_coeff[e],
+                                                     param.mat.state_var_model);
             }
             break;
         case MatProps::rh_evp_rsf: // rate-and-state frition model
@@ -1154,6 +1840,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                                        amc, anphi, anpsi, hardn, ten_max, slip_rate,
                                        dyn_fric_coeff[e], state_variable[e],
                                        var.dt, param.mat.state_var_model, initial_equilibrium);
+                const StrengthLaw law = {var.mat, e, plstrain[e],
+                                         amc, anphi, anpsi, ten_max, true, slip_rate,
+                                         state_variable[e], dyn_fric_coeff[e],
+                                         param.mat.state_var_model, initial_equilibrium, nullptr,
+                                         start_angles};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
                 #pragma acc loop seq
@@ -1163,12 +1854,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     spyy = syy;
                     elasto_plastic2d(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                      de, depls, sp, spyy, failure_mode, 
-                                     has_hydraulic_diffusion, dpp);
+                                     has_hydraulic_diffusion, dpp, law);
                 }
                 else {
                     elasto_plastic(bulkm, shearm, amc, anphi, anpsi, hardn, ten_max,
                                    de, depls, sp, failure_mode, 
-                                   has_hydraulic_diffusion, dpp);
+                                   has_hydraulic_diffusion, dpp, law);
                 }
                 double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
@@ -1181,8 +1872,18 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 else {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sp[i];
+                    // Only a stored plastic stress must be admissible.
+                    if (failure_mode < 0) rejection = -failure_mode;
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
+                    // The iterative return used the friction of the stored
+                    // history; store that coefficient. The state was already
+                    // advanced this step, and frozen initial-equilibrium friction
+                    // stays as stored. Option 0 used the stored coefficient.
+                    if (depls > 0 && !initial_equilibrium && !start_angles)
+                        var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
+                                                         state_variable[e], dyn_fric_coeff[e],
+                                                         param.mat.state_var_model);
                     if (var.mat->is_plane_strain) syy = spyy;
                 }
             }
@@ -1197,10 +1898,19 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 ? trace(s)+syy : trace(s);
             dpressure[e] = new_trace-old_s;
         }
+        // Updated without a branch: NVHPC loses conditional updates of these
+        // reductions on the GPU, and the run would go on without exit 54.
+        rejected_returns += rejection != 0;
+        rejection_reasons |= (rejection != 0) << rejection;
+        first_rejection = std::min(first_rejection, rejection != 0 ?
+                                   (long long)e*reject_reason_count + rejection : LLONG_MAX);
         // std::cerr << "stress " << e << ": ";
         // print(std::cerr, s, NSTR);
         // std::cerr << '\n';
     }
+    #pragma acc wait
+    if (rejected_returns != 0)
+        report_rejected_returns(var, rejected_returns, first_rejection, rejection_reasons);
 #ifdef NPROF
     nvtxRangePop();
 #endif

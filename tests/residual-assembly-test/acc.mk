@@ -13,4 +13,4 @@ $(TEST_EXE): $(TEST_DRIVER) $(TEST_MAIN) $(TEST_OBJS) $(M_OBJS) $(C3X3_DIR)/lib$
 	$(CXX) $(TEST_DRIVER) $(TEST_MAIN) $(TEST_OBJS) $(M_OBJS) $(LDFLAGS) $(BOOST_LDFLAGS) -L$(C3X3_DIR) -l$(C3X3_LIBNAME) -o $@
 .PHONY: residual-assembly-check
 residual-assembly-check: $(TEST_EXE)
-	./$(TEST_EXE)
+	sh $(TEST_DIR)/check.sh ./$(TEST_EXE)
