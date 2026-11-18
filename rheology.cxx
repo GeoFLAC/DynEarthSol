@@ -1898,12 +1898,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 ? trace(s)+syy : trace(s);
             dpressure[e] = new_trace-old_s;
         }
-        if (rejection) {
-            ++rejected_returns;
-            first_rejection = std::min(first_rejection,
-                                       (long long)e*reject_reason_count + rejection);
-            rejection_reasons |= 1 << rejection;
-        }
+        // Updated without a branch: NVHPC loses conditional updates of these
+        // reductions on the GPU, and the run would go on without exit 54.
+        rejected_returns += rejection != 0;
+        rejection_reasons |= (rejection != 0) << rejection;
+        first_rejection = std::min(first_rejection, rejection != 0 ?
+                                   (long long)e*reject_reason_count + rejection : LLONG_MAX);
         // std::cerr << "stress " << e << ": ";
         // print(std::cerr, s, NSTR);
         // std::cerr << '\n';
