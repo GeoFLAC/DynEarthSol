@@ -377,6 +377,16 @@ static void test_body_force() {
         update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped);
         double baseline=0;
         for (int n=0;n<m->var.nnode;++n) baseline+=m->force_undamped[n][NDIMS-1];
+        // Boundary assembly reuses tmp_result. The PT rounding floor needs the
+        // node sums of the absolute element forces as assembled before that.
+        auto* magnitude = new array_t(m->var.nnode);
+        update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,
+                     &m->force_undamped,0,false,magnitude);
+        for (int n=0;n<m->var.nnode;++n)
+            for (int d=0;d<NDIMS;++d)
+                check("node force magnitude survives boundary scratch",(*magnitude)[n][d],
+                      d==NDIMS-1 ? weight*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
+        delete magnitude;
         const double rho = wet ? 2200 : 2500;
         const double area = NDIMS==2 ? 1 : 0.5;
         for (double dt : {0.5,1.0,0.5,0.0}) {
@@ -769,8 +779,9 @@ static void test_material_trials() {
                     check("failed solve invalidates diagnostic",!m->var.PT_force_residual_valid,1);
                     check("failed solve iterations",result.iterations,cap);
                     check("failed solve has imbalance",result.residual>0,1);
-                    if (!running) check("failed solve threshold",result.threshold,0);
-                    else check("running floor is finite and positive",std::isfinite(result.threshold) && result.threshold>0,1);
+                    // Both criteria keep a rounding floor; the solve still fails above it.
+                    check("rounding floor is finite and positive",std::isfinite(result.threshold) && result.threshold>0,1);
+                    check("failed solve stays above its threshold",result.residual>result.threshold,1);
                     check("failed solve retains reference",m->var.PT_initial_residual_max,0);
                     check("failed solve retains remesh exclusion",m->var.PT_skip_scale_update,1);
                     after->capture(m->var);
