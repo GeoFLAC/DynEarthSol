@@ -108,10 +108,11 @@ OMP_NUM_THREADS=1 mpiexec -n 4 ./dynearthsol2d.mpi model.cfg
 ```
 
 `METIS_INCLUDE_DIR` and `METIS_LIB_DIR` override compiler/linker default paths;
-`make config` prints them. Repeat the build with `ndims=3` for 3D. One-rank
-execution uses the original kernels without partitioning. Tiny meshes with no more
-elements than ranks use an explicitly logged recursive coordinate bisection,
-preserving empty-partition support.
+`make config` prints them. Repeat the build with `ndims=3` for 3D. One-rank CPU
+execution uses the original kernels without partitioning. A one-rank GPU run uses
+the compact backend with every element on its rank, without calling METIS. Tiny
+meshes with no more elements than ranks use an explicitly logged recursive
+coordinate bisection, preserving empty-partition support.
 
 The METIS graph connects elements sharing any vertex, matching DES node-star
 dependencies more closely than a face-only graph. K-way partitioning uses the
