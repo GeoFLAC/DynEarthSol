@@ -2,6 +2,7 @@
 #include <mpi.h>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
@@ -34,6 +35,7 @@
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
 #include "rheology.hpp"
+#include "runtime_info.hpp"
 #include "pseudo_transient.hpp"
 
 namespace {
@@ -489,6 +491,7 @@ struct MpiSimulation::Impl {
     double elapsed[int(MpiOp::Count)] = {}, communication_s = 0;
     double operation_comm[int(MpiOp::Count)] = {}, wait_s = 0, interior_window_s = 0;
     double_vec rank_profile;
+    std::vector<std::pair<std::string, std::string>> runtime;
     bool overlap_enabled = true, pending_active = false;
     int pending = 0;
     bool pending_nodes = false;
@@ -1126,18 +1129,59 @@ struct MpiSimulation::Impl {
     }
 };
 
+// The manifest's [runtime.mpi]: where the ranks run and how many threads each
+// uses. Collective; only the root's copy is filled.
+static std::vector<std::pair<std::string, std::string>>
+runtime_summary(int rank, int size, int provided, int local_rank, int local_size, bool overlap)
+{
+    int threads = omp_team_size_now();
+    if (threads < 1) threads = 1;   // a build without OpenMP
+    const int mine[2] = {local_size, threads};
+    int low[2], high[2], nodes = 0;
+    const int leader = local_rank == 0;
+    MPI_Reduce(mine, low, 2, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(mine, high, 2, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&leader, &nodes, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    if (rank != 0) return {};
+
+    auto range = [](int a, int b) {
+        return a == b ? std::to_string(a) : std::to_string(a) + "-" + std::to_string(b);
+    };
+    const char* level = provided == MPI_THREAD_MULTIPLE ? "multiple"
+                      : provided == MPI_THREAD_SERIALIZED ? "serialized" : "funneled";
+    // The version string's first clause, e.g. "Open MPI v4.1.6" or "MPICH Version: 4.0".
+    char version[MPI_MAX_LIBRARY_VERSION_STRING] = {};
+    int length = 0;
+    MPI_Get_library_version(version, &length);
+    std::string raw(version), library;
+    raw = raw.substr(0, raw.find_first_of(",\n"));
+    for (char c : raw) {
+        if (!std::isspace(static_cast<unsigned char>(c))) library += c;
+        else if (!library.empty() && library.back() != ' ') library += ' ';
+    }
+    while (!library.empty() && library.back() == ' ') library.pop_back();
+
+    return {{"ranks", std::to_string(size)},
+            {"nodes", std::to_string(nodes)},
+            {"ranks_per_node", range(low[0], high[0])},
+            {"threads_per_rank", range(low[1], high[1])},
+            {"thread_level", level},
+            {"halo_overlap", overlap ? "on" : "off"},
+            {"library", library.empty() ? "unknown" : library}};
+}
+
 MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
     int provided;
     MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, &provided);
     if (provided < MPI_THREAD_FUNNELED) die(EXIT_RUNTIME_RESOURCE, "MPI_THREAD_FUNNELED required");
     MPI_Comm_rank(MPI_COMM_WORLD, &impl_->rank);
     MPI_Comm_size(MPI_COMM_WORLD, &impl_->size);
-#ifdef ACC
     MPI_Comm local;
     MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, impl_->rank, MPI_INFO_NULL, &local);
     int local_rank, local_size;
     MPI_Comm_rank(local, &local_rank);
     MPI_Comm_size(local, &local_size);
+#ifdef ACC
     if (selected_device != local_rank) die(EXIT_CONFIG_VALUE, "GPU device selection differs from MPI's local rank");
     int current = -1;
     mpi_cuda_check(cudaGetDevice(&current));
@@ -1152,7 +1196,6 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
                 die(EXIT_CONFIG_VALUE, "GPU MPI ranks selected the same physical GPU");
         }
     }
-    MPI_Comm_free(&local);
     char hostname[MPI_MAX_PROCESSOR_NAME];
     int length;
     MPI_Get_processor_name(hostname, &length);
@@ -1169,6 +1212,7 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
              << " fields=managed halo_transport=host_staged\n";
     std::cout << identity.str() << std::flush;
 #endif
+    MPI_Comm_free(&local);
     if (is_root()) {
         const char* option = std::getenv("DES_MPI_OVERLAP");
         if (option && std::string(option) != "0" && std::string(option) != "1")
@@ -1176,6 +1220,8 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
         impl_->overlap_enabled = !option || std::string(option) == "1";
     }
     MPI_Bcast(&impl_->overlap_enabled, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+    impl_->runtime = runtime_summary(impl_->rank, impl_->size, provided, local_rank, local_size,
+                                     impl_->overlap_enabled);
     impl_->local.mpi = this;
     if (is_root())
         std::cout << "[mpi] compact spatial partitions; ranks=" << impl_->size
@@ -1189,6 +1235,10 @@ MpiSimulation::~MpiSimulation() {
         MPI_Bcast(&stop, sizeof(stop), MPI_BYTE, 0, MPI_COMM_WORLD);
     }
     MPI_Finalize();
+}
+
+const std::vector<std::pair<std::string, std::string>>& MpiSimulation::runtime_fields() const {
+    return impl_->runtime;
 }
 
 bool MpiSimulation::is_root() const {

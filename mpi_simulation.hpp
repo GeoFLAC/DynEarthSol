@@ -9,7 +9,9 @@ enum class MpiEntity { Node, Element };
 #ifdef USEMPI
 #include <memory>
 #include <initializer_list>
+#include <string>
 #include <utility>
+#include <vector>
 
 enum class MpiEntity { Node, Element };
 // Call before parsing parameters: managed allocations must use this rank's GPU.
@@ -60,6 +62,8 @@ public:
     int sum(int value);
     void maximum(int* data, int count);
     void report();
+    // The manifest's [runtime.mpi] fields, gathered from every rank at start.
+    const std::vector<std::pair<std::string, std::string>>& runtime_fields() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

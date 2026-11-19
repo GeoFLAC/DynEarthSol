@@ -33,7 +33,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   Both PT relaxation methods, including initial equilibrium and failure rollback,
   use the distributed compute meshes and collective convergence checks.
   CPU halo and solver regression checks accompany the backend;
-  see `doc/mpi.md`.
+  see `doc/mpi.md`. The `.manifest` and the start report record the MPI layout
+  in `[runtime.mpi]`: ranks, nodes, ranks per node, threads per rank, MPI thread
+  level, halo overlap and MPI library.
 - Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
   timestep fields with one device per rank and pinned host staging for halos.
   Root CPU mesh management handles MMG and remapping. GPU identity, full-field,

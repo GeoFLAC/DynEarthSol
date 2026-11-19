@@ -948,7 +948,11 @@ int main(int argc, const char* argv[])
     const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
     // Selects the offload device, so it must precede any compute.
     const DeviceInfo dev = init_offload_device();
+#ifdef USEMPI
+    const Manifest manifest = compose_manifest(param, build, cpu, dev, &mpi.runtime_fields());
+#else
     const Manifest manifest = compose_manifest(param, build, cpu, dev);
+#endif
     if (param.sim.has_runtime_info_display)
         report_build_and_runtime_info(manifest);
     // An -acc=gpu binary cannot compute on the host (its managed allocations need a

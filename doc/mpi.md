@@ -162,6 +162,9 @@ with process count.
 Rank zero drives initialization/isostasy, scheduling, phase changes, hydrous-marker
 advection, marker creation/correction, MMG/interpolation, surface management and
 output. Workers wait during this work. Thus **not every operation is parallel**.
+Rank zero runs this work with its OpenMP threads, so models with phase
+changes, surface option 1 or frequent remeshing usually run faster with fewer
+ranks per node and several threads each than with one single-threaded rank per core.
 A global state is collected only when needed by these operations, checkpoints,
 output or optional earthquake moment accumulation. Surface option 1
 collects/scatters a top/boundary strip. Option 0 uses compact mechanical surface
@@ -286,7 +289,10 @@ directory. Version reusable commands, acceptance criteria and scoped conclusions
 Compare equal CPU budgets and retain the same geometry, initial state and physical
 outputs. Measure complete wall time including initialization, remeshing, output
 and MPI startup. Use warmups and repeated runs without competing jobs; record CPU
-placement and GPU identities. Local shared-memory measurements do not predict
+placement and GPU identities. Each run records its ranks, nodes, ranks per node,
+threads per rank, MPI thread level, halo overlap and MPI library in the
+`[runtime.mpi]` section of `<modelname>.manifest` and prints them at start as
+`[runtime][mpi]`. Local shared-memory measurements do not predict
 multi-node or adaptive-model speedup. Keep workload-specific measurement
 scripts with their results under ignored `*.local/` directories.
 

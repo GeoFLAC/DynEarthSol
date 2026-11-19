@@ -796,7 +796,8 @@ CpuInfo probe_cpu_info(bool wait_policy_from_des)
 }
 
 Manifest compose_manifest(const Param& param, const BuildInfo& build,
-                          const CpuInfo& cpu, const DeviceInfo& dev)
+                          const CpuInfo& cpu, const DeviceInfo& dev,
+                          const std::vector<std::pair<std::string, std::string> >* mpi)
 {
     Manifest m;
     Fields run;
@@ -854,6 +855,7 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
         add(threads, "omp_wait_policy_src", cpu.wait_policy_src);
     }
     add_section(m, "runtime.threads", threads);
+    if (mpi) add_section(m, "runtime.mpi", *mpi);
 
     // Only the variables that are set, OMP_WAIT_POLICY included where main() set it.
     const char* const env_names[] = {

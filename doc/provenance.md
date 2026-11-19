@@ -46,6 +46,7 @@ The manifest uses the cfg format, with these sections in this order:
 | `[runtime.host]` | the OS, the user@host running it, the CPU and its cores, the memory |
 | `[runtime.device]` | `kernel` (`CPU` or `GPU`); on a GPU run, the device, its driver and memory |
 | `[runtime.threads]` | whether OpenMP is on, the team size, and the wait policy |
+| `[runtime.mpi]` | MPI builds only: ranks, nodes, ranks per node, threads per rank, the MPI thread level, halo overlap and the MPI library |
 | `[runtime.env]` | the thread and device variables that are set, DES's own macOS default included |
 | `[build.*]` | the executable's `build.snapshot` block, and `exe_mtime`, the file's own mtime |
 | `build.code-changes` | under `snapshot_diff=1` the diff, else a line saying it was not embedded |
