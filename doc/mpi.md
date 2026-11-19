@@ -189,6 +189,77 @@ MPI progress during computation depends on the MPI implementation; posting a
 transfer does not by itself prove simultaneous data movement. Regular
 timesteps do not gather full fields with `MPI_Allgatherv`.
 
+## Adding a distributed kernel
+
+Rank 0 runs the ordinary time loop on its global mesh. When the loop calls a
+kernel that has an MPI operation, rank 0 broadcasts a `Command` naming the
+operation, and every rank, rank 0 included, runs that kernel on its compact
+mesh. The workers wait for commands in `MpiSimulation::worker_loop()`; both
+sides run `Impl::execute()` in `mpi_simulation.cxx`.
+
+**1. The dispatch line.** The kernel starts with
+
+```cpp
+if (var.mpi && var.mpi->dispatch(MpiOp::X, var)) return;
+```
+
+On rank 0's global variables, `dispatch()` broadcasts the command, runs the
+operation and returns `true`, so the global body is skipped. Inside
+`execute()` the same kernel is called again on the compact variables. That call
+falls through to the body, because `dispatch()` returns `false` while an
+operation is running, for variables other than rank 0's global ones, and in runs
+that are not distributed (CPU runs with one rank).
+
+**2. The operation.** Add `X` to `enum class MpiOp` and its name to `op_name()`,
+and add a `case MpiOp::X:` to `execute()`. The case calls the kernel on the
+compact variables and then exchanges every field the kernel writes that a
+neighbor reads, for example
+
+```cpp
+case MpiOp::Temperature:
+    update_temperature(param, var, *var.temperature, *var.tmp_result);
+    exchange(MpiEntity::Node, {{var.temperature->data(), 1}});
+    break;
+```
+
+Element loops run over owned elements (`mpi_element_end(var)`), node loops over
+owned nodes (`mpi_node_end(var)`); the exchange fills the ghosts. Node assembly
+that can overlap communication uses `mpi_gather_passes()` and
+`mpi_gather_nodes()`, as `update_temperature()` does.
+
+**3. Scalars.** `Command` carries the step, time, `dt`, the velocity and
+timestep bounds, the surface velocity, the operation's argument and two
+switches; `Impl::command()` copies them into each rank's variables. A new scalar
+that the kernel reads goes into both. A global scalar result comes from a
+reduction (`minimum()`, `sum()`, `maximum()`). If rank 0's time loop reads it
+afterwards, copy it to `master` in the case (`if (rank == 0) master->... = ...`),
+as `TimeStep` and `Residual` do.
+
+**4. Work that only rank 0 can do.** Operations that need the global mesh,
+markers or MMG are listed in `management()`. Their case first brings rank 0's
+copy up to date (`full()` for every field, `geometry()` for coordinates and
+volumes, `boundary()` for the surface strip), runs the function on `*master`
+under `if (rank == 0)`, and then sends the result back with `distribute(false)`,
+`distribute(true)` when the mesh changed (this also repartitions), or
+`scatter_surface()`. OpenACC offload is off during these operations.
+
+**5. The version rule.** After every operation, `execute()` advances `version`
+unless the operation is on the list at its end (`Collect`, `Geometry`,
+`Boundary`, `Sample`, `Average`, `Metrics`, `TimeStep`, `Residual`, `Report`).
+`full()`, `geometry()` and `boundary()` gather again only when the version has
+moved since their last gather. An operation that changes any field must
+therefore not be on the list; one that only reads fields or computes scalars
+may be added to it.
+
+**6. Fields and offload.** A new per-node or per-element field of `Variables`
+goes into `mpi_local_fields.hpp`, or compact meshes never get it. An OpenACC
+loop that can also run on rank 0's management mesh needs
+`if(des_acc_offload_enabled())`; in a GPU MPI build that mesh stays on the host.
+
+**7. Tests.** `tests/functional/mpi/run_mpi.py` compares serial and MPI runs
+field by field; add a case to its list that uses the kernel. PT kernels are
+checked by `run_pt_mpi.py`, halo packing by `run_accelerator_checks.py`.
+
 ## Inspecting actual partitions
 
 Set an output prefix before launching; its parent directory must exist:
