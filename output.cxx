@@ -401,13 +401,13 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, coord0) firstprivate(nn, coord_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(nn, coord_components) collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(nn, coord_components) collapse(2)
         for (int c=0; c<coord_components; ++c)
             for (int n=0; n<nn; ++n) coord0[n][c] = (*var.coord)[n][c];
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, strain0, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(ne, tensor_components) collapse(2)
         for (int c=0; c<tensor_components; ++c)
             for (int e=0; e<ne; ++e) {
                 strain0[e][c] = (*var.strain)[e][c];
@@ -421,7 +421,7 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(dp_avg) firstprivate(n)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(n)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(n)
         for (int i=0; i<n; ++i) {
             dp_avg[i] = 0.0;
         }
@@ -433,7 +433,7 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, stress_avg) firstprivate(ne, tensor_components) collapse(2)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(ne, tensor_components) collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(ne, tensor_components) collapse(2)
         for (int c=0; c<tensor_components; ++c)
             for (int e=0; e<ne; ++e) stress_avg[e][c] += (*var.stress)[e][c];
 
@@ -443,7 +443,7 @@ void Output::average_fields(const Variables& var, int interval, double& time0,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(dp_avg, dp) firstprivate(n)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(n)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(n)
         for (int i=0; i<n; ++i) {
             dp_avg[i] += dp[i];
         }

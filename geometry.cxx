@@ -198,7 +198,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -237,7 +237,7 @@ void compute_volume(const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, volume) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
@@ -280,7 +280,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var, etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee;e++) {
         ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
@@ -295,7 +295,7 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
     #pragma omp parallel for default(none)      \
         shared(var,dvoldt,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
@@ -334,7 +334,7 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
     #pragma omp parallel for default(none)      \
         shared(var, dvoldt, edvoldt) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dj = 0;
@@ -370,7 +370,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee;e++) {
         etmp[e] = (*var.dpressure)[e] * (*var.volume)[e];
     }
@@ -380,7 +380,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,dp_nd,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
@@ -396,7 +396,7 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
@@ -575,7 +575,7 @@ static void spr_fused_fields(const Variables &var,
                 out_strides, num_fields)
 #endif
 #if !defined(ACC) || !defined(USEMPI)
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async copyin(in_ptrs[0:num_fields], \
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
 #endif
     for (int i = 0; i < var.nnode; ++i) {
@@ -1336,7 +1336,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, topo, spr_p_ref_old)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double c[NDIMS] = {0.0};
@@ -1445,7 +1445,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(param, var, topo, stress_n) \
             firstprivate(sea_level, rho_w_g)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
         int n = (*var.surfinfo.top_nodes)[i];
         double z = (*var.coord)[n][NDIMS-1];
@@ -1471,7 +1471,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstTensorAccessor s = (*stress)[e];
         TensorAccessor s_nn = stress_nn[e];
@@ -1501,7 +1501,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i = 0; i < var.ntop_elems; ++i) {
         int e = (*var.top_elems)[i];
         TensorAccessor s = (*stress)[e];
@@ -1532,7 +1532,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn, \
             remesh_is_changed, spr_blend_weight)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = (*stress)[e];
         ConstTensorAccessor s_nn = stress_nn[e];
@@ -1579,7 +1579,7 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo, \
             remesh_is_changed, spr_p_ref_old)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         double p_ref;
         if ((*remesh_is_changed)[e] == 0) {
@@ -1670,7 +1670,7 @@ double compute_dt(const Param& param, Variables& var,
         default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 
@@ -1913,7 +1913,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
@@ -1988,7 +1988,7 @@ void compute_mass(const Param &param, const Variables &var,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async firstprivate(rows)
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
                 volume_n[n]=0;
@@ -2070,7 +2070,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(coord, connectivity, volume, n) reduction(min:q)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:q) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:q) async
     for (int e=0; e<n; e++) {
         double quality = elem_quality(coord, connectivity, volume, e);
         if (quality < q) q = quality;
@@ -2081,7 +2081,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(coord, connectivity, volume, n, q) reduction(min:w)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(min:w) async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:w) async
         for (int e=0; e<n; e++) {
             if (e < w && elem_quality(coord, connectivity, volume, e) == q) w = e;
         }

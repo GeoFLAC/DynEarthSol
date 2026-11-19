@@ -353,7 +353,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     #pragma omp parallel for default(none) shared(var) \
         reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
     for (int i=0; i<var.nnode; ++i) {
         if (! is_on_boundary(*var.bcflag, i)) continue;
         uint flag = (*var.bcflag)[i];
@@ -454,11 +454,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     };
 #else
     double zmin = 0;
-    #pragma acc enter data copyin(zmin) async if(des_acc_offload())
+    #pragma acc enter data copyin(zmin) async if(des_acc_offload_enabled())
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async reduction(min:zmin)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async reduction(min:zmin)
     for (int k=0; k<var.nnode; ++k) {
         ConstArrayAccessor tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
@@ -489,9 +489,9 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #endif
 #endif
 #ifdef THREED
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async copyin(lateral_faces[0:4])
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async copyin(lateral_faces[0:4])
 #else
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async present(zmin)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async present(zmin)
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -727,7 +727,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         }
     }
 #ifndef THREED
-    #pragma acc exit data copyout(zmin) async if(des_acc_offload())
+    #pragma acc exit data copyout(zmin) async if(des_acc_offload_enabled())
 #endif
     #pragma acc wait
 #ifdef NPROF
@@ -750,7 +750,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.etmp_int)[e] = -1;
 
@@ -778,7 +778,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int n=0; n<bound; ++n) {
                 // this facet belongs to element e
                 int e = (*var.bfacets[i])[n].first;
@@ -864,7 +864,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = (*var.bnodes[i])[j];
                 const int npatch = var.support.size(n);
@@ -889,7 +889,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int n=0; n<bound; ++n) {
                 const int e = (*var.bfacets[i])[n].first;
                 (*var.etmp_int)[e] = -1;
@@ -1026,7 +1026,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
@@ -1035,7 +1035,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<var.surfinfo.etop; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
@@ -1126,7 +1126,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1173,7 +1173,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
@@ -1748,7 +1748,7 @@ void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, plstrain, lambha)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int ti = 0; ti < var.ntop_elems; ++ti) {
         const int e = (*var.top_elems)[ti];
         plstrain[e] -= plstrain[e] * lambha * var.dt;
@@ -1772,7 +1772,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0; i<var.ntop_elems; i++) {
             const int e = (*var.top_elems)[i];
 
@@ -1795,7 +1795,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
             const int npatch = var.support.size(nt);
@@ -1828,7 +1828,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i=0;i<var.surfinfo.ntop;i++)
         (*var.surfinfo.dh)[i] = 0.;
 
@@ -1876,7 +1876,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0; i<var.surfinfo.ntop; i++) {
             // get global index of node
             // update coordinate via dh
@@ -1890,7 +1890,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0;i<var.surfinfo.etop;i++) {
             double dh_e = 0.;
 
@@ -1922,7 +1922,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
 #endif
-    #pragma acc parallel loop if(des_acc_offload()) gang vector reduction(max:maxdh) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(max:maxdh) async
     for (int i=0; i<var.surfinfo.ntop; ++i) {
         double tmp = fabs((*var.surfinfo.dh)[i]);
 
@@ -1945,7 +1945,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var)
 #endif
-            #pragma acc parallel loop if(des_acc_offload()) gang vector
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
             for (int i=0;i<var.surfinfo.ntop;i++)
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 

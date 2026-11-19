@@ -3,26 +3,29 @@
 
 // Only compact timestep commands offload in a GPU MPI build. Initialization,
 // MMG, remapping and global output remain CPU mesh-management operations.
-inline bool& mpi_gpu_offload_flag() {
+// des_acc_offload_enabled() is the if() clause of every OpenACC loop that can
+// run on root's management mesh: false there in a GPU MPI build, else true.
+// AccOffloadScope sets it for the duration of one MPI operation.
+inline bool& des_acc_offload_flag() {
     static bool enabled=false;
     return enabled;
 }
-inline bool des_acc_offload() {
+inline bool des_acc_offload_enabled() {
 #if defined(USEMPI) && defined(ACC)
-    return mpi_gpu_offload_flag();
+    return des_acc_offload_flag();
 #else
     return true;
 #endif
 }
 
-class MpiAccScope {
+class AccOffloadScope {
     bool previous_;
 public:
-    explicit MpiAccScope(bool enabled):previous_(mpi_gpu_offload_flag()) {
-        mpi_gpu_offload_flag()=enabled;
+    explicit AccOffloadScope(bool enabled):previous_(des_acc_offload_flag()) {
+        des_acc_offload_flag()=enabled;
     }
-    ~MpiAccScope() {mpi_gpu_offload_flag()=previous_;}
-    MpiAccScope(const MpiAccScope&)=delete;
-    MpiAccScope& operator=(const MpiAccScope&)=delete;
+    ~AccOffloadScope() {des_acc_offload_flag()=previous_;}
+    AccOffloadScope(const AccOffloadScope&)=delete;
+    AccOffloadScope& operator=(const AccOffloadScope&)=delete;
 };
 #endif

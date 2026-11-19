@@ -195,7 +195,7 @@ public:
         #pragma omp parallel for default(none) shared(buffer, count) \
             collapse(2) if(count > 10000)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
                 (*this)[i][d] = buffer[i * N + d];
@@ -225,7 +225,7 @@ public:
         #pragma omp parallel for default(none) shared(buffer, count) \
             collapse(2) if(count > 10000)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
                 buffer[i * N + d] = (*this)[i][d];
@@ -240,7 +240,7 @@ public:
         if (buffer.size() < count)
             buffer.resize(count);
 
-        #pragma acc parallel loop if(des_acc_offload()) gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (std::size_t i = 0; i < count; ++i) {
             buffer[i].x = (float)(*this)[i][0];
             buffer[i].y = (float)(*this)[i][1];
@@ -285,7 +285,7 @@ public:
                 #pragma omp parallel for default(none) shared(aos_data) \
                     collapse(2) if(n_ > 10000)
 #endif
-                #pragma acc parallel loop if(des_acc_offload()) gang vector collapse(2)
+                #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
                     for (int d = 0; d < N; ++d) {
                         // AoS(i, d) -> SoA(i, d)
@@ -413,7 +413,7 @@ public:
         #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
             if(n_ > 10000)
 #endif
-        #pragma acc parallel loop if(des_acc_offload()) gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (int i = 0; i < n_; ++i) {
             ptr[offset + i * stride] = val;
         }

@@ -870,7 +870,7 @@ struct MpiSimulation::Impl {
         double started = MPI_Wtime();
         double comm_before = communication_s;
         Variables& var = local;
-        MpiAccScope offload(!management(op));
+        AccOffloadScope offload(!management(op));
         switch (op) {
         case MpiOp::State:
             distribute(true);
