@@ -231,6 +231,18 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = p.mat.fluid_visc;
     biot_coeff = p.mat.biot_coeff;
     bulk_modulus_s = p.mat.bulk_modulus_s;
+    // Largest hydraulic diffusivity over the materials, as update_pore_pressure computes it
+    // per element. update_pore_pressure replaces it with the element maximum after the first
+    // step, but compute_dt runs before that: started from a placeholder, the explicit
+    // pressure update could run up to slow_updates_interval steps beyond its stability limit.
+    if (p.control.has_hydraulic_diffusion) {
+        for (int m = 0; m < nmat; ++m) {
+            const double matrix_comp = 1.0 / (p.mat.bulk_modulus[m] + 4.0 * p.mat.shear_modulus[m] / 3.0);
+            const double storage = p.mat.porosity[m] / p.mat.fluid_bulk_modulus[m] + p.mat.biot_coeff[m] * matrix_comp;
+            if (storage > 0)
+                hydro_diff_max = std::max(hydro_diff_max, p.mat.hydraulic_perm[m] / (p.mat.fluid_visc[m] * storage));
+        }
+    }
     // Rate-and-state friction parameters
     direct_a = p.mat.direct_a;
     evolution_b = p.mat.evolution_b;
