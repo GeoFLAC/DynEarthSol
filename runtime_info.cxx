@@ -41,12 +41,8 @@
 #endif
 
 #include <nanoflann.hpp>
-#ifdef HDF5
 #include <H5public.h>
-#endif
-#ifdef USEMMG
 #include <mmg/common/mmgversion.h>
-#endif
 #include "binaryio.hpp"
 #include "constants.hpp"
 
@@ -79,28 +75,20 @@ __attribute__((used)) const char snapshot_sentinel[] =
 #ifdef ACC
     " gpu_cc=cc" DES_GPU_CC
 #endif
-    // The frame format output.cxx compiles in; layout = BINARY_FILE_REVISION.
+    // The frame format output.cxx writes; layout = FILE_REVISION.
     "\nbuild.snapshot.output     :"
-#ifdef HDF5
     " container=vtkhdf"
-#else
-    " container=des-binary"
-#endif
-    " layout=" DES_STR(BINARY_FILE_REVISION)
+    " layout=" DES_STR(FILE_REVISION)
     // version@rev: a patched submodule still reports its release's version.
     "\nbuild.snapshot.submodules :"
 #ifdef ACC
     " knn-bvh=" DES_KNNBVH_REV   // no version macro, so the rev alone
 #endif
     " nanoflann=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
-#ifdef USEMMG
     " mmg=" MMG_VERSION_RELEASE DES_MMG_REV "(" DES_SRC_MMG ")"
-#endif
     // Ordered by how likely a version change explains a behaviour change.
     "\nbuild.snapshot.libs       :"
-#ifdef HDF5
     " hdf5=" H5_VERSION "(" DES_SRC_HDF5 ")"
-#endif
 #ifdef _OPENMP
     " openmp=" DES_STR(_OPENMP) "(" DES_SRC_OPENMP ")"
 #else

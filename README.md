@@ -9,7 +9,6 @@
 [![Functional tests](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/functional-tests.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/functional-tests.yml)
 <br> <!-- External Modules & Integrations -->
 [![Exodus build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/exodus-build.yml)
-[![MMG build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/mmg-build.yml)
 [![GoSPL build](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml/badge.svg)](https://github.com/GeoFLAC/DynEarthSol/actions/workflows/gospl-build.yml)
 
 # Overview
@@ -22,9 +21,9 @@ Earth's lithosphere and problems alike.
 # Building DES
 
 ## Getting the Source Code
-This repository uses Git submodules for three libraries: `nanoflann` (always),
-`mmg` (with `usemmg=1`) and `knn-bvh` (with `openacc=1`). `make` initializes the
-ones a build needs, fetching them over the internet before compiling.
+This repository uses Git submodules for three libraries: `nanoflann` and `mmg`
+(always) and `knn-bvh` (with `openacc=1`). `make` initializes the ones a build
+needs, fetching them over the internet before compiling.
 
 For environments without internet access (such as certain HPC compute nodes), pre-downloading all dependencies is highly recommended. To ensure all necessary source files are downloaded upfront, clone the repository with its submodules using the `--recurse-submodules` flag:
 
@@ -45,19 +44,34 @@ own, with no paths to edit and none to pass on the command line.
 
 ```bash
 # macOS (Homebrew) -- libomp because Apple clang ships no OpenMP runtime
-brew install libomp
+brew install libomp cmake hdf5
 
 # Debian / Ubuntu
-sudo apt install g++ make
+sudo apt install g++ make cmake libhdf5-dev
 
 # Fedora / RHEL
-sudo dnf install gcc-c++ make
+sudo dnf install gcc-c++ make cmake hdf5-devel
 ```
 
 The requirements in detail:
 * You will need a C++17 compiler: g++ 8 or newer, nvc++ 25.7 or newer (NVIDIA
   HPC SDK), or clang++ 5 or newer. CI builds with g++ 8 through 15, nvc++
   25.7, clang 18 and the Apple clang of the current macOS runner.
+* cmake 3.5 or newer, which configures the `mmg` submodule (see
+  [Submodules](#submodules)).
+* [HDF5](https://www.hdfgroup.org/solutions/hdf5/): DES writes its results in
+  the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
+  format, which is compressed (up to 50 % smaller) and opens directly in ParaView.
+  * The build locates it via `pkg-config` and then the usual install layouts,
+    picking the prefix that matches the host architecture: on a Mac that has
+    used both Homebrew prefixes, `h5cc` and `pkg-config` on `PATH` are often the
+    x86_64 ones. With `useexo=1` it takes the HDF5 that seacas built, and on
+    Linux with `usegospl=1` the GoSPL conda env's HDF5, each when it has one, so
+    that one process loads one HDF5 library.
+  * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
+    a conda env or a hand-built copy:
+    `make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
+    Either one alone is enough; the other is still detected.
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.
@@ -85,7 +99,7 @@ defaults are not what you want.
 
 ### Build options
 
-* Options go on the command line (`make ndims=2 hdf5=1`) or into the
+* Options go on the command line (`make ndims=2 openmp=0`) or into the
   corresponding variable at the top of the `Makefile`; the command line wins.
   Changing a flag rebuilds what it reaches, so no `make clean` is needed.
 * `make check-deps` verifies the external libraries, including their
@@ -108,8 +122,14 @@ defaults are not what you want.
 ### Submodules
 * [nanoflann](https://github.com/jlblancoc/nanoflann): header-only KD-tree for
   nearest-neighbour searches on the CPU. Always required.
-* [mmg](https://github.com/MmgTools/mmg): mesh optimization during remeshing.
-  Required with `usemmg=1`; `make` configures and builds it under `mmg/build`.
+* [mmg](https://github.com/MmgTools/mmg): the remesher, in 2D and 3D. Always
+  required; `make` configures it with cmake and builds `libmmg2d`
+  and `libmmg3d` under `mmg/build`, with the C and C++ compilers of `CXX`'s
+  toolchain. The configure step ignores an exported `CFLAGS`; a tree configured
+  earlier keeps its cached flags and compilers until `mmg/build` is removed. A
+  `mmg/build` configured at another path (the tree mounted into a container,
+  say) is removed and rebuilt automatically.
+  `MMG_INCLUDE` and `MMG_LIB_DIR` point at a different build.
 * [knn-bvh](https://github.com/GeoFLAC/knn-bvh): K-nearest-neighbour searches
   on Bounding Volume Hierarchies, the GPU counterpart of nanoflann. Required with
   `openacc=1`.
@@ -129,26 +149,6 @@ defaults are not what you want.
     make; make install
     ```
   * `EXO_INCLUDE` and `EXO_LIB_DIR` override those defaults.
-* [MMG](https://www.mmgtools.org/), `usemmg=1`, for mesh optimization during
-  remeshing, in 2D and 3D. It is the `mmg` submodule: `make usemmg=1` initializes
-  it and builds `libmmg2d` or `libmmg3d` under `mmg/build`, so nothing is
-  installed by hand. The configure step ignores an exported `CFLAGS`; a tree
-  configured earlier keeps its cached flags until `mmg/build` is removed. A
-  `mmg/build` configured at another path (the tree mounted into a container,
-  say) is removed and rebuilt automatically.
-  `MMG_INCLUDE` and `MMG_LIB_DIR` point at a different build.
-* [HDF5](https://www.hdfgroup.org/solutions/hdf5/), `hdf5=1`, for writing
-  results in the HDF5-based [vtkhdf](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format)
-  format, which is compressed (up to 50 % smaller) and opens directly in ParaView.
-  * Install it with `brew install hdf5` (macOS), `apt install libhdf5-dev`
-    (Debian/Ubuntu) or `dnf install hdf5-devel` (Fedora/RHEL). The build locates
-    it via `pkg-config` and then the usual install layouts, picking the prefix
-    that matches the host architecture: on a Mac that has used both Homebrew
-    prefixes, `h5cc` and `pkg-config` on `PATH` are often the x86_64 ones.
-  * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
-    a conda env or a hand-built copy:
-    `make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
-    Either one alone is enough; the other is still detected.
 * [GoSPL](https://gospl.readthedocs.io/) (Global Scalable Paleo Landscape
   Evolution), `usegospl=1`, for two-way coupling with a surface process model.
   GoSPL handles erosion, deposition and hillslope diffusion; DES handles
@@ -165,7 +165,7 @@ defaults are not what you want.
     make install-local      # macOS: add PYTHON_LIBS="$CONDA_PREFIX/lib/libpython3.11.dylib"
     ```
   * Coupling is 3D only. With the environment active, build with
-    `make ndims=3 usegospl=1 usemmg=1 CONDA_ENV_PATH=$CONDA_PREFIX`.
+    `make ndims=3 usegospl=1 CONDA_ENV_PATH=$CONDA_PREFIX`.
     `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
     and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
     `dynearthsol-gospl` wrapper script.
@@ -311,10 +311,9 @@ Nothing else to configure: `make` locates the header and the library itself.
   ```bash
   ./build.sh
   ```
-  The image includes HDF5, so `make hdf5=1` in the container builds with
-  `.vtkhdf` output. The GoSPL image uses the `gospl` conda env's HDF5, and its
-  login shell exports `HDF5_INCLUDE_DIR`/`HDF5_LIB_DIR` so that build links
-  that same one.
+  The plain image installs HDF5 with apt. The GoSPL image uses the `gospl`
+  conda env's HDF5, and its login shell exports `HDF5_INCLUDE_DIR`/`HDF5_LIB_DIR`
+  so that a build in it links that same one.
 * Run it. The shell starts in `~/DynEarthSol`, and `./runs` on the host is
   mounted at `~/DynEarthSol/runs`: run models there, since results written
   there stay on the host and anything written elsewhere in the container is
@@ -329,8 +328,8 @@ Nothing else to configure: `make` locates the header and the library itself.
   ```
 * `GOSPL=1 ./build.sh` builds `dynearthsol/gcc-11-gospl` instead
   (`dynearthsol/clang-14-gospl` with `CXXVERSION=clang-14`): a 3D
-  executable with GoSPL coupling and MMG remeshing (`usemmg=1`), the `gospl`
-  conda environment and `gospl_extensions` included, so no conda setup is needed on the host. Mount a
+  executable with GoSPL coupling, the `gospl` conda environment and
+  `gospl_extensions` included, so no conda setup is needed on the host. Mount a
   directory holding the cfg and the GoSPL YAML and run `dynearthsol-gospl`
   inside it; see `gospl_driver/README.md`. Miniforge, `gospl` and
   `gospl_extensions` are pinned in the `Dockerfile`
@@ -357,14 +356,8 @@ make opt=0 openmp=0
 # build 2D version
 make ndims=2
 
-# enable MMG mesh optimization (builds the mmg submodule)
-make usemmg=1
-
 # enable Exodus mesh import, 3D only (requires seacas/exodus libs)
 make useexo=1
-
-# enable HDF5-based vtkhdf output support (requires HDF5)
-make hdf5=1
 
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
@@ -413,13 +406,13 @@ make openacc=1 GPU_CC=90
   and `gospl_driver/README.md` for the details.
 
 # Visualizing DES outputs
-* Run `2vtk.py modelname` to convert the binary output to VTK files; `2vtk.py -h`
+* Run `2vtk.py modelname` to convert the output to VTK files; `2vtk.py -h`
   lists the options, among them markers (`-m`), principal stresses (`-p`) and
   full tensors (`-t`).
 * What a frame contains is set in the input file (`has_marker_output`,
   `is_outputting_averaged_fields`, ... in the `[sim]` section of
   `examples/defaults.cfg`), not by editing sources.
-* With `hdf5=1` the output is already `.vtkhdf`, which
+* The output is already `.vtkhdf`, which
   [ParaView](https://www.paraview.org/download/) opens directly; `2vtk.py -u` adds
   the derived fields to it in place. Plain VTK files open in ParaView or
   [VisIt](https://visit-dav.github.io/visit-website/).

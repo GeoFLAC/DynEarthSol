@@ -16,15 +16,11 @@
 #include "tetgen/tetgen.h"
 #undef TETLIBRARY
 
-#ifdef USEMMG
 #include "mmg/mmg3d/libmmg3d.h"
-#endif
 
 #else // !THREED
 
-#ifdef USEMMG
 #include "mmg/mmg2d/libmmg2d.h"
-#endif
 
 #endif // THREED
 
@@ -771,7 +767,6 @@ void set_3d_quality_str(std::string &quality, double max_ratio,
     }
 }
 
-#ifdef USEMMG
 struct CentroidCloud {
     const double *pts;  // AoS layout: x0,y0,z0, x1,y1,z1, ...
     int n;
@@ -896,7 +891,8 @@ static void compute_init_metric(
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
             // A region without a size constraint (.poly size <= 0) keeps each element's as-meshed
-            // size, as on the non-MMG path (a mesh.resolution fallback would refine the region).
+            // size, as a plain Triangle/TetGen initial mesh does (a mesh.resolution fallback would
+            // refine the region).
             double target = (vol > 0)
                 ? std::pow(vol / sizefactor, 1.0 / NDIMS)
                 : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
@@ -1598,7 +1594,6 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
     std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
               << nnode << " nodes, " << nelem << " elements\n";
 }
-#endif // USEMMG
 
 
 #ifdef THREED
@@ -1717,13 +1712,11 @@ void adopt_initial_mesh(const Param &param, Variables &var,
                         double *pcoord, int *pconnectivity, int *psegment, int *psegflag,
                         double *pregattr)
 {
-#ifdef USEMMG
     refine_initial_weak_zone(param, var, var.nnode, var.nelem, var.nseg,
                              pcoord, pconnectivity, psegment, psegflag, pregattr);
     if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
         refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
                                   pcoord, pconnectivity, psegment, psegflag, pregattr);
-#endif
 
     var.coord = new array_t(pcoord, var.nnode);
     var.connectivity = new conn_t(pconnectivity, var.nelem);
@@ -1752,7 +1745,6 @@ void points_to_mesh(const Param &param, Variables &var,
     std::vector<double> coarse_regattr_vec;
     const double *coarse_regattr_ptr = regattr;
 
-#ifdef USEMMG
     if (param.mesh.use_mmg_init) {
         // Step 1: scale volume for coarse TetGen mesh
         if (max_elem_size > 0) {
@@ -1818,14 +1810,6 @@ void points_to_mesh(const Param &param, Variables &var,
                            var.nnode, var.nelem, var.nseg,
                            pcoord, pconnectivity, psegment, psegflag, pregattr);
     }
-#else // !USEMMG
-    points_to_new_mesh(param.mesh, npoints, points,
-                       n_init_segments, init_segments, init_segflags,
-                       nregions, regattr,
-                       max_elem_size, vertex_per_polygon,
-                       var.nnode, var.nelem, var.nseg,
-                       pcoord, pconnectivity, psegment, psegflag, pregattr);
-#endif
 
     adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 }
@@ -2548,7 +2532,6 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag;
 
-#ifdef USEMMG
     if (param.mesh.use_mmg_init) {
         // Step 1: scale volume for coarse TetGen mesh
         double coarse_max_elem_size = max_elem_size;
@@ -2605,20 +2588,6 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                                   &pcoord, &pconnectivity,
                                   &psegment, &psegflag, &pregattr);
     }
-#else // !USEMMG
-    tetrahedralize_polyhedron(param.mesh.max_ratio,
-                              param.mesh.min_tet_angle, max_elem_size,
-                              0,
-                              param.mesh.meshing_verbosity,
-                              param.mesh.tetgen_optlevel,
-                              npoints, n_init_segments, points,
-                              NULL, init_segflags,
-                              facets,
-                              nregions, regattr,
-                              &var.nnode, &var.nelem, &var.nseg,
-                              &pcoord, &pconnectivity,
-                              &psegment, &psegflag, &pregattr);
-#endif
 
     adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 #else
@@ -3034,32 +3003,6 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
         die(EXIT_MESH_TETGEN);
     }
 
-}
-
-
-void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
-                           int n_init_segments, const int *init_segments, const int *init_segflags,
-                           int n_regions, const double *regattr,
-                           double max_elem_size, int vertex_per_polygon,
-                           int &nnode, int &nelem, int &nseg, double *&pcoord,
-                           int *&pconnectivity, int *&psegment, int *&psegflag, double *&pregattr)
-{
-#ifdef THREED
-    /* For triangulation of boundary surfaces in 3D */
-
-    triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity, mesh.max_steiner_factor,
-                        npoints, n_init_segments, points,
-                        init_segments, init_segflags,
-                        n_regions, regattr,
-                        &nnode, &nelem, &nseg,
-                        &pcoord, &pconnectivity,
-                        &psegment, &psegflag, &pregattr);
-
-    if (nelem <= 0) {
-        die(EXIT_MESH_TETGEN, "surface triangulation failed");
-    }
-#endif
 }
 
 
@@ -3885,8 +3828,7 @@ void create_new_mesh(const Param& param, Variables& var)
         die(EXIT_CONFIG_VALUE);
     }
 
-    if (param.mesh.is_discarding_internal_segments)
-        discard_internal_segments(var.nseg, *var.segment, *var.segflag);
+    discard_internal_segments(var.nseg, *var.segment, *var.segflag);
 
     renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, var.regattr, var.init_elem_size_n);
 

@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       apt-get install -y clang libomp-dev; \
     fi
 
-# Plain image: HDF5 for hdf5=1, and numpy/scipy for the Python utilities.
+# Plain image: HDF5, and numpy/scipy for the Python utilities.
 FROM base AS env-0
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -113,7 +113,7 @@ ARG NDIMS=2
 RUN if [ "$CXXVERSION" = "clang-14" ]; then cxx=CXX=clang++; fi \
     && make ndims=$NDIMS cleanall \
     && if [ "$GOSPL" = "1" ]; then \
-      make ndims=3 usegospl=1 usemmg=1 -j$(nproc) $cxx \
+      make ndims=3 usegospl=1 -j$(nproc) $cxx \
         CONDA_ENV_PATH=$HOME/miniforge3/envs/gospl PYTHON_VERSION=3.11; \
     else \
       make ndims=$NDIMS -j$(nproc) $cxx; \
