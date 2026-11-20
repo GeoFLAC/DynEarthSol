@@ -11,14 +11,22 @@
 #include "utils.hpp"
 
 
-void KNN::backend_str(char* buf, size_t n) const
+void KNN::print_search(const char* stage, long nquery, int k_neig,
+        [[maybe_unused]] int batch_queries) const
 {
-    snprintf(buf, n, "%s", backend_name());
+    printf("%sknn: %10s pts for %11s q w/ %2d k", stage,
+            format_with_commas((unsigned long)numPoints).c_str(),
+            format_with_commas((unsigned long)nquery).c_str(), k_neig);
+#if defined(ACC) && !defined(USEMPI)
+    // d_queries + d_results of one batch
+    const size_t bytes = (size_t)batch_queries * (3 * sizeof(float) + (size_t)k_neig * sizeof(neighbor));
+    printf(", %6.1f MB", bytes / 1048576.0);
+#endif
+    fflush(stdout);
 }
 
-KNN::KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, bool is_msg_, int capacity) :
+KNN::KNN(const array_t& points_vec_, NANOKDTree& nano_kdtree_, [[maybe_unused]] int capacity) :
     points_vec(points_vec_), numPoints(points_vec_.size()),
-    resolution(param.mesh.resolution), is_msg(is_msg_),
     nano_kdtree(nano_kdtree_)
 {
     h_results = nullptr;
@@ -76,13 +84,9 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    if (is_msg) printf("      knn: %d pts ", numPoints);
-
     const size_t required_size = (size_t)nquery * k_neig;
 
 #if defined(ACC) && !defined(USEMPI)
-    if (is_msg) printf("(lbvh GPU)\n");
-
     if (is_sync_to_host && required_size > h_results_capacity) {
         if (h_results) delete[] h_results;
         h_results = new neighbor[required_size];
@@ -136,7 +140,6 @@ neighbor* KNN::search(const array_t& queries, int nquery, int k_neig,
 
 #else
     #pragma acc wait
-    if (is_msg) printf("(nano-kdtree)\n");
 
     if (required_size > h_results_capacity) {
         if (h_results) delete[] h_results;

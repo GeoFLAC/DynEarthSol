@@ -5002,16 +5002,16 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             Barycentric_transformation bary(old.coord, old.connectivity, *var.volume);
 
             // interpolating fields defined on elements
-            nearest_neighbor_interpolation(param, var, bary, old.coord, old.connectivity, rs);
+            nearest_neighbor_interpolation(var, bary, old.coord, old.connectivity, rs);
 
             Barycentric_transformation bary_surface(old.coord, old.connectivity_surface, old_surface_area, true);
 
             // interpolating fields defined on surface elements
-            nearest_neighbor_interpolation(param, var, bary_surface, old.coord, old.connectivity_surface,
+            nearest_neighbor_interpolation(var, bary_surface, old.coord, old.connectivity_surface,
                                            rs, true);
 
             // interpolating fields defined on nodes
-            barycentric_node_interpolation(param, var, bary, old.coord, old.connectivity, rs);
+            barycentric_node_interpolation(var, bary, old.coord, old.connectivity, rs);
         }
 
         create_support(var);

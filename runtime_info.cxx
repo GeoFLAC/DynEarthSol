@@ -84,7 +84,8 @@ __attribute__((used)) const char snapshot_sentinel[] =
 #ifdef ACC
     " knn-bvh=" DES_KNNBVH_REV   // no version macro, so the rev alone
 #endif
-    " nanoflann=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
+    // The nanoflann submodule, keyed by its role: its name matches a case-blind search for NaN.
+    " knn-kdtree=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
     " mmg=" MMG_VERSION_RELEASE DES_MMG_REV "(" DES_SRC_MMG ")"
     // Ordered by how likely a version change explains a behaviour change.
     "\nbuild.snapshot.libs       :"
@@ -810,6 +811,13 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
 
     Fields device;
     add(device, "kernel", dev.kernel);
+    // The neighbour-search structure of the remesh. No library name: "nano..." matches a
+    // case-blind search of the log for NaN.
+#if defined(ACC) && !defined(USEMPI)
+    add(device, "knn", "lbvh");
+#else
+    add(device, "knn", "kdtree");
+#endif
     // Outside the using_gpu block: "none" is why a run found no device.
     if (dev.acc_build)
         add(device, "visible_devices", dev.visible_devices);
