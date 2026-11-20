@@ -58,7 +58,10 @@ Philosophy of Software Design*.
   works on.
 * Add a new `.cxx`/`.hpp` pair only for a new subsystem: its own data, its own
   entry points called from the time loop or from several files, and some
-  hundreds of lines of code. A few dozen lines go into an existing file.
+  hundreds of lines of code. A few dozen lines go into an existing file. A
+  small header is also fine when it has to be included without the rest of
+  its subsystem: by a standalone test, or by a low-level header such as
+  `constants.hpp`. Any other new file says why in the pull request.
 * Split a file only when it is very large -- several thousand lines -- and only
   along a seam that it already has: a group of functions with its own data and
   its own callers. The split is its own commit that moves the code unchanged,
