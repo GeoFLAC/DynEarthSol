@@ -50,8 +50,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - MPI builds (`usempi=1`) require METIS 5 and partition every mesh with it,
   using shared-node connectivity and a communication volume objective; meshes with
   no more elements than ranks use recursive coordinate bisection, and a one-rank
-  GPU run keeps every element on its rank. Resized inactive hydraulic scratch
-  state after remeshing to prevent out-of-bounds MPI packing/collection.
+  GPU run keeps every element on its rank.
 
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
@@ -121,8 +120,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   key from existing inputs ([#135]).
 - **Breaking.** Seismic moment uses element plastic-strain increments in N m
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
-- MPI reuses current root fields and material caches, skips repeated PT velocity
-  synchronization, and combines RSF diagnostics into one collective reduction.
 - The time summary and the manifest time phase changes for every
   `mat.phase_change_option`, not only option 3, together with hydrous markers and
   the serpentinization grid, show surface processes on a new `Surface` line, and
@@ -228,11 +225,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Restart manifests report only the steps executed in the current run ([#135]).
 - A GVS run no longer writes a duplicate regular frame when the elapsed time
   lands on an output time to within rounding ([#135]).
-- MPI builds without MMG skip its unpopulated mesh-size hints during partitioning,
-  avoiding a startup crash when selecting compact node fields.
-
-- GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
-  initial checkpoint, avoiding indeterminate metadata in managed root state.
 - The benchmark comparator resolves the requested frame through the frame list
   when printing its step, allowing sparse restart outputs beginning above frame 0.
 - PT steps that start or end near equilibrium no longer stop with exit 54:
