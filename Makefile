@@ -665,10 +665,8 @@ INCS =	\
 	mpi_local_fields.hpp \
 	mpi_transport.hpp \
 	mpi_halo_kernels.hpp \
-	mpi_gpu_buffer.hpp \
 	mpi_acc.hpp \
 	exit_codes.hpp \
-	mpi_state.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
