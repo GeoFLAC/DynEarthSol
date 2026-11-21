@@ -16,3 +16,15 @@ you cannot infer from the tree.
   either or reply to a review without the user's explicit instruction.
 - Commit messages follow the "Commit messages" section, with a `Co-Authored-By`
   trailer naming you.
+- A new per-node or per-element field in `Variables` must also be listed in
+  `mpi_local_fields.hpp`, or MPI runs never distribute it: it stays `nullptr` on
+  every rank and is never gathered back for output, checkpoints or remeshing.
+  `tests/functional/mpi/check_mpi_fields.py` checks this; compare results with
+  `tests/functional/mpi/run_mpi.py`. A new value of an option read inside a
+  distributed kernel goes into `check_mpi_support()` in `input.cxx` only once it
+  works under MPI.
+- An OpenACC loop that can also run on root's management mesh (code that a
+  management operation calls, such as remeshing, phase changes or output) needs
+  `if(des_acc_offload_enabled())`: in a GPU MPI build that mesh stays on the
+  host. To make a kernel run on every MPI rank, follow "Adding a distributed
+  kernel" in `doc/mpi.md`.

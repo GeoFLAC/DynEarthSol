@@ -46,6 +46,7 @@ The manifest uses the cfg format, with these sections in this order:
 | `[runtime.host]` | the OS, the user@host running it, the CPU and its cores, the memory |
 | `[runtime.device]` | `kernel` (`CPU` or `GPU`); on a GPU run, the device, its driver and memory |
 | `[runtime.threads]` | whether OpenMP is on, the team size, and the wait policy |
+| `[runtime.mpi]` | MPI builds only: ranks, nodes, ranks per node, threads per rank, the MPI thread level and the MPI library |
 | `[runtime.env]` | the thread and device variables that are set, DES's own macOS default included |
 | `[build.*]` | the executable's `build.snapshot` block, and `exe_mtime`, the file's own mtime |
 | `build.code-changes` | under `snapshot_diff=1` the diff, else a line saying it was not embedded |
@@ -91,12 +92,15 @@ The other fields:
 | `init_time`, `compute_time`, `remesh_time`, `output_time` | the screen's time summary |
 | `compute_sec_per_step` | the compute time over `steps_this_run` |
 | `remeshings`, `remesh_sec_per_remesh` | this run's remesh count and average (the log's `Remeshing starts (#N` counts the model's) |
-| `outputs`, `output_sec_per_output` | the output count and average |
-| `phase_change_time`, `phase_changes`, `phase_change_sec_per_call` | the time phase changes took, their count and average (only `mat.phase_change_option` 3 times them) |
+| `outputs`, `output_sec_per_output` | the output count and average; the time includes checkpoints |
+| `phase_change_time`, `phase_changes`, `phase_change_sec_per_call` | the time phase changes took, with the hydrous markers and the serpentinization grid that serve them, their count and average |
+| `surface_time`, `surface_process_calls`, `surface_sec_per_call` | the time surface processes took, their count and average |
 
-* As on screen, wall = init + compute + remesh + output + phase changes.
+* As on screen, wall = init + compute + remesh + output + phase changes + surface processes.
+* Under MPI, the remesh, phase-change and surface-process times include gathering the fields
+  to rank zero and sending them back.
 * `remesh_sec_per_remesh` is left out when the run did not remesh, and the three phase-change
-  fields when no phase change was timed.
+  fields when no phase change ran.
 * Every total is written twice, to read and in seconds to the millisecond:
   `wall_time = 3d 01:01:11` (the day part from one day up) and `wall_time_sec = 262871.412`.
 

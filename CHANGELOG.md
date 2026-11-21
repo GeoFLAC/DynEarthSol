@@ -23,6 +23,38 @@ For a release, the full auto-generated list of merged pull requests is in its
   CSVs identify regular, pre-remesh and post-remesh states in a final `row` column
   ([#135]).
 - Native and HDF5 frames include nodal `displacement = coordinate - coord0` ([#135]).
+- Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
+  `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
+  geometry, mass and timestep bounds use compact spatial partitions with neighbor
+  halo exchanges. Ownership is rebalanced after every MMG remesh; the log reports
+  element, node, marker and ghost loads. Rank zero retains the
+  global mesh for MMG, phase changes, marker/surface management and output.
+  Individual marker records stay on rank zero; compute ranks keep material counts.
+  Both PT relaxation methods, including initial equilibrium and failure rollback,
+  use the distributed compute meshes and collective convergence checks.
+  CPU halo and solver regression checks accompany the backend;
+  see `doc/mpi.md`. The `.manifest` and the start report record the MPI layout
+  in `[runtime.mpi]`: ranks, nodes, ranks per node, threads per rank, MPI thread
+  level and MPI library.
+- Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
+  timestep fields with one device per rank and pinned host staging for halos.
+  Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
+  checkpoint and restart checks accompany the backend;
+  scientific equivalence and speedup must be verified for each workload.
+- MPI interior-node/halo overlap for thermal, force and mass assembly. Mesh
+  checks collect geometry only, and inactive serpentinization/monitor paths
+  avoid unused collections. Per-rank operation and
+  communication profiles expose rank loads and halo traffic.
+  Shared SoA halo packers have explicit OpenACC host/device test modes; host
+  checks alone do not verify full GPU solver behavior or NVLink transport.
+- MPI builds (`usempi=1`) require METIS 5 and partition every mesh with it,
+  using shared-node connectivity and a communication volume objective; meshes with
+  no more elements than ranks use recursive coordinate bisection, and a one-rank
+  GPU run keeps every element on its rank. Resized inactive hydraulic scratch
+  state after remeshing to prevent out-of-bounds MPI packing/collection.
+- A scientific-example reproduction driver checks complete serial/MPI fields,
+  checkpoints and monitors. A separate current-format Maxwell case checks the
+  analytical constitutive response in 2D and 3D without the historical source patch.
 
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
@@ -92,6 +124,16 @@ For a release, the full auto-generated list of merged pull requests is in its
   key from existing inputs ([#135]).
 - **Breaking.** Seismic moment uses element plastic-strain increments in N m
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
+- MPI reuses current root fields and material caches, skips repeated PT velocity
+  synchronization, and combines RSF diagnostics into one collective reduction.
+- The time summary and the manifest time phase changes for every
+  `mat.phase_change_option`, not only option 3, together with hydrous markers and
+  the serpentinization grid, show surface processes on a new `Surface` line, and
+  count checkpoints as output. Under MPI the remesh, phase-change and surface times
+  include the gather to rank zero and the redistribution, which `Compute` no
+  longer contains.
+- HDF5 output failures stop with the I/O exit codes 20 or 21 instead of an
+  uncaught exception (serial) or exit 61 (MPI).
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -189,6 +231,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Restart manifests report only the steps executed in the current run ([#135]).
 - A GVS run no longer writes a duplicate regular frame when the elapsed time
   lands on an output time to within rounding ([#135]).
+- MPI builds without MMG skip its unpopulated mesh-size hints during partitioning,
+  avoiding a startup crash when selecting compact node fields.
+
+- GPU MPI fixed-timestep runs initialize timestep diagnostics before writing the
+  initial checkpoint, avoiding indeterminate metadata in managed root state.
+- The benchmark comparator resolves the requested frame through the frame list
+  when printing its step, allowing sparse restart outputs beginning above frame 0.
 - PT steps that start or end near equilibrium no longer stop with exit 54:
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions

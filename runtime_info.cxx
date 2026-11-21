@@ -796,7 +796,8 @@ CpuInfo probe_cpu_info(bool wait_policy_from_des)
 }
 
 Manifest compose_manifest(const Param& param, const BuildInfo& build,
-                          const CpuInfo& cpu, const DeviceInfo& dev)
+                          const CpuInfo& cpu, const DeviceInfo& dev,
+                          const std::vector<std::pair<std::string, std::string> >* mpi)
 {
     Manifest m;
     Fields run;
@@ -854,6 +855,7 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
         add(threads, "omp_wait_policy_src", cpu.wait_policy_src);
     }
     add_section(m, "runtime.threads", threads);
+    if (mpi) add_section(m, "runtime.mpi", *mpi);
 
     // Only the variables that are set, OMP_WAIT_POLICY included where main() set it.
     const char* const env_names[] = {
@@ -973,8 +975,8 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     // %.3g, not gib_or_unknown's %.1f: a small run's peak would read 0.0.
     if (peak_rss_gib > 0) add(end, "mem_peak_rss_gib", format_double("%.3g", peak_rss_gib));
 
-    // The screen's time summary: wall = init + compute + remesh + output + phase changes,
-    // compute being the remainder. Per step divides by this run's steps, not the resumed count
+    // The screen's time summary: wall = init + compute + remesh + output + phase changes
+    // + surface processes, compute being the remainder. Per step divides by this run's steps, not the resumed count
     // the screen uses.
     add_duration(end, "init_time", init_ns * 1e-9);
     add_duration(end, "compute_time", compute_ns * 1e-9);
@@ -990,12 +992,18 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     add(end, "outputs", std::to_string(var.noutput));
     add(end, "output_sec_per_output",
         format_double("%.6g", var.func_time.output_time * 1e-9 / var.noutput));
-    // Absent when no phase change was timed (only mat.phase_change_option 3 is), as on screen.
+    // Absent without a phase change or a time step, as on screen.
     if (var.nphasechange > 0) {
         add_duration(end, "phase_change_time", var.func_time.phase_change_time * 1e-9);
         add(end, "phase_changes", std::to_string(var.nphasechange));
         add(end, "phase_change_sec_per_call",
             format_double("%.6g", var.func_time.phase_change_time * 1e-9 / var.nphasechange));
+    }
+    if (var.nsurface > 0) {
+        add_duration(end, "surface_time", var.func_time.surface_time * 1e-9);
+        add(end, "surface_process_calls", std::to_string(var.nsurface));
+        add(end, "surface_sec_per_call",
+            format_double("%.6g", var.func_time.surface_time * 1e-9 / var.nsurface));
     }
 
     // Appended to this run's record: after its start sections, before any restart's seam.
