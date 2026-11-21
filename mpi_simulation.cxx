@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -489,15 +488,14 @@ struct MpiSimulation::Impl {
     std::uint64_t version = 0, root_version = 0, surface_version = ~std::uint64_t(0);
     std::uint64_t calls[int(MpiOp::Count)] = {}, payload_bytes = 0, state_bytes = 0, root_bytes = 0, all_payload_bytes = 0;
     double elapsed[int(MpiOp::Count)] = {}, communication_s = 0;
-    double operation_comm[int(MpiOp::Count)] = {}, wait_s = 0, interior_window_s = 0;
+    double operation_comm[int(MpiOp::Count)] = {};
     double_vec rank_profile;
     std::vector<std::pair<std::string, std::string>> runtime;
-    bool overlap_enabled = true, pending_active = false;
+    bool pending_active = false;
     int pending = 0;
     bool pending_nodes = false;
     Fields pending_fields;
-    double posted_at = 0;
-    std::uint64_t geometry_version = ~std::uint64_t(0), overlap_calls = 0;
+    std::uint64_t geometry_version = ~std::uint64_t(0);
     std::vector<unsigned char> bytes;
     double_vec send, recv, scatter;
     int_vec counts, offsets, queries_n, queries_e;
@@ -518,22 +516,10 @@ struct MpiSimulation::Impl {
         param.ic.has_body_force_adjustment = received.body_adjustment;
     }
 
-    void trace() {
+    // One line per rank after every repartition: the loads that a user reads to
+    // choose a rank count.
+    void report_partitions() {
         if (rank != 0) return;
-        const char* path = std::getenv("DES_MPI_PARTITION_TRACE");
-        std::ofstream file;
-        if (path) {
-            std::ostringstream name;
-            name << path << "." << std::setw(4) << std::setfill('0') << generation << ".csv";
-            file.open(name.str());
-            if (!file) die(EXIT_IO_OPEN, "cannot create MPI partition trace");
-            file << "entity,id,owner,x,z";
-#ifdef THREED
-            file << ",y";
-#endif
-            for (int j=0; j<NODES_PER_ELEM; ++j) file << ",n" << j;
-            file << "\n" << std::setprecision(17);
-        }
         for (int r=0; r<size; ++r) {
             const auto& partition = parts[r];
             std::cout << "[mpi][partition] generation=" << generation << " step=" << master->steps << " rank=" << r
@@ -544,30 +530,6 @@ struct MpiSimulation::Impl {
                       << " neighbors=" << partition.halos.size()
                       << " interior_nodes=" << partition.interior_nodes.size()
                       << " interface_nodes=" << partition.interface_nodes.size() << '\n';
-            if (!file) continue;
-            for (int i=0; i<partition.owned_nodes; ++i) {
-                int n = partition.nodes[i];
-                file << "node," << n << ',' << r << ',' << (*master->coord)[n][0] << ',' << (*master->coord)[n][NDIMS-1];
-#ifdef THREED
-                file << ',' << (*master->coord)[n][1];
-#endif
-                for (int j=0; j<NODES_PER_ELEM; ++j) file << ',';
-                file << '\n';
-            }
-            for (int i=0; i<partition.owned_elements; ++i) {
-                int e = partition.elements[i];
-                double center[NDIMS] = {};
-                for (int j=0; j<NODES_PER_ELEM; ++j) {
-                    for (int d=0; d<NDIMS; ++d)
-                        center[d] += (*master->coord)[(*master->connectivity)[e][j]][d] / NODES_PER_ELEM;
-                }
-                file << "element," << e << ',' << r << ',' << center[0] << ',' << center[NDIMS-1];
-#ifdef THREED
-                file << ',' << center[1];
-#endif
-                for (int j=0; j<NODES_PER_ELEM; ++j) file << ',' << (*master->connectivity)[e][j];
-                file << '\n';
-            }
         }
     }
 
@@ -580,8 +542,6 @@ struct MpiSimulation::Impl {
             master->mat->refresh_elem_cache();
             // Marker operations stay on the management mesh. Compute ranks
             // need material counts, not copies of the individual records.
-            if (rebalance && !master->markersets.empty())
-                master->markersets[0]->check_marker_elem_consistency(*master);
             // Serial remeshing leaves this inactive hydraulic scratch array at
             // its old size. Compact selection/collection still visits it.
             if (!param.control.has_hydraulic_diffusion && master->old_mean_stress)
@@ -591,7 +551,7 @@ struct MpiSimulation::Impl {
             if (rebalance || parts.empty()) {
                 parts = mpi_partition_mesh(*master, size);
                 ++generation;
-                trace();
+                report_partitions();
             }
         }
         int extent[] = {global_n, global_e};
@@ -1029,17 +989,14 @@ struct MpiSimulation::Impl {
             break;
         case MpiOp::Report: {
             MPI_Reduce(&payload_bytes, &all_payload_bytes, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-            double sample[3*int(MpiOp::Count)+3];
+            double sample[3*int(MpiOp::Count)];
             for (int i=0; i<int(MpiOp::Count); ++i) {
                 sample[3*i] = double(calls[i]);
                 sample[3*i+1] = elapsed[i];
                 sample[3*i+2] = operation_comm[i];
             }
-            sample[3*int(MpiOp::Count)] = wait_s;
-            sample[3*int(MpiOp::Count)+1] = interior_window_s;
-            sample[3*int(MpiOp::Count)+2] = double(overlap_calls);
-            if (rank == 0) rank_profile.resize(size*(3*int(MpiOp::Count)+3));
-            MPI_Gather(sample, 3*int(MpiOp::Count)+3, MPI_DOUBLE, rank_profile.data(), 3*int(MpiOp::Count)+3,
+            if (rank == 0) rank_profile.resize(size*3*int(MpiOp::Count));
+            MPI_Gather(sample, 3*int(MpiOp::Count), MPI_DOUBLE, rank_profile.data(), 3*int(MpiOp::Count),
                        MPI_DOUBLE, 0, MPI_COMM_WORLD);
             break;
         }
@@ -1100,16 +1057,13 @@ struct MpiSimulation::Impl {
         pending_nodes = nodes;
         pending_fields = fields;
         pending_active = true;
-        posted_at = MPI_Wtime();
         communication_s += MPI_Wtime() - start;
     }
 
     void finish_exchange() {
         if (!pending_active) die(EXIT_INTERNAL_ASSERT, "halo completion without a posted exchange");
         const double started = MPI_Wtime();
-        interior_window_s += started - posted_at;
         mpi_finish_buffers(pending, requests.data());
-        wait_s += MPI_Wtime() - started;
         for (int i=0; i<int(part.halos.size()); ++i) {
 #ifdef ACC
             unpack_device(pending_fields, pending_nodes ? part.halos[i].recv_nodes : part.halos[i].recv_elements,
@@ -1132,7 +1086,7 @@ struct MpiSimulation::Impl {
 // The manifest's [runtime.mpi]: where the ranks run and how many threads each
 // uses. Collective; only the root's copy is filled.
 static std::vector<std::pair<std::string, std::string>>
-runtime_summary(int rank, int size, int provided, int local_rank, int local_size, bool overlap)
+runtime_summary(int rank, int size, int provided, int local_rank, int local_size)
 {
     int threads = omp_team_size_now();
     if (threads < 1) threads = 1;   // a build without OpenMP
@@ -1166,7 +1120,6 @@ runtime_summary(int rank, int size, int provided, int local_rank, int local_size
             {"ranks_per_node", range(low[0], high[0])},
             {"threads_per_rank", range(low[1], high[1])},
             {"thread_level", level},
-            {"halo_overlap", overlap ? "on" : "off"},
             {"library", library.empty() ? "unknown" : library}};
 }
 
@@ -1213,15 +1166,7 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
     std::cout << identity.str() << std::flush;
 #endif
     MPI_Comm_free(&local);
-    if (is_root()) {
-        const char* option = std::getenv("DES_MPI_OVERLAP");
-        if (option && std::string(option) != "0" && std::string(option) != "1")
-            die(EXIT_CONFIG_VALUE, "DES_MPI_OVERLAP must be 0 or 1");
-        impl_->overlap_enabled = !option || std::string(option) == "1";
-    }
-    MPI_Bcast(&impl_->overlap_enabled, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
-    impl_->runtime = runtime_summary(impl_->rank, impl_->size, provided, local_rank, local_size,
-                                     impl_->overlap_enabled);
+    impl_->runtime = runtime_summary(impl_->rank, impl_->size, provided, local_rank, local_size);
     impl_->local.mpi = this;
     if (is_root())
         std::cout << "[mpi] compact spatial partitions; ranks=" << impl_->size
@@ -1346,16 +1291,10 @@ void MpiSimulation::exchange(MpiEntity entity, std::initializer_list<std::pair<d
 
 void MpiSimulation::begin_exchange(MpiEntity entity, std::initializer_list<std::pair<double*,int>> arrays) {
     impl_->begin_exchange(entity, arrays);
-    if (!impl_->overlap_enabled) impl_->finish_exchange();
-    else ++impl_->overlap_calls;
 }
 
 void MpiSimulation::finish_exchange() {
     impl_->finish_exchange();
-}
-
-bool MpiSimulation::overlap() const {
-    return impl_->overlap_enabled;
 }
 
 MpiNodeRows MpiSimulation::gather_rows(int pass) const {
@@ -1441,7 +1380,7 @@ void MpiSimulation::report() {
     }
     std::cout << "[mpi][communication] seconds=" << impl.communication_s << " halo_sent_bytes=" << impl.all_payload_bytes
               << " root_collection_bytes=" << impl.root_bytes << " state_bytes=" << impl.state_bytes << '\n';
-    const int stride = 3*int(MpiOp::Count)+3;
+    const int stride = 3*int(MpiOp::Count);
     for (int r=0; r<impl.size && !impl.rank_profile.empty(); ++r) {
         const double* profile = impl.rank_profile.data() + r*stride;
         for (int i=0; i<int(MpiOp::Count); ++i) {
@@ -1451,8 +1390,6 @@ void MpiSimulation::report() {
                           << " elapsed_s=" << profile[3*i+1] << " communication_s=" << profile[3*i+2]
                           << " outside_communication_s=" << std::max(0.0, profile[3*i+1] - profile[3*i+2]) << '\n';
         }
-        std::cout << "[mpi][overlap] rank=" << r << " calls=" << profile[stride-1] << " wait_s=" << profile[stride-3]
-                  << " work_window_s=" << profile[stride-2] << '\n';
     }
 }
 #endif

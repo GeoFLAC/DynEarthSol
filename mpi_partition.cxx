@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <map>
@@ -86,7 +85,6 @@ void metis_partition(const Variables& var, int ranks, int_vec& owner) {
         if (element_part[e] < 0 || element_part[e] >= ranks) die(EXIT_INTERNAL_ASSERT, "invalid METIS owner");
         owner[e] = element_part[e];
     }
-    std::cout << "[mpi][metis] objective=volume value=" << objective << " imbalance_tolerance=0.03\n";
 }
 
 void bisect(int_vec& ids, int begin, int end, int rank_begin, int rank_end,
@@ -122,7 +120,6 @@ void bisect(int_vec& ids, int begin, int end, int rank_begin, int rank_end,
 }
 
 std::vector<MpiPartition> mpi_partition_mesh(const Variables& var, int nranks) {
-    const auto started = std::chrono::steady_clock::now();
     int_vec elem_owner(var.nelem);
     int_vec node_owner(var.nnode, nranks);
     // METIS partitions every mesh. Its coarsening is inappropriate for tiny
@@ -256,9 +253,6 @@ std::vector<MpiPartition> mpi_partition_mesh(const Variables& var, int nranks) {
     for (int rank=0; rank<nranks; ++rank) {
         for (auto& link : links[rank]) parts[rank].halos.push_back(std::move(link.second));
     }
-    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-    std::cout << "[mpi][partitioner] method=" << (geometric ? "rcb" : "metis")
-              << " seconds=" << elapsed << '\n';
     return parts;
 }
 #endif

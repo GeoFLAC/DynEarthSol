@@ -50,7 +50,7 @@ def main():
     save()
     env = dict(os.environ, OMP_NUM_THREADS='1', OMP_DYNAMIC='FALSE', OPENBLAS_NUM_THREADS='1')
     env['PYTHONPATH'] = str(ROOT) + os.pathsep + env.get('PYTHONPATH', '')
-    def run(name, cfg, executable, ranks=None, overlap=1):
+    def run(name, cfg, executable, ranks=None):
         directory = work / name
         directory.mkdir()
         with (directory / 'model.cfg').open('w') as stream:
@@ -60,7 +60,7 @@ def main():
             command = [sys.executable, str(ROOT/'tests/functional/mpi/launch_sge.py'),
                        '--min-nodes', '2', '-n', str(ranks)] + command
         (directory/'command.json').write_text(json.dumps(command, indent=2)+'\n')
-        log, elapsed = execute(command, directory, dict(env, DES_MPI_OVERLAP=str(overlap)))
+        log, elapsed = execute(command, directory, env)
         return directory, metrics(log, elapsed)
     def compare_all(reference, current, frames):
         for kind in ('save', 'chkpt'):
@@ -91,27 +91,26 @@ def main():
                     save()
                     cfg['sim']['is_restarting'] = 'no'
                 for ranks in a.ranks:
-                    for overlap in (0, 1):
-                        label = '{}-mpi{}-overlap{}'.format(name, ranks, overlap)
-                        current, timing = run(label, cfg, executables['mpi'+suffix], ranks, overlap)
-                        compare_all(reference, current, range(5))
-                        if timing['remeshes'] != baseline['remeshes']:
-                            raise RuntimeError('Remesh counts differ: '+label)
-                        report['checks'].append(dict(case=label, bit_exact=True, timing=timing,
-                                                     frames=list(range(5)), checkpoint_frames=list(range(5))))
+                    label = '{}-mpi{}'.format(name, ranks)
+                    current, timing = run(label, cfg, executables['mpi'+suffix], ranks)
+                    compare_all(reference, current, range(5))
+                    if timing['remeshes'] != baseline['remeshes']:
+                        raise RuntimeError('Remesh counts differ: '+label)
+                    report['checks'].append(dict(case=label, bit_exact=True, timing=timing,
+                                                 frames=list(range(5)), checkpoint_frames=list(range(5))))
+                    save()
+                    print(label+': all physical fields/checkpoints exact', flush=True)
+                    if moving:
+                        cfg['sim'].update(is_restarting='yes', restarting_from_modelname=str(reference/'result'),
+                                          restarting_from_frame='2')
+                        restart, resumed = run(label+'-restart', cfg, executables['mpi'+suffix], ranks)
+                        compare_all(restart_reference, restart, (3, 4))
+                        report['checks'].append(dict(case=label+'-restart', bit_exact=True, timing=resumed,
+                                                     frames=[3, 4], checkpoint_frames=[3, 4],
+                                                     checkpoint_reference=str(restart_reference)))
                         save()
-                        print(label+': all physical fields/checkpoints exact', flush=True)
-                        if moving:
-                            cfg['sim'].update(is_restarting='yes', restarting_from_modelname=str(reference/'result'),
-                                              restarting_from_frame='2')
-                            restart, resumed = run(label+'-restart', cfg, executables['mpi'+suffix], ranks, overlap)
-                            compare_all(restart_reference, restart, (3, 4))
-                            report['checks'].append(dict(case=label+'-restart', bit_exact=True, timing=resumed,
-                                                         frames=[3, 4], checkpoint_frames=[3, 4],
-                                                         checkpoint_reference=str(restart_reference)))
-                            save()
-                            print(label+'-restart: continuation exact', flush=True)
-                            cfg['sim']['is_restarting'] = 'no'
+                        print(label+'-restart: continuation exact', flush=True)
+                        cfg['sim']['is_restarting'] = 'no'
     except Exception as error:
         report['failure'] = str(error)
         save()

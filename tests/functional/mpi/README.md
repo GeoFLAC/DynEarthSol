@@ -169,11 +169,8 @@ global management state. Ownership is rebuilt after every MMG remesh. See the
 
 `run_mpi.py` defaults to ranks 1/2/3/4/6/8 and also checks hybrid OpenMP,
 averaging across remeshing and empty partitions.
-`DES_MPI_OVERLAP=0` and `1` select blocking and overlapped halo assembly; use the
-same reference and inputs for both. No extra simulation cfg parameter is needed.
-
-To inspect actual ownership, write partition traces as described in
-[inspecting actual partitions](../../../doc/mpi.md#inspecting-actual-partitions).
+No extra simulation cfg parameter is needed. The `[mpi][partition]` log rows
+report each rank's ownership ([reading the MPI log](../../../doc/mpi.md#reading-the-mpi-log)).
 
 ## Accelerator halo checks
 

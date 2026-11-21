@@ -123,8 +123,6 @@ def metrics(log, elapsed):
     for line in re.findall(r"\[mpi\]\[rank-profile\] (.*)",log):
         row=dict(re.findall(r"(\w+)=(\S+)",line))
         data["rank_profile"].append({k:(v if k=="operation" else float(v)) for k,v in row.items()})
-    data["overlap"] = [{k:float(v) for k,v in re.findall(r"(\w+)=([\d.eE+-]+)",line)}
-                       for line in re.findall(r"\[mpi\]\[overlap\] (.*)",log)]
     return data
 
 

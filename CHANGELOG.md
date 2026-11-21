@@ -26,8 +26,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
   `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
   geometry, mass and timestep bounds use compact spatial partitions with neighbor
-  halo exchanges. Ownership is rebalanced after every MMG remesh; partition traces
-  and logs expose element, node, marker and ghost loads. Rank zero retains the
+  halo exchanges. Ownership is rebalanced after every MMG remesh; the log reports
+  element, node, marker and ghost loads. Rank zero retains the
   global mesh for MMG, phase changes, marker/surface management and output.
   Individual marker records stay on rank zero; compute ranks keep material counts.
   Both PT relaxation methods, including initial equilibrium and failure rollback,
@@ -35,15 +35,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   CPU halo and solver regression checks accompany the backend;
   see `doc/mpi.md`. The `.manifest` and the start report record the MPI layout
   in `[runtime.mpi]`: ranks, nodes, ranks per node, threads per rank, MPI thread
-  level, halo overlap and MPI library.
+  level and MPI library.
 - Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
   timestep fields with one device per rank and pinned host staging for halos.
   Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
   checkpoint and restart checks accompany the backend;
   scientific equivalence and speedup must be verified for each workload.
-- MPI interior-node/halo overlap for thermal, force and mass assembly, selectable
-  with `DES_MPI_OVERLAP=0/1`. Mesh checks collect geometry only, and inactive
-  serpentinization/monitor paths avoid unused collections. Per-rank operation and
+- MPI interior-node/halo overlap for thermal, force and mass assembly. Mesh
+  checks collect geometry only, and inactive serpentinization/monitor paths
+  avoid unused collections. Per-rank operation and
   communication profiles expose rank loads and halo traffic.
   Shared SoA halo packers have explicit OpenACC host/device test modes; host
   checks alone do not verify full GPU solver behavior or NVLink transport.

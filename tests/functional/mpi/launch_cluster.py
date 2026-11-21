@@ -99,8 +99,7 @@ def main():
                '--mca', 'plm_rsh_agent', ' '.join(map(shlex.quote, ssh)),
                '--wdir', str(cwd)]
     for name in ('PATH', 'LD_LIBRARY_PATH', 'OPAL_PREFIX', 'UCX_TLS', 'OMPI_MCA_pml',
-                 'OMPI_MCA_coll_hcoll_enable', 'OMP_NUM_THREADS', 'OMP_DYNAMIC',
-                 'DES_MPI_OVERLAP'):
+                 'OMPI_MCA_coll_hcoll_enable', 'OMP_NUM_THREADS', 'OMP_DYNAMIC'):
         if name in os.environ:
             command += ['-x', name]
     command += ['-n', str(a.n), a.python, str(script), '--rank', str(executable),

@@ -47,7 +47,6 @@ public:
     void exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);
     void begin_exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);
     void finish_exchange();
-    bool overlap() const;
     MpiNodeRows gather_rows(int pass) const;
     void collect(const Variables&, bool averages = false);
     void geometry(const Variables&);
@@ -97,10 +96,7 @@ inline int mpi_gather_passes(const Variables& v) {
 }
 inline MpiNodeRows mpi_gather_nodes(const Variables& v,int pass) {
 #ifdef USEMPI
-    if(v.mpi && v.mpi->in_kernel()) {
-        if(v.mpi->overlap()) return v.mpi->gather_rows(pass);
-        return {nullptr,v.mpi->owned_nodes()};
-    }
+    if(v.mpi && v.mpi->in_kernel()) return v.mpi->gather_rows(pass);
 #endif
     return {nullptr,v.nnode};
 }
@@ -136,7 +132,7 @@ template<int N> inline void mpi_begin_gather(const Variables& var,Array2D<double
 // Completes an overlapped gather before its second pass; no-op otherwise.
 inline void mpi_finish_gather(const Variables& var) {
 #ifdef USEMPI
-    if(var.mpi && var.mpi->in_kernel() && var.mpi->overlap())var.mpi->finish_exchange();
+    if(var.mpi && var.mpi->in_kernel())var.mpi->finish_exchange();
 #endif
 }
 #endif

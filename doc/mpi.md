@@ -179,12 +179,10 @@ Earthquake speed/plastic-rate diagnostics use small global maximum reductions.
 Regular dependency exchanges pack only needed ghost fields into reusable
 contiguous peer buffers. Receives/sends use `MPI_Irecv`/`MPI_Isend`, followed by
 `MPI_Waitall` and unpacking. Related fields share transfers; buffers and maps
-persist until repartitioning. With `DES_MPI_OVERLAP=1`, temperature, force and mass
-assembly first posts element transfers, computes owned nodes whose incident
-elements are all local, waits/unpacks, then computes interface nodes. Per-node
-element summation order is unchanged. Overlap is enabled by default.
-`DES_MPI_OVERLAP=0` uses a blocking exchange
-and one owned-node pass. Other exchanges still complete before dependent work.
+persist until repartitioning. Temperature, force and mass assembly first posts
+element transfers, computes owned nodes whose incident elements are all local,
+waits/unpacks, then computes interface nodes. Per-node element summation order is
+unchanged. Other exchanges still complete before dependent work.
 MPI progress during computation depends on the MPI implementation; posting a
 transfer does not by itself prove simultaneous data movement. Regular
 timesteps do not gather full fields with `MPI_Allgatherv`.
@@ -268,21 +266,11 @@ compute ranks: a kernel that takes more must carry them in `Command`.
 field by field; add a case to its list that uses the kernel. PT kernels are
 checked by `run_pt_mpi.py`, halo packing by `run_accelerator_checks.py`.
 
-## Inspecting actual partitions
+## Reading the MPI log
 
-Set an output prefix before launching; its parent directory must exist:
-
-```sh
-mkdir -p /tmp/des-partition-run
-DES_MPI_PARTITION_TRACE=/tmp/des-partition-run/partition OMP_NUM_THREADS=1 \
-  mpiexec -n 4 ./dynearthsol2d.mpi model.cfg > /tmp/des-partition-run/run.log 2>&1
-```
-
-Trace files `partition.0001.csv`, `.0002.csv`, etc. contain actual global IDs,
-owners, node positions, centroids and connectivity at each partition generation.
 `[mpi][partition]` log rows report step, owned nodes/elements/markers, ghosts and
-neighbors for every rank. Counts show balance and ghost storage; they do not
-establish equal runtime.
+neighbors for every rank at each partition generation. Counts show balance and
+ghost storage; they do not establish equal runtime.
 
 `[mpi][kernel]` reports operation counts and root elapsed seconds including
 synchronization. Management operations have counters too. `[mpi][communication]`
@@ -293,11 +281,8 @@ they are not a complete network profile.
 
 `[mpi][rank-profile]` reports operation time and instrumented communication time
 on every rank. Their difference includes local work, scheduling and uninstrumented
-overhead; it is not a hardware compute counter. `[mpi][overlap]` reports aggregate
-wait time and the interval between posting and completion, including blocking
-exchanges' small intervals. These counters help diagnose imbalance but do not
-establish asynchronous MPI progress. Reductions are now included in communication
-timing, so seconds cannot be compared directly with earlier instrumentation.
+overhead; it is not a hardware compute counter. These counters help diagnose
+imbalance but do not establish asynchronous MPI progress.
 
 ## Correctness checks
 
@@ -369,7 +354,7 @@ Compare equal CPU budgets and retain the same geometry, initial state and physic
 outputs. Measure complete wall time including initialization, remeshing, output
 and MPI startup. Use warmups and repeated runs without competing jobs; record CPU
 placement and GPU identities. Each run records its ranks, nodes, ranks per node,
-threads per rank, MPI thread level, halo overlap and MPI library in the
+threads per rank, MPI thread level and MPI library in the
 `[runtime.mpi]` section of `<modelname>.manifest` and prints them at start as
 `[runtime][mpi]`. Local shared-memory measurements do not predict
 multi-node or adaptive-model speedup. Keep workload-specific measurement
