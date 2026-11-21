@@ -191,9 +191,9 @@ int count(std::size_t entries) {
     return entries;
 }
 
-// The packed fields of one mesh row as one MPI element. Counts and displacements in it are
-// row counts, which fit in an int as the mesh's node and element counts do; counted in
-// doubles, a gather of the whole mesh would not.
+// The packed fields of one mesh row as one MPI element, so counts and displacements are
+// row counts. A gather counts each owned row once, so they fit in an int as the mesh's node
+// and element counts do; counted in doubles, a gather of the whole mesh would not.
 class MpiRows {
 public:
     explicit MpiRows(int columns) {
@@ -765,6 +765,9 @@ struct MpiSimulation::Impl {
             counts.assign(size, 0);
             offsets.assign(size, 0);
             scatter.clear();
+            // A ghost row goes to every rank that holds it, so the rows sent can outnumber
+            // the mesh's rows: sum them wide and check each displacement.
+            std::size_t rows_before = 0;
             for (int r=0; r<size; ++r) {
                 const auto& partition = parts[r];
                 const auto& rows = nodes ? partition.surface_nodes : partition.surface_elements;
@@ -772,8 +775,9 @@ struct MpiSimulation::Impl {
                 int_vec global_rows;
                 for (int i : rows) global_rows.push_back(ids[i]);
                 pack(from, global_rows, send);
-                counts[r] = global_rows.size();
-                if (r) offsets[r] = offsets[r-1] + counts[r-1];
+                counts[r] = count(global_rows.size());
+                offsets[r] = count(rows_before);
+                rows_before += global_rows.size();
                 scatter.insert(scatter.end(), send.begin(), send.end());
                 if (r) root_bytes += send.size() * sizeof(double);
             }
