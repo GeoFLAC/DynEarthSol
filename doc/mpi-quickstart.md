@@ -58,18 +58,17 @@ their combined CPU count.
 
 ## One or two NVIDIA GPUs
 
-Use NVHPC and its compatible MPI wrapper/runtime; set the example SDK paths and
-`GPU_CC` for your installation/device. Keep the CPU binaries from the preceding
-section. The project documents NVHPC 25.7 as its supported minimum.
+Use NVHPC and its compatible MPI wrapper/runtime; set `NVHPC_DIR` to your SDK's
+installation (see `README.md` for the supported versions). The Makefile detects
+the GPU's compute capability. Keep the CPU binaries from the preceding section.
 
 ```sh
-export NVHPC_DIR=/path/to/nvidia/hpc_sdk/Linux_x86_64/25.7
+export NVHPC_DIR=<NVHPC SDK root>
 export GPU_MPI="$NVHPC_DIR/comm_libs/mpi/bin/mpicxx"
 for dim in 2 3; do
     OMPI_CXX="$NVHPC_DIR/compilers/bin/nvc++" \
-    make -j4 ndims="$dim" usempi=1 openacc=1 openmp=0 nofma=1 \
-        GPU_CC=80 NVHPC_DIR="$NVHPC_DIR" MPI_CXX="$GPU_MPI" \
-        usemmg=1 hdf5=1
+    make -j4 ndims="$dim" usempi=1 openacc=1 openmp=0 \
+        NVHPC_DIR="$NVHPC_DIR" MPI_CXX="$GPU_MPI" usemmg=1 hdf5=1
 done
 OMP_NUM_THREADS=1 python3 tests/functional/mpi/run_gpu_mpi.py \
     --cpu ./dynearthsol2d --gpu ./dynearthsol2d.mpi.gpu \

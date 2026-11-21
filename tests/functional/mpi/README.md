@@ -43,7 +43,7 @@ by upstream, so that failure must not be hidden by relaxing the restart checker.
 
 ## Full NVIDIA GPU MPI checks
 
-`usempi=1 openacc=1 openmp=0 nofma=1` builds separate `.mpi.gpu` executables.
+`usempi=1 openacc=1 openmp=0` builds separate `.mpi.gpu` executables.
 Use an NVHPC-backed MPI wrapper and the architecture of the target device.
 Initialization, MMG and field/marker remapping remain root CPU operations;
 compact timestep kernels and halo pack/unpack run on GPUs with pinned host MPI
@@ -51,14 +51,14 @@ staging. Local ranks must select distinct physical GPU UUIDs. Stage dependencies
 before using offline hosts, and use an allocation on scheduler-managed hosts.
 Keep model workspaces on the site's designated storage.
 
-Inside a single-host Grid Engine allocation, with both A100s visible:
+Inside a single-host Grid Engine allocation, with one visible GPU per rank:
 
 ```sh
 python3 tests/functional/mpi/run_gpu_mpi.py \
-  --cpu /parent/dynearthsol2d --gpu ./dynearthsol2d.mpi.gpu \
-  --cpu3d /parent/dynearthsol3d --gpu3d ./dynearthsol3d.mpi.gpu \
-  --ranks 1 2 --restart --workdir /shared/results \
-  --launcher 'python3 /shared/source/tests/functional/mpi/launch_sge.py --local-only'
+  --cpu <parent build>/dynearthsol2d --gpu ./dynearthsol2d.mpi.gpu \
+  --cpu3d <parent build>/dynearthsol3d --gpu3d ./dynearthsol3d.mpi.gpu \
+  --ranks 1 2 --restart --workdir <workdir> \
+  --launcher 'python3 <repo>/tests/functional/mpi/launch_sge.py --local-only'
 ```
 
 `--local-only` requires this host to be the sole scheduler-allocated host; it
@@ -237,7 +237,7 @@ python3 /path/to/DynEarthSol/tests/functional/mpi/run_mpi.py \
 ```
 
 Submit that script with eight slots using the site's queue and PE, for example
-`qsub -S /bin/bash -q all.q -pe smp 8 -l h_rt=00:20:00 job.sh`.
+`qsub -S /bin/bash -q <queue> -pe <pe> 8 -l h_rt=00:20:00 job.sh`.
 The eight-slot allocation accommodates the driver's six-rank empty-partition
 case and two-rank/two-thread cases. Do not reduce slots without accounting for
 those cases. Python 3.6 is supported; errors do not require `shlex.join`.
@@ -252,10 +252,10 @@ python3 /path/to/DynEarthSol/tests/functional/mpi/run_sge_matrix.py \
 ```
 
 A multi-node PE, for example
-`qsub -S /bin/bash -q all.q -pe ompi_pf 4 -l h_rt=00:15:00 job.sh`,
+`qsub -S /bin/bash -q <queue> -pe <multi-node pe> 4 -l h_rt=00:15:00 job.sh`,
 requests slots across compute nodes. Replace queue and PE names for the site.
-The driver requires at least two actual allocated nodes. Its 24 comparisons cover 2D/3D
-fixed meshes, forced MMG remeshing and restart, with halo overlap off/on. Fresh
+The driver requires at least two actual allocated nodes. Its comparisons cover 2D/3D
+fixed meshes, forced MMG remeshing and restart. Fresh
 frames/checkpoints 0–4 must match the parent exactly. Restart frames 3/4 must
 reproduce uninterrupted physics, and every checkpoint field must match an
 equivalent parent serial restart. The parent also reinitializes output scheduling

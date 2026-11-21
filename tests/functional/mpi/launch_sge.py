@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Launch MPI checks inside an existing Grid Engine allocation.
+"""Launch MPI checks inside an existing Grid Engine allocation (optional helper).
 
-Use as run_mpi.py's --launcher from a qsub job. The source, executable, working
+For sites with Grid Engine and Open MPI, whose mpirun it drives; elsewhere, pass
+your own launcher to run_mpi.py. Use as run_mpi.py's --launcher from a qsub job. The source, executable, working
 directory and dependencies must be visible at the same paths on allocated hosts.
 Open MPI discovers its hosts and starts tasks through its Grid Engine support.
 """
@@ -38,6 +39,14 @@ def allocation():
                 nslots=int(os.environ['NSLOTS']), host_slots=slots, pe_hostfile=raw)
 
 
+def first_env(*names):
+    # The rank variables differ between MPI launchers.
+    for name in names:
+        if name in os.environ:
+            return os.environ[name]
+    raise RuntimeError('No MPI rank variable among ' + ', '.join(names))
+
+
 def rank_main(args):
     context = json.loads(Path(args[0]).read_text())
     command = args[1:]
@@ -46,9 +55,9 @@ def rank_main(args):
         raise RuntimeError('MPI rank started outside the scheduler allocation: ' + host)
     if os.environ.get('JOB_ID') != context['job_id']:
         raise RuntimeError('MPI worker job ID differs from the submitting job')
-    rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
-    local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-    local_size = int(os.environ['OMPI_COMM_WORLD_LOCAL_SIZE'])
+    rank = int(first_env('OMPI_COMM_WORLD_RANK', 'PMIX_RANK', 'PMI_RANK'))
+    local_rank = int(first_env('OMPI_COMM_WORLD_LOCAL_RANK', 'MPI_LOCALRANKID', 'PMI_LOCAL_RANK'))
+    local_size = int(first_env('OMPI_COMM_WORLD_LOCAL_SIZE', 'MPI_LOCALNRANKS', 'PMI_LOCAL_SIZE'))
     threads = context['threads']
     if local_size * threads > context['host_slots'][host]:
         raise RuntimeError('MPI/OpenMP workers exceed allocated slots on ' + host)

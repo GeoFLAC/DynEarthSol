@@ -87,7 +87,7 @@ jobs:
             python3 tests/functional/mpi/run_accelerator_checks.py --mode host \
               --std "$cpp_std" --ranks 1 2 3 4 \
               --launcher 'mpiexec --oversubscribe --bind-to none' \
-              --workdir "/tmp/des-halo-$cpp_std"
+              --workdir "$RUNNER_TEMP/des-halo-$cpp_std"
           done
 
       - name: compare PT mechanics with the serial solver
@@ -100,7 +100,7 @@ jobs:
             --serial3d ./dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
             --ranks 3 4 --cases elastic maxwell hydrostatic dynamic failure \
             --launcher 'mpiexec --oversubscribe --bind-to none' \
-            --workdir /tmp/des-pt-mpi
+            --workdir "$RUNNER_TEMP/des-pt-mpi"
 
       - name: retain compatibility logs
         if: always()
@@ -111,8 +111,8 @@ jobs:
           path: |
             build-cxx20-*.log
             cxx20-*.txt
-            /tmp/des-halo-*/accelerator-*/results.json
-            /tmp/des-halo-*/accelerator-*/*.log
-            /tmp/des-pt-mpi/pt-mpi-*/results.json
-            /tmp/des-pt-mpi/pt-mpi-*/*.log
-            /tmp/des-pt-mpi/pt-mpi-*/*/*.log
+            ${{ runner.temp }}/des-halo-*/accelerator-*/results.json
+            ${{ runner.temp }}/des-halo-*/accelerator-*/*.log
+            ${{ runner.temp }}/des-pt-mpi/pt-mpi-*/results.json
+            ${{ runner.temp }}/des-pt-mpi/pt-mpi-*/*.log
+            ${{ runner.temp }}/des-pt-mpi/pt-mpi-*/*/*.log

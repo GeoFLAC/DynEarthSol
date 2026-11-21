@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Compare fixed/remeshed/restarted 2D/3D runs on scheduler-allocated nodes.
 
+An optional check for Grid Engine sites (through launch_sge.py and Open MPI).
+
 Requires a shared filesystem, parent/MPI HDF5+MMG executables, NumPy and h5py.
 Every fresh frame/checkpoint and every saved continuation frame is compared in
 full; wall-clock metadata is excluded. This is a correctness check, not a timing

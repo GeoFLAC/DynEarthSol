@@ -74,7 +74,7 @@ def main():
     p.add_argument('--cpu3d',type=Path)
     p.add_argument('--gpu3d',type=Path)
     p.add_argument('--launcher',default='mpiexec --bind-to none')
-    p.add_argument('--ranks',type=int,nargs='+',default=[1,2])
+    p.add_argument('--ranks',type=int,nargs='+',default=[1],help='GPU ranks; one visible GPU per rank')
     p.add_argument('--cases',nargs='+',choices=['fixed','remesh','hydraulic','averaged'],default=['fixed','remesh','hydraulic','averaged'])
     p.add_argument('--steps',type=int,default=76)
     p.add_argument('--output-interval',type=int,default=19)

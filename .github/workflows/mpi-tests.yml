@@ -64,5 +64,5 @@ jobs:
           name: mpi-tests
           retention-days: 7
           path: |
-            /tmp/des-mpi/**/results.json
-            /tmp/des-mpi/**/*.log
+            ${{ runner.temp }}/des-mpi/**/results.json
+            ${{ runner.temp }}/des-mpi/**/*.log

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Launch a CPU DES check across explicitly named SSH hosts without a shared cwd.
 
+An optional helper for Open MPI, whose mpirun it drives; elsewhere, pass your own
+launcher to run_mpi.py.
+
 Install the same executable, dependencies and input assets at identical paths on
 each host first. This stages cfg/restart inputs and collects rank-zero outputs.
 Use as run_mpi.py's --launcher. Requires passwordless, host-key-verified SSH.
@@ -17,10 +20,18 @@ import subprocess
 import sys
 
 
+def first_env(*names):
+    # The rank variables differ between MPI launchers.
+    for name in names:
+        if name in os.environ:
+            return os.environ[name]
+    raise RuntimeError('No MPI rank variable among ' + ', '.join(names))
+
+
 def rank_main(command):
-    rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
+    rank = int(first_env('OMPI_COMM_WORLD_RANK', 'PMIX_RANK', 'PMI_RANK'))
     row = dict(rank=rank, host=socket.gethostname(),
-               local_rank=int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK']),
+               local_rank=int(first_env('OMPI_COMM_WORLD_LOCAL_RANK', 'MPI_LOCALRANKID', 'PMI_LOCAL_RANK')),
                threads=int(os.environ.get('OMP_NUM_THREADS', '1')),
                cpus=sorted(os.sched_getaffinity(0)))
     print('[cluster][rank] ' + json.dumps(row, sort_keys=True), flush=True)

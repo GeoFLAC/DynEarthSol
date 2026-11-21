@@ -33,11 +33,12 @@ allocated for the job. Stage dependencies first on offline compute hosts.
 
 ```sh
 export OMPI_CXX=/path/to/nvc++
-make -j8 ndims=2 usempi=1 openacc=1 openmp=0 nofma=1 GPU_CC=80 \
-  MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
-make -j8 ndims=3 usempi=1 openacc=1 openmp=0 nofma=1 GPU_CC=80 \
-  MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
+make -j8 ndims=2 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
+make -j8 ndims=3 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
 ```
+
+The Makefile detects the GPU's compute capability; set `GPU_CC` to build for
+another device.
 
 Use one rank per visible physical GPU. Device selection precedes managed
 allocations; local ranks must have distinct physical UUIDs. The implementation
@@ -53,7 +54,8 @@ OpenACC regions enforce this boundary; command boundaries drain pending kernels
 before host state changes. MMG is followed by collection, repartitioning and
 managed-state refresh. Managed allocation also covers the root state container.
 
-GPU MPI builds use IEEE division; `nofma=1` disables host and device FMA.
+GPU MPI builds use IEEE division. As in other builds, `nofma=1` (opt-in) disables
+host and device FMA, which brings GPU results closer to CPU ones.
 Use the project's supported NVHPC SDK and target the installed GPU architecture.
 Keep MPI/SDK runtimes separate when staging libraries: an HDF5 library directory
 containing an older SDK can make a newer compiler link the old OpenACC runtime.
@@ -333,12 +335,8 @@ Full examples and bounded regression runs are explicitly distinguished.
 
 ### Verification scope
 
-Native Apple Silicon checks with Apple clang, Open MPI, OpenMP, HDF5 and MMG
-built both dimensions as serial and MPI executables. Against master `6195cc2`,
-four parent/changed regressions and 34 MPI matrix comparisons were bit-exact.
-All 20 PT checks passed without changing the existing tolerances; six ADR field
-comparisons differed within `rtol=1e-8`, `atol=1e-12`. This verifies short CPU
-cases on one Mac; GPU runs were not exercised there.
+The CPU checks above also build and pass natively on macOS (Apple clang, Open
+MPI, OpenMP, HDF5 and MMG); they cover short CPU cases, not GPU runs.
 
 GPU checks cover bounded fixed-mesh and remeshing cases with physical device
 identity and kernel execution checks. Adaptive CPU/GPU trajectories can produce
