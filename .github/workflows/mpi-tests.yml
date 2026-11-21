@@ -53,9 +53,9 @@ jobs:
           /usr/bin/python3 tests/functional/mpi/run_mpi.py \
             --serial ./dynearthsol2d --mpi ./dynearthsol2d.mpi \
             --serial3d ./dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
-            --ranks 1 2 \
+            --ranks 1 3 \
             --launcher 'mpiexec --oversubscribe --bind-to none' \
-            --workdir /tmp/des-mpi
+            --workdir "$RUNNER_TEMP/des-mpi"
 
       - name: retain logs
         if: always()
