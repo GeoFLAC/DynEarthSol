@@ -126,6 +126,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 - MPI reuses current root fields and material caches, skips repeated PT velocity
   synchronization, and combines RSF diagnostics into one collective reduction.
+- The time summary and the manifest time phase changes for every
+  `mat.phase_change_option`, not only option 3, together with hydrous markers and
+  the serpentinization grid, show surface processes on a new `Surface` line, and
+  count checkpoints as output. Under MPI the remesh, phase-change and surface times
+  include the gather to rank zero and the redistribution, which `Compute` no
+  longer contains.
 - HDF5 output failures stop with the I/O exit codes 20 or 21 instead of an
   uncaught exception (serial) or exit 61 (MPI).
 

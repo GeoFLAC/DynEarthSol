@@ -6027,7 +6027,14 @@ struct OldMesh {
 void remesh(const Param &param, Variables &var, int bad_quality)
 {
 #ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Remesh, var, bad_quality)) return;
+    // The time of the whole op, the gather to rank zero and the repartitioning
+    // included, replaces what the remesh on rank zero's mesh inside it adds.
+    const int64_t start = get_nanoseconds();
+    const int64_t before = var.func_time.remesh_time;
+    if (var.mpi && var.mpi->dispatch(MpiOp::Remesh, var, bad_quality)) {
+        var.func_time.remesh_time = before + (get_nanoseconds() - start);
+        return;
+    }
 #endif
 
 #ifdef NPROF

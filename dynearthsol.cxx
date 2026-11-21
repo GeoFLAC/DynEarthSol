@@ -45,9 +45,11 @@ void init_var(const Param& param, Variables& var)
     var.nremesh_prior = 0;
     var.noutput = 0;
     var.nphasechange = 0;
+    var.nsurface = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.phase_change_time = 0;
+    var.func_time.surface_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
     var.refined_elem_size_n = new double_vec(0);
@@ -747,6 +749,9 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
+    // Surface processes are timed whole: under MPI, with the boundary gather below
+    // and the op's own gather to rank zero and redistribution.
+    const int64_t surface_start = get_nanoseconds();
     // option 13: each profiled wall's top rise (SideProfile::top_rise)
     double top_before[NSIDEWALL] = {};
     const bool track_tops = param.mesh.remeshing_option == 13 &&
@@ -762,6 +767,8 @@ void update_mesh(const Param& param, Variables& var)
     surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                   *var.plstrain, *var.volume, *var.volume_n, \
                   var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+    var.func_time.surface_time += get_nanoseconds() - surface_start;
+    ++var.nsurface;
     if (track_tops) {
         for (int t = 0; t < NSIDEWALL; ++t) {
             SideProfile &prof = var.side_profile[t];
@@ -1117,6 +1124,9 @@ int main(int argc, const char* argv[])
         var.output->write_checkpoint(param, var);
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
+    // Initiate already holds the surface processes of an isostasy adjustment.
+    var.func_time.surface_time = 0;
+    var.nsurface = 0;
 
     var.output->write_exact(var);
     monitor_initialize(param, var, monitor_checkpoint_state);
@@ -1238,10 +1248,13 @@ int main(int argc, const char* argv[])
         // and it does not go stale in a run that seldom remeshes. A checkpoint
         // holds the grid the run reads.
         if (var.steps % param.mesh.quality_check_step_interval == 0 && uses_serpentinization_grid(param)) {
+            // The grid serves the phase changes; timed with them.
+            const int64_t grid_start = get_nanoseconds();
 #ifdef USEMPI
             if (var.mpi) var.mpi->collect(var);
 #endif
             build_serpentinization_grid(param, var);
+            var.func_time.phase_change_time += get_nanoseconds() - grid_start;
         }
 
         // elastic stress/strain are objective (frame-indifferent)
@@ -1254,10 +1267,15 @@ int main(int argc, const char* argv[])
         monitor_write_if_due(param, var);
 
         if (slow_step) {
-            if (param.control.has_hydration_processes)
+            if (param.control.has_hydration_processes) {
+                // Timed with the phase changes that release these markers; under MPI
+                // it includes the gather to rank zero and the redistribution.
+                const int64_t hydrous_start = get_nanoseconds();
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
+                var.func_time.phase_change_time += get_nanoseconds() - hydrous_start;
+            }
             var.dt = compute_dt(param, var);
         }
 
@@ -1277,8 +1295,11 @@ int main(int argc, const char* argv[])
         } else {
             if (regular_output_is_due(param, var, next_regular_frame, false)) {
                 var.output_next_regular_frame = next_regular_frame + 1;
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
+                    const int64_t checkpoint_start = get_nanoseconds();
                     var.output->write_checkpoint(param, var);
+                    var.func_time.output_time += get_nanoseconds() - checkpoint_start;
+                }
 
                 var.output->write(var);
 
@@ -1336,7 +1357,7 @@ int main(int argc, const char* argv[])
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
     int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time
-        - var.func_time.phase_change_time - init_time;
+        - var.func_time.phase_change_time - var.func_time.surface_time - init_time;
     double computation_time_avg = computation_time * 1.e-9 / var.steps;
 
     std::cout << "Time summary...\n  Execute : ";
@@ -1365,6 +1386,14 @@ int main(int argc, const char* argv[])
         std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
             << 100.*var.func_time.phase_change_time/duration_ns << "%)/ " << var.nphasechange
             << " = " << std::setprecision(6) << phase_change_time_avg << " s/call\n";
+    }
+    if (var.nsurface > 0) {
+        double surface_time_avg = var.func_time.surface_time * 1.e-9 / var.nsurface;
+        std::cout << "  Surface : ";
+        print_time_ns(var.func_time.surface_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.surface_time/duration_ns << "%)/ " << var.nsurface
+            << " = " << std::setprecision(6) << surface_time_avg << " s/call\n";
     }
     if (var.noutput > 0) {
         double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;

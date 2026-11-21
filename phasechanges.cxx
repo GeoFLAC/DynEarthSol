@@ -716,14 +716,8 @@ void build_serpentinization_grid(const Param& param, Variables& var)
 }
 
 
-void phase_changes(const Param& param, Variables& var)
+static void change_phases(const Param& param, Variables& var)
 {
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::PhaseChange, var, 0.0)) return;
-#endif
-
-    if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return; // no phase change        
-
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -732,13 +726,8 @@ void phase_changes(const Param& param, Variables& var)
 
     if (param.mat.phase_change_option == 3) {
         // Its own two marker loops (device kernels in an ACC build), and
-        // geometric serpentinization needs the VirtualTopology grid. Timed on
-        // its own (rather than folded into a generic phase_changes timer), so
-        // its cost shows in the run summary.
-        const int64_t time_tmp = get_nanoseconds();
+        // geometric serpentinization needs the VirtualTopology grid.
         subduction_phase_changes(param, var, ms);
-        var.func_time.phase_change_time += get_nanoseconds() - time_tmp;
-        ++var.nphasechange;
 #ifdef NPROF
         nvtxRangePop();
 #endif
@@ -848,4 +837,25 @@ void phase_changes(const Param& param, Variables& var)
 #ifdef NPROF
     nvtxRangePop();
 #endif
+}
+
+
+void phase_changes(const Param& param, Variables& var)
+{
+    if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return; // no phase change
+
+    // Timed whole, for every option, so the run summary shows its cost. Under MPI
+    // that includes the op's gather to root and its redistribution: the time of the
+    // whole op replaces what the call on root's mesh inside it has added.
+    const int64_t start = get_nanoseconds();
+#ifdef USEMPI
+    const int64_t before = var.func_time.phase_change_time;
+    if (var.mpi && var.mpi->dispatch(MpiOp::PhaseChange, var, 0.0)) {
+        var.func_time.phase_change_time = before + (get_nanoseconds() - start);
+        return;
+    }
+#endif
+    change_phases(param, var);
+    var.func_time.phase_change_time += get_nanoseconds() - start;
+    ++var.nphasechange;
 }

@@ -534,7 +534,8 @@ struct Time {
     int64_t remesh_time;
     int64_t output_time;
     int64_t start_time;
-    int64_t phase_change_time;   // subduction_phase_changes() (mat.phase_change_option 3 only)
+    int64_t phase_change_time;   // phase_changes(), every option; under MPI the whole op
+    int64_t surface_time;        // surface_processes() in the time loop; under MPI the whole op
 };
 
 struct Markers {
@@ -851,6 +852,7 @@ struct Variables {
                         // remesh #N continues across a restart
     int noutput;
     int nphasechange;
+    int nsurface;
     int info_display_next_step;
     Time func_time;
     Output *output = nullptr;
