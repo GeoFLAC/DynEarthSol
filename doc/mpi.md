@@ -61,7 +61,8 @@ Keep MPI/SDK runtimes separate when staging libraries: an HDF5 library directory
 containing an older SDK can make a newer compiler link the old OpenACC runtime.
 
 The validation drivers retain full-field and checkpoint comparisons at `1e-8`,
-integer/topology equality, GPU identities and actual kernel traces. Short 2D/3D
+integer/topology equality and GPU identities, and require each rank's GPU to run
+the force update in its OpenACC launch log. Short 2D/3D
 fixed, MMG, hydraulic and averaged-output cases exercise GPU MPI. Non-averaged MMG
 checkpoints also exercise each run's own restart. The parent resets averaging
 windows at restart, so averaged-output trajectory restart is outside this matrix.

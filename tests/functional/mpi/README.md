@@ -65,7 +65,9 @@ integer/topology datasets exactly, every saved frame/checkpoint, and multi-GPU
 outputs against the one-GPU control. Restart checks resume non-averaged MMG runs
 from their own checkpoints and compare equivalent CPU continuations. Averaged
 parent restarts reset their averaging window and are not included as trajectory
-restart controls. The reports retain physical UUIDs and actual kernel traces.
+restart controls. The reports retain physical UUIDs, and every GPU run logs its
+OpenACC kernel launches: each rank's GPU must run the force update, or the check
+fails.
 
 ## Partition and overlap checks
 

@@ -64,6 +64,13 @@ def device_records(log,ranks):
             raise RuntimeError('Missing physical GPU or unexpected transport')
     if 'kernel=GPU' not in log or '[mpi][kernel] name=Stress' not in log:
         raise RuntimeError('The complete compact GPU MPI timestep backend was not exercised')
+    # The OpenACC launch log (NV_ACC_NOTIFY) names each kernel's device: every rank's
+    # GPU must run the force update, or that rank fell back to the host. Device numbers
+    # repeat across hosts, so on several hosts this checks each number at least once.
+    launched={int(device) for device in
+              re.findall(r'launch CUDA kernel .*function=\S*update_force\S* .*device=(\d+)',log)}
+    idle=sorted({int(row['device']) for row in rows}-launched)
+    if idle:raise RuntimeError('No GPU force update on device(s) {}'.format(idle))
     return rows
 
 
@@ -104,8 +111,7 @@ def main():
         with (folder/'model.cfg').open('w') as stream:cfg.write(stream)
         command=[executable,'model.cfg'];settings=dict(env)
         if ranks:command=shlex.split(a.launcher)+['-n',str(ranks)]+command
-        if ranks==1 and not report['checks']:
-            settings.update(NV_ACC_NOTIFY='1',NVCOMPILER_ACC_NOTIFY='1')
+        if ranks:settings.update(NV_ACC_NOTIFY='1',NVCOMPILER_ACC_NOTIFY='1')
         (folder/'command.json').write_text(json.dumps(command,indent=2)+'\n')
         log,wall=execute(command,folder,settings)
         if 'Ending simulation.' not in log:raise RuntimeError('Run did not finish: '+name)
