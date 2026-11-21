@@ -992,9 +992,10 @@ void write_manifest_end(const Param& param, const Manifest& manifest, const Vari
     add(end, "outputs", std::to_string(var.noutput));
     add(end, "output_sec_per_output",
         format_double("%.6g", var.func_time.output_time * 1e-9 / var.noutput));
-    // Absent without a phase change or a time step, as on screen.
-    if (var.nphasechange > 0) {
+    // As on screen: the time whenever it is nonzero, the count and average after a phase change.
+    if (var.nphasechange > 0 || var.func_time.phase_change_time > 0)
         add_duration(end, "phase_change_time", var.func_time.phase_change_time * 1e-9);
+    if (var.nphasechange > 0) {
         add(end, "phase_changes", std::to_string(var.nphasechange));
         add(end, "phase_change_sec_per_call",
             format_double("%.6g", var.func_time.phase_change_time * 1e-9 / var.nphasechange));

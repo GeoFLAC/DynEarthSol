@@ -1379,13 +1379,18 @@ int main(int argc, const char* argv[])
             << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
             << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
     }
-    if (var.nphasechange > 0) {
-        double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+    // Hydrous markers and the serpentinization grid count here even without a phase change.
+    if (var.nphasechange > 0 || var.func_time.phase_change_time > 0) {
         std::cout << "  PhaseChg: ";
         print_time_ns(var.func_time.phase_change_time);
         std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
-            << 100.*var.func_time.phase_change_time/duration_ns << "%)/ " << var.nphasechange
-            << " = " << std::setprecision(6) << phase_change_time_avg << " s/call\n";
+            << 100.*var.func_time.phase_change_time/duration_ns << "%)";
+        if (var.nphasechange > 0) {
+            double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+            std::cout << "/ " << var.nphasechange
+                << " = " << std::setprecision(6) << phase_change_time_avg << " s/call";
+        }
+        std::cout << "\n";
     }
     if (var.nsurface > 0) {
         double surface_time_avg = var.func_time.surface_time * 1.e-9 / var.nsurface;
