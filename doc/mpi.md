@@ -252,9 +252,17 @@ therefore not be on the list; one that only reads fields or computes scalars
 may be added to it.
 
 **6. Fields and offload.** A new per-node or per-element field of `Variables`
-goes into `mpi_local_fields.hpp`, or compact meshes never get it. An OpenACC
-loop that can also run on rank 0's management mesh needs
+goes into `mpi_local_fields.hpp`, or compact meshes never get it.
+`tests/functional/mpi/check_mpi_fields.py` fails for a field allocated with
+`new` that is in neither that list nor its own list of fields that never leave
+rank 0. An OpenACC loop that can also run on rank 0's management mesh needs
 `if(des_acc_offload_enabled())`; in a GPU MPI build that mesh stays on the host.
+
+**Options.** An MPI build accepts only the checked values of the options that
+choose code inside the distributed kernels (`check_mpi_support()` in
+`input.cxx`). Add a new value there once the steps above and a test cover it.
+Kernel arguments other than `var` and the one scalar are not forwarded to the
+compute ranks: a kernel that takes more must carry them in `Command`.
 
 **7. Tests.** `tests/functional/mpi/run_mpi.py` compares serial and MPI runs
 field by field; add a case to its list that uses the kernel. PT kernels are

@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: check that every per-mesh field reaches the compute ranks or is listed
+        run: python3 tests/functional/mpi/check_mpi_fields.py
+
       - name: install MPI, METIS and HDF5
         run: |
           sudo apt-get update
