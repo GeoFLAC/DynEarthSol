@@ -1995,6 +1995,9 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     array_t& basis = *basis_owner;
     auto& p = constraints.projector;
     auto& offset = constraints.prescribed;
+    // Under MPI only some ranks hold a boundary's nodes: the flags are made common
+    // to all ranks, which then stop together with one report.
+    int bad_normal = 0, bad_horizontal = 0;
     for (int ib=iboundn0; ib<=iboundn3; ++ib) {
         if (var.vbc_types[ib] == 0) continue;
         for (int n=0; n<nn; ++n) {
@@ -2002,12 +2005,16 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             double norm2 = 0;
             for (int d=0; d<NDIMS; ++d) norm2 += (*var.bnormals)[ib][d]*(*var.bnormals)[ib][d];
             if (!std::isfinite(norm2) || std::abs(norm2-1) > 1e-10)
-                die(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+                bad_normal = 1;
             const double nz = (*var.bnormals)[ib][NDIMS-1];
             if ((var.vbc_types[ib] == 11 || var.vbc_types[ib] == 13) && !(1-nz*nz > 1e-14))
-                die(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
+                bad_horizontal = 1;
         }
     }
+    if (mpi_any(var, bad_normal))
+        die_together(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+    if (mpi_any(var, bad_horizontal))
+        die_together(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
     for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) offset[n][d] = 0;
     apply_vbcs(param, var, offset, homogeneous, true);
@@ -2021,6 +2028,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     }
     // At most NDIMS rows: reorthogonalized elimination supplies both the minimum
     // norm affine solution and an orthogonal free-space projector, including edges.
+    int inconsistent = 0;
     for (int n=0; n<nn; ++n) {
         double q[NDIMS][NDIMS] = {}, rhs[NDIMS] = {};
         int rank = 0;
@@ -2040,7 +2048,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             for (int d=0; d<NDIMS; ++d) norm2 += a[d]*a[d];
             if (norm2 <= 1e-24) {
                 if (std::abs(b) > 1e-12*std::max(scale, std::numeric_limits<double>::min()))
-                    die(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
+                    inconsistent = 1;
                 continue;
             }
             const double norm = std::sqrt(norm2);
@@ -2057,6 +2065,8 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             }
         }
     }
+    if (mpi_any(var, inconsistent))
+        die_together(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
 }
 
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,

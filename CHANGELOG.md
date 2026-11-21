@@ -126,6 +126,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 - MPI reuses current root fields and material caches, skips repeated PT velocity
   synchronization, and combines RSF diagnostics into one collective reduction.
+- HDF5 output failures stop with the I/O exit codes 20 or 21 instead of an
+  uncaught exception (serial) or exit 61 (MPI).
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.

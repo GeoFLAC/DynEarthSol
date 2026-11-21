@@ -67,7 +67,7 @@ def execute(command, directory, env, logname="run.log", expected_failure=False, 
     return log, elapsed
 
 
-def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save"):
+def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save", finite=True):
     import h5py
     import numpy as np
 
@@ -87,7 +87,7 @@ def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save
             a, b = left[path][()], right[path][()]
             if a.shape != b.shape or a.dtype != b.dtype:
                 raise RuntimeError(f"Shape or dtype differs: frame {frame}, {path}")
-            if a.dtype.kind in "fc" and (not np.isfinite(a).all() or not np.isfinite(b).all()):
+            if finite and a.dtype.kind in "fc" and (not np.isfinite(a).all() or not np.isfinite(b).all()):
                 raise RuntimeError(f"Non-finite physical data: frame {frame}, {path}")
             if a.tobytes() != b.tobytes():
                 raise RuntimeError(f"Physical data differ: frame {frame}, {path}")
@@ -314,8 +314,8 @@ def main():
         cfg.write(f)
     log, _ = execute(launcher + ["-n", "2", str(executables["mpi"]), "model.cfg"],
                      directory, env, expected_failure=True)
-    if "H5Fcreate failed" not in log or "[DES exit 61]" not in log:
-        raise RuntimeError("The failure test did not reach the expected HDF5 exception handler")
+    if "H5Fcreate failed" not in log or "[DES exit 20]" not in log:
+        raise RuntimeError("The failure test did not stop with the serial I/O exit code 20")
     print("Root I/O failure terminates the MPI job: passed", flush=True)
 
     cfg["sim"]["modelname"] = "result"
@@ -329,6 +329,44 @@ def main():
     execute(launcher + ["-n", "2", str(executables["mpi"]), "--help"],
             directory, env, "help.log")
     print("DES error and --help exit without hanging: passed", flush=True)
+
+    # A NaN velocity found by compute_dt inside the time-step op stops the run with
+    # the serial error frame, which root writes, and one message. A NaN Winkler
+    # density leaves the initial state finite; GVS checks the velocity after step 1.
+    cfg = configure(2, False, 1000, steps=4, output_interval=1)
+    cfg["control"]["use_global_velocity_scaling"] = "yes"
+    cfg["bc"]["winkler_delta_rho"] = "nan"
+    ranks = max(args.ranks)
+    runs = {"serial": [str(executables["serial"])],
+            f"mpi{ranks}": launcher + ["-n", str(ranks), str(executables["mpi"])]}
+    for label, command in runs.items():
+        directory = work / f"nan-velocity-{label}"
+        directory.mkdir()
+        with (directory / "model.cfg").open("w") as f:
+            cfg.write(f)
+        log, _ = execute(command + ["model.cfg"], directory, env, expected_failure=True)
+        if "[DES exit 50]" not in log or log.count("Error: NaN velocity in") != 1:
+            raise RuntimeError(f"{label}: expected one NaN-velocity report and DES exit 50")
+    compare_physical_hdf5(work / "nan-velocity-serial", work / f"nan-velocity-mpi{ranks}", 1,
+                          finite=False)
+    results["checks"].append(dict(case="nan-velocity-error-frame", ranks=ranks, bit_exact=True))
+    print(f"NaN velocity on {ranks} ranks writes the serial error frame: passed", flush=True)
+
+    # A failure that every rank reaches inside an op stops with one report and the
+    # serial exit code. A negative fixed dt fails the first PT step on every rank.
+    cfg = configure(2, False, 1000, steps=4, output_interval=1)
+    cfg["control"].update(has_PT="yes", fixed_dt="-1")
+    for label, command in runs.items():
+        directory = work / f"common-failure-{label}"
+        directory.mkdir()
+        with (directory / "model.cfg").open("w") as f:
+            cfg.write(f)
+        log, _ = execute(command + ["model.cfg"], directory, env, expected_failure=True)
+        if log.count("[DES exit 11]") != 1 or log.count("PT requires positive domain length") != 1:
+            raise RuntimeError(f"{label}: expected one report and DES exit 11")
+    results["checks"].append(dict(case="common-failure-report", ranks=ranks, passed=True))
+    print(f"A failure on all {ranks} ranks is reported once with the serial exit code: passed",
+          flush=True)
 
     (work / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(f"Passed. Results: {work / 'results.json'}")

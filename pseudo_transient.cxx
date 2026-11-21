@@ -487,13 +487,14 @@ PTResult run_physical_step_pt(const Param& param, Variables& var)
 
 PTResult run_initial_equilibrium_pt(const Param& param, Variables& var)
 {
+    // Instantaneous limit: no viscous relaxation and no RSF aging. Plastic
+    // correction remains part of the skeleton's initial equilibrium state.
+    // Checked before the dispatch, so that only rank zero reports it.
+    if (!(param.mat.rheol_type & MatProps::rh_elastic))
+        die(EXIT_CONFIG_VALUE, "Initial instantaneous PT equilibrium requires an elastic skeleton; use a physical-time process for pure viscous material.");
 #ifdef USEMPI
     if (var.mpi && var.mpi->dispatch(MpiOp::InitialPT, var)) return var.mpi->pt_result();
 #endif
-    // Instantaneous limit: no viscous relaxation and no RSF aging. Plastic
-    // correction remains part of the skeleton's initial equilibrium state.
-    if (!(param.mat.rheol_type & MatProps::rh_elastic))
-        die(EXIT_CONFIG_VALUE, "Initial instantaneous PT equilibrium requires an elastic skeleton; use a physical-time process for pure viscous material.");
     std::unique_ptr<Param> initial_owner(new Param(param));
     Param& initial = *initial_owner;
     // Keep the physical load definition: the hydraulic option also controls

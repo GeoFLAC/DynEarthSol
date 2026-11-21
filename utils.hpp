@@ -27,6 +27,11 @@
 // (NVC++-W-1053). A declaration alone leaves nothing to promote.
 [[noreturn]] void die(ExitCode code);
 [[noreturn]] void die(ExitCode code, const char* msg);
+// For a failure that every MPI rank reaches together: rank zero reports it and stops the
+// run, the other ranks wait for that, so the report appears once and no other rank's
+// abort cuts it short. The same as die() without MPI. Use it only where every rank takes
+// the same branch, or a rank that never gets here leaves the others waiting.
+[[noreturn]] void die_together(ExitCode code, const char* msg = nullptr);
 
 static void print(std::ostream& os, const double& x)
 {

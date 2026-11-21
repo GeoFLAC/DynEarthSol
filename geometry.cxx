@@ -1629,7 +1629,22 @@ double compute_dt(const Param& param, Variables& var,
 
 {
 #ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::TimeStep, var, include_rsf_state_limit ? 1.0 : 0.0)) return var.mpi->result();
+    if (var.mpi && var.mpi->dispatch(MpiOp::TimeStep, var, include_rsf_state_limit ? 1.0 : 0.0)) {
+        const double dt = var.mpi->result();
+        // The op reports a NaN velocity or dt <= 0 below and returns a non-positive
+        // dt, as the serial checks fail; a fixed dt returns before them. The error
+        // frame gathers every field to rank zero, and die() stops the workers.
+        if (param.control.fixed_dt == 0 && dt <= 0) {
+            var.output->write_exact_error(var);
+            die(EXIT_RUNTIME_NAN);
+        }
+        return dt;
+    }
+    // Inside the op every rank sees the same reduced counts and limits, so all
+    // ranks fail together; the op returns the failure to rank zero (above).
+    const bool in_op = var.mpi && var.mpi->in_kernel();
+#else
+    const bool in_op = false;
 #endif
     const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
     const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
@@ -1793,9 +1808,11 @@ double compute_dt(const Param& param, Variables& var,
     // universal net: compute_dt runs every slow_updates_interval steps, so a NaN that
     // reaches the markers first exits EXIT_RUNTIME_LOOKUP instead.
     if (nan_elem_count > 0) {
-        std::cerr << "Error: NaN velocity in " << nan_elem_count
-                  << " elements at step " << var.steps
-                  << " -- stopping before writing further frames.\n";
+        if (mpi_reports(var))
+            std::cerr << "Error: NaN velocity in " << nan_elem_count
+                      << " elements at step " << var.steps
+                      << " -- stopping before writing further frames.\n";
+        if (in_op) return 0;
         // write_exact_error() runs check_nan(), which dies on any NaN it finds in vel;
         // the die() below still covers an element mean gone NaN from Inf - Inf.
         if (var.output) var.output->write_exact_error(var);
@@ -1839,15 +1856,17 @@ double compute_dt(const Param& param, Variables& var,
                           dt_diffusion, dt_hydro_diffusion}) *
                 param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
-    if (param.debug.dt) {
+    if (param.debug.dt && mpi_reports(var)) {
         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
                   << dt_rsf << " " << dt_diffusion << " "
                   << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << " sec\n";
     }
     if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
-                  << " " << dt_diffusion
-                  << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
+        if (mpi_reports(var))
+            std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
+                      << " " << dt_diffusion
+                      << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
+        if (in_op) return dt;
         if (var.output) var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
     }
@@ -1897,10 +1916,11 @@ void compute_mass(const Param &param, const Variables &var,
         const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
 
         if (pseudo_speed < diff_ref) {
-            std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
-                      << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
-                      << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
-            die(EXIT_CONFIG_VALUE);
+            if (mpi_reports(var))
+                std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
+                          << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
+                          << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
+            die_together(EXIT_CONFIG_VALUE);
         }
     }
 
@@ -2110,7 +2130,7 @@ void compute_pt_factors(const Param& param, const Variables& var,
     length = std::max(length, param.mesh.ylength);
 #endif
     if (!(length > 0 && var.dt > 0 && std::isfinite(var.dt)))
-        die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
+        die_together(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
     int bad = 0;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length, adaptive, ee, nn) reduction(|:bad)
@@ -2156,8 +2176,8 @@ void compute_pt_factors(const Param& param, const Variables& var,
     }
     mpi_sync(var, effective_viscosity, MpiEntity::Element);
     if (!adaptive) mpi_sync(var, height, MpiEntity::Element);
-    if (bad)
-        die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
+    if (mpi_any(var, bad))
+        die_together(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length, adaptive, ee, nn) reduction(|:bad)
 #endif
@@ -2175,8 +2195,8 @@ void compute_pt_factors(const Param& param, const Variables& var,
         if (!adaptive)
             mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
     }
-    if (bad)
-        die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
+    if (mpi_any(var, bad))
+        die_together(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
 }
 
 void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,

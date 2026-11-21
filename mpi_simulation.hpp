@@ -72,9 +72,26 @@ private:
 };
 #endif
 
+// Whether this process prints a failure or warning that every rank reaches together
+// inside an operation: rank zero alone, so it appears once, as in a serial run.
+inline bool mpi_reports(const Variables& var) {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) return var.mpi->is_root();
+#endif
+    return true;
+}
+// A failure flag seen on some ranks, made common to all inside an operation, so that
+// every rank takes the same branch (see die_together()).
+inline int mpi_any(const Variables& var, int flag) {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->maximum(&flag, 1);
+#endif
+    return flag;
+}
+
 inline int mpi_gather_passes(const Variables& v) {
 #ifdef USEMPI
-    if(v.mpi && v.mpi->in_kernel() && v.mpi->overlap()) return 2;
+    if(v.mpi && v.mpi->in_kernel()) return 2;
 #endif
     return 1;
 }
