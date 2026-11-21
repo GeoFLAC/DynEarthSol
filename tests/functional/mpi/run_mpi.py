@@ -67,7 +67,8 @@ def execute(command, directory, env, logname="run.log", expected_failure=False, 
     return log, elapsed
 
 
-def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save", finite=True):
+def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save", finite=True,
+                          group="VTKHDF"):
     import h5py
     import numpy as np
 
@@ -78,7 +79,7 @@ def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save
             def visit(path, obj):
                 if isinstance(obj, h5py.Dataset) and path.split("/")[-1] != "walltime_sec":
                     found[path] = obj
-            file["VTKHDF"].visititems(visit)
+            file[group].visititems(visit)
             return found
         left, right = datasets(old), datasets(new)
         if not left or left.keys() != right.keys():
@@ -277,6 +278,23 @@ def main():
             results["checks"].append(dict(case=label, ranks=ranks, bit_exact=exact,
                                            frames=list(range(5)), timing=timing))
             print(f"{label}: ranks={ranks}: bit-exact", flush=True)
+
+    # A restart between mesh checks with averaging switched on opens no averaging window
+    # before its first output, at the next mesh check, so that frame's averaged fields are
+    # empty. compare.py cannot read empty fields; every dataset in the file is compared.
+    # With averaging, only a mesh-check step writes output; the short time interval makes
+    # the first one, step 10, write frame 2.
+    cfg = configure(2, False, 1000, steps=4, output_interval=2)
+    checkpoint, _ = run("averaged-restart-checkpoint", cfg, executables["serial"])
+    cfg["sim"].update(is_outputting_averaged_fields="yes", max_steps="10", output_step_interval="10",
+                      output_time_interval_in_yr="1e-9", is_restarting="yes",
+                      restarting_from_modelname=str(checkpoint / "result"), restarting_from_frame="1")
+    reference, _ = run("averaged-restart-parent", cfg, executables["serial"])
+    ranks = max(args.ranks)
+    current, timing = run(f"averaged-restart-mpi{ranks}", cfg, executables["mpi"], ranks)
+    compare_physical_hdf5(reference, current, 2, group="/")
+    results["checks"].append(dict(case="averaged-restart", ranks=ranks, bit_exact=True, timing=timing))
+    print(f"Restart between mesh checks with averaging on {ranks} ranks: bit-exact", flush=True)
 
     cfg = configure(2, False, 1000)
     cfg["ic"]["isostasy_adjustment_time_in_yr"] = "10"

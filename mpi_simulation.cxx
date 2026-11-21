@@ -549,6 +549,9 @@ struct MpiSimulation::Impl {
     tensor_t average_strain, average_stress;
     double_vec average_plastic;
     double average_time = 0;
+    // Whether this run has opened an averaging window (Output::average_fields). A restart
+    // between mesh checks opens none until the next one, and the buffers stay empty.
+    bool average_window_opened = false;
 
     void command(const Command& received) {
         local.steps = received.steps;
@@ -849,6 +852,8 @@ struct MpiSimulation::Impl {
 
     void collect_averages() {
         if (param.mesh.quality_check_step_interval <= 1) return;
+        // Root's averaging buffers stay empty, as they are in a serial run.
+        if (!average_window_opened) return;
         Fields root_node_fields, root_element_fields, local_node_fields, local_element_fields;
         local_node_fields.add(&average_coord);
         local_element_fields.add(&average_strain);
@@ -1029,6 +1034,7 @@ struct MpiSimulation::Impl {
         case MpiOp::Average:
             Output::average_fields(var, param.mesh.quality_check_step_interval,
                                    average_time, average_coord, average_strain, average_stress, average_plastic);
+            if (var.steps % param.mesh.quality_check_step_interval == 1) average_window_opened = true;
             break;
         case MpiOp::Metrics:
             compute_earthquake_metrics(var, measurements[0], measurements[1]);
