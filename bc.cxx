@@ -466,9 +466,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     }
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
-        // The host MPI reduction consumes the asynchronous device reduction.
+        // The device reduction lands in the device copy, and the loop below reads it there.
         #pragma acc wait
+        #pragma acc update self(zmin) if(des_acc_offload_enabled())
         var.mpi->minimum(&zmin, 1);
+        #pragma acc update device(zmin) if(des_acc_offload_enabled())
     }
 #endif
 #endif
