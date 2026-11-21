@@ -230,13 +230,14 @@ void metadata(MpiState& state, Variables& var) {
     for (int i=0; i<nbdrytypes; ++i) {
         state.value(var.vbc_types[i]);
         state.value(var.vbc_values[i]);
-        state.value(var.stress_bc_values[i]);
         state.value(var.bnodes[i]);
         state.value(var.bfacets[i]);
     }
+    // init_var() sets the stress BCs of the six walls only.
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         state.value(var.hbc_types[i]);
         state.value(var.stress_bc_types[i]);
+        state.value(var.stress_bc_values[i]);
     }
     for (int i=0; i<nbdrytypes*nbdrytypes; ++i) state.value(var.edge_slot[i]);
     ARCHIVE(bnormals);
@@ -380,7 +381,6 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     for (int i=0; i<nbdrytypes; ++i) {
         var.vbc_types[i] = global.vbc_types[i];
         var.vbc_values[i] = global.vbc_values[i];
-        var.stress_bc_values[i] = global.stress_bc_values[i];
         if (!var.bnodes[i]) var.bnodes[i] = new int_vec;
         var.bnodes[i]->clear();
         for (int n : *global.bnodes[i]) {
@@ -397,6 +397,7 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         var.hbc_types[i] = global.hbc_types[i];
         var.stress_bc_types[i] = global.stress_bc_types[i];
+        var.stress_bc_values[i] = global.stress_bc_values[i];
     }
     std::copy(global.edge_slot, global.edge_slot + nbdrytypes*nbdrytypes, var.edge_slot);
     // Copy each support in GLOBAL element order, including full stars of owned nodes.
