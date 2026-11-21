@@ -250,18 +250,24 @@ def main():
             current, timing = run(f"{case}-mpi{ranks}-omp{threads}", cfg, executables["mpi"],
                                   ranks, threads)
             exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
+            # The checkpoints MPI writes match the serial ones in every dataset.
+            for frame in range(5):
+                compare_physical_hdf5(reference, current, frame, kind="chkpt", group="/")
             if moving and ranks > 1 and timing["ownership_reports"] < 2*ranks:
                 raise RuntimeError("Ownership was not updated across remeshing")
             results["checks"].append(dict(case=case, ranks=ranks, threads=threads,
                                            bit_exact=exact, timing=timing))
             print(f"{case}: ranks={ranks} OMP={threads}: "
                   f"{'bit-exact' if exact else 'within regression tolerance'}", flush=True)
-        cfg["sim"].update(is_restarting="yes", restarting_from_modelname=str(reference / "result"),
+        # Restart on two ranks from a checkpoint that the last MPI run wrote.
+        written = current
+        cfg["sim"].update(is_restarting="yes", restarting_from_modelname=str(written / "result"),
                           restarting_from_frame="2")
         current, timing = run(f"{case}-restart", cfg, executables["mpi"], 2)
         exact = compare(reference, current, 4, env)
-        results["checks"].append(dict(case=case + "-restart", ranks=2, bit_exact=exact, timing=timing))
-        print(f"{case}: restart on two ranks: "
+        results["checks"].append(dict(case=case + "-restart", ranks=2, bit_exact=exact, timing=timing,
+                                      checkpoint_source=str(written)))
+        print(f"{case}: restart on two ranks from an MPI checkpoint: "
               f"{'bit-exact' if exact else 'within regression tolerance'}", flush=True)
 
     # Averaging maintains persistent local accumulators across remeshing.
