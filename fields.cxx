@@ -204,23 +204,23 @@ void update_temperature(const Param &param, const Variables &var,
             }
         }
 
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp master
 #endif
         {
             mpi_begin_gather(var,tmp_result,NODES_PER_ELEM);
         }
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp barrier
 #endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp master
 #endif
                 mpi_finish_gather(var);
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp barrier
 #endif
             }
@@ -255,7 +255,7 @@ void update_temperature(const Param &param, const Variables &var,
     // since only the top boundary has Dirichlet bc, and all the other boundaries
     // have no heat flux bc.
 //    #pragma omp parallel for default(none) shared(var, param, tdot, temperature)
-//    for (int n=mpi_nb; n<mpi_ne; ++n) {
+//    for (int n=0; n<var.nnode; ++n) {
 //        if ((*var.bcflag)[n] & BOUNDZ1)
 //            temperature[n] = param.bc.surface_temperature;
 //        else
@@ -671,23 +671,23 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             }
         }
 
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp master
 #endif
         {
             mpi_begin_gather(var,tmp_result,NODES_PER_ELEM*NDIMS);
         }
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp barrier
 #endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp master
 #endif
                 mpi_finish_gather(var);
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp barrier
 #endif
             }

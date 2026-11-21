@@ -524,7 +524,7 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 	endif
 
 	ifeq ($(nofma), 1)
-		CXXFLAGS += -Mnofma
+		CXXFLAGS += -mno-fma
 	endif
 
 	ifeq ($(openacc), 1)
@@ -553,17 +553,17 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 		ifeq ($(usempi), 1)
 			CXXFLAGS += -Kieee
 		endif
-		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),managed -cuda
+		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
 
 		## Keep our symbols out of .dynsym
 		LDFLAGS += -Wl,--version-script=local-symbols.map
 		ifeq ($(nofma), 1)
-			CXXFLAGS += -gpu=cc$(GPU_CC),managed,nofma
+			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed,nofma
 			# CXXFLAGS += -gpu=managed,nofma
 		else
-			CXXFLAGS += -gpu=cc$(GPU_CC),managed
+			CXXFLAGS += -gpu=cc$(GPU_CC),mem:managed
 			# CXXFLAGS += -gpu=managed
 		endif
 	endif

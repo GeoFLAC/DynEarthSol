@@ -562,10 +562,12 @@ static void spr_fused_fields(const Variables &var,
                              double* const out_ptrs[], const int out_strides[], 
                              int num_fields)
 {
+#ifdef USEMPI
     // SPR is centralized mesh-management work in the MPI backend. Complete
     // global GPU producers before the CPU fit; compact timestep arrays remain
     // on their devices until the collect/remesh/repartition transition.
     #pragma acc wait
+#endif
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -608,7 +610,7 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-    #if !defined(ACC) || !defined(USEMPI)
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
 #endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
@@ -627,7 +629,7 @@ static void spr_fused_fields(const Variables &var,
             z0 += cz;
 #endif
 
-    #if !defined(ACC) || !defined(USEMPI)
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
 #endif
             for (int f = 0; f < num_fields; ++f) {
@@ -655,7 +657,7 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-    #if !defined(ACC) || !defined(USEMPI)
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
 #endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
@@ -690,7 +692,7 @@ static void spr_fused_fields(const Variables &var,
             A[3][3] += dz*dz;
 #endif
 
-    #if !defined(ACC) || !defined(USEMPI)
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
 #endif
             for (int f = 0; f < num_fields; ++f) {
@@ -1964,23 +1966,23 @@ void compute_mass(const Param &param, const Variables &var,
             tr[4] = ym; 
         }
 
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp master
 #endif
         {
             mpi_begin_gather(var,tmp_result,5);
         }
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
         #pragma omp barrier
 #endif
         const int passes=mpi_gather_passes(var);
         for(int pass=0;pass<passes;++pass) {
             if(pass==1) {
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp master
 #endif
                 mpi_finish_gather(var);
-#ifndef ACC
+#if !defined(ACC) && defined(USEMPI)
                 #pragma omp barrier
 #endif
             }

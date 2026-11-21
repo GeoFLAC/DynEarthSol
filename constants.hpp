@@ -76,9 +76,9 @@ const int NODE_OF_FACET[FACETS_PER_ELEM][NODES_PER_FACET] =
      {2,0},
      {0,1}};
 #endif
-#ifdef ACC
-// This static lookup is indexed inside GPU kernels; managed heap allocation
-// does not make a host-side const/global array device-accessible.
+#if defined(ACC) && defined(USEMPI)
+// The compact GPU MPI kernels index this static lookup on the device; managed heap
+// allocation does not make a host-side const/global array device-accessible.
 #pragma acc declare copyin(NODE_OF_FACET)
 #endif
 

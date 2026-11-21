@@ -10,13 +10,16 @@ inline bool& des_acc_offload_flag() {
     static bool enabled=false;
     return enabled;
 }
-inline bool des_acc_offload_enabled() {
 #if defined(USEMPI) && defined(ACC)
+inline bool des_acc_offload_enabled() {
     return des_acc_offload_flag();
-#else
-    return true;
-#endif
 }
+#else
+// Every other build always offloads, decided at compile time.
+constexpr bool des_acc_offload_enabled() {
+    return true;
+}
+#endif
 
 class AccOffloadScope {
     bool previous_;
