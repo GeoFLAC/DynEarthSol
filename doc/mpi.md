@@ -288,12 +288,9 @@ imbalance but do not establish asynchronous MPI progress.
 
 ## Correctness checks
 
-Use the [Grid Engine workflow](../tests/functional/mpi/README.md#cpu-correctness-through-grid-engine)
-for scheduler-managed resources, or the
-[SSH-host workflow](../tests/functional/mpi/README.md#cpu-correctness-across-ssh-hosts)
-for explicitly allocated hosts with separate working directories.
-
-Use HDF5/MMG executables built from the parent commit and changed sources:
+On scheduler-managed resources, run the checks inside an allocation and pass the
+site's MPI launcher with `--launcher`. Use HDF5/MMG executables built from the
+parent commit and changed sources:
 
 ```sh
 python tests/functional/mpi/run_mpi.py \
@@ -327,11 +324,6 @@ make cmp NDIMS=2 CASE=test-tiny.cfg \
 Repeat with a valid 3D case. Output precedes same-step remeshing in DES; restarting
 such a checkpoint can omit that remesh, also without MPI. Restart tests therefore
 place checkpoints between mesh checks.
-
-The [scientific reproduction guide](../tests/functional/mpi/README.md) covers
-full-duration core-complex/MMG, earthquake cycles, bounded rifting, and a separate
-current-format Maxwell benchmark with an analytical constitutive comparison.
-Full examples and bounded regression runs are explicitly distinguished.
 
 ### Verification scope
 

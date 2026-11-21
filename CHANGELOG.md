@@ -52,9 +52,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   no more elements than ranks use recursive coordinate bisection, and a one-rank
   GPU run keeps every element on its rank. Resized inactive hydraulic scratch
   state after remeshing to prevent out-of-bounds MPI packing/collection.
-- A scientific-example reproduction driver checks complete serial/MPI fields,
-  checkpoints and monitors. A separate current-format Maxwell case checks the
-  analytical constitutive response in 2D and 3D without the historical source patch.
 
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
