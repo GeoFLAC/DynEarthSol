@@ -191,6 +191,23 @@ int count(std::size_t entries) {
     return entries;
 }
 
+// The packed fields of one mesh row as one MPI element. Counts and displacements in it are
+// row counts, which fit in an int as the mesh's node and element counts do; counted in
+// doubles, a gather of the whole mesh would not.
+class MpiRows {
+public:
+    explicit MpiRows(int columns) {
+        MPI_Type_contiguous(columns, MPI_DOUBLE, &type_);
+        MPI_Type_commit(&type_);
+    }
+    ~MpiRows() { MPI_Type_free(&type_); }
+    MpiRows(const MpiRows&) = delete;
+    MpiRows& operator=(const MpiRows&) = delete;
+    MPI_Datatype type() const { return type_; }
+private:
+    MPI_Datatype type_;
+};
+
 void metadata(MpiState& state, Variables& var) {
 #define ARCHIVE(x) state.value(var.x)
     ARCHIVE(time);
@@ -717,24 +734,25 @@ struct MpiSimulation::Impl {
                         }
                     }
                 }
-                counts[r] = count(std::size_t(nrows) * from.columns);
+                counts[r] = nrows;
                 if (r) offsets[r] = offsets[r-1] + counts[r-1];
             }
-            recv.resize(std::size_t(offsets.back()) + counts.back());
+            recv.resize((std::size_t(offsets.back()) + counts.back()) * from.columns);
         }
+        const MpiRows row(from.columns);
         double start = MPI_Wtime();
-        MPI_Gatherv(send.data(), count(send.size()), MPI_DOUBLE, recv.data(), counts.data(), offsets.data(),
-                    MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(send.data(), int(local_rows->size()), row.type(), recv.data(), counts.data(), offsets.data(),
+                    row.type(), 0, MPI_COMM_WORLD);
         communication_s += MPI_Wtime() - start;
         std::size_t row_start = 0;
         if (rank == 0) {
             for (int r=0; r<size; ++r) {
                 const auto& ids = nodes ? parts[r].nodes : parts[r].elements;
-                const int nrows = counts[r] / from.columns;
+                const int nrows = counts[r];
                 if (nrows) unpack(to, surface || query ? global_rows.data() + row_start : ids.data(), nrows,
-                                  recv.data() + offsets[r]);
+                                  recv.data() + std::size_t(offsets[r]) * from.columns);
                 row_start += nrows;
-                if (r) root_bytes += std::uint64_t(counts[r]) * sizeof(double);
+                if (r) root_bytes += std::uint64_t(counts[r]) * from.columns * sizeof(double);
             }
         }
     }
@@ -754,16 +772,17 @@ struct MpiSimulation::Impl {
                 int_vec global_rows;
                 for (int i : rows) global_rows.push_back(ids[i]);
                 pack(from, global_rows, send);
-                offsets[r] = scatter.size();
-                counts[r] = count(send.size());
+                counts[r] = global_rows.size();
+                if (r) offsets[r] = offsets[r-1] + counts[r-1];
                 scatter.insert(scatter.end(), send.begin(), send.end());
                 if (r) root_bytes += send.size() * sizeof(double);
             }
         }
         recv.resize(std::size_t(local_rows.size()) * to.columns);
+        const MpiRows row(to.columns);
         double start = MPI_Wtime();
-        MPI_Scatterv(scatter.data(), counts.data(), offsets.data(), MPI_DOUBLE, recv.data(), count(recv.size()),
-                     MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Scatterv(scatter.data(), counts.data(), offsets.data(), row.type(), recv.data(), int(local_rows.size()),
+                     row.type(), 0, MPI_COMM_WORLD);
         communication_s += MPI_Wtime() - start;
         unpack(to, local_rows.data(), local_rows.size(), recv.data());
     }
