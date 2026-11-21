@@ -284,7 +284,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, displacement)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int n = 0; n < var.nnode; ++n)
         for (int d = 0; d < NDIMS; ++d)
             displacement[n][d] = (*var.coord)[n][d] - (*var.coord0)[n][d];
