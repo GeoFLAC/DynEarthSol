@@ -497,7 +497,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_aux_array(normals, "boundary normals", normals.size());
     }
     if (!param.control.has_PT) {
-        // The input of the run's velocity boundary conditions, which a restart compares.
+        // The run's velocity boundary conditions in force now, which a restart compares.
         const double_vec vbc = vbc_controls(param, var);
         bin.write_scalar(static_cast<int>(vbc.size()), "boundary condition control count");
         bin.write_aux_array(vbc, "boundary condition controls", vbc.size());
