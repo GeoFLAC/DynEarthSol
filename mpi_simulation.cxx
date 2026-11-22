@@ -1213,7 +1213,8 @@ runtime_summary(int rank, int size, int provided, int local_rank, int local_size
             {"library", library.empty() ? "unknown" : library}};
 }
 
-MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
+// Built before main's try block, so it ends its own failures as worker_loop() does.
+MpiSimulation::MpiSimulation(Param& param) try : impl_(new Impl(param)) {
     int provided;
     MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, &provided);
     if (provided < MPI_THREAD_FUNNELED) die(EXIT_RUNTIME_RESOURCE, "MPI_THREAD_FUNNELED required");
@@ -1261,6 +1262,13 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
     if (is_root())
         std::cout << "[mpi] compact spatial partitions; ranks=" << impl_->size
                   << "; neighbor halos; centralized mesh management\n";
+}
+catch (const std::bad_alloc&) {
+    die(EXIT_RUNTIME_RESOURCE, "MPI startup allocation failed");
+}
+catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    die(EXIT_INTERNAL_UNREACHABLE, "MPI startup exception");
 }
 
 MpiSimulation::~MpiSimulation() {
