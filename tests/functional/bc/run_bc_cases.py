@@ -14,9 +14,9 @@ Input that adds nothing ran on the parent; the current executable refuses it (#1
 these cases expect its exit code 11: side-wall codes that set no velocity component, and
 stress_bc_* of an unknown type or on a component the velocity code holds.
 
-Cases marked restart also restart from checkpoint 1 with the current executable; the n
-boundaries keep the normals of the starting mesh, which the checkpoints now carry. With
-restart='exact', every later frame must match the run's bit for bit.
+Cases marked restart also restart from checkpoint 1 with the current executable, and
+every later frame must match the run's bit for bit: the n boundaries keep the normals of
+the starting mesh, which the checkpoints now carry, and the restart keeps the velocity.
 Cases marked corner check, at the nodes on n0 and one other side only, that the velocity
 along n0's normal is the value n0 holds.
 
@@ -87,11 +87,8 @@ def base(ndims, mesh):
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
          same_as=None, refused=False, restart=False, corner=None):
-    # exit_code is the parent's; input that set nothing ran there and is refused now. A case
-    # with restart also restarts from checkpoint 1: 'exact' must give the later frames bit for
-    # bit, 'runs' must only run. Where an n boundary holds just its normal, apply_vbcs at the
-    # restart moves the velocity of the edge nodes once more, as before #115. corner is
-    # (side, frame).
+    # exit_code is the parent's; input that set nothing ran there and is refused now.
+    # corner is (side, frame).
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
                 same_as=same_as, restart=restart, corner=corner)
@@ -205,7 +202,7 @@ def cases():
         if nd == 3:
             stress.update(vbc_y0='0', vbc_y1='0', stress_bc_y0='2', stress_val_y0='6e4',
                           stress_bc_y1='1', stress_val_y1='-7e4')
-        found.append(case(f'{d}-stress', nd, stress, restart='exact'))
+        found.append(case(f'{d}-stress', nd, stress, restart=True))
         # A tangential component loads a tilted facet: x on a top that rises to the east.
         found.append(case(f'{d}-stress-slope', nd, dict(stress_bc_z1='1', stress_val_z1='-4e4'), mesh='slope'))
         # A held component is loaded once its hold ends.
@@ -226,7 +223,7 @@ def cases():
                 if nd == 3:
                     others.update(vbc_y0=str(sides), vbc_y1=str(sides))
                 found.append(case(f'{d}-n-c{code}-sides{sides}', nd, dict(vbc_n0=str(code), **others),
-                                  mesh='cut', restart='exact' if code in (3, 13) else 'runs'))
+                                  mesh='cut', restart=True))
         # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
         found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
                           mesh='cut', corner=('z1', 3)))
@@ -255,17 +252,17 @@ def cases():
         # What the codes cannot give: a free (supported) n boundary, and one under a normal
         # traction. Both bend; their frame stays that of the starting mesh, also on restart.
         found.append(case(f'{d}-n-free-letters', nd, dict(vbc_n0=free, vbc_val_n0=zeros), mesh='cut',
-                          letters=True, restart='exact'))
+                          letters=True, restart=True))
         found.append(case(f'{d}-n-normal-traction-letters', nd, dict(vbc_n0='t' + 'f' * (nd - 1),
                           vbc_val_n0='[-2e4' + ', 0' * (nd - 1) + ']'), mesh='cut', letters=True,
-                          restart='exact'))
+                          restart=True))
         # Tractions the codes cannot give: shear on a side wall and on an n boundary, and a
         # traction that stays when the Winkler foundation or water loading frees the velocity.
         found.append(case(f'{d}-x0-shear-letters', nd, dict(vbc_x0='ft' + 'f' * (nd - 2), vbc_val_x0_l='0',
                           vbc_val_x0='[0, 5e4' + ', 0' * (nd - 2) + ']'), letters=True))
         found.append(case(f'{d}-n-traction-letters', nd, dict(vbc_n0='vt' + 'f' * (nd - 2),
                           vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True,
-                          restart='runs'))
+                          restart=True))
         found.append(case(f'{d}-winkler-traction-letters', nd, dict(has_winkler_foundation='yes',
                           vbc_z0='tv' + 'f' * (nd - 2), vbc_val_z0='[-3e4, 1e-10' + ', 0' * (nd - 2) + ']'),
                           letters=True))
@@ -533,16 +530,14 @@ def same_outputs(old, new):
     return len(names)
 
 
-def same_after_restart(exe, result, exact):
-    """Restart the run from checkpoint 1; if exact, every later frame must match the run's."""
+def same_after_restart(exe, result):
+    """Restart the run from checkpoint 1: every later frame must match the run's."""
     cfg = copy.deepcopy(result.cfg)
     cfg['sim'].update(modelname='again', is_restarting='true', restarting_from_modelname='bc',
                       restarting_from_frame='1')
     again = run_des(exe, result.folder, 'again', cfg, timeout=600, check=False)
     if again.returncode:
         raise RuntimeError('the restart from checkpoint 1 exited {}'.format(again.returncode))
-    if not exact:
-        return 'restarts from checkpoint 1'
     later = [n for n in outputs(result.folder) if int(n.split('.')[-1]) > 1]
     for name in later:
         twin = result.folder/name.replace('bc.', 'again.', 1)
@@ -613,7 +608,7 @@ def main():
         try:
             verdict = compare_letters(current, spec, reference) if spec['letters'] else compare(parent, current, spec)
             if spec['restart']:
-                verdict += '; ' + same_after_restart(current_exe, current, spec['restart'] == 'exact')
+                verdict += '; ' + same_after_restart(current_exe, current)
             if spec['corner']:
                 verdict += '; ' + corner_normal_velocity(current, spec)
             ok = True

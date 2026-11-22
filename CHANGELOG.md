@@ -105,6 +105,10 @@ For a release, the full auto-generated list of merged pull requests is in its
   speed, which sets mass scaling and the timestep. Results of
   `examples/oblique-rift-3d.cfg` change markedly: its timestep falls from
   2.64 to 0.398 yr ([#115]).
+- A restart keeps the velocity of its checkpoint instead of applying the
+  velocity boundary conditions again, so it continues the run exactly, also at
+  the edges of oblique (`n`) boundaries. A boundary condition changed at
+  restart takes hold at the end of the first step ([#115]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).

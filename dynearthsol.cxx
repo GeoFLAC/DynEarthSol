@@ -597,10 +597,10 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     else
         create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    // PT checkpoints carry the accepted velocity. The legacy boundary map can
-    // change it (notably on oblique boundaries); the next PT solve imposes its
-    // own constraints at the next physical time.
-    if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
+    // Checkpoints carry the velocity the run's boundary conditions left, PT ones the
+    // accepted velocity. Applying them again would move the edge nodes of an n boundary
+    // once more, since its edge map is not a projection (#115); the next step applies
+    // them, also when the restart changes them.
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
