@@ -24,8 +24,8 @@ the y velocity the run's conditions give the checkpointed one there: the restart
 one from the checkpoint without its record of the conditions. Restarting with only n0's
 traction changed, n1 freed, which has no node, z1 holding a velocity it released before the
 checkpoint, x1's period table changed after the checkpoint time, or x0's code 5 given as the
-same letters must keep the checkpointed velocity; one with x0's value changed may change it
-on x0 only.
+same letters must keep the checkpointed velocity; one with x1's value changed may change it
+on x1 only, and not where the edge map with n0 leaves no part of that value.
 Cases with facet_loads run one step with z1 carrying the water load and one without it:
 their forces must differ by the load of every z1 facet, even on the triangle that takes both
 sides of the peak of peak-top-2d.poly.
@@ -35,7 +35,8 @@ sides hold keep their values.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
-match the integer-code case they repeat bit for bit. Other letters cases check
+match the integer-code case they repeat bit for bit, but for the record of the conditions in
+the checkpoints, which keeps the values each input gives. Other letters cases check
 conditions the codes cannot give and the input the letters reject.
 
     python3 tests/functional/bc/run_bc_cases.py \
@@ -615,21 +616,21 @@ def field_name(key):
     return key.split('/')[-1].lstrip('@').replace('.layout', '')
 
 
-def same_fields(a, b, name):
+def same_fields(a, b, name, ignored=()):
     added = {k for k in b.keys() - a.keys() if field_name(k) in ADDED_FIELDS}
     if a.keys() != b.keys() - added:
         raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ (b.keys() - added))))
     for key in a:
-        if field_name(key) not in ('walltime_sec', 'provenance') and a[key] != b[key]:
+        if field_name(key) not in ('walltime_sec', 'provenance') + ignored and a[key] != b[key]:
             raise RuntimeError('{}: {} differs'.format(name, key))
 
 
-def same_outputs(old, new, model='bc'):
+def same_outputs(old, new, model='bc', ignored=()):
     names = outputs(old, model)
     if not names or names != outputs(new, model):
         raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new, model)))
     for name in names:
-        same_fields(fields(old/name), fields(new/name), name)
+        same_fields(fields(old/name), fields(new/name), name, ignored)
     return len(names)
 
 
@@ -680,7 +681,8 @@ def edge_restart(exe, result):
     only n0's traction changed, n1 freed, which has no node, z1 holding a velocity it released
     before the checkpoint, x1's period table changed after the checkpoint time, or x0's code 5
     given as the same letters, the conditions at the checkpoint are the run's, and the restart
-    keeps the velocity. With x0's value changed, it applies them on x0 only."""
+    keeps the velocity. With x1's value changed, it applies them on x1 only, and not at its
+    edge with n0, where the edge map leaves no part of x1's normal."""
     import h5py
     import numpy as np
     import shutil
@@ -724,12 +726,13 @@ def edge_restart(exe, result):
         if (kept != saved).any():
             raise RuntimeError('changing only {} moved the velocity of {} nodes on restart'.format(
                 what, int((kept != saved).any(axis=1).sum())))
-    restart_from_1(exe, folder, result, 'x0', dict(vbc_val_x0='1e-9'))
-    moved = (velocity(fields(folder/'x0.save.000001')) != saved).any(axis=1)
-    off_x0 = (flag & FLAG_BITS['x0']) == 0
-    if (moved & off_x0).any() or not moved.any():
-        raise RuntimeError('changing the value of x0 moved {} nodes off it and {} on it on restart'.format(
-            int((moved & off_x0).sum()), int((moved & ~off_x0).sum())))
+    restart_from_1(exe, folder, result, 'x1', dict(vbc_val_x1='-2e-9'))
+    moved = (velocity(fields(folder/'x1.save.000001')) != saved).any(axis=1)
+    elsewhere = ((flag & FLAG_BITS['x1']) == 0) | ((flag & FLAG_BITS['n0']) != 0)
+    if (moved & elsewhere).any() or not moved.any():
+        raise RuntimeError('changing the value of x1 moved {} nodes off it or on n0 and {} elsewhere on '
+                           'it on restart'.format(int((moved & elsewhere).sum()),
+                                                  int((moved & ~elsewhere).sum())))
     change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
                   vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
     restart_from_1(exe, folder, result, 'changed', change)
@@ -737,8 +740,8 @@ def edge_restart(exe, result):
     count = same_outputs(bare, folder, 'changed')
     return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
            'without the record ({} files); ones changing only the n0 traction, n1, a released z1, ' \
-           'a later x1 period or the spelling of x0 keep the velocity, and x0\'s value changes it on ' \
-           'x0 only ({} nodes)'.format(int(node), count, int(moved.sum()))
+           'a later x1 period or the spelling of x0 keep the velocity, and x1\'s value changes it on ' \
+           'x1 off n0 only ({} nodes)'.format(int(node), count, int(moved.sum()))
 
 
 def facet_loads(exe, result):
@@ -794,7 +797,9 @@ def compare_letters(current, spec, reference):
         raise RuntimeError('no per-side table printed')
     if reference is None:
         return 'runs, table as expected'
-    count = same_outputs(reference.folder, current.folder)
+    # The record of the conditions keeps the values the input gives, also those without effect,
+    # such as that of a free component; a restart compares their effect at each node.
+    count = same_outputs(reference.folder, current.folder, ignored=RECORD)
     return 'bit-exact with {} ({} files), table as expected'.format(spec['same_as'], count)
 
 

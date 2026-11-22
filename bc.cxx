@@ -3,6 +3,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 #include <iomanip>
 #include <math.h>
@@ -539,21 +540,32 @@ void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const
         if (!(axes & (1 << d))) v[d] += (target - vn) * p[d] / left;
 }
 
-// What apply_vbcs applies on each side at the current time. Each side's table (param.bc.side,
-// in the side's frame) is turned back into global components for the side walls and z sides
-// (walls): the normal value of a side wall follows its period table, and a homogeneous call
-// holds every component at 0. For every side, how it meets an n boundary (meets), the global
-// axes it holds (held_axes) and its frame; for an n boundary, what it holds.
-void side_conditions(const Param &param, const Variables &var, bool homogeneous, WallBC *walls,
-                     bool &any_z, int *meets, int *held_axes, bool *held, bool *horizontal,
-                     bool *full, double *n_value)
+// What apply_vbcs applies on each side at a time, as a checkpoint records it (vbc_controls):
+// the global components of the side walls and z sides (walls) and whether a z side holds one
+// (any_z); for every side, how it meets an n boundary (meets) and the global axes it holds
+// (held_axes); for an n boundary, what it holds (held, horizontal, full, n_value); in 2D, the
+// depth profiles of x0 and x1 (division, ratio) and the bottom shear zone of a tapered one.
+struct SideConditions {
+    WallBC walls[nbdrytypes_hydro];
+    bool any_z;
+    int meets[nbdrytypes], held_axes[nbdrytypes];
+    bool held[nbdrytypes], horizontal[nbdrytypes], full[nbdrytypes];
+    double n_value[nbdrytypes];
+    double_vec division[2], ratio[2];
+    double thickness;
+};
+
+// The conditions at the current time. Each side's table (param.bc.side, in the side's frame) is
+// turned back into global components for the side walls and z sides: the normal value of a
+// side wall follows its period table, and a homogeneous call holds every component at 0.
+void side_conditions(const Param &param, const Variables &var, bool homogeneous, SideConditions &c)
 {
     const BC &bc = param.bc;
     const double t_now = var.time / YEAR2SEC;
-    any_z = false;
+    c.any_z = false;
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         const SideBC &s = bc.side[i];
-        WallBC &w = walls[i];
+        WallBC &w = c.walls[i];
         w.taper = s.taper;
         for (int d=0; d<NDIMS; ++d) {
             w.mode[d] = FREE;
@@ -574,118 +586,69 @@ void side_conditions(const Param &param, const Variables &var, bool homogeneous,
             }
             else
                 w.value[axis] = homogeneous ? 0.0 : v;
-            if (i == iboundz0 || i == iboundz1) any_z = true;
+            if (i == iboundz0 || i == iboundz1) c.any_z = true;
         }
     }
 
     for (int i=0; i<nbdrytypes; ++i) {
         const SideBC &s = bc.side[i];
-        held[i] = (s.type[0] == 'v');
-        horizontal[i] = s.horizontal_normal;
-        full[i] = true;
+        c.held[i] = (s.type[0] == 'v');
+        c.horizontal[i] = s.horizontal_normal;
+        c.full[i] = true;
         for (int d=0; d<NDIMS; ++d)
-            if (s.type[d] != 'v') full[i] = false;
-        n_value[i] = homogeneous ? 0.0 : s.value[0];
+            if (s.type[d] != 'v') c.full[i] = false;
+        c.n_value[i] = homogeneous ? 0.0 : s.value[0];
         const bool released = var.time > s.release_time;
-        meets[i] = (released || all_free(s)) ? MEETS_FREE : !normal_only(s) ? MEETS_HELD
+        c.meets[i] = (released || all_free(s)) ? MEETS_FREE : !normal_only(s) ? MEETS_HELD
                  : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
         // The global axes a side wall or z side holds, and every axis for an n boundary that
         // holds every component; one holding its normal keeps that instead.
-        held_axes[i] = (i >= iboundn0 && meets[i] == MEETS_HELD) ? (1 << NDIMS) - 1 : 0;
+        c.held_axes[i] = (i >= iboundn0 && c.meets[i] == MEETS_HELD) ? (1 << NDIMS) - 1 : 0;
         for (int d=0; d<NDIMS && i < iboundn0; ++d)
-            if (s.type[d] == 'v') held_axes[i] |= 1 << frame_axis(i, d);
+            if (s.type[d] == 'v') c.held_axes[i] |= 1 << frame_axis(i, d);
     }
+    c.division[0] = var.vbc_vertical_div_x0;
+    c.division[1] = var.vbc_vertical_div_x1;
+    c.ratio[0] = var.vbc_vertical_ratio_x0;
+    c.ratio[1] = var.vbc_vertical_ratio_x1;
+    c.thickness = bc.bottom_shear_zone_thickness;
 }
-} // anonymous namespace
 
-
-// The velocity conditions apply_vbcs gives each side at the current time (side_conditions),
-// so that a restart can tell on which sides they differ from the run's at its checkpoint: the
-// global components a side wall or z side holds and their values, in 2D with the depth
-// profile and bottom shear zone of a profiled one; how the side meets an n boundary, and what
-// an n boundary holds. A profiled value of 0 is recorded as the constant 0 it applies, and a
-// side no node lies on holds nothing. Each side's part starts with its length.
-double_vec vbc_controls(const Param &param, const Variables &var)
+// Every value of c, in the order of the record; put stores or reads it.
+template <typename Put>
+void each_value(SideConditions &c, Put put)
 {
-    WallBC walls[nbdrytypes_hydro];
-    bool any_z;
-    int meets[nbdrytypes], held_axes[nbdrytypes];
-    bool held[nbdrytypes], horizontal[nbdrytypes], full[nbdrytypes];
-    double n_value[nbdrytypes];
-    side_conditions(param, var, false, walls, any_z, meets, held_axes, held, horizontal, full,
-                    n_value);
-    uint present = 0;  // the sides some node lies on
-    for (int n=0; n<var.nnode; ++n) present |= (*var.bcflag)[n];
-    double_vec c;
+    for (WallBC &w : c.walls) {
+        for (int d=0; d<NDIMS; ++d) {
+            put(w.mode[d]);
+            put(w.value[d]);
+        }
+        put(w.taper);
+    }
+    put(c.any_z);
     for (int i=0; i<nbdrytypes; ++i) {
-        const std::size_t start = c.size();
-        c.push_back(0);
-        if (!((present >> i) & 1)) continue;
-        for (int d=0; d<NDIMS && i < nbdrytypes_hydro; ++d) {
-            const WallBC &w = walls[i];
-            const int mode = (w.mode[d] == PROFILED && w.value[d] == 0) ? CONSTANT : w.mode[d];
-            c.push_back(mode);
-            if (mode != FREE) c.push_back(w.value[d]);
-#ifndef THREED
-            if (mode != PROFILED) continue;
-            const auto add = [&c](const double_vec &table) {
-                c.push_back(table.size());
-                c.insert(c.end(), table.begin(), table.end());
-            };
-            add(i == iboundx0 ? var.vbc_vertical_div_x0 : var.vbc_vertical_div_x1);
-            add(i == iboundx0 ? var.vbc_vertical_ratio_x0 : var.vbc_vertical_ratio_x1);
-            const double thickness = param.bc.bottom_shear_zone_thickness;
-            c.push_back(w.taper && thickness > 0 ? thickness : 0);
-#endif
-        }
-        c.push_back(meets[i]);
-        if (meets[i] != MEETS_FREE) {
-            c.push_back(held_axes[i]);
-            c.push_back(horizontal[i]);
-        }
-        if (i >= iboundn0 && held[i]) {
-            c.push_back(full[i]);
-            c.push_back(n_value[i]);
-        }
-        c[start] = c.size() - start - 1;
+        put(c.meets[i]);
+        put(c.held_axes[i]);
+        put(c.held[i]);
+        put(c.horizontal[i]);
+        put(c.full[i]);
+        put(c.n_value[i]);
     }
-    return c;
+    for (int k=0; k<2; ++k) {
+        for (double &x : c.division[k]) put(x);
+        for (double &x : c.ratio[k]) put(x);
+    }
+    put(c.thickness);
 }
 
-// The sides whose parts of two records of vbc_controls differ; every side if the saved one
-// does not split into one part per side.
-uint vbc_changed_sides(const double_vec &saved, const double_vec &now)
+// Sets the velocity vel of the boundary nodes as the conditions c hold it.
+void apply_conditions(const Variables &var, const SideConditions &c, array_t &vel, bool normalized)
 {
-    const uint every = (1U << nbdrytypes) - 1;
-    uint changed = 0;
-    std::size_t a = 0, b = 0;
-    for (int i=0; i<nbdrytypes; ++i) {
-        if (a >= saved.size() || b >= now.size()) return every;
-        const double na = saved[a], nb = now[b];
-        if (!(na >= 0 && na <= saved.size() - a - 1 && na == std::size_t(na))) return every;
-        if (na != nb || !std::equal(saved.begin() + a + 1, saved.begin() + a + 1 + std::size_t(na),
-                                    now.begin() + b + 1))
-            changed |= 1U << i;
-        a += 1 + std::size_t(na);
-        b += 1 + std::size_t(nb);
-    }
-    return a == saved.size() ? changed : every;
-}
-
-
-void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized,
-                uint sides)
-{
-#ifdef NPROF
-    nvtxRangePush(__FUNCTION__);
-#endif
-    WallBC walls[nbdrytypes_hydro];
-    bool any_z;
-    int meets[nbdrytypes], held_axes[nbdrytypes];
-    bool held[nbdrytypes], horizontal[nbdrytypes], full[nbdrytypes];
-    double n_value[nbdrytypes];
-    side_conditions(param, var, homogeneous, walls, any_z, meets, held_axes, held, horizontal, full,
-                    n_value);
+    const WallBC *walls = c.walls;
+    bool any_z = c.any_z;
+    const int *meets = c.meets, *held_axes = c.held_axes;
+    const bool *held = c.held, *horizontal = c.horizontal, *full = c.full;
+    const double *n_value = c.n_value;
 
 #ifndef THREED
     // find max and min coordinate for BOUNDX0
@@ -718,16 +681,16 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
     double BOUNDX1_width = BOUNDX1_max - BOUNDX1_min;
 
-    const double_vec& vbc_vertical_ratios_x0 = var.vbc_vertical_ratio_x0;
-    const double_vec& vbc_vertical_ratios_x1 = var.vbc_vertical_ratio_x1;
+    const double_vec& vbc_vertical_ratios_x0 = c.ratio[0];
+    const double_vec& vbc_vertical_ratios_x1 = c.ratio[1];
 
     double_vec vbc_vertical_divisions_x0(4,0.);
     double_vec vbc_vertical_divisions_x1(4,0.);
     for (int i=0;i<4;i++) {
-        vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
-        vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - var.vbc_vertical_div_x1[i] * BOUNDX1_width);
+        vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - c.division[0][i] * BOUNDX0_width);
+        vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - c.division[1][i] * BOUNDX1_width);
     }
-    const double thickness = param.bc.bottom_shear_zone_thickness;
+    const double thickness = c.thickness;
 
     double zmin = 0;
     #pragma acc enter data copyin(zmin) async
@@ -744,11 +707,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #ifndef ACC
 #ifdef THREED
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, sides, walls, any_z, meets, held_axes, held, horizontal, full, \
+        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, \
                n_value)
 #else
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, sides, walls, any_z, meets, held_axes, held, horizontal, full, n_value, zmin, \
+        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, n_value, zmin, \
         thickness, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
@@ -769,7 +732,6 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         if (! is_on_boundary(*var.bcflag, i)) continue;
 
         uint flag = (*var.bcflag)[i];
-        if (!(flag & sides)) continue;
         ArrayAccessor v = vel[i];
 
         //
@@ -900,6 +862,66 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     #pragma acc exit data copyout(zmin) async
 #endif
     #pragma acc wait
+}
+} // anonymous namespace
+
+
+// The conditions apply_vbcs gives at the current time, value by value (each_value), which a
+// checkpoint keeps for its restart.
+double_vec vbc_controls(const Param &param, const Variables &var)
+{
+    SideConditions c;
+    side_conditions(param, var, false, c);
+    double_vec record;
+    each_value(c, [&record](auto &x) { record.push_back(x); });
+    return record;
+}
+
+// On restart, the run's conditions at the nodes where they differ from those of the checkpoint
+// (saved by vbc_controls); a node where they are the same keeps its velocity vel, even where
+// applying them moves it. At each node the conditions map its velocity affinely, so two are
+// the same there if they give vel and vel plus each unit vector the same values. All of them
+// if saved does not read as a record.
+void apply_changed_vbcs(const Param &param, const Variables &var, const double_vec &saved,
+                        array_t &vel)
+{
+    SideConditions now;
+    side_conditions(param, var, false, now);
+    SideConditions then = now;
+    std::size_t n = 0;
+    each_value(then, [&saved, &n](auto &x) {
+        if (n < saved.size()) x = static_cast<std::remove_reference_t<decltype(x)>>(saved[n]);
+        ++n;
+    });
+    if (n != saved.size()) {
+        apply_conditions(var, now, vel, false);
+        return;
+    }
+    std::vector<bool> differ(var.nnode, false);
+    for (int unit=0; unit<=NDIMS; ++unit) {  // vel plus each unit vector, then vel
+        array_t before(vel);
+        for (int i=0; i<var.nnode && unit<NDIMS; ++i) before[i][unit] += 1;
+        array_t after(before);
+        apply_conditions(var, then, before, false);
+        apply_conditions(var, now, after, false);
+        for (int i=0; i<var.nnode; ++i)
+            for (int d=0; d<NDIMS; ++d)
+                if (before[i][d] != after[i][d]) differ[i] = true;
+        if (unit < NDIMS) continue;
+        for (int i=0; i<var.nnode; ++i)
+            if (differ[i])
+                for (int d=0; d<NDIMS; ++d) vel[i][d] = after[i][d];
+    }
+}
+
+void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
+{
+#ifdef NPROF
+    nvtxRangePush(__FUNCTION__);
+#endif
+    SideConditions c;
+    side_conditions(param, var, homogeneous, c);
+    apply_conditions(var, c, vel, normalized);
 #ifdef NPROF
     nvtxRangePop();
 #endif
