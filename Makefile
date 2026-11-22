@@ -172,6 +172,11 @@ CXX_BACKEND := $(shell $(CXX) --showme:command 2>/dev/null || $(CXX) -show 2>/de
 suffix = .mpi
 ifeq ($(openacc), 1)
 suffix = .mpi.gpu
+## OpenACC flags are set only for nvc++; another backend would build a CPU
+## executable under the GPU name. check-deps refuses it, and `make config` says so.
+ifeq (, $(findstring nvc++, $(CXX_BACKEND)))
+MPI_ACC_BACKEND_MISSING = yes
+endif
 endif
 else
 CXX_BACKEND = ${CXX}
@@ -934,6 +939,9 @@ check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
 		echo "g++ or nvc++, e.g. make CXX=g++."; exit 1; }
+	@test -z "$(MPI_ACC_BACKEND_MISSING)" || { \
+		echo "usempi=1 openacc=1 needs an MPI wrapper around nvc++, but '$(CXX)'"; \
+		echo "runs '$(CXX_BACKEND)'. Set MPI_CXX to an NVHPC MPI wrapper."; exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))
@@ -959,6 +967,7 @@ config:
 	@echo "openmp             $(strip $(openmp))"
 	@echo "usempi             $(strip $(usempi))"
 ifeq ($(usempi), 1)
+	@echo "  wrapper runs     $(CXX_BACKEND)$(if $(MPI_ACC_BACKEND_MISSING),   ** openacc=1 needs nvc++ -- set MPI_CXX **)"
 	@echo "  metis include    $(if $(strip $(METIS_INCLUDE_DIR)),$(METIS_INCLUDE_DIR),compiler default)"
 	@echo "  metis lib dir    $(if $(strip $(METIS_LIB_DIR)),$(METIS_LIB_DIR),linker default)"
 endif
