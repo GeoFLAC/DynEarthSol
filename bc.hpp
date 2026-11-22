@@ -2,8 +2,9 @@
 #define DYNEARTHSOL3D_BC_HPP
 
 bool is_on_boundary(const Variables &var, int node);
+void convert_bc_codes(Param &p);
 double find_max_vbc(const BC &bc);
-void create_boundary_normals(const Variables &var, array_t &bnormals,
+void create_boundary_normals(const Param &param, const Variables &var, array_t &bnormals,
                              double_vec& edge_vec, int* edge_slot);
 // Homogeneous/normalized modes are used to construct the corrected PT subspace.
 // Default calls retain the legacy boundary map.

@@ -65,35 +65,146 @@ bool is_on_boundary(const uint_vec &bcflag, int node)
 }
 
 
+namespace {
+// Today's code 0 on a side: every component free, from a code that sets something.
+bool all_free(const SideBC &s)
+{
+    if (s.noop) return false;
+    for (int d=0; d<NDIMS; ++d)
+        if (s.type[d] != 'f') return false;
+    return true;
+}
+
+// Today's codes 1 and 11: the normal held, the other components free.
+bool normal_only(const SideBC &s)
+{
+    if (s.type[0] != 'v') return false;
+    for (int d=1; d<NDIMS; ++d)
+        if (s.type[d] != 'f') return false;
+    return true;
+}
+} // anonymous namespace
+
+
+// Read the velocity and stress codes into one table per side, in the side's frame
+// (see SideBC). Zeros on a negative axis are stored as -0.0, so that turning a value
+// back into a global component gives today's +0.0.
+void convert_bc_codes(Param &p)
+{
+    // What each code holds today, per global component (the conversion tables of #115).
+    // N is the normal value, which follows the period table; V the value; L the lateral
+    // value; Z holds the component at 0; F leaves it free. Side walls list (normal,
+    // lateral, z) in 3D and (x, z) in 2D; z sides list (x, y, z) or (x, z).
+    enum { F, Z, N, V, L };
+#ifdef THREED
+    static const int wall_rows[8][NDIMS] = {{F, F, F}, {N, F, F}, {F, Z, Z}, {N, Z, Z},
+                                            {F, V, Z}, {Z, V, Z}, {N, L, F}, {N, Z, F}};
+    static const int z_rows[4][NDIMS] = {{F, F, F}, {F, F, V}, {Z, Z, F}, {Z, Z, V}};
+#else
+    static const int wall_rows[8][NDIMS] = {{F, F}, {N, F}, {F, Z}, {N, Z}, {Z, V}, {F, F}, {N, L}, {F, F}};
+    static const int z_rows[5][NDIMS] = {{F, F}, {F, V}, {Z, F}, {Z, V}, {V, Z}};
+#endif
+
+    BC &bc = p.bc;
+    const int codes[nbdrytypes] = {bc.vbc_x0, bc.vbc_x1, bc.vbc_y0, bc.vbc_y1, bc.vbc_z0, bc.vbc_z1,
+                                   bc.vbc_n0, bc.vbc_n1, bc.vbc_n2, bc.vbc_n3};
+    const double values[nbdrytypes] = {bc.vbc_val_x0, bc.vbc_val_x1, bc.vbc_val_y0, bc.vbc_val_y1,
+                                       bc.vbc_val_z0, bc.vbc_val_z1, bc.vbc_val_n0, bc.vbc_val_n1,
+                                       bc.vbc_val_n2, bc.vbc_val_n3};
+    const double lateral[4] = {bc.vbc_val_x0_l, bc.vbc_val_x1_l, bc.vbc_val_y0_l, bc.vbc_val_y1_l};
+    const int stress_codes[nbdrytypes_hydro] = {bc.stress_bc_x0, bc.stress_bc_x1, bc.stress_bc_y0,
+                                                bc.stress_bc_y1, bc.stress_bc_z0, bc.stress_bc_z1};
+    const double stress_values[nbdrytypes_hydro] = {bc.stress_val_x0, bc.stress_val_x1, bc.stress_val_y0,
+                                                    bc.stress_val_y1, bc.stress_val_z0, bc.stress_val_z1};
+    for (int i=0; i<nbdrytypes; ++i) {
+        SideBC &s = bc.side[i];
+        s = SideBC{};
+        for (int d=0; d<NDIMS; ++d) s.type[d] = 'f';
+        s.release_time = (i == iboundz1) ? bc.vbc_val_z1_loading_period : std::numeric_limits<double>::max();
+        s.stress_axis = -1;
+        const int code = codes[i];
+        const double v = values[i];
+
+        if (i >= iboundn0) {
+            // n0 to n3 accept 1, 3, 11 and 13 only (input.cxx checks). The frame is the
+            // boundary's normal, or its horizontal part for 11 and 13.
+            s.horizontal_normal = (code == 11 || code == 13);
+            const bool all = (code == 3 || code == 13);
+            for (int d=0; d<NDIMS; ++d) {
+                if (d > 0 && !all) break;
+                s.type[d] = 'v';
+                s.value[d] = d ? 0. : v;
+            }
+            s.max_speed = std::fabs(v);
+            continue;
+        }
+
+        if (code % 2 == 1 || code == 4) s.max_speed = std::fabs(v);
+        if (stress_codes[i] >= 1 && stress_codes[i] <= 3) {
+#ifdef THREED
+            s.stress_axis = stress_codes[i] - 1;
+#else
+            if (stress_codes[i] != 2) s.stress_axis = (stress_codes[i] == 1) ? 0 : 1;
+#endif
+            s.stress_value = stress_values[i];
+        }
+#ifndef THREED
+        if (i == iboundy0 || i == iboundy1) continue;
+#endif
+
+        const bool z_side = (i == iboundz0 || i == iboundz1);
+        const int *row = nullptr;
+        int global[NDIMS];  // the global axis of each row entry
+        if (z_side) {
+            if (code < int(sizeof(z_rows) / sizeof(z_rows[0]))) row = z_rows[code];
+            for (int d=0; d<NDIMS; ++d) global[d] = d;
+            s.support = (code == 0 || code == 2 || code == 4) &&
+                ((i == iboundz0) ? bc.has_winkler_foundation : bc.has_water_loading);
+        }
+        else {
+            const bool noop_code = (code < 0 || code > 7)
+#ifndef THREED
+                || code == 5 || code == 7
+#endif
+                ;
+            if (!noop_code) row = wall_rows[code];
+            s.noop = noop_code;
+#ifdef THREED
+            const int normal = (i < iboundy0) ? 0 : 1;
+            global[0] = normal; global[1] = 1 - normal; global[2] = 2;
+#else
+            global[0] = 0; global[1] = 1;
+#endif
+            s.support = (code == 0 || code == 2 || code == 4);
+            s.taper = (NDIMS == 2 && i == iboundx0 && code == 3);
+            s.normal_follows_period = (row && row[0] == N);
+        }
+        if (!row) continue;
+
+        for (int d=0; d<NDIMS; ++d) {
+            const int axis = std::abs(side_frame[i][d]) - 1;
+            const double sign = (side_frame[i][d] < 0) ? -1. : 1.;
+            int k = 0;
+            while (global[k] != axis) ++k;
+            if (row[k] == F) continue;
+            const double held = (row[k] == Z) ? 0. : (row[k] == L) ? lateral[i] : v;
+            s.type[d] = 'v';
+            s.value[d] = sign * held;
+        }
+    }
+}
+
+
 double find_max_vbc(const BC &bc)
 {
     double max_vbc_val = 1e-12; // equal to 0.03 mm/yr
-    if (bc.vbc_x0 % 2 == 1 || bc.vbc_x0 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_x0));
-    if (bc.vbc_x1 % 2 == 1 || bc.vbc_x1 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_x1));
-    if (bc.vbc_y0 % 2 == 1 || bc.vbc_y0 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_y0));
-    if (bc.vbc_y1 % 2 == 1 || bc.vbc_y1 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_y1));
-    if (bc.vbc_z0 % 2 == 1 || bc.vbc_z0 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_z0));
-    if (bc.vbc_z1 % 2 == 1 || bc.vbc_z1 == 4)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_z1));
-    if (bc.vbc_n0 % 2 == 1)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_n0));
-    if (bc.vbc_n1 % 2 == 1)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_n1));
-    if (bc.vbc_n2 % 2 == 1)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_n2));
-    if (bc.vbc_n3 % 2 == 1)
-        max_vbc_val = std::max(max_vbc_val, std::fabs(bc.vbc_val_n3));
-
+    for (int i=0; i<nbdrytypes; ++i)
+        max_vbc_val = std::max(max_vbc_val, bc.side[i].max_speed);
     return max_vbc_val;
 }
 
 
-void create_boundary_normals(const Variables &var, array_t &bnormals,
+void create_boundary_normals(const Param &param, const Variables &var, array_t &bnormals,
                              double_vec& edge_vec, int* edge_slot)
 {
     /* This subroutine finds the outward normal unit vectors of boundaries.
@@ -209,9 +320,10 @@ void create_boundary_normals(const Variables &var, array_t &bnormals,
     // silence. Report it here, the last place with somewhere to say it, for the pairs
     // the kernel can actually ask about.
     for (int ib=iboundn0; ib<=iboundn3; ib++) {
-        if (var.vbc_types[ib] != 1 && var.vbc_types[ib] != 11) continue;
+        if (!normal_only(param.bc.side[ib])) continue;
         for (int ic=iboundx0; ic<ib; ic++) {
-            if (var.vbc_types[ic] != 1) continue;
+            const SideBC &s = param.bc.side[ic];
+            if (!normal_only(s) || s.horizontal_normal) continue;
             if (edge_slot[ic*nbdrytypes + ib] >= 0) continue;
             for (int n=0; n<var.nnode; ++n) {
                 uint flag = (*var.bcflag)[n];
@@ -230,7 +342,8 @@ namespace {
 #pragma acc routine seq
 void project_boundary_intersection(const Variables& var, int ic, int ib,
                                    ConstArrayAccessor n, ArrayAccessor v, bool normalized,
-                                   double prescribed_normal)
+                                   double prescribed_normal, bool horizontal_earlier,
+                                   bool horizontal_current)
 {
     if (normalized) {
         // Add the new affine normal constraint while preserving the normal
@@ -242,11 +355,11 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
             earlier[direction] = 1;
         } else {
             for (int d=0; d<NDIMS; ++d) earlier[d] = (*var.bnormals)[ic][d];
-            if (var.vbc_types[ic] == 11) earlier[NDIMS-1] = 0;
+            if (horizontal_earlier) earlier[NDIMS-1] = 0;
         }
         double aa = 0, bb = 0;
         for (int d=0; d<NDIMS; ++d) {
-            current[d] = (var.vbc_types[ib] == 11 && d == NDIMS-1) ? 0 : n[d];
+            current[d] = (horizontal_current && d == NDIMS-1) ? 0 : n[d];
             aa += earlier[d]*earlier[d];
             bb += current[d]*current[d];
         }
@@ -277,20 +390,15 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
 }
 
 // Normal velocity apply_vbcs prescribes on side wall t (0 = x0, 1 = x1, 2 = y0, 3 = y1) at
-// time_in_yr, before the 2D depth profile and homogeneous constraints: vbc_val_* times the wall's
-// period table; 0 for a code that leaves it free or holds it at 0 (1, 3, 6 set it, and 7 in 3D).
+// time_in_yr, along the global axis, before the 2D depth profile and homogeneous constraints:
+// the wall's normal value times its period table; 0 unless that value follows the table.
 namespace {
 double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
 {
     const bool lo = (t % 2 == 0), y = (t >= 2);
-    const int code = y ? (lo ? bc.vbc_y0 : bc.vbc_y1) : (lo ? bc.vbc_x0 : bc.vbc_x1);
-#ifdef THREED
-    if (code != 1 && code != 3 && code != 6 && code != 7) return 0.;
-#else
-    if (code != 1 && code != 3 && code != 6) return 0.;
-#endif
-    const double v = y ? (lo ? bc.vbc_val_y0 : bc.vbc_val_y1)
-                       : (lo ? bc.vbc_val_x0 : bc.vbc_val_x1);
+    const SideBC &s = bc.side[t];
+    if (!s.normal_follows_period) return 0.;
+    const double v = (side_frame[t][0] < 0 ? -1. : 1.) * s.value[0];
     const double_vec &time = y ? (lo ? bc.vbc_period_y0_time_in_yr : bc.vbc_period_y1_time_in_yr)
                                : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
     const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
@@ -313,31 +421,82 @@ bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr)
     return (t % 2 == 0) ? (v < 0.) : (v > 0.);
 }
 
+namespace {
+// What apply_vbcs does to one global component of a side wall or z side.
+enum { FREE, CONSTANT, PROFILED };  // PROFILED: a 2D normal value times the depth profile
+
+// A side wall or z side in global components, for one apply_vbcs call.
+struct WallBC {
+    int mode[NDIMS];
+    double value[NDIMS];
+    bool taper;
+};
+
+// What a side is to an n boundary of code 1 or 11 that meets it: a free side lets it set
+// its normal, a side holding only its normal (11 only when normalized) projects onto the edge.
+enum { MEETS_NOTHING, MEETS_FREE, MEETS_NORMAL, MEETS_HORIZONTAL_NORMAL };
+} // anonymous namespace
+
+
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
 {
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
-    // meaning of vbc flags (odd: free; even: fixed) --
-    // 0: all components free
-    // 1: normal component fixed, shear components free
-    // 2: normal component free, shear components fixed at 0
-    // 3: normal component fixed, shear components fixed at 0
-    // 4: special tangential loading mode. In 2D, prescribe the tangential
-    //    component and set the boundary-normal component to zero. In 3D on
-    //    x/y boundaries, fix one tangential component and set vz=0.
-    // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
-
+    // Each side's table (param.bc.side, in the side's frame) is turned back into global
+    // components, valued as the integer codes were: the normal value of a side wall follows
+    // its period table; a homogeneous call zeroes the values, except that it multiplies by
+    // 0 the tangential value of such a side (L or 0) and the n values (#115).
     const BC &bc = param.bc;
-    // normal velocity of each side wall, after its period table
     const double t_now = var.time / YEAR2SEC;
-    double vbc_applied_x0 = side_wall_normal_vbc(bc, 0, t_now);
-    double vbc_applied_x1 = side_wall_normal_vbc(bc, 1, t_now);
-#ifdef THREED
-    double vbc_applied_y0 = side_wall_normal_vbc(bc, 2, t_now);
-    double vbc_applied_y1 = side_wall_normal_vbc(bc, 3, t_now);
-#else
+    const double prescribed = homogeneous ? 0.0 : 1.0;
 
+    WallBC walls[nbdrytypes_hydro];
+    bool any_z = false;
+    for (int i=0; i<nbdrytypes_hydro; ++i) {
+        const SideBC &s = bc.side[i];
+        WallBC &w = walls[i];
+        w.taper = s.taper;
+        for (int d=0; d<NDIMS; ++d) {
+            w.mode[d] = FREE;
+            w.value[d] = 0;
+        }
+        if (var.time > s.release_time) continue;
+        for (int d=0; d<NDIMS; ++d) {
+            if (s.type[d] != 'v') continue;
+            const int axis = std::abs(side_frame[i][d]) - 1;
+            const double v = (side_frame[i][d] < 0 ? -1. : 1.) * s.value[d];
+            w.mode[axis] = CONSTANT;
+            if (d == 0 && s.normal_follows_period) {
+                const double applied = homogeneous ? 0.0 : side_wall_normal_vbc(bc, i, t_now);
+                w.value[axis] = prescribed * applied;
+#ifndef THREED
+                w.mode[axis] = PROFILED;
+#endif
+            }
+            else if (s.normal_follows_period)
+                w.value[axis] = prescribed * v;
+            else
+                w.value[axis] = homogeneous ? 0.0 : v;
+            if (i == iboundz0 || i == iboundz1) any_z = true;
+        }
+    }
+
+    int meets[nbdrytypes];
+    bool horizontal[nbdrytypes], full[nbdrytypes];
+    double n_value[nbdrytypes];
+    for (int i=0; i<nbdrytypes; ++i) {
+        const SideBC &s = bc.side[i];
+        horizontal[i] = s.horizontal_normal;
+        full[i] = true;
+        for (int d=0; d<NDIMS; ++d)
+            if (s.type[d] != 'v') full[i] = false;
+        n_value[i] = prescribed * s.value[0];
+        meets[i] = all_free(s) ? MEETS_FREE : !normal_only(s) ? MEETS_NOTHING
+                 : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
+    }
+
+#ifndef THREED
     // find max and min coordinate for BOUNDX0
     // Side-wall extents as device reductions (a host scan would migrate coord/bcflag every step).
     // max/min are exact, so the result is order-independent; a wall with no node gets extent 0.
@@ -377,69 +536,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - var.vbc_vertical_div_x0[i] * BOUNDX0_width);
         vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - var.vbc_vertical_div_x1[i] * BOUNDX1_width);
     }
-#endif
+    const double thickness = bc.bottom_shear_zone_thickness;
 
-    // diverging x-boundary
-
-
-    int bc_x0 = bc.vbc_x0;
-    int bc_x1 = bc.vbc_x1;
-    int bc_y0 = bc.vbc_y0;
-    int bc_y1 = bc.vbc_y1;
-    int bc_z0 = bc.vbc_z0;
-    int bc_z1 = bc.vbc_z1;
-
-    double bc_vx0 = bc.vbc_val_x0;
-    double bc_vx1 = bc.vbc_val_x1;
-    double bc_vy0 = bc.vbc_val_y0;
-    double bc_vy1 = bc.vbc_val_y1;
-    double bc_vz0 = bc.vbc_val_z0;
-    double bc_vz1 = bc.vbc_val_z1;
-
-    double bc_vx0_l = bc.vbc_val_x0_l;
-    double bc_vx1_l = bc.vbc_val_x1_l;
-    double bc_vy0_l = bc.vbc_val_y0_l;
-    double bc_vy1_l = bc.vbc_val_y1_l;
-
-    if (homogeneous) {
-        bc_vx0 = 0.0;
-        bc_vx1 = 0.0;
-#ifdef THREED
-        // Only 3D has y boundaries to hold at rest; in 2D y is not a boundary direction.
-        bc_vy0 = 0.0;
-        bc_vy1 = 0.0;
-        vbc_applied_y0 = 0.0;
-        vbc_applied_y1 = 0.0;
-#endif
-        bc_vz0 = 0.0;
-        bc_vz1 = 0.0;
-        vbc_applied_x0 = 0.0;
-        vbc_applied_x1 = 0.0;
-    }
-
-    if (var.time > var.vbc_val_z1_loading_period) {bc_z1 = 0;}
-
-    double bc_vx0min = bc.vbc_val_division_x0_min;
-    double bc_vx0max = bc.vbc_val_division_x0_max;
-
-    double bc_vx0r0 = bc.vbc_val_x0_ratio0;
-    double bc_vx0r1 = bc.vbc_val_x0_ratio1;
-    double bc_vx0r2 = bc.vbc_val_x0_ratio2;
-
-#ifdef THREED
-    // Each lateral face is described by: boundary mask, normal component index (ni),
-    // lateral-shear component index (li), bc type, normal value (val_n, after the period table),
-    // tangential value of types 4 and 5 (val) and lateral shear value (val_l), both unscaled as
-    // in 2D. The vertical shear (v[2]) is always either free or fixed at 0.
-    struct LateralFace { uint mask; int ni; int li; int type;
-                         double val_n; double val; double val_l; };
-    const LateralFace lateral_faces[] = {
-        {BOUNDX0, 0, 1, bc_x0, vbc_applied_x0, bc_vx0, bc_vx0_l},
-        {BOUNDX1, 0, 1, bc_x1, vbc_applied_x1, bc_vx1, bc_vx1_l},
-        {BOUNDY0, 1, 0, bc_y0, vbc_applied_y0, bc_vy0, bc_vy0_l},
-        {BOUNDY1, 1, 0, bc_y1, vbc_applied_y1, bc_vy1, bc_vy1_l},
-    };
-#else
     double zmin = 0;
     #pragma acc enter data copyin(zmin) async
 #ifndef ACC
@@ -455,23 +553,22 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #ifndef ACC
 #ifdef THREED
     #pragma omp parallel for default(none) \
-        shared(bc, var, vel, homogeneous, normalized, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
-        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, \
-        bc_vx0_l, bc_vx1_l, bc_vy0_l, bc_vy1_l, lateral_faces)
+        shared(var, vel, normalized, walls, any_z, meets, horizontal, full, n_value)
 #else
     #pragma omp parallel for default(none) \
-        shared(bc, var, vel, homogeneous, normalized, bc_x0, bc_x1, bc_y0, bc_y1, bc_z0, bc_z1, \
-        bc_vx0, bc_vx1, bc_vy0, bc_vy1, bc_vz0, bc_vz1, zmin, \
-        bc_vx0_l, bc_vx1_l, \
-        vbc_applied_x0, vbc_applied_x1, \
+        shared(var, vel, normalized, walls, any_z, meets, horizontal, full, n_value, zmin, thickness, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
 #endif
 #endif
 #ifdef THREED
-    #pragma acc parallel loop gang vector async copyin(lateral_faces[0:4])
+    #pragma acc parallel loop gang vector async \
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], horizontal[0:nbdrytypes], \
+               full[0:nbdrytypes], n_value[0:nbdrytypes])
 #else
-    #pragma acc parallel loop gang vector async present(zmin)
+    #pragma acc parallel loop gang vector async present(zmin) \
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], horizontal[0:nbdrytypes], \
+               full[0:nbdrytypes], n_value[0:nbdrytypes])
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -480,163 +577,105 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 
         uint flag = (*var.bcflag)[i];
         ArrayAccessor v = vel[i];
-        const double prescribed = homogeneous ? 0.0 : 1.0;
 
-#ifdef THREED
         //
-        // X and Y (3D): unified lateral-face handler
+        // Side walls, in the order x0, x1, y0, y1
         //
-        for (const auto& f : lateral_faces) {
-            if (!(flag & f.mask)) continue;
-            switch (f.type) {
-            case 0: break;
-            case 1: v[f.ni] = prescribed*f.val_n; break;
-            case 2: v[f.li] = 0; v[2] = 0; break;
-            case 3: v[f.ni] = prescribed*f.val_n; v[f.li] = 0; v[2] = 0; break;
-            case 4: v[f.li] = prescribed*f.val; v[2] = 0; break;
-            case 5: v[f.ni] = 0; v[f.li] = prescribed*f.val; v[2] = 0; break;
-            case 6: v[f.ni] = prescribed*f.val_n; v[f.li] = prescribed*f.val_l; break;
-            case 7: v[f.ni] = prescribed*f.val_n; v[f.li] = 0; break;
-            }
-        }
-#else
-        ConstArrayAccessor x = (*var.coord)[i];
-        double ratio, rr, dvr;
-        double vbc_exact_x0 = prescribed * vbc_applied_x0 * interp1(vbc_vertical_divisions_x0, vbc_vertical_ratios_x0,-x[1]);
-        double vbc_exact_x1 = prescribed * vbc_applied_x1 * interp1(vbc_vertical_divisions_x1, vbc_vertical_ratios_x1,-x[1]);
-        //
-        // X (2D)
-        //
-        if (flag & BOUNDX0) {
-            switch (bc_x0) {
-            case 0:
-                break;
-            case 1:
-                v[0] = vbc_exact_x0;
-                break;
-            case 2:
-                v[1] = 0;
-                break;
-            case 3:
-                v[0] = vbc_exact_x0;
-                if (bc.bottom_shear_zone_thickness > 0.) {
-                    double dz = x[NDIMS-1] - zmin;
-                    if (dz < bc.bottom_shear_zone_thickness)
-                        v[0] = v[0] * dz / bc.bottom_shear_zone_thickness;
+        for (int b=iboundx0; b<=iboundy1; ++b) {
+            if (!(flag & (1U << b))) continue;
+            const WallBC &w = walls[b];
+            for (int d=0; d<NDIMS; ++d) {
+                if (w.mode[d] == FREE) continue;
+                v[d] = w.value[d];
+#ifndef THREED
+                if (w.mode[d] == PROFILED) {
+                    ConstArrayAccessor x = (*var.coord)[i];
+                    v[d] = w.value[d] * interp1(b == iboundx0 ? vbc_vertical_divisions_x0 : vbc_vertical_divisions_x1,
+                                                b == iboundx0 ? vbc_vertical_ratios_x0 : vbc_vertical_ratios_x1, -x[1]);
+                    if (w.taper && thickness > 0.) {
+                        double dz = x[NDIMS-1] - zmin;
+                        if (dz < thickness)
+                            v[d] = v[d] * dz / thickness;
+                    }
                 }
-                v[1] = 0;
-                break;
-            case 4:
-                v[0] = 0;
-                v[1] = bc_vx0;
-                break;
-            case 6:
-                v[0] = vbc_exact_x0;
-                v[1] = prescribed*bc_vx0_l;
-                break;
-            }
-        }
-        if (flag & BOUNDX1) {
-            switch (bc_x1) {
-            case 0:
-                break;
-            case 1:
-                v[0] = vbc_exact_x1;
-                break;
-            case 2:
-                v[1] = 0;
-                break;
-            case 3:
-                v[0] = vbc_exact_x1;
-                v[1] = 0;
-                break;
-            case 4:
-                v[0] = 0;
-                v[1] = bc_vx1;
-                break;
-            case 6:
-                v[0] = vbc_exact_x1;
-                v[1] = prescribed*bc_vx1_l;
-                break;
-            }
-        }
 #endif
+            }
+        }
 
         //
         // N
         //
         for (int ib=iboundn0; ib<=iboundn3; ib++) {
-            const double eps = 1e-15;
             ConstArrayAccessor n = (*var.bnormals)[ib]; // unit normal vector
 
             if (flag & (1 << ib)) {
                 double fac = 0;
-                switch (var.vbc_types[ib]) {
-                case 1:
+                if (!full[ib] && !horizontal[ib]) {  // the normal held, as code 1
                     if (flag == (1U << ib)) {  // ordinary boundary
                         double vn = 0;
                         for (int d=0; d<NDIMS; d++)
                             vn += v[d] * n[d];  // normal velocity
 
-			for (int d=0; d<NDIMS; d++)
-                            v[d] += ((prescribed * var.vbc_values[ib]) - vn) * n[d];  // setting normal velocity
+                        for (int d=0; d<NDIMS; d++)
+                            v[d] += (n_value[ib] - vn) * n[d];  // setting normal velocity
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (var.vbc_types[ic] == 0) {
+                                if (meets[ic] == MEETS_FREE) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         vn += v[d] * n[d];  // normal velocity
 
-				    for (int d=0; d<NDIMS; d++)
-                                        v[d] += ((prescribed * var.vbc_values[ib]) - vn) * n[d];  // setting normal velocity
+                                    for (int d=0; d<NDIMS; d++)
+                                        v[d] += (n_value[ib] - vn) * n[d];  // setting normal velocity
                                 }
-                                else if (var.vbc_types[ic] == 1 || (normalized && var.vbc_types[ic] == 11)) {
-                                    project_boundary_intersection(var, ic, ib, n, v, normalized, prescribed*var.vbc_values[ib]);
+                                else if (meets[ic] == MEETS_NORMAL || (normalized && meets[ic] == MEETS_HORIZONTAL_NORMAL)) {
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized, n_value[ib],
+                                                                  horizontal[ic], horizontal[ib]);
                                 }
                             }
                         }
                     }
-                    break;
-                case 3:
+                }
+                else if (!horizontal[ib]) {  // every component held, as code 3
                     for (int d=0; d<NDIMS; d++)
-                        v[d] = (prescribed * var.vbc_values[ib]) * n[d];  // v must be normal to n
-                    break;
-                case 11:
+                        v[d] = n_value[ib] * n[d];  // v must be normal to n
+                }
+                else if (!full[ib]) {  // the horizontal normal held, as code 11
                     fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
                     if (flag == (1U << ib)) {  // ordinary boundary
                         double vn = 0;
                         for (int d=0; d<NDIMS-1; d++)
                             vn += v[d] * n[d];  // normal velocity
 
-			for (int d=0; d<NDIMS-1; d++)
-                            v[d] += ((prescribed * var.vbc_values[ib]) * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
+                        for (int d=0; d<NDIMS-1; d++)
+                            v[d] += (n_value[ib] * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (var.vbc_types[ic] == 0) {
+                                if (meets[ic] == MEETS_FREE) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS-1; d++)
                                         vn += v[d] * n[d];  // normal velocity
 
-				    for (int d=0; d<NDIMS-1; d++)
-                                        v[d] += ((prescribed * var.vbc_values[ib]) * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
+                                    for (int d=0; d<NDIMS-1; d++)
+                                        v[d] += (n_value[ib] * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                                 }
-                                else if (var.vbc_types[ic] == 1 || (normalized && var.vbc_types[ic] == 11)) {
-                                    project_boundary_intersection(var, ic, ib, n, v, normalized, prescribed*var.vbc_values[ib]);
+                                else if (meets[ic] == MEETS_NORMAL || (normalized && meets[ic] == MEETS_HORIZONTAL_NORMAL)) {
+                                    project_boundary_intersection(var, ic, ib, n, v, normalized, n_value[ib],
+                                                                  horizontal[ic], horizontal[ib]);
                                 }
                             }
                         }
                     }
-                    break;
-                case 13:
+                }
+                else {  // the horizontal velocity along the horizontal normal, as code 13
                     fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
                     for (int d=0; d<NDIMS-1; d++)
-                        v[d] = (prescribed * var.vbc_values[ib]) * fac * n[d];
+                        v[d] = n_value[ib] * fac * n[d];
                     v[NDIMS-1] = 0;
-                    break;
                 }
             }
         }
@@ -646,64 +685,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         //
 
         // fast path: vz is usually free in the models
-        if (bc_z0==0 && bc_z1==0) continue;
+        if (!any_z) continue;
 
-        if (flag & BOUNDZ0) {
-            switch (bc_z0) {
-            case 0:
-                break;
-            case 1:
-                v[NDIMS-1] = bc_vz0;
-                break;
-            case 2:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                break;
-            case 3:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                v[NDIMS-1] = bc_vz0;
-                break;
-#ifndef THREED
-            case 4:
-                v[0] = bc_vz0;
-                v[NDIMS-1] = 0;
-                break;
-#endif
-            }
-        }
-        if (flag & BOUNDZ1) {
-            switch (bc_z1) {
-            case 0:
-                break;
-            case 1:
-                v[NDIMS-1] = bc_vz1;
-                break;
-            case 2:
-                v[0] = 0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                break;
-            case 3:
-                v[0] = 0.0;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                v[NDIMS-1] = bc_vz1;
-                break;
-            case 4:
-                v[0] = bc_vz1;
-#ifdef THREED
-                v[1] = 0;
-#endif
-                v[NDIMS-1] = 0;
-                break;
-            }
+        for (int b=iboundz0; b<=iboundz1; ++b) {
+            if (!(flag & (1U << b))) continue;
+            const WallBC &w = walls[b];
+            for (int d=0; d<NDIMS; ++d)
+                if (w.mode[d] != FREE) v[d] = w.value[d];
         }
     }
 #ifndef THREED
@@ -737,12 +725,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
     #pragma acc wait
 
     for (int i=0; i<nbdrytypes; i++) {
-        if (var.vbc_types[i] != 0 &&
-            var.vbc_types[i] != 2 &&
-            var.vbc_types[i] != 4) continue;
-
-        if (i==iboundz0 && !param.bc.has_winkler_foundation) continue;
-        if (i==iboundz1 && !param.bc.has_water_loading) continue;
+        // a free normal on a side wall, or on z0 with a Winkler foundation and z1 with water loading
+        if (!param.bc.side[i].support) continue;
 
         // Plain host reads of two vector sizes: an `acc kernels` block here becomes a serial device
         // kernel plus a synchronization per boundary per step (nvc++).
@@ -902,7 +886,8 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
     // Check if there is a stress BC applied on this boundary
-    if (var.stress_bc_types[i] == 0) continue;
+    const SideBC &side = param.bc.side[i];
+    if (side.stress_axis < 0) continue;
 
     const auto& bdry = *(var.bfacets[i]);
     const int bound = static_cast<int>(bdry.size());
@@ -927,35 +912,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         normal_vector_of_facet(facet_coord, normal, zcenter);
 
         double traction[NDIMS] = {0.0};
-
-#ifdef THREED
-        // 3D case: Apply stress based on boundary type (x0, x1, y0, y1, z0, z1)
-        switch (var.stress_bc_types[i]) {
-            case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
-                break;
-            case 2: // Traction in the y-direction
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value
-                break;
-            case 3: // Traction in the z-direction
-                traction[2] = var.stress_bc_values[i]; // Set z-direction traction value
-                break;
-            default:
-                continue; // Skip if no valid stress BC type
-        }
-#else
-        // 2D case: Apply stress based on boundary type (x0, x1, z0, z1)
-        switch (var.stress_bc_types[i]) {
-            case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
-                break;
-            case 3: // Traction in the z-direction (mapped to y in 2D)
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value in 2D
-                break;
-            default:
-                continue; // Skip if no valid stress BC type
-        }
-#endif
+        traction[side.stress_axis] = side.stress_value;
 
         // Apply the traction to the boundary facet nodes
         for (int j = 0; j < NODES_PER_FACET; ++j) {
@@ -1972,7 +1929,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     auto& p = constraints.projector;
     auto& offset = constraints.prescribed;
     for (int ib=iboundn0; ib<=iboundn3; ++ib) {
-        if (var.vbc_types[ib] == 0) continue;
+        if (all_free(param.bc.side[ib])) continue;
         for (int n=0; n<nn; ++n) {
             if (!((*var.bcflag)[n] & (1U << ib))) continue;
             double norm2 = 0;
@@ -1980,7 +1937,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             if (!std::isfinite(norm2) || std::abs(norm2-1) > 1e-10)
                 die(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
             const double nz = (*var.bnormals)[ib][NDIMS-1];
-            if ((var.vbc_types[ib] == 11 || var.vbc_types[ib] == 13) && !(1-nz*nz > 1e-14))
+            if (param.bc.side[ib].horizontal_normal && !(1-nz*nz > 1e-14))
                 die(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
         }
     }

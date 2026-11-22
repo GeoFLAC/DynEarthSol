@@ -300,6 +300,15 @@ struct SideBC {
     double stress_value;         // Pa
 };
 
+// The frame of each side wall and z side as signed global axes: +-(axis + 1), so -1 is -x.
+// 2D global axes are x and z.
+#ifdef THREED
+const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, -2, 3}, {1, 2, 3}, {-2, 1, 3}, {2, -1, 3},
+                                                 {-3, 1, -2}, {3, 1, 2}};
+#else
+const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, 2}, {1, 2}, {0, 0}, {0, 0}, {-2, 1}, {2, 1}};
+#endif
+
 struct BC {
     double surface_temperature;
     double mantle_temperature;
@@ -910,12 +919,7 @@ struct Variables {
 
     // the recorded column of each restored side wall, SIDEWALL_* order (SideProfile)
     SideProfile side_profile[NSIDEWALL];
-    int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
-    int stress_bc_types[nbdrytypes_hydro];
-    double vbc_values[nbdrytypes];
-    double stress_bc_values[nbdrytypes];
-    double vbc_val_z1_loading_period;
 
     // Unit vector along the edge where two boundaries meet, NDIMS doubles per pair in
     // edge_vec. edge_slot[i*nbdrytypes + j] with i < j indexes it, and is -1 when that
