@@ -463,43 +463,73 @@ struct WallBC {
 // What a side is to an n boundary of code 1 or 11 that meets it: a side that holds no
 // velocity, or no longer does, lets it set its normal; a side holding only its normal (11
 // only when normalized) projects onto the edge. Where a side at the node holds other
-// components, the n boundary instead sets its normal through the components that no side
-// there holds, its normal included, and does nothing where its normal lies in the held ones.
+// components, the n boundary instead sets its normal while keeping what the sides there
+// hold, and does nothing where its normal lies in that.
 enum { MEETS_FREE, MEETS_NORMAL, MEETS_HORIZONTAL_NORMAL, MEETS_HELD };
 
-// Whether the normal n of an n boundary (its horizontal part, for 11 and 13) has no
-// component along any global axis in the mask.
+// The part of the n-boundary normal n (its horizontal part, for 11 and 13) in r.
 #pragma acc routine seq
-bool normal_clear_of(int axes, ConstArrayAccessor n, bool horizontal)
+void normal_part(ConstArrayAccessor n, bool horizontal, double r[NDIMS])
 {
-    for (int d=0; d<NDIMS; ++d) {
-        if (!(axes & (1 << d)) || (horizontal && d == NDIMS-1)) continue;
-        if (std::fabs(n[d]) > 1e-12) return false;
-    }
-    return true;
+    for (int d=0; d<NDIMS; ++d) r[d] = (horizontal && d == NDIMS-1) ? 0 : n[d];
 }
 
-// Sets v.n (over the horizontal components, for 11) to target through the global components
-// outside the mask, which keep their values; nothing where n has no component outside it.
-// The z sides of the node, which apply their components last, give them first.
+// Removes from r its parts along the first k vectors of the orthonormal basis; returns r.r
+// before and after.
 #pragma acc routine seq
-void set_normal_outside(int axes, ConstArrayAccessor n, ArrayAccessor v, bool horizontal,
-                        double target, const WallBC *walls, uint flag)
+void remove_parts(const double basis[NDIMS][NDIMS], int k, double r[NDIMS], double &before,
+                  double &after)
 {
-    if (normal_clear_of(((1 << NDIMS) - 1) & ~axes, n, horizontal)) return;
+    before = after = 0;
+    for (int d=0; d<NDIMS; ++d) before += r[d] * r[d];
+    for (int j=0; j<k; ++j) {
+        double rb = 0;
+        for (int d=0; d<NDIMS; ++d) rb += r[d] * basis[j][d];
+        for (int d=0; d<NDIMS; ++d) r[d] -= rb * basis[j][d];
+    }
+    for (int d=0; d<NDIMS; ++d) after += r[d] * r[d];
+}
+
+// Sets v.n of n boundary ib (over the horizontal components, for 11) to target by the
+// smallest change that keeps the global components in axes and, before ib at the node, the
+// normals (horizontal normals, for 11) of the n boundaries; nothing where n lies in what they
+// keep. The z sides of the node, which apply their components last, give them first.
+#pragma acc routine seq
+void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const int *meets,
+                        const bool *horizontal, const WallBC *walls, ArrayAccessor v,
+                        double target)
+{
+    if (horizontal[ib]) axes |= 1 << (NDIMS-1);
+    // An orthonormal basis of what is kept, the axes first.
+    double basis[NDIMS][NDIMS], before, after;
+    int k = 0;
+    for (int d=0; d<NDIMS; ++d) {
+        if (!(axes & (1 << d))) continue;
+        for (int e=0; e<NDIMS; ++e) basis[k][e] = (e == d);
+        ++k;
+    }
+    for (int ic=iboundn0; ic<ib && k<NDIMS; ++ic) {
+        if (!(flag & (1U << ic)) || meets[ic] == MEETS_FREE) continue;
+        double r[NDIMS];
+        normal_part((*var.bnormals)[ic], horizontal[ic], r);
+        remove_parts(basis, k, r, before, after);
+        if (!(after > 1e-12 * before)) continue;  // already kept
+        for (int d=0; d<NDIMS; ++d) basis[k][d] = r[d] / std::sqrt(after);
+        ++k;
+    }
+    double n[NDIMS], p[NDIMS];
+    normal_part((*var.bnormals)[ib], horizontal[ib], n);
+    for (int d=0; d<NDIMS; ++d) p[d] = n[d];
+    remove_parts(basis, k, p, before, after);  // p: the part of n free to change
+    if (!(after > 1e-12 * before)) return;
     for (int b=iboundz0; b<=iboundz1; ++b)
         if (flag & (1U << b))
             for (int d=0; d<NDIMS; ++d)
                 if (walls[b].mode[d] != FREE) v[d] = walls[b].value[d];
-    double vn = 0, nn = 0;
-    for (int d=0; d<NDIMS; ++d) {
-        if (horizontal && d == NDIMS-1) continue;
-        vn += v[d] * n[d];
-        if (!(axes & (1 << d))) nn += n[d] * n[d];
-    }
+    double vn = 0;
+    for (int d=0; d<NDIMS; ++d) vn += v[d] * n[d];
     for (int d=0; d<NDIMS; ++d)
-        if (!(axes & (1 << d)) && !(horizontal && d == NDIMS-1))
-            v[d] += (target - vn) * n[d] / nn;
+        if (!(axes & (1 << d))) v[d] += (target - vn) * p[d] / after;
 }
 } // anonymous namespace
 
@@ -597,14 +627,14 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         for (int d=0; d<NDIMS; ++d)
             if (s.type[d] != 'v') full[i] = false;
         n_value[i] = homogeneous ? 0.0 : s.value[0];
-        // The global axes a side wall or z side holds; an n boundary's frame is not global,
-        // so it counts as holding every axis.
-        held_axes[i] = (i < iboundn0) ? 0 : (1 << NDIMS) - 1;
-        for (int d=0; d<NDIMS && i < iboundn0; ++d)
-            if (s.type[d] == 'v') held_axes[i] |= 1 << frame_axis(i, d);
         const bool released = var.time > s.release_time;
         meets[i] = (released || all_free(s)) ? MEETS_FREE : !normal_only(s) ? MEETS_HELD
                  : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
+        // The global axes a side wall or z side holds, and every axis for an n boundary that
+        // holds every component; one holding its normal keeps that instead.
+        held_axes[i] = (i >= iboundn0 && meets[i] == MEETS_HELD) ? (1 << NDIMS) - 1 : 0;
+        for (int d=0; d<NDIMS && i < iboundn0; ++d)
+            if (s.type[d] == 'v') held_axes[i] |= 1 << frame_axis(i, d);
     }
 
 #ifndef THREED
@@ -738,7 +768,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                             v[d] += (n_value[ib] - vn) * n[d];  // setting normal velocity
                     }
                     else if (held_other) {  // the sides at this node together
-                        set_normal_outside(axes, n, v, false, n_value[ib], walls, flag);
+                        set_normal_outside(var, ib, flag, axes, meets, horizontal, walls, v, n_value[ib]);
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
@@ -774,7 +804,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                             v[d] += (n_value[ib] * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                     }
                     else if (held_other) {  // the sides at this node together
-                        set_normal_outside(axes, n, v, true, n_value[ib] / fac, walls, flag);
+                        set_normal_outside(var, ib, flag, axes, meets, horizontal, walls, v, n_value[ib] / fac);
                     }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {

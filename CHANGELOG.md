@@ -210,11 +210,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   carry the boundary normals of the starting mesh, and the restart keeps them.
   Older checkpoints restart as before ([#115]).
 - An oblique (`n`) boundary that holds its normal velocity now sets it where
-  it meets a side that holds components other than its normal, through the
-  components that no side at the node holds (the other sides' normals
-  included), and on its edge with the top once `vbc_val_z1_loading_period` has
-  passed; those nodes used to lose it. This changes runs where it meets such
-  a side, for example `vbc_z1 = 2` ([#115]).
+  it meets a side that holds components other than its normal, by the
+  smallest change that keeps what the sides at the node hold (the other
+  sides' normals and the normals of earlier `n` boundaries included), and on
+  its edge with the top once `vbc_val_z1_loading_period` has passed; those
+  nodes used to lose it. This changes runs where it meets such a side, for
+  example `vbc_z1 = 2` ([#115]).
 - In 2D, side-wall code 4 holds the normal velocity at 0 and no longer adds
   the lithostatic support to the saved `force`; velocities and stresses are
   unchanged ([#115]).

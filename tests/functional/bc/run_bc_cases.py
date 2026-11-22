@@ -24,8 +24,8 @@ the y velocity the run's conditions give the checkpointed one there: the restart
 one from the checkpoint without its record of the conditions. Restarting with only n0's
 traction changed must keep the checkpointed velocity.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
-along n0's normal is the value n0 holds and that the components the sides hold keep their
-values.
+along the normal of each n boundary there is the value it holds and that the components the
+sides hold keep their values.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
@@ -72,7 +72,7 @@ def base(ndims, mesh):
     cfg['sim'].update(modelname='bc', max_steps='6', output_step_interval='2')
     cfg['mesh'].update(xlength='1e4', ylength='1e4', zlength='1e4', resolution='2.5e3')
     if mesh != 'box':
-        poly = dict(cut='cut-corner', slope='slope-top')[mesh]
+        poly = dict(cut='cut-corner', cuts='two-cuts', slope='slope-top')[mesh]
         cfg['mesh'].update(meshing_option='90', meshing_elem_shape='0',
                            poly_filename=str(HERE/f'{poly}-{ndims}d.poly'))
     # DES's usual dynamics, so that gravity and every constrained component move nodes.
@@ -337,6 +337,12 @@ def cases():
                                                                 vbc_val_y0=f'[0, 0, {Z_HOLD!r}]',
                                                                 vbc_val_y0_l='0'),
                       mesh='cut', letters=True, corner=(('x1', 'y0'), 3, dict(x=0.0, z=Z_HOLD))))
+    # Two n boundaries holding their normals where they meet y0 holding only z: on that
+    # corner n1 sets its normal keeping z and n0's normal.
+    found.append(case('3d-two-n-and-tangent-letters', 3, dict(vbc_y0='ffv', vbc_val_y0='[0, 0, 0]',
+                                                             vbc_val_y0_l='0', vbc_n1='vff',
+                                                             vbc_val_n1='[7e-10, 0, 0]'),
+                      mesh='cuts', letters=True, corner=(('y0', 'n1'), 3, dict(z=0.0))))
     # What the codes cannot give: a side wall with a vertical velocity, and a 2D x0 held by
     # its normal only that tapers off over the bottom shear zone.
     found.append(case('3d-x0-vertical-letters', 3, dict(vbc_x0='vvv', vbc_val_x0='[1e-9, 2e-10, -3e-10]',
@@ -489,7 +495,7 @@ def run(exe, folder, spec):
 CUT_NORMAL = {2: (0.5**0.5, 0.5**0.5), 3: (0.5**0.5, 0.0, 0.5**0.5)}
 CUT_SIDES = {2: ('x1', 'z1'), 3: ('x1', 'y0', 'y1', 'z1')}
 Z_HOLD = 1.2e-9 * 2**0.5  # with x = 0, the z velocity that gives n0's 1.2e-9 in 3D
-FLAG_BITS = dict(x0=1, x1=2, y0=4, y1=8, z0=16, z1=32, n0=64)
+FLAG_BITS = dict(x0=1, x1=2, y0=4, y1=8, z0=16, z1=32, n0=64, n1=128)
 
 
 def saved_field(saved, name):
@@ -500,8 +506,9 @@ def saved_field(saved, name):
 
 
 def corner_normal_velocity(result, spec):
-    """At the nodes on n0 and the spec['corner'] sides only, the velocity along n0's normal
-    is the value n0 holds, and the components the sides hold keep their values."""
+    """At the nodes on n0 and the spec['corner'] sides only, the velocity along the normal of
+    each n boundary there is the value it holds, and the components the sides hold keep their
+    values."""
     import numpy as np
     sides, frame, held_there = spec['corner']
     side = '+'.join(sides)
@@ -513,19 +520,25 @@ def corner_normal_velocity(result, spec):
     on = flag == FLAG_BITS['n0'] + sum(FLAG_BITS[s] for s in sides)
     if not on.any():
         raise RuntimeError('no node lies on n0 and {} only'.format(side))
-    held = float(result.cfg['bc']['vbc_val_n0'].strip('[]').split(',')[0])
-    normal = velocity[on] @ np.array(CUT_NORMAL[nd])
-    worst = float(np.max(np.abs(normal - held)))
-    if worst > 1e-9*abs(held):
-        raise RuntimeError('velocity along the n0 normal at the {} nodes on n0 and {}: {} instead '
-                           'of {}'.format(int(on.sum()), side, normal.tolist(), held))
+    chkpt = fields(result.folder/'bc.chkpt.{:06d}'.format(frame))
+    normals = saved_field(chkpt, 'boundary normals').reshape(-1, nd)
+    checked = []
+    for b in ['n0'] + [s for s in sides if s[0] == 'n']:
+        held = float(result.cfg['bc']['vbc_val_' + b].strip('[]').split(',')[0])
+        checked.append('{} {:g}'.format(b, held))
+        normal = velocity[on] @ normals[FLAG_BITS[b].bit_length() - 1]
+        worst = float(np.max(np.abs(normal - held)))
+        if worst > 1e-9*abs(held):
+            raise RuntimeError('velocity along the {} normal at the {} nodes on n0 and {}: {} instead '
+                               'of {}'.format(b, int(on.sum()), side, normal.tolist(), held))
     for axis, value in held_there.items():
         got = velocity[on][:, 'xyz'.index(axis) if nd == 3 else 'xz'.index(axis)]
         if (got != value).any():
             raise RuntimeError('{} velocity at the {} nodes on n0 and {}: {} instead of {}'.format(
                 axis, int(on.sum()), side, got.tolist(), value))
-    return 'n0 normal velocity {:g} at its {} nodes with {}{}'.format(
-        held, int(on.sum()), side, ''.join(', {} {:g}'.format(a, v) for a, v in held_there.items()))
+    return 'normal velocity {} at the {} nodes on n0 and {}{}'.format(
+        ', '.join(checked), int(on.sum()), side,
+        ''.join(', {} {:g}'.format(a, v) for a, v in held_there.items()))
 
 
 def compare(parent, current, spec):
