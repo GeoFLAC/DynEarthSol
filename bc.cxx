@@ -504,34 +504,44 @@ void set_normal_outside(int axes, ConstArrayAccessor n, ArrayAccessor v, bool ho
 } // anonymous namespace
 
 
-// What apply_vbcs reads from the input, so that a restart can tell whether its velocity
-// boundary conditions are the run's: the side tables, the period tables of the side walls,
-// the 2D depth profiles and the bottom shear zone.
+// What apply_vbcs reads from the input for the velocity components the sides hold, so that
+// a restart can tell whether its velocity boundary conditions are the run's: which components
+// they hold and at what values, when they release them, the frame of an n boundary, and the
+// period table, 2D depth profile and bottom shear zone a normal value follows. Tractions and
+// free components do not count.
 double_vec vbc_controls(const Param &param, const Variables &var)
 {
     const BC &bc = param.bc;
+    const double_vec *period[] = {&bc.vbc_period_x0_time_in_yr, &bc.vbc_period_x0_ratio,
+                                  &bc.vbc_period_x1_time_in_yr, &bc.vbc_period_x1_ratio,
+                                  &bc.vbc_period_y0_time_in_yr, &bc.vbc_period_y0_ratio,
+                                  &bc.vbc_period_y1_time_in_yr, &bc.vbc_period_y1_ratio};
     double_vec c;
+    auto add = [&c](const double_vec &table) {
+        c.push_back(table.size());
+        c.insert(c.end(), table.begin(), table.end());
+    };
     for (int i=0; i<nbdrytypes; ++i) {
         const SideBC &s = bc.side[i];
         for (int d=0; d<NDIMS; ++d) {
-            c.push_back(s.type[d]);
-            c.push_back(s.value[d]);
+            c.push_back(s.type[d] == 'v');
+            if (s.type[d] == 'v') c.push_back(s.value[d]);
         }
+        if (all_free(s)) continue;
         c.push_back(s.release_time);
-        c.push_back(s.taper);
-        c.push_back(s.normal_follows_period);
         c.push_back(s.horizontal_normal);
+        c.push_back(s.normal_follows_period);
+        if (!s.normal_follows_period) continue;
+        add(*period[2*i]);
+        add(*period[2*i + 1]);
+#ifndef THREED
+        add(i == iboundx0 ? var.vbc_vertical_div_x0 : var.vbc_vertical_div_x1);
+        add(i == iboundx0 ? var.vbc_vertical_ratio_x0 : var.vbc_vertical_ratio_x1);
+        const bool taper = s.taper && bc.bottom_shear_zone_thickness > 0;
+        c.push_back(taper);
+        if (taper) c.push_back(bc.bottom_shear_zone_thickness);
+#endif
     }
-    for (const double_vec *table : {&bc.vbc_period_x0_time_in_yr, &bc.vbc_period_x0_ratio,
-                                    &bc.vbc_period_x1_time_in_yr, &bc.vbc_period_x1_ratio,
-                                    &bc.vbc_period_y0_time_in_yr, &bc.vbc_period_y0_ratio,
-                                    &bc.vbc_period_y1_time_in_yr, &bc.vbc_period_y1_ratio,
-                                    &var.vbc_vertical_div_x0, &var.vbc_vertical_ratio_x0,
-                                    &var.vbc_vertical_div_x1, &var.vbc_vertical_ratio_x1}) {
-        c.push_back(table->size());
-        c.insert(c.end(), table->begin(), table->end());
-    }
-    c.push_back(bc.bottom_shear_zone_thickness);
     return c;
 }
 

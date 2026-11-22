@@ -21,7 +21,8 @@ Cases with changed_restart restart both executables from checkpoint 1 with those
 values changed, and every later frame must match the parent's restart bit for bit.
 Cases with edge_restart restart from checkpoint 1 with x1 holding, at an x1-n0 edge node,
 the y velocity the run's conditions give the checkpointed one there: the restart must match
-one from the checkpoint without its record of the conditions.
+one from the checkpoint without its record of the conditions. Restarting with only n0's
+traction changed must keep the checkpointed velocity.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
 along n0's normal is the value n0 holds and that the components the sides hold keep their
 values.
@@ -578,13 +579,17 @@ RECORD = ('boundary condition control count', 'boundary condition controls')
 ADDED_FIELDS = ('boundary normals',) + RECORD
 
 
+def field_name(key):
+    """The field a key of fields() holds, for its data and its layout."""
+    return key.split('/')[-1].lstrip('@').replace('.layout', '')
+
+
 def same_fields(a, b, name, ignored=()):
-    added = {k for k in b.keys() - a.keys()
-             if k.split('/')[-1].lstrip('@').replace('.layout', '') in ADDED_FIELDS}
+    added = {k for k in b.keys() - a.keys() if field_name(k) in ADDED_FIELDS}
     if a.keys() != b.keys() - added:
         raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ (b.keys() - added))))
     for key in a:
-        if key.split('/')[-1] not in ('walltime_sec', 'provenance') + ignored and a[key] != b[key]:
+        if field_name(key) not in ('walltime_sec', 'provenance') + ignored and a[key] != b[key]:
             raise RuntimeError('{}: {} differs'.format(name, key))
 
 
@@ -635,7 +640,8 @@ def edge_restart(exe, result):
     """Restart from checkpoint 1 with x1 holding, at the x1-n0 edge node where the edge map
     changes it most, the y velocity the run's conditions give the checkpointed one, and n0
     free but for its traction. The conditions differ, so the restart applies them, as one from
-    the checkpoint without its record does; their result at that node does not tell."""
+    the checkpoint without its record does; their result at that node does not tell. With
+    only n0's traction changed, they are the run's, and the restart keeps the velocity."""
     import h5py
     import numpy as np
     import shutil
@@ -657,13 +663,19 @@ def edge_restart(exe, result):
     node = edge[np.argmax(np.abs(mapped[edge, 1] - saved[edge, 1]))]
     if mapped[node, 1] == saved[node, 1]:
         raise RuntimeError('the edge map leaves the y velocity of every node on x1 and n0')
+    restart_from_1(exe, folder, result, 'traction', dict(vbc_val_n0='[1.2e-9, -4e4, 0]'))
+    kept = saved_field(fields(folder/'traction.save.000001'), 'velocity').reshape(flag.size, -1)
+    if (kept != saved).any():
+        raise RuntimeError('changing only the n0 traction moved the velocity of {} nodes on '
+                           'restart'.format(int((kept != saved).any(axis=1).sum())))
     change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
                   vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
     restart_from_1(exe, folder, result, 'changed', change)
     restart_from_1(exe, bare, result, 'changed', change)
     count = same_outputs(bare, folder, 'changed')
     return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
-           'without the record ({} files)'.format(int(node), count)
+           'without the record ({} files); one changing only the n0 traction keeps the ' \
+           'velocity'.format(int(node), count)
 
 
 def compare_letters(current, spec, reference):
@@ -675,8 +687,8 @@ def compare_letters(current, spec, reference):
         raise RuntimeError('no per-side table printed')
     if reference is None:
         return 'runs, table as expected'
-    # The record of the input may differ where the two inputs differ without effect, as the
-    # taper of an x0 without a bottom shear zone does.
+    # The record of the input may differ where the two inputs differ without effect, as a
+    # normal held at 0 does that follows the period table as letters and not as code 4 or 5.
     count = same_outputs(reference.folder, current.folder, ignored=RECORD)
     return 'bit-exact with {} ({} files), table as expected'.format(spec['same_as'], count)
 

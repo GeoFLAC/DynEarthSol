@@ -108,8 +108,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   its checkpoint instead of applying them again, so it continues the run
   exactly, also at the edges of oblique (`n`) boundaries. One that changes
   them applies them, as before, so that they hold from its first step.
-  Checkpoints record the input of the conditions; older ones apply them
-  ([#115]).
+  Checkpoints record the input of the velocity conditions, tractions aside;
+  older ones apply them ([#115]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
