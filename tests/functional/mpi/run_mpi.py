@@ -29,7 +29,6 @@ def command_text(command):
 
 
 def configure(ndims, moving, resolution, steps=196, output_interval=49):
-    # Checkpoints fall between mesh checks: outputs precede same-step remeshing in DES.
     cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     cfg.optionxform = str
     cfg.read(ROOT / "examples/core-complex-mmg.cfg")

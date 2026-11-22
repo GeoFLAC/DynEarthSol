@@ -322,9 +322,7 @@ make cmp NDIMS=2 CASE=test-tiny.cfg \
   EXE='mpiexec -n 3 /path/to/changed/dynearthsol2d.mpi'
 ```
 
-Repeat with a valid 3D case. Output precedes same-step remeshing in DES; restarting
-such a checkpoint can omit that remesh, also without MPI. Restart tests therefore
-place checkpoints between mesh checks.
+Repeat with a valid 3D case.
 
 ### Verification scope
 
