@@ -8,6 +8,7 @@ void create_boundary_normals(const Param &param, const Variables &var, array_t &
                              double_vec& edge_vec, int* edge_slot);
 void create_boundary_edges(const Param &param, const Variables &var, double_vec& edge_vec,
                            int* edge_slot);
+double_vec vbc_controls(const Param &param, const Variables &var);
 // Homogeneous/normalized modes are used to construct the corrected PT subspace.
 // Default calls retain the legacy boundary map.
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel,

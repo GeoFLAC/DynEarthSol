@@ -8,6 +8,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "binaryio.hpp"
+#include "bc.hpp"
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
@@ -494,6 +495,12 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         for (int i=0; i<nbdrytypes; ++i)
             for (int d=0; d<NDIMS; ++d) normals[i*NDIMS + d] = (*var.bnormals)[i][d];
         bin.write_aux_array(normals, "boundary normals", normals.size());
+    }
+    if (!param.control.has_PT) {
+        // The input of the run's velocity boundary conditions, which a restart compares.
+        const double_vec vbc = vbc_controls(param, var);
+        bin.write_scalar(static_cast<int>(vbc.size()), "boundary condition control count");
+        bin.write_aux_array(vbc, "boundary condition controls", vbc.size());
     }
     const double_vec controls = dt_controls(param);
     bin.write_scalar(1, "dt controls version");

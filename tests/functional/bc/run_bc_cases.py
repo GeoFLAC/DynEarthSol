@@ -17,6 +17,11 @@ stress_bc_* of an unknown type or on a 2D y wall.
 Cases marked restart also restart from checkpoint 1 with the current executable, and
 every later frame must match the run's bit for bit: the n boundaries keep the normals of
 the starting mesh, which the checkpoints now carry, and the restart keeps the velocity.
+Cases with changed_restart restart both executables from checkpoint 1 with those bc
+values changed, and every later frame must match the parent's restart bit for bit.
+Cases with edge_restart restart from checkpoint 1 with x1 holding, at an x1-n0 edge node,
+the y velocity the run's conditions give the checkpointed one there: the restart must match
+one from the checkpoint without its record of the conditions.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
 along n0's normal is the value n0 holds and that the components the sides hold keep their
 values.
@@ -87,13 +92,15 @@ def base(ndims, mesh):
 
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
-         same_as=None, refused=False, restart=False, corner=None, quoted=()):
+         same_as=None, refused=False, restart=False, corner=None, quoted=(), changed_restart=None,
+         edge_restart=False):
     # exit_code is the parent's; input that set nothing ran there and is refused now.
     # corner is (sides, frame, {global axis: value held there}); quoted lists the bc keys
-    # written in quotes.
+    # written in quotes; changed_restart holds the bc values a restart changes.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
-                same_as=same_as, restart=restart, corner=corner, quoted=quoted)
+                same_as=same_as, restart=restart, corner=corner, quoted=quoted,
+                changed_restart=changed_restart, edge_restart=edge_restart)
 
 
 def effective_cfg(spec, quoted=False):
@@ -101,7 +108,7 @@ def effective_cfg(spec, quoted=False):
     cfg = base(spec['ndims'], spec['mesh'])
     cfg['bc'].update(spec['bc'])
     cfg['control'].update(spec['control'])
-    if spec['restart']:
+    if spec['restart'] or spec['changed_restart'] or spec['edge_restart']:
         cfg['sim']['has_marker_output'] = 'yes'  # a restart reads the markers
     for k, key in enumerate(spec['quoted'] if quoted else ()):
         mark = '"' if k % 2 == 0 else "'"
@@ -248,6 +255,10 @@ def cases():
         # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
         found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
                           mesh='cut', corner=(('z1',), 3, {})))
+        # A restart that changes a held velocity applies it before its first step, as the
+        # parent does.
+        found.append(case(f'{d}-restart-z1-changed', nd, dict(vbc_z1='1'),
+                          changed_restart=dict(vbc_val_z1='-3e-9')))
         # Quoted values, as the codes and scalars took them before they became text and lists.
         found.append(case(f'{d}-quoted', nd, dict(vbc_x0='3', vbc_val_x0='-1e-9'),
                           quoted=('vbc_val_x0', 'vbc_x0')))
@@ -264,7 +275,8 @@ def cases():
         vbc_val_division_x1_min='0.4', vbc_val_division_x1_max='0.9', vbc_val_x1_ratio0='0.2',
         vbc_val_x1_ratio1='1', vbc_val_x1_ratio2='0.7', vbc_val_x1_ratio3='0.5')))
 
-    found += [c for c in map(as_letters, [c for c in found if not c['current_exit']]) if c]
+    found += [c for c in map(as_letters, [c for c in found if not (c['current_exit'] or c['changed_restart'])])
+              if c]
     for nd in (2, 3):
         d, zeros = f'{nd}d', '[' + ', '.join(['0'] * nd) + ']'
         held, free = 'v' * nd, 'f' * nd
@@ -286,7 +298,7 @@ def cases():
                           vbc_val_x0='[0, 5e4' + ', 0' * (nd - 2) + ']'), letters=True))
         found.append(case(f'{d}-n-traction-letters', nd, dict(vbc_n0='vt' + 'f' * (nd - 2),
                           vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True,
-                          restart=True))
+                          restart=True, edge_restart=nd == 3))
         found.append(case(f'{d}-winkler-traction-letters', nd, dict(has_winkler_foundation='yes',
                           vbc_z0='tv' + 'f' * (nd - 2), vbc_val_z0='[-3e4, 1e-10' + ', 0' * (nd - 2) + ']'),
                           letters=True))
@@ -459,9 +471,9 @@ def check_table(log, ndims, cfg):
     return True
 
 
-def outputs(folder):
+def outputs(folder, model='bc'):
     names = {p.name[:-len('.vtkhdf')] if p.suffix == '.vtkhdf' else p.name
-             for p in folder.glob('bc.*') if '.save.' in p.name or '.chkpt.' in p.name}
+             for p in folder.glob(model + '.*') if '.save.' in p.name or '.chkpt.' in p.name}
     return sorted(names)
 
 
@@ -560,26 +572,28 @@ def largest_difference(old, new):
     return 'largest relative difference {:.2g} in {}'.format(worst, where)
 
 
-# What the current build adds to its checkpoints: the boundary normals that a restart keeps.
-ADDED_FIELDS = ('boundary normals',)
+# What the current build adds to its checkpoints: the boundary normals that a restart keeps,
+# and the record of the input of the velocity conditions that it compares.
+RECORD = ('boundary condition control count', 'boundary condition controls')
+ADDED_FIELDS = ('boundary normals',) + RECORD
 
 
-def same_fields(a, b, name):
+def same_fields(a, b, name, ignored=()):
     added = {k for k in b.keys() - a.keys()
              if k.split('/')[-1].lstrip('@').replace('.layout', '') in ADDED_FIELDS}
     if a.keys() != b.keys() - added:
         raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ (b.keys() - added))))
     for key in a:
-        if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]:
+        if key.split('/')[-1] not in ('walltime_sec', 'provenance') + ignored and a[key] != b[key]:
             raise RuntimeError('{}: {} differs'.format(name, key))
 
 
-def same_outputs(old, new):
-    names = outputs(old)
-    if not names or names != outputs(new):
-        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new)))
+def same_outputs(old, new, model='bc', ignored=()):
+    names = outputs(old, model)
+    if not names or names != outputs(new, model):
+        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new, model)))
     for name in names:
-        same_fields(fields(old/name), fields(new/name), name)
+        same_fields(fields(old/name), fields(new/name), name, ignored)
     return len(names)
 
 
@@ -602,6 +616,63 @@ def same_after_restart(exe, result):
     return 'restart from checkpoint 1 matches {} files'.format(len(later))
 
 
+def same_changed_restart(parent_exe, current_exe, parent, current, spec):
+    """Restart both runs from checkpoint 1 with spec['changed_restart']: every later frame
+    must match the parent's restart."""
+    for exe, result in ((parent_exe, parent), (current_exe, current)):
+        cfg = copy.deepcopy(result.cfg)
+        cfg['bc'].update(spec['changed_restart'])
+        cfg['sim'].update(modelname='changed', is_restarting='true', restarting_from_modelname='bc',
+                          restarting_from_frame='1')
+        again = run_des(exe, result.folder, 'changed', cfg, timeout=600, check=False)
+        if again.returncode:
+            raise RuntimeError('the changed restart from checkpoint 1 exited {}'.format(again.returncode))
+    count = same_outputs(parent.folder, current.folder, 'changed')
+    return 'changed restart matches the parent\'s ({} files)'.format(count)
+
+
+def edge_restart(exe, result):
+    """Restart from checkpoint 1 with x1 holding, at the x1-n0 edge node where the edge map
+    changes it most, the y velocity the run's conditions give the checkpointed one, and n0
+    free but for its traction. The conditions differ, so the restart applies them, as one from
+    the checkpoint without its record does; their result at that node does not tell."""
+    import h5py
+    import numpy as np
+    import shutil
+    folder, bare = result.folder, result.folder/'without-record'
+    bare.mkdir()
+    for name in ('bc.info', 'bc.save.000001.vtkhdf', 'bc.chkpt.000001.vtkhdf'):
+        shutil.copyfile(folder/name, bare/name)
+    with h5py.File(bare/'bc.chkpt.000001.vtkhdf', 'r+') as stream:
+        found = []
+        stream.visit(lambda key: found.append(key) if key.split('/')[-1] in RECORD else None)
+        for key in found:
+            del stream[key]
+    def restart(where, model, bc):
+        cfg = copy.deepcopy(result.cfg)
+        cfg['bc'].update(bc)
+        cfg['sim'].update(modelname=model, is_restarting='true', restarting_from_modelname='bc',
+                          restarting_from_frame='1')
+        again = run_des(exe, where, model, cfg, timeout=600, check=False)
+        if again.returncode:
+            raise RuntimeError('the {} restart from checkpoint 1 exited {}'.format(model, again.returncode))
+    restart(bare, 'old', {})  # the run's conditions applied to the checkpointed velocity
+    flag = saved_field(fields(folder/'bc.save.000001'), 'bcflag')
+    saved = saved_field(fields(folder/'bc.save.000001'), 'velocity').reshape(flag.size, -1)
+    mapped = saved_field(fields(bare/'old.save.000001'), 'velocity').reshape(flag.size, -1)
+    edge = np.flatnonzero(flag == FLAG_BITS['n0'] + FLAG_BITS['x1'])
+    node = edge[np.argmax(np.abs(mapped[edge, 1] - saved[edge, 1]))]
+    if mapped[node, 1] == saved[node, 1]:
+        raise RuntimeError('the edge map leaves the y velocity of every node on x1 and n0')
+    change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
+                  vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
+    restart(folder, 'changed', change)
+    restart(bare, 'changed', change)
+    count = same_outputs(bare, folder, 'changed')
+    return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
+           'without the record ({} files)'.format(int(node), count)
+
+
 def compare_letters(current, spec, reference):
     if current.returncode != spec['exit_code']:
         raise RuntimeError('exited {} where {} was expected'.format(current.returncode, spec['exit_code']))
@@ -611,7 +682,9 @@ def compare_letters(current, spec, reference):
         raise RuntimeError('no per-side table printed')
     if reference is None:
         return 'runs, table as expected'
-    count = same_outputs(reference.folder, current.folder)
+    # The record of the input may differ where the two inputs differ without effect, as the
+    # taper of an x0 without a bottom shear zone does.
+    count = same_outputs(reference.folder, current.folder, ignored=RECORD)
     return 'bit-exact with {} ({} files), table as expected'.format(spec['same_as'], count)
 
 
@@ -662,6 +735,10 @@ def main():
             verdict = compare_letters(current, spec, reference) if spec['letters'] else compare(parent, current, spec)
             if spec['restart']:
                 verdict += '; ' + same_after_restart(current_exe, current)
+            if spec['changed_restart']:
+                verdict += '; ' + same_changed_restart(parent_exe, current_exe, parent, current, spec)
+            if spec['edge_restart']:
+                verdict += '; ' + edge_restart(current_exe, current)
             if spec['corner']:
                 verdict += '; ' + corner_normal_velocity(current, spec)
             ok = True

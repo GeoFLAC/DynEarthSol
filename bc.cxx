@@ -513,6 +513,38 @@ void set_normal_outside(int axes, ConstArrayAccessor n, ArrayAccessor v, bool ho
 } // anonymous namespace
 
 
+// What apply_vbcs reads from the input, so that a restart can tell whether its velocity
+// boundary conditions are the run's: the side tables, the period tables of the side walls,
+// the 2D depth profiles and the bottom shear zone.
+double_vec vbc_controls(const Param &param, const Variables &var)
+{
+    const BC &bc = param.bc;
+    double_vec c;
+    for (int i=0; i<nbdrytypes; ++i) {
+        const SideBC &s = bc.side[i];
+        for (int d=0; d<NDIMS; ++d) {
+            c.push_back(s.type[d]);
+            c.push_back(s.value[d]);
+        }
+        c.push_back(s.release_time);
+        c.push_back(s.taper);
+        c.push_back(s.normal_follows_period);
+        c.push_back(s.horizontal_normal);
+    }
+    for (const double_vec *table : {&bc.vbc_period_x0_time_in_yr, &bc.vbc_period_x0_ratio,
+                                    &bc.vbc_period_x1_time_in_yr, &bc.vbc_period_x1_ratio,
+                                    &bc.vbc_period_y0_time_in_yr, &bc.vbc_period_y0_ratio,
+                                    &bc.vbc_period_y1_time_in_yr, &bc.vbc_period_y1_ratio,
+                                    &var.vbc_vertical_div_x0, &var.vbc_vertical_ratio_x0,
+                                    &var.vbc_vertical_div_x1, &var.vbc_vertical_ratio_x1}) {
+        c.push_back(table->size());
+        c.insert(c.end(), table->begin(), table->end());
+    }
+    c.push_back(bc.bottom_shear_zone_thickness);
+    return c;
+}
+
+
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
 {
 #ifdef NPROF

@@ -597,10 +597,26 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     else
         create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    // Checkpoints carry the velocity the run's boundary conditions left, PT ones the
-    // accepted velocity. Applying them again would move the edge nodes of an n boundary
-    // once more, since its edge map is not a projection (#115); the next step applies
-    // them, also when the restart changes them.
+    // Checkpoints carry the velocity the run's boundary conditions left, and the input of
+    // those conditions. Applying the same conditions again would move the edge nodes of an n
+    // boundary once more, since its edge map is not a projection, so the restart applies its
+    // own only where their input differs; the first step then moves the mesh with them and
+    // strains it. Checkpoints without that record apply them too. PT checkpoints carry the
+    // accepted velocity.
+    if (!param.control.has_PT) {
+        const double_vec vbc = vbc_controls(param, var);
+        bool same = false;
+        if (bin_chkpt.has_array("boundary condition control count")) {
+            int count = 0;
+            bin_chkpt.read_scalar(count, "boundary condition control count");
+            if (count == static_cast<int>(vbc.size())) {
+                double_vec saved(count);
+                bin_chkpt.read_array(saved, "boundary condition controls");
+                same = saved == vbc;
+            }
+        }
+        if (!same) apply_vbcs(param, var, *var.vel);
+    }
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
