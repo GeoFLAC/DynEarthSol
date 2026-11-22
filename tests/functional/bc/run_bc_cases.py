@@ -101,8 +101,6 @@ def as_letters(spec):
     for side, e in table.items():
         if e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
             return None
-        if e['support'] != letters_support(side, e['types'], winkler, water):
-            return None  # 2D code 4: supported, although its normal is held
         bc['vbc_' + side] = e['types']
         bc['vbc_val_' + side] = '[' + ', '.join(repr(v) for v in e['values']) + ']'
         if side[0] in 'xy':
@@ -133,15 +131,29 @@ def parent_max_speed(ndims, cfg):
     return speed
 
 
+def parent_support(side, code, winkler, water):
+    """Before #115 the codes 0, 2 and 4 carried the support, held normal or not."""
+    return code in (0, 2, 4) and (side != 'z0' or winkler) and (side != 'z1' or water)
+
+
 def changes(spec):
     """What #115 changed for this case, compared with the parent, or None."""
     if spec['letters'] or spec['current_exit']:
         return None
-    cfg = effective_cfg(spec)
-    old, new = parent_max_speed(spec['ndims'], cfg), max_speed(expected_table(spec['ndims'], cfg))
+    nd, cfg = spec['ndims'], effective_cfg(spec)
+    table = expected_table(nd, cfg)
+    winkler, water = support_options(cfg)
+    found = []
+    old, new = parent_max_speed(nd, cfg), max_speed(table)
     if old != new:
-        return 'find_max_vbc {:g} -> {:g}'.format(old, new)
-    return None
+        found.append('find_max_vbc {:g} -> {:g}'.format(old, new))
+    for side, e in table.items():
+        if side[0] == 'n':
+            continue
+        code = 0 if (side == 'z0' and winkler) or (side == 'z1' and water) else int(cfg['bc']['vbc_' + side])
+        if parent_support(side, code, winkler, water) != e['support']:
+            found.append('{} support {}'.format(side, 'added' if e['support'] else 'removed'))
+    return '; '.join(found) or None
 
 
 def cases():
@@ -304,7 +316,7 @@ def expected_table(ndims, cfg):
         table[side] = dict(
             frame=FRAMES[ndims][side], types=types, values=values, normal_follows_period=period,
             taper=ndims == 2 and side == 'x0' and code == 3,
-            support=code in (0, 2, 4) and (side != 'z0' or winkler) and (side != 'z1' or water),
+            support=letters_support(side, types, winkler, water),
             max_speed=max([abs(v) for v in held.values()] or [0.0]),
             release_time=bc.get('vbc_val_z1_loading_period') if side == 'z1' else None,
             stress='{}:{}'.format(stress_axes[stress], float(bc['stress_val_' + side]))

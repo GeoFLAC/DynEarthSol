@@ -178,8 +178,6 @@ void convert_bc_codes(Param &p)
         if (z_side) {
             if (code >= 0 && code < int(sizeof(z_rows) / sizeof(z_rows[0]))) row = z_rows[code];
             for (int d=0; d<NDIMS; ++d) global[d] = d;
-            s.support = (code == 0 || code == 2 || code == 4) &&
-                ((i == iboundz0) ? bc.has_winkler_foundation : bc.has_water_loading);
         }
         else {
             // input.cxx refuses the codes that set nothing: anything else than 0 to 7, and 5
@@ -196,7 +194,6 @@ void convert_bc_codes(Param &p)
 #else
             global[0] = 0; global[1] = 1;
 #endif
-            s.support = (code == 0 || code == 2 || code == 4);
             s.taper = (NDIMS == 2 && i == iboundx0 && code == 3);
             s.normal_follows_period = (row && row[0] == N);
         }
@@ -213,6 +210,10 @@ void convert_bc_codes(Param &p)
             s.value[d] = sign * held;
             s.max_speed = std::max(s.max_speed, std::fabs(held));
         }
+        // A free normal carries the support, as with letters.
+        const bool free_normal = (s.type[0] == 'f');
+        s.support = (i == iboundz0) ? free_normal && bc.has_winkler_foundation
+                  : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
     }
 }
 
