@@ -9,7 +9,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <unordered_map>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -283,26 +282,6 @@ SideInflowState side_inflow_state(const Param &param, double time_in_yr, int nno
         s.out[t] = (t % 2 == 0) ? (s.pos_out[t] < plane - tol_o) : (s.pos_out[t] > plane + tol_o);
     }
     return s;
-}
-
-// Flag in affected_old_node (RemeshScratch) every original node in points_to_delete or moved
-// before meshing (qcoord != original_coord). Call before qcoord is renumbered.
-void record_affected_old_nodes(std::vector<char> &affected_old_node, const array_t &original_coord,
-                               const double *qcoord, int old_nnode, const int_vec &points_to_delete)
-{
-    if ((int)affected_old_node.size() != old_nnode)
-        die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: record not sized to the old mesh");
-    for (int n : points_to_delete) {
-        if (n < 0 || n >= old_nnode)
-            die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: deleted node is not an old node");
-        affected_old_node[n] = 1;
-    }
-    for (int n = 0; n < old_nnode; ++n)
-        for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
-                affected_old_node[n] = 1;
-                break;
-            }
 }
 
 
@@ -2035,19 +2014,29 @@ void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
 //  R6 input: what did flatten_* break?
 // ----------------------------------------------------------------------------
 // Elements flatten_* broke: a boundary node was snapped onto its restored plane (qcoord !=
-// original_coord) and the post-flatten quality fell below min_quality. Also records the moved
-// and deleted old nodes (record_affected_old_nodes). OLD element ids.
+// original_coord) and the post-flatten quality fell below min_quality. Also flags the moved and
+// the deleted old nodes in affected_old_node. OLD ids throughout: qcoord and qconn are the
+// flattened old mesh, not the collapse path's c_* arrays, and points_to_delete lists old nodes.
 std::vector<char> detect_flatten_broken(const Param &param, std::vector<char> &affected_old_node,
                                         const array_t &original_coord,
                                         const double *qcoord, const int *qconn,
                                         int old_nnode, int old_nelem,
                                         const int_vec &points_to_delete)
 {
+    if ((int)affected_old_node.size() != old_nnode)
+        die(EXIT_INTERNAL_ASSERT, "detect_flatten_broken: affected_old_node not sized to the old mesh");
     std::vector<char> displaced(old_nnode, 0);
     for (int n = 0; n < old_nnode; ++n)
         for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
-    record_affected_old_nodes(affected_old_node, original_coord, qcoord, old_nnode, points_to_delete);
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
+                displaced[n] = affected_old_node[n] = 1;
+                break;
+            }
+    for (int n : points_to_delete) {
+        if (n < 0 || n >= old_nnode)
+            die(EXIT_INTERNAL_ASSERT, "detect_flatten_broken: deleted node is not an old node");
+        affected_old_node[n] = 1;
+    }
     std::vector<char> flatten_broken(old_nelem, 0);
     for (int e = 0; e < old_nelem; ++e) {
         const int *el = qconn + e*NODES_PER_ELEM;
@@ -3112,14 +3101,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const segment_t &original_segment, const segflag_t &original_segflag,
               std::vector<char> &affected_old_node)
 {
-    // We don't want to refine large elements during remeshing,
-    // so using negative size as the max area
-    const double max_elem_size = -1;
-    const int vertex_per_polygon = 3;
     const RefineFloors floors = refine_floors(param.mesh);
     const double min_dist = floors.min_dist;
-    Mesh mesh_param = param.mesh;
-    mesh_param.poly_filename = "";
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
@@ -3351,14 +3334,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
               const segment_t &original_segment, const segflag_t &original_segflag,
               std::vector<char> &affected_old_node)
 {
-    // We don't want to refine large elements during remeshing,
-    // so using negative size as the max area
-    const double max_elem_size = -1;
-    const int vertex_per_polygon = 3;
     const RefineFloors floors = refine_floors(param.mesh);
     const double min_dist = floors.min_dist;
-    Mesh mesh_param = param.mesh;
-    mesh_param.poly_filename = "";
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
@@ -4945,7 +4922,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         const int old_nseg  = old.segment.size();
         const char *remesh_engine = "?";
 
-        // filled by the meshing routine (record_affected_old_nodes)
+        // filled by the meshing routine (detect_flatten_broken)
         rs.affected_old_node.assign(old_nnode, 0);
 
         // while var.bcflag still describes the old mesh

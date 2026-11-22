@@ -55,6 +55,14 @@ const double sizefactor = 0.118;
 const double sizefactor = 0.433;
 #endif
 
+static void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
+                               int n_init_segments, const int *init_segments,
+                               const int *init_segflags, int n_regions, const double *regattr,
+                               double max_elem_size, int vertex_per_polygon,
+                               int &nnode, int &nelem, int &nseg, double *&pcoord,
+                               int *&pconnectivity, int *&psegment, int *&psegflag,
+                               double *&pregattr);
+
 
 namespace { // anonymous namespace
 
@@ -1707,7 +1715,9 @@ void tetrahedralize_polyhedron
 
 // Shared tail of every Triangle/TetGen-built initial mesh (points_to_mesh, the 3D .poly path):
 // refine_initial_weak_zone, refine_initial_side_walls (option 13), then var copies the buffers and
-// this function frees them. An imported .exo mesh (meshing_option 95) skips it.
+// this function frees them. An imported .exo mesh (meshing_option 95) skips it. delete[] is right
+// for the mesher's arrays: TetGen allocates them with new[], and the vendored Triangle's trimalloc
+// (triangle/triangle.c) with operator new[].
 void adopt_initial_mesh(const Param &param, Variables &var,
                         double *pcoord, int *pconnectivity, int *psegment, int *psegflag,
                         double *pregattr)
@@ -2959,12 +2969,13 @@ void create_equilateral_segments(const Variables& var, int_vec &segments, int_ve
     }
 }
 
-void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
-                        int n_init_segments, const int *init_segments, const int *init_segflags,
-                        int n_regions, const double *regattr,
-                        double max_elem_size, int vertex_per_polygon,
-                        int &nnode, int &nelem, int &nseg, double *&pcoord,
-                        int *&pconnectivity, int *&psegment, int *&psegflag, double *&pregattr)
+static void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
+                               int n_init_segments, const int *init_segments,
+                               const int *init_segflags, int n_regions, const double *regattr,
+                               double max_elem_size, int vertex_per_polygon,
+                               int &nnode, int &nelem, int &nseg, double *&pcoord,
+                               int *&pconnectivity, int *&psegment, int *&psegflag,
+                               double *&pregattr)
 {
 #ifdef THREED
 
