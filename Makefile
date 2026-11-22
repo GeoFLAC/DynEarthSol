@@ -607,9 +607,14 @@ else
 endif
 
 CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
-LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
 ifneq ($(OSNAME), Darwin)
-	LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
+	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5 -Wl,-rpath,$(HDF5_LIB_DIR)
+else
+	## Full path, as for libomp: -L on a conda env would also answer the implicit -lc++.
+	## A conda libhdf5 names itself @rpath/..., so its directory is an rpath (added after
+	## the link); Homebrew's names its full path, and the extra rpath is unused.
+	LDFLAGS += $(HDF5_LIB_DIR)/libhdf5.dylib
+	HDF5_RPATH = $(abspath $(HDF5_LIB_DIR))
 endif
 
 ## Is git in the path?
@@ -1128,7 +1133,7 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# with usegospl=1 OPENMP_RPATH and GOSPL_RPATH are both the env's lib.
 		@# An empty one (openmp=0, or no runtime found) drops out of the loop, as does
 		@# GWB_RPATH without usegwb=1 (GWB's library names itself @rpath/...).
-		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH); do \
+		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH) $(HDF5_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(usegospl), 1)
