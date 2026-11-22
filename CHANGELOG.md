@@ -107,9 +107,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A restart with the run's velocity boundary conditions keeps the velocity of
   its checkpoint instead of applying them again, so it continues the run
   exactly, also at the edges of oblique (`n`) boundaries. One that changes
-  them applies them, as before, so that they hold from its first step.
-  Checkpoints record the velocity conditions in force at their time,
-  tractions aside; older ones apply them ([#115]).
+  them applies them at the nodes of the sides they change, so that they hold
+  from its first step. Checkpoints record the velocity conditions each side
+  applies at their time, tractions aside; older ones apply them everywhere, as
+  before ([#115]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).

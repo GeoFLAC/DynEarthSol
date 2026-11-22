@@ -23,8 +23,9 @@ Cases with edge_restart restart from checkpoint 1 with x1 holding, at an x1-n0 e
 the y velocity the run's conditions give the checkpointed one there: the restart must match
 one from the checkpoint without its record of the conditions. Restarting with only n0's
 traction changed, n1 freed, which has no node, z1 holding a velocity it released before the
-checkpoint, or x1's period table changed after the checkpoint time must keep the checkpointed
-velocity.
+checkpoint, x1's period table changed after the checkpoint time, or x0's code 5 given as the
+same letters must keep the checkpointed velocity; one with x0's value changed may change it
+on x0 only.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
 along the normal of each n boundary there is the value it holds and that the components the
 sides hold keep their values.
@@ -299,9 +300,11 @@ def cases():
         # traction that stays when the Winkler foundation or water loading frees the velocity.
         found.append(case(f'{d}-x0-shear-letters', nd, dict(vbc_x0='ft' + 'f' * (nd - 2), vbc_val_x0_l='0',
                           vbc_val_x0='[0, 5e4' + ', 0' * (nd - 2) + ']'), letters=True))
-        found.append(case(f'{d}-n-traction-letters', nd, dict(vbc_n0='vt' + 'f' * (nd - 2),
-                          vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True,
-                          restart=True, edge_restart=nd == 3))
+        traction = dict(vbc_n0='vt' + 'f' * (nd - 2), vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']')
+        if nd == 3:
+            traction.update(vbc_x0='5')  # its normal held at 0, which letters give following the period table
+        found.append(case(f'{d}-n-traction-letters', nd, traction, mesh='cut', letters=True, restart=True,
+                          edge_restart=nd == 3))
         found.append(case(f'{d}-winkler-traction-letters', nd, dict(has_winkler_foundation='yes',
                           vbc_z0='tv' + 'f' * (nd - 2), vbc_val_z0='[-3e4, 1e-10' + ', 0' * (nd - 2) + ']'),
                           letters=True))
@@ -604,21 +607,21 @@ def field_name(key):
     return key.split('/')[-1].lstrip('@').replace('.layout', '')
 
 
-def same_fields(a, b, name, ignored=()):
+def same_fields(a, b, name):
     added = {k for k in b.keys() - a.keys() if field_name(k) in ADDED_FIELDS}
     if a.keys() != b.keys() - added:
         raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ (b.keys() - added))))
     for key in a:
-        if field_name(key) not in ('walltime_sec', 'provenance') + ignored and a[key] != b[key]:
+        if field_name(key) not in ('walltime_sec', 'provenance') and a[key] != b[key]:
             raise RuntimeError('{}: {} differs'.format(name, key))
 
 
-def same_outputs(old, new, model='bc', ignored=()):
+def same_outputs(old, new, model='bc'):
     names = outputs(old, model)
     if not names or names != outputs(new, model):
         raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new, model)))
     for name in names:
-        same_fields(fields(old/name), fields(new/name), name, ignored)
+        same_fields(fields(old/name), fields(new/name), name)
     return len(names)
 
 
@@ -662,8 +665,9 @@ def edge_restart(exe, result):
     free but for its traction. The conditions differ, so the restart applies them, as one from
     the checkpoint without its record does; their result at that node does not tell. With
     only n0's traction changed, n1 freed, which has no node, z1 holding a velocity it released
-    before the checkpoint, or x1's period table changed after the checkpoint time, the
-    conditions at the checkpoint are the run's, and the restart keeps the velocity."""
+    before the checkpoint, x1's period table changed after the checkpoint time, or x0's code 5
+    given as the same letters, the conditions at the checkpoint are the run's, and the restart
+    keeps the velocity. With x0's value changed, it applies them on x0 only."""
     import h5py
     import numpy as np
     import shutil
@@ -679,8 +683,9 @@ def edge_restart(exe, result):
     restart_from_1(exe, bare, result, 'old')  # the run's conditions applied to the checkpointed velocity
     run = fields(folder/'bc.save.000001')
     flag = saved_field(run, 'bcflag')
-    saved = saved_field(run, 'velocity').reshape(flag.size, -1)
-    mapped = saved_field(fields(bare/'old.save.000001'), 'velocity').reshape(flag.size, -1)
+    velocity = lambda frame: saved_field(frame, 'velocity').reshape(flag.size, -1)
+    saved = velocity(run)
+    mapped = velocity(fields(bare/'old.save.000001'))
     edge = np.flatnonzero(flag == FLAG_BITS['n0'] + FLAG_BITS['x1'])
     node = edge[np.argmax(np.abs(mapped[edge, 1] - saved[edge, 1]))]
     if mapped[node, 1] == saved[node, 1]:
@@ -698,20 +703,29 @@ def edge_restart(exe, result):
                              dict(vbc_z1='1', vbc_val_z1='6e-10', vbc_val_z1_loading_period=str(release))),
                             ('period', 'the x1 period table after {} yr'.format(later),
                              dict(num_vbc_period_x1='2', vbc_period_x1_time_in_yr='[{}, {}]'.format(later, 2 * later),
-                                  vbc_period_x1_ratio='[1, 2]'))):
+                                  vbc_period_x1_ratio='[1, 2]')),
+                            ('letters', 'the spelling of x0, as letters,',
+                             dict(vbc_x0='vvv', vbc_val_x0='[-0.0, 1e-9, 0]', vbc_val_x0_l='0'))):
         restart_from_1(exe, folder, result, model, bc)
-        kept = saved_field(fields(folder/(model + '.save.000001')), 'velocity').reshape(flag.size, -1)
+        kept = velocity(fields(folder/(model + '.save.000001')))
         if (kept != saved).any():
             raise RuntimeError('changing only {} moved the velocity of {} nodes on restart'.format(
                 what, int((kept != saved).any(axis=1).sum())))
+    restart_from_1(exe, folder, result, 'x0', dict(vbc_val_x0='1e-9'))
+    moved = (velocity(fields(folder/'x0.save.000001')) != saved).any(axis=1)
+    off_x0 = (flag & FLAG_BITS['x0']) == 0
+    if (moved & off_x0).any() or not moved.any():
+        raise RuntimeError('changing the value of x0 moved {} nodes off it and {} on it on restart'.format(
+            int((moved & off_x0).sum()), int((moved & ~off_x0).sum())))
     change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
                   vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
     restart_from_1(exe, folder, result, 'changed', change)
     restart_from_1(exe, bare, result, 'changed', change)
     count = same_outputs(bare, folder, 'changed')
     return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
-           'without the record ({} files); ones changing only the n0 traction, n1, a released z1 ' \
-           'or a later x1 period keep the velocity'.format(int(node), count)
+           'without the record ({} files); ones changing only the n0 traction, n1, a released z1, ' \
+           'a later x1 period or the spelling of x0 keep the velocity, and x0\'s value changes it on ' \
+           'x0 only ({} nodes)'.format(int(node), count, int(moved.sum()))
 
 
 def compare_letters(current, spec, reference):
@@ -723,9 +737,7 @@ def compare_letters(current, spec, reference):
         raise RuntimeError('no per-side table printed')
     if reference is None:
         return 'runs, table as expected'
-    # The record of the input may differ where the two inputs differ without effect, as a
-    # normal held at 0 does that follows the period table as letters and not as code 4 or 5.
-    count = same_outputs(reference.folder, current.folder, ignored=RECORD)
+    count = same_outputs(reference.folder, current.folder)
     return 'bit-exact with {} ({} files), table as expected'.format(spec['same_as'], count)
 
 

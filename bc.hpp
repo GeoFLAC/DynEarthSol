@@ -9,10 +9,12 @@ void create_boundary_normals(const Param &param, const Variables &var, array_t &
 void create_boundary_edges(const Param &param, const Variables &var, double_vec& edge_vec,
                            int* edge_slot);
 double_vec vbc_controls(const Param &param, const Variables &var);
+uint vbc_changed_sides(const double_vec &saved, const double_vec &now);
 // Homogeneous/normalized modes are used to construct the corrected PT subspace.
-// Default calls retain the legacy boundary map.
+// Default calls retain the legacy boundary map. Only nodes on one of sides (bits of bcflag)
+// are set.
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel,
-                bool homogeneous = false, bool normalized = false);
+                bool homogeneous = false, bool normalized = false, uint sides = ~0U);
 
 struct VelocityConstraints {
     Array2D<double, NDIMS*NDIMS> projector;
