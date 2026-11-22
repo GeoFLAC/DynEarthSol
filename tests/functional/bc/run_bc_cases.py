@@ -110,15 +110,38 @@ def as_letters(spec):
     taper = float(cfg['bc'].get('bottom_shear_zone_thickness', '0')) > 0
     if nd == 2 and taper and table['x0']['types'][0] == 'v' and not table['x0']['taper']:
         return None  # letters taper any held x0 normal; the codes, 3 only
-    letters = case(spec['name'] + '-letters', nd, dict(spec['bc'], **bc), spec['control'], spec['mesh'],
-                   letters=True, same_as=spec['name'])
-    if max_speed(table) != max_speed(expected_table(nd, effective_cfg(letters))):
-        return None  # find_max_vbc skips code 6 and its L; letters count every held value
-    return letters
+    return case(spec['name'] + '-letters', nd, dict(spec['bc'], **bc), spec['control'], spec['mesh'],
+                letters=True, same_as=spec['name'])
 
 
 def max_speed(table):
     return max([1e-12] + [e['max_speed'] for e in table.values()])
+
+
+def parent_max_speed(ndims, cfg):
+    """find_max_vbc before #115: |vbc_val| of the side codes that are odd or 4, and of the
+    n codes, whatever the code held."""
+    bc = cfg['bc']
+    winkler, water = support_options(cfg)
+    speed = 1e-12
+    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1', 'n0', 'n1', 'n2', 'n3'):
+        code = int(bc['vbc_' + side])
+        if (side == 'z0' and winkler) or (side == 'z1' and water):
+            code = 0
+        if code % 2 == 1 or (code == 4 and side[0] != 'n'):
+            speed = max(speed, abs(float(bc['vbc_val_' + side])))
+    return speed
+
+
+def changes(spec):
+    """What #115 changed for this case, compared with the parent, or None."""
+    if spec['letters'] or spec['current_exit']:
+        return None
+    cfg = effective_cfg(spec)
+    old, new = parent_max_speed(spec['ndims'], cfg), max_speed(expected_table(spec['ndims'], cfg))
+    if old != new:
+        return 'find_max_vbc {:g} -> {:g}'.format(old, new)
+    return None
 
 
 def cases():
@@ -282,7 +305,7 @@ def expected_table(ndims, cfg):
             frame=FRAMES[ndims][side], types=types, values=values, normal_follows_period=period,
             taper=ndims == 2 and side == 'x0' and code == 3,
             support=code in (0, 2, 4) and (side != 'z0' or winkler) and (side != 'z1' or water),
-            max_speed=abs(known['V']) if code % 2 == 1 or code == 4 else 0.0,
+            max_speed=max([abs(v) for v in held.values()] or [0.0]),
             release_time=bc.get('vbc_val_z1_loading_period') if side == 'z1' else None,
             stress='{}:{}'.format(stress_axes[stress], float(bc['stress_val_' + side]))
                    if stress in stress_axes else 'none')
@@ -353,8 +376,38 @@ def compare(parent, current, spec):
                                      current.returncode)
     # A build that prints the per-side table must print the one #115 expects.
     table = check_table(current.stdout, spec['ndims'], current.cfg)
+    change = changes(spec)
+    if change:
+        return 'changed as expected ({}): {}'.format(change, largest_difference(parent.folder, current.folder))
     count = same_outputs(parent.folder, current.folder)
     return 'bit-exact ({} files){}'.format(count, ', table as expected' if table else '')
+
+
+def largest_difference(old, new):
+    """The largest relative difference of a floating field over every save and checkpoint."""
+    import numpy as np
+    names = outputs(old)
+    if names != outputs(new):
+        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new)))
+    worst, where = 0.0, None
+    for file in names:
+        a, b = fields(old/file), fields(new/file)
+        for key in a:
+            layout = a.get('@' + key + '.layout')
+            if key.startswith('@') or layout is None or key.split('/')[-1] == 'walltime_sec':
+                continue
+            dtype = eval(layout.decode())[1]
+            if not dtype.lstrip('<>|=').startswith('f') or key not in b:
+                continue
+            x, y = np.frombuffer(a[key], dtype), np.frombuffer(b[key], dtype)
+            if x.size == 0 or x.size != y.size:
+                continue
+            diff = float(np.max(np.abs(x - y))) / (float(np.max(np.abs(x))) or 1.0)
+            if diff > worst:
+                worst, where = diff, '{} of {}'.format(key.split('/')[-1], file)
+    if worst == 0:
+        raise RuntimeError('the outputs did not change')
+    return 'largest relative difference {:.2g} in {}'.format(worst, where)
 
 
 def same_outputs(old, new):

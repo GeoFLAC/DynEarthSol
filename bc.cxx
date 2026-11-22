@@ -160,7 +160,6 @@ void convert_bc_codes(Param &p)
             continue;
         }
 
-        if (code % 2 == 1 || code == 4) s.max_speed = std::fabs(v);
         if (stress_codes[i] >= 1 && stress_codes[i] <= 3) {
 #ifdef THREED
             s.stress_axis = stress_codes[i] - 1;
@@ -212,6 +211,7 @@ void convert_bc_codes(Param &p)
             const double held = (row[k] == Z) ? 0. : (row[k] == L) ? lateral[i] : v;
             s.type[d] = 'v';
             s.value[d] = sign * held;
+            s.max_speed = std::max(s.max_speed, std::fabs(held));
         }
     }
 }

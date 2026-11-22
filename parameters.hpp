@@ -293,7 +293,7 @@ struct SideBC {
     bool taper;                  // 2D x0 code 3: normal value tapers off near the bottom
     bool horizontal_normal;      // n boundaries 11, 13: n is the horizontal part of the normal
     bool support;                // a free normal carries the lithostatic, Winkler or water load
-    double max_speed;            // the speed find_max_vbc takes from this side
+    double max_speed;            // the largest held value, which find_max_vbc takes
     double release_time;         // in s; the side is free after it (bc.vbc_val_z1_loading_period)
     int stress_axis;             // stress_bc_*: adds stress_value * normal[axis]; -1 for none
     double stress_value;         // Pa
