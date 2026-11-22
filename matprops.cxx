@@ -489,6 +489,10 @@ void MatProps::strength_here(int e, double pls, StrengthPiece& piece) const
     piece.pls = pls;
     piece.rsf = 0;
     piece.rsf_terms[0] = piece.rsf_terms[1] = 0;
+    // complete_piece sets these once the element yields; until then they hold
+    // values, so that copying the piece copies no indeterminate ones.
+    piece.end = std::numeric_limits<double>::max();
+    piece.dfriction = piece.ddilation = 0;
     piece.has_slopes = false;
     finish_piece(piece);
 }
