@@ -67,20 +67,20 @@ bool is_on_boundary(const uint_vec &bcflag, int node)
 
 
 namespace {
-// Today's code 0 on a side: every component free.
+// Today's code 0 on a side: no velocity component held (tractions aside).
 bool all_free(const SideBC &s)
 {
     for (int d=0; d<NDIMS; ++d)
-        if (s.type[d] != 'f') return false;
+        if (s.type[d] == 'v') return false;
     return true;
 }
 
-// Today's codes 1 and 11: the normal held, the other components free.
+// Today's codes 1 and 11: the normal velocity held, the other components not.
 bool normal_only(const SideBC &s)
 {
     if (s.type[0] != 'v') return false;
     for (int d=1; d<NDIMS; ++d)
-        if (s.type[d] != 'f') return false;
+        if (s.type[d] == 'v') return false;
     return true;
 }
 } // anonymous namespace
@@ -127,16 +127,16 @@ void convert_bc_codes(Param &p)
 
         const std::string &text = bc.vbc_text[i];
         if (!text.empty() && std::isalpha(static_cast<unsigned char>(text[0]))) {
-            // Given by components: the values are already in the side's frame. A free normal
-            // carries the support; only the normal value follows the period table, and in 2D
-            // the depth profile and the bottom shear zone of x0.
+            // Given by components: the values are already in the side's frame. A normal not
+            // held carries the support; only a held normal value follows the period table, and
+            // in 2D the depth profile and the bottom shear zone of x0.
             for (int d=0; d<NDIMS; ++d) {
-                if (text[d] != 'v') continue;
-                s.type[d] = 'v';
+                if (text[d] == 'f') continue;
+                s.type[d] = text[d];
                 s.value[d] = bc.vbc_component_values[i][d];
-                s.max_speed = std::max(s.max_speed, std::fabs(s.value[d]));
+                if (text[d] == 'v') s.max_speed = std::max(s.max_speed, std::fabs(s.value[d]));
             }
-            const bool free_normal = (text[0] == 'f');
+            const bool free_normal = (text[0] != 'v');
             s.support = (i == iboundz0) ? free_normal && bc.has_winkler_foundation
                       : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
             if (i < iboundz0) {
@@ -160,6 +160,8 @@ void convert_bc_codes(Param &p)
             continue;
         }
 
+        // stress_bc_*: the global stress component k, applied on each facet as S n_k with the
+        // facet's area-weighted normal n (input.cxx refuses what adds nothing).
         if (stress_codes[i] >= 1 && stress_codes[i] <= 3) {
 #ifdef THREED
             s.stress_axis = stress_codes[i] - 1;
@@ -895,6 +897,45 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #endif
 }
 
+namespace {
+// The frame axes of side i in global components: a side wall's or z side's from side_frame,
+// an n boundary's from its normal n as t_h = up x n / |up x n| (+x for a level n) and
+// t_v = n x t_h; in 2D the in-plane t is t_v, or +x for a level n.
+void side_axes(const Variables &var, int i, double axes[NDIMS][NDIMS])
+{
+    for (int c=0; c<NDIMS; ++c)
+        for (int d=0; d<NDIMS; ++d) axes[c][d] = 0;
+    if (i < iboundn0) {
+        for (int c=0; c<NDIMS; ++c)
+            axes[c][std::abs(side_frame[i][c]) - 1] = (side_frame[i][c] < 0) ? -1. : 1.;
+        return;
+    }
+    ConstArrayAccessor n = (*var.bnormals)[i];
+    for (int d=0; d<NDIMS; ++d) axes[0][d] = n[d];
+#ifdef THREED
+    const double h = std::sqrt(n[0]*n[0] + n[1]*n[1]);
+    if (h < 1e-12) {
+        axes[1][0] = 1;
+    } else {
+        axes[1][0] = -n[1] / h;
+        axes[1][1] = n[0] / h;
+    }
+    axes[2][0] = n[1]*axes[1][2] - n[2]*axes[1][1];
+    axes[2][1] = n[2]*axes[1][0] - n[0]*axes[1][2];
+    axes[2][2] = n[0]*axes[1][1] - n[1]*axes[1][0];
+#else
+    if (std::fabs(n[0]) < 1e-12) {
+        axes[1][0] = 1;
+    } else {
+        const double s = (n[0] < 0) ? -1. : 1.;
+        axes[1][0] = -s * n[1];
+        axes[1][1] = s * n[0];
+    }
+#endif
+}
+} // anonymous namespace
+
+
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
@@ -903,11 +944,23 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 
     #pragma acc wait
 
-    // Apply general stress (Neumann) boundary conditions
-    for (int i = 0; i < 6; ++i) {
-    // Check if there is a stress BC applied on this boundary
+    // stress_bc_* (codes only) loads each facet with S n_k on component k, n being the
+    // facet's area-weighted normal. A traction t (letters only, #115) loads it with T times
+    // the facet area along the frame axis. The facet's nodes share the load.
+    for (int i = 0; i < nbdrytypes; ++i) {
     const SideBC &side = param.bc.side[i];
-    if (side.stress_axis < 0) continue;
+    bool any = false;
+    for (int c = 0; c < NDIMS; ++c) any = any || side.type[c] == 't';
+    if ((!any && side.stress_axis < 0) || !var.bfacets[i] || var.bfacets[i]->empty()) continue;
+    double stress[NDIMS] = {0.0}, traction[NDIMS] = {0.0};
+    if (side.stress_axis >= 0) stress[side.stress_axis] = side.stress_value;
+    if (any) {
+        double axes[NDIMS][NDIMS];
+        side_axes(var, i, axes);
+        for (int c = 0; c < NDIMS; ++c)
+            if (side.type[c] == 't')
+                for (int d = 0; d < NDIMS; ++d) traction[d] += side.value[c] * axes[c][d];
+    }
 
     const auto& bdry = *(var.bfacets[i]);
     const int bound = static_cast<int>(bdry.size());
@@ -918,7 +971,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         int f = bdry[n].second;     // This facet is the f-th facet of element e
         ConstConnAccessor conn = (*var.connectivity)[e];  // Element connectivity
 
-        // Outward-normal vector and z-center for the facet
+        // Outward-normal vector, whose length is the facet area, and z-center for the facet
         double normal[NDIMS] = {0.0}; 
         double zcenter = 0.0;
 
@@ -930,20 +983,19 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         ConstArrayIndirectAccessor facet_coord = var.coord->view_const(idx);
 
         normal_vector_of_facet(facet_coord, normal, zcenter);
+        double area = 0;
+        for (int d = 0; d < NDIMS; ++d) area += normal[d] * normal[d];
+        area = std::sqrt(area);
+        double load[NDIMS];
+        for (int d = 0; d < NDIMS; ++d)
+            load[d] = (side.stress_axis >= 0) ? stress[d] * normal[d] : traction[d] * area;
 
-        double traction[NDIMS] = {0.0};
-        traction[side.stress_axis] = side.stress_value;
-
-        // Apply the traction to the boundary facet nodes
+        // Apply the load to the boundary facet nodes
         for (int j = 0; j < NODES_PER_FACET; ++j) {
             int nn = conn[NODE_OF_FACET[f][j]];  // Get global node index for this facet
             ArrayAccessor force_node = force[nn];      // Pointer to the force array for this node
-
-            // Distribute the traction (stress) to the nodes on the facet
-            for (int d = 0; d < NDIMS; ++d) {
-                // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
-                force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
-            }
+            for (int d = 0; d < NDIMS; ++d)
+                force_node[d] += load[d] / NODES_PER_FACET;
         }
     }
     }

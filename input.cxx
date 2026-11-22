@@ -729,9 +729,12 @@ static void declare_parameters(opt::Registry &cfg,
          "Or one letter per component of the side's frame (n, t_h, t_v): n is the outward normal, "
          "t_h = up x n (+x on the top and bottom) and t_v = n x t_h; here (-x, -y, +z), in 2D (-x, +z). "
          "'v' holds the component at its value in bc.vbc_val_x0, then a list such as '[1e-9, 0, 0]' "
-         "(m/s along the frame axis, outward positive); 'f' leaves it free. A free normal keeps the "
-         "lithostatic support (z0: with the Winkler foundation; z1: with water loading). Only the "
-         "normal value follows the period table and, in 2D, the depth profile and the bottom shear zone.")
+         "(m/s along the frame axis, outward positive); 't' applies a traction of that value (Pa along "
+         "the frame axis, outward and tension positive, times the facet area); 'f' leaves it free. A "
+         "normal that is not held keeps the lithostatic support (z0: with the Winkler foundation; z1: "
+         "with water loading), and a traction adds to it. Only a held normal value follows the period "
+         "table and, in 2D, the depth profile and the bottom shear zone. With letters, "
+         "bc.stress_bc_* is refused; give a traction as t.")
         ("bc.vbc_x1", opt::value<std::string>(&p.bc.vbc_text[iboundx1])->default_value("1"),
          "Type of boundary condition for the right/eastern side, as for bc.vbc_x0: an integer code or one letter per component of the frame (+x, +y, +z), in 2D (+x, +z)")
         ("bc.vbc_val_x0", opt::list()->scalar_too()->default_value("-1e-9"),
@@ -1380,6 +1383,47 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
+// stress_bc_* loads global component k of each facet with S n_k, n being the facet's
+// area-weighted normal; #115 keeps that. Refuse what adds nothing: an unknown type, the y
+// walls in 2D, and a component the velocity code holds for the whole run. A tangential
+// component stays: it is zero on a flat side but loads a tilted facet.
+static void check_stress_bcs(const Param &p)
+{
+    static const char *names[nbdrytypes_hydro] = {"x0", "x1", "y0", "y1", "z0", "z1"};
+    const int codes[nbdrytypes_hydro] = {p.bc.stress_bc_x0, p.bc.stress_bc_x1, p.bc.stress_bc_y0,
+                                         p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
+    const char *axes = (NDIMS == 3) ? "xyz" : "xz";
+    for (int i=0; i<nbdrytypes_hydro; ++i) {
+        const int code = codes[i];
+        if (code == 0) continue;
+        const std::string key = std::string("bc.stress_bc_") + names[i];
+#ifndef THREED
+        if (i == iboundy0 || i == iboundy1) {
+            std::cerr << "Error: " << key << " = " << code << ": 2D has no y walls.\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+        const int axis = (code == 1) ? 0 : (code == 3) ? 1 : -1;
+#else
+        const int axis = (code >= 1 && code <= 3) ? code - 1 : -1;
+#endif
+        if (axis < 0) {
+            std::cerr << "Error: " << key << " = " << code << " is not "
+                      << (NDIMS == 3 ? "1 (x), 2 (y) or 3 (z)" : "1 (x) or 3 (z)") << ".\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+        const SideBC &s = p.bc.side[i];
+        int c = 0;  // the frame component along the loaded axis
+        while (std::abs(side_frame[i][c]) - 1 != axis) ++c;
+        if (s.type[c] == 'v' && s.release_time == std::numeric_limits<double>::max()) {
+            std::cerr << "Error: " << key << " = " << code << " loads " << axes[axis] << " on the "
+                      << names[i] << " side, which bc.vbc_" << names[i] << " holds; that adds "
+                      << "nothing. Free " << axes[axis] << " there to load it.\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+}
+
+
 // One line per side, for checking the table against the conversion tables of #115.
 static void print_bc_table(const Param &p)
 {
@@ -1451,13 +1495,8 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
 
         if (text.size() != NDIMS || text.find_first_not_of("vft") != std::string::npos) {
             std::cerr << "Error: " << key << " must be an integer code or " << NDIMS
-                      << " letters from v (velocity) and f (free), one per component of the "
-                         "side's frame, got '" << text << "'.\n";
-            die(EXIT_CONFIG_VALUE);
-        }
-        if (text.find('t') != std::string::npos) {
-            std::cerr << "Error: " << key << " = " << text << ": a traction (t) is not read yet; "
-                      << "use bc.stress_bc_" << names[i] << ".\n";
+                      << " letters from v (velocity), t (traction) and f (free), one per component "
+                         "of the side's frame, got '" << text << "'.\n";
             die(EXIT_CONFIG_VALUE);
         }
 #ifndef THREED
@@ -1478,19 +1517,23 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
             die(EXIT_CONFIG_VALUE);
         }
         if (i < nbdrytypes_hydro && stress_codes[i] != 0) {
-            std::cerr << "Error: bc.stress_bc_" << names[i] << " is for the integer codes, not for "
-                      << key << " = " << text << ".\n";
+            std::cerr << "Error: bc.stress_bc_" << names[i] << " is for the integer codes; with "
+                      << key << " = " << text << ", give a traction as t.\n";
             die(EXIT_CONFIG_VALUE);
         }
         if (i >= iboundn0) {
-            // An n boundary holds its normal, every component, or none; tangential values are 0.
-            const std::string normal = "v" + std::string(NDIMS - 1, 'f');
-            const std::string all(NDIMS, 'v'), none(NDIMS, 'f');
+            // An n boundary holds the velocity of its normal, of every component with the
+            // tangential values 0, or of none; the others can carry tractions.
+            std::string held = text;
+            for (char &c : held) c = (c == 'v') ? 'v' : '-';
+            const std::string normal = "v" + std::string(NDIMS - 1, '-');
+            const std::string all(NDIMS, 'v'), none(NDIMS, '-');
             bool zero_tangents = true;
             for (int d=1; d<NDIMS; ++d) zero_tangents = zero_tangents && numbers[d] == 0;
-            if (!(text == normal || text == none || (text == all && zero_tangents))) {
-                std::cerr << "Error: " << key << " = " << text << ": an n boundary takes " << normal
-                          << ", " << all << " with tangential values 0, or " << none << ".\n";
+            if (!(held == normal || held == none || (held == all && zero_tangents))) {
+                std::cerr << "Error: " << key << " = " << text << ": an n boundary holds the "
+                          << "velocity of its normal only, of every component with tangential "
+                          << "values 0, or of none.\n";
                 die(EXIT_CONFIG_VALUE);
             }
         }
@@ -1858,9 +1901,15 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.bc.has_winkler_foundation = 0;
             std::cerr << "Warning: no gravity, Winkler foundation is turned off.\n";
         }
-        if ( p.bc.has_winkler_foundation && letters(iboundz0) &&
-             p.bc.vbc_text[iboundz0] != std::string(NDIMS, 'f') ) {
-            p.bc.vbc_text[iboundz0] = std::string(NDIMS, 'f');
+        // The Winkler foundation and water loading free the velocity of z0 and z1, as they set
+        // code 0; a traction t stays and adds to the load.
+        auto free_velocity = [&p](int i) {
+            std::string &text = p.bc.vbc_text[i];
+            const bool held = text.find('v') != std::string::npos;
+            std::replace(text.begin(), text.end(), 'v', 'f');
+            return held;
+        };
+        if ( p.bc.has_winkler_foundation && letters(iboundz0) && free_velocity(iboundz0) ) {
             std::cerr << "Warning: Winkler foundation is turned on, setting bc.vbc_z0 to "
                       << p.bc.vbc_text[iboundz0] << ".\n";
         }
@@ -1872,9 +1921,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.bc.has_water_loading = 0;
             std::cerr << "Warning: no gravity, water loading is turned off.\n";
         }
-        if ( p.bc.has_water_loading && letters(iboundz1) &&
-             p.bc.vbc_text[iboundz1] != std::string(NDIMS, 'f') ) {
-            p.bc.vbc_text[iboundz1] = std::string(NDIMS, 'f');
+        if ( p.bc.has_water_loading && letters(iboundz1) && free_velocity(iboundz1) ) {
             std::cerr << "Warning: water loading is turned on, setting bc.vbc_z1 to "
                       << p.bc.vbc_text[iboundz1] << ".\n";
         }
@@ -1945,6 +1992,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
 
         convert_bc_codes(p);
+        check_stress_bcs(p);
         print_bc_table(p);
     }
 

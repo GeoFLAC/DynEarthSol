@@ -10,8 +10,9 @@ be rejected with the same exit code. This replaces a make set / make cmp pair pe
 When the current executable prints its per-side table ([bc][side] lines), the table
 must match the conversion tables of #115 in the side frames chosen there.
 
-Side-wall codes that set no velocity component ran on the parent; the current executable
-refuses them (#115), and these cases expect its exit code 11.
+Input that adds nothing ran on the parent; the current executable refuses it (#115), and
+these cases expect its exit code 11: side-wall codes that set no velocity component, and
+stress_bc_* of an unknown type or on a component the velocity code holds.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
@@ -56,9 +57,10 @@ def base(ndims, mesh):
     cfg = read_config(ROOT/'tests/functional/displacement_output/displacement_output.cfg')
     cfg['sim'].update(modelname='bc', max_steps='6', output_step_interval='2')
     cfg['mesh'].update(xlength='1e4', ylength='1e4', zlength='1e4', resolution='2.5e3')
-    if mesh == 'cut':
+    if mesh != 'box':
+        poly = dict(cut='cut-corner', slope='slope-top')[mesh]
         cfg['mesh'].update(meshing_option='90', meshing_elem_shape='0',
-                           poly_filename=str(HERE/f'cut-corner-{ndims}d.poly'))
+                           poly_filename=str(HERE/f'{poly}-{ndims}d.poly'))
     # DES's usual dynamics, so that gravity and every constrained component move nodes.
     cfg['control'].update(gravity='10', fixed_dt='0', inertial_scaling='1e5',
                           damping_option='1', damping_factor='0.8')
@@ -77,10 +79,10 @@ def base(ndims, mesh):
 
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
-         same_as=None):
-    # exit_code is the parent's; a code that sets nothing ran there and is refused now.
+         same_as=None, refused=False):
+    # exit_code is the parent's; input that set nothing ran there and is refused now.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
-                exit_code=exit_code, current_exit=11 if noop else exit_code, letters=letters,
+                exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
                 same_as=same_as)
 
 
@@ -102,6 +104,8 @@ def as_letters(spec):
         if e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
             return None
         bc['vbc_' + side] = e['types']
+        if side[0] != 'n':
+            bc['stress_bc_' + side] = '0'
         bc['vbc_val_' + side] = '[' + ', '.join(repr(v) for v in e['values']) + ']'
         if side[0] in 'xy':
             bc['vbc_val_{}_l'.format(side)] = '0'
@@ -187,6 +191,20 @@ def cases():
             stress.update(vbc_y0='0', vbc_y1='0', stress_bc_y0='2', stress_val_y0='6e4',
                           stress_bc_y1='1', stress_val_y1='-7e4')
         found.append(case(f'{d}-stress', nd, stress))
+        # A tangential component loads a tilted facet: x on a top that rises to the east.
+        found.append(case(f'{d}-stress-slope', nd, dict(stress_bc_z1='1', stress_val_z1='-4e4'), mesh='slope'))
+        # A held component is loaded once its hold ends.
+        found.append(case(f'{d}-stress-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='1.3e7',
+                                                              stress_bc_z1='3', stress_val_z1='-4e4')))
+        # What adds nothing is refused: a component held for the whole run, and other types.
+        found.append(case(f'{d}-stress-held-normal', nd, dict(stress_bc_x0='1', stress_val_x0='2e4'),
+                          refused=True))
+        found.append(case(f'{d}-stress-held-tangential', nd, dict(vbc_x0='2', stress_bc_x0='3',
+                                                                  stress_val_x0='2e4'), refused=True))
+        found.append(case(f'{d}-stress-type4', nd, dict(vbc_x0='0', stress_bc_x0='4', stress_val_x0='2e4'),
+                          refused=True))
+        if nd == 2:
+            found.append(case('2d-stress-y', 2, dict(stress_bc_y0='2', stress_val_y0='2e4'), refused=True))
         for code in (1, 3, 11, 13):
             for sides in ((0, 1) if code in (1, 11) else (1,)):
                 others = dict(vbc_x1=str(sides), vbc_z1=str(sides))
@@ -219,8 +237,19 @@ def cases():
         # What the codes cannot give: a free (supported) n boundary.
         found.append(case(f'{d}-n-free-letters', nd, dict(vbc_n0=free, vbc_val_n0=zeros), mesh='cut',
                           letters=True))
-        rejected = [('t', dict(vbc_x0='t' + 'f' * (nd - 1), vbc_val_x0=zeros)),
-                    ('length', dict(vbc_x0='v' * (nd + 1), vbc_val_x0='[' + ', '.join(['0'] * (nd + 1)) + ']')),
+        # Tractions the codes cannot give: shear on a side wall and on an n boundary, and a
+        # traction that stays when the Winkler foundation or water loading frees the velocity.
+        found.append(case(f'{d}-x0-shear-letters', nd, dict(vbc_x0='ft' + 'f' * (nd - 2), vbc_val_x0_l='0',
+                          vbc_val_x0='[0, 5e4' + ', 0' * (nd - 2) + ']'), letters=True))
+        found.append(case(f'{d}-n-traction-letters', nd, dict(vbc_n0='vt' + 'f' * (nd - 2),
+                          vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True))
+        found.append(case(f'{d}-winkler-traction-letters', nd, dict(has_winkler_foundation='yes',
+                          vbc_z0='tv' + 'f' * (nd - 2), vbc_val_z0='[-3e4, 1e-10' + ', 0' * (nd - 2) + ']'),
+                          letters=True))
+        found.append(case(f'{d}-water-loading-traction-letters', nd, dict(has_water_loading='yes',
+                          vbc_z1='tv' + 'f' * (nd - 2), vbc_val_z1='[-2e4, 1e-10' + ', 0' * (nd - 2) + ']'),
+                          letters=True))
+        rejected = [('length', dict(vbc_x0='v' * (nd + 1), vbc_val_x0='[' + ', '.join(['0'] * (nd + 1)) + ']')),
                     ('letter', dict(vbc_x0='x' + 'f' * (nd - 1), vbc_val_x0=zeros)),
                     ('scalar', dict(vbc_x0='v' + 'f' * (nd - 1), vbc_val_x0='1e-9')),
                     ('code-list', dict(vbc_x0='1', vbc_val_x0=zeros)),
@@ -263,7 +292,7 @@ def support_options(cfg):
 
 
 def letters_support(side, types, winkler, water):
-    free = types[0] == 'f'
+    free = types[0] != 'v'  # f, or t, which adds to the support
     return free and (winkler if side == 'z0' else water if side == 'z1' else True)
 
 
@@ -272,10 +301,10 @@ def letters_entry(ndims, side, bc, winkler, water):
     types = bc['vbc_' + side]
     values = [float(x) for x in bc['vbc_val_' + side].strip('[]').split(',')]
     if (side == 'z0' and winkler) or (side == 'z1' and water):
-        types = 'f' * ndims
+        types = types.replace('v', 'f')  # the velocity is freed; a traction stays
     held = [v for c, v in zip(types, values) if c == 'v']
     return dict(frame=FRAMES[ndims][side] if side[0] != 'n' else 'normal', types=types,
-                values=[v if c == 'v' else 0.0 for c, v in zip(types, values)],
+                values=[v if c != 'f' else 0.0 for c, v in zip(types, values)],
                 normal_follows_period=side[0] in 'xy' and types[0] == 'v',
                 taper=ndims == 2 and side == 'x0' and types[0] == 'v',
                 support=letters_support(side, types, winkler, water),
@@ -461,7 +490,7 @@ def main():
     selected = [c for c in cases() if any(fnmatch.fnmatch(c['name'], g) for g in a.cases)]
     if a.list:
         for c in selected:
-            print(c['name'] + ('  (sets nothing; now rejected)' if c['noop'] else '') +
+            print(c['name'] + ('  (now rejected)' if c['current_exit'] and not c['exit_code'] else '') +
                   ('  (rejected, exit {})'.format(c['exit_code']) if c['exit_code'] else '') +
                   ('  (same as {})'.format(c['same_as']) if c['same_as'] else ''))
         return 0
