@@ -1076,15 +1076,16 @@ endif
 	@# from the environment on the FIRST configure, so an exported one is baked in.
 	@# MMG's optional SCOTCH, Elas and VTK stay off: cmake would take whichever the
 	@# environment offers (the gospl env's VTK stops the configure), and DES links
-	@# none of them.
+	@# none of them. A cache without a Makefile is another generator's (CMAKE_GENERATOR)
+	@# or a failed configure's, and cmake will not change a cached generator: it goes.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
 		command -v cmake >/dev/null || { \
 			echo "Missing: cmake, which configures the mmg submodule."; \
 			echo "         Install: brew install cmake (macOS), apt install cmake (Debian/Ubuntu)"; \
 			exit 1; }; \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" \
-		  cmake -DCMAKE_C_COMPILER="$(MMG_CC)" -DCMAKE_CXX_COMPILER="$(MMG_CXX)" \
+		cd mmg/build && rm -f CMakeCache.txt && CFLAGS="" CXXFLAGS="" LDFLAGS="" \
+		  cmake -G "Unix Makefiles" -DCMAKE_C_COMPILER="$(MMG_CC)" -DCMAKE_CXX_COMPILER="$(MMG_CXX)" \
 		        -DUSE_SCOTCH=OFF -DUSE_ELAS=OFF -DUSE_VTK=OFF ..; \
 	fi
 	@# The revision IN the archive, stamped only when it is built: the archive is reused
