@@ -333,13 +333,15 @@ MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
 
 ## MMG's compilers come from CXX's toolchain, so the archive matches the objects'
 ## architecture (a gcc on PATH can be another Homebrew's x86_64 one). nvc++ builds it
-## with GNU, whose C++ library it also uses.
-ifneq (, $(findstring clang++, $(CXX)))
-	MMG_CC = $(subst clang++,clang,$(CXX))
-	MMG_CXX = $(CXX)
-else ifneq (, $(findstring g++, $(CXX)))
-	MMG_CC = $(subst g++,gcc,$(CXX))
-	MMG_CXX = $(CXX)
+## with GNU, whose C++ library it also uses. CMake takes a compiler path, so only the
+## word of CXX that names the compiler: CXX may start with a wrapper (`env clang++`).
+MMG_CXX_WORD = $(firstword $(foreach w,$(CXX),$(if $(findstring clang++,$(w))$(findstring g++,$(w)),$(w))))
+ifneq (, $(findstring clang++, $(MMG_CXX_WORD)))
+	MMG_CC = $(subst clang++,clang,$(MMG_CXX_WORD))
+	MMG_CXX = $(MMG_CXX_WORD)
+else ifneq (, $(findstring g++, $(MMG_CXX_WORD)))
+	MMG_CC = $(subst g++,gcc,$(MMG_CXX_WORD))
+	MMG_CXX = $(MMG_CXX_WORD)
 else
 	MMG_CC = gcc
 	MMG_CXX = g++
