@@ -517,7 +517,9 @@ static void declare_parameters(opt::Registry &cfg,
          "   plastic strain of the step (default).\n"
          "1: (experimental) iterate until cohesion, friction and dilation all match the\n"
          "   plastic strain at the end of the step (backward Euler). Slower where\n"
-         "   friction or dilation weakens; less dependent on the step size.\n"
+         "   friction or dilation weakens; less dependent on the step size. Where more\n"
+         "   than one plastic increment matches, it can take a later one than the\n"
+         "   smallest, with more plastic strain in the step.\n"
          "Both give the same result when only cohesion weakens.\n")
 
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),

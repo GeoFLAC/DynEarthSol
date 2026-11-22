@@ -106,8 +106,10 @@ past a cohesion jump whose friction softens while its cohesion hardens, where
 `g = recorded - delta` is below 0 at both ends and above 0 between (the return
 lies there), also where the trial yields only within the piece, not at its ends
 nor where a golden-section search starts, and where cohesion and friction nearly
-cancel in the yield function there, and a piece softening friction and
-cohesion where g is above 0 at
+cancel in the yield function there, in 3D a piece where the active set of the
+return goes from two faces and the cap to two faces, all three faces and back
+(g is below 0 at both ends and above 0 between, the return at the apex of the
+faces), and a piece softening friction and cohesion where g is above 0 at
 both ends and below 0 between (the return is its first root); with either option,
 in 3D and plane strain, a steep cohesion fall past a jump where the return moves
 from a face to an edge and g rises, falls to its first root and rises again

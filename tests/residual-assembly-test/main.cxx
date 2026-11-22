@@ -846,11 +846,13 @@ static double recorded_plastic_increment_2d(const double plastic[3]) {
     return std::sqrt(squared/2);
 }
 
-// Plastic strain of a principal stress correction under the compliance of
-// set_mc_material: 3K = 65e9, lambda = K - 2G/3 = 15e9, 2G = 2e10.
-static void compliance_plastic(const double trial[3], const double result[3], double plastic[3]) {
-    const double volume=(trial[0]+trial[1]+trial[2]-result[0]-result[1]-result[2])/65e9;
-    for(int k=0;k<3;++k) plastic[k]=(trial[k]-result[k]-15e9*volume)/2e10;
+// Plastic strain of a principal stress correction under the isotropic compliance of the
+// moduli of material 0, K and G (lambda = K - 2G/3).
+static void compliance_plastic(const Param& param, const double trial[3], const double result[3],
+                               double plastic[3]) {
+    const double K=param.mat.bulk_modulus[0], G=param.mat.shear_modulus[0];
+    const double volume=(trial[0]+trial[1]+trial[2]-result[0]-result[1]-result[2])/(3*K);
+    for(int k=0;k<3;++k) plastic[k]=(trial[k]-result[k]-(K-2*G/3)*volume)/(2*G);
 }
 
 // Pure 2D: the in-plane moduli a1 = K + 4G/3 = 35e9 and a2 = K - 2G/3 = 15e9
@@ -922,7 +924,7 @@ static void test_mohr_coulomb_returns() {
             const double edge_trial[3]={base,base,unique};
             const double edge_target[3]={target_base,target_base,target_unique};
             double plastic[3];
-            compliance_plastic(edge_trial,edge_target,plastic);
+            compliance_plastic(m->param,edge_trial,edge_target,plastic);
             const double increment=recorded_plastic_increment(plastic);
             for(int e=0;e<ne;++e) {
                 for(int d=0;d<NDIMS;++d)
@@ -948,7 +950,7 @@ static void test_mohr_coulomb_returns() {
         const double trial[3]={169e3,185e3,200e3};
         const double target[3]={165347.65655963385,170585.93935780309,170585.93935780309};
         double plastic[3];
-        compliance_plastic(trial,target,plastic);
+        compliance_plastic(m->param,trial,target,plastic);
         const double increment=recorded_plastic_increment(plastic);
         f.set_principal(trial);
         f.update();
@@ -1137,7 +1139,7 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     principal(result);
     double plastic[3];
     if(nd==2) compliance_plastic_2d(trial,result,plastic);
-    else compliance_plastic(trial,result,plastic);
+    else compliance_plastic(f.m->param,trial,result,plastic);
     const double recorded=nd==2 ? recorded_plastic_increment_2d(plastic)
                                 : recorded_plastic_increment(plastic);
     const double history=(*f.pls)[0];
@@ -1244,13 +1246,18 @@ static void check_mixed_cohesions(const char* prefix, const double trial[3], boo
 // there. For ten times the trial rise, past a jump of one from 5e4 to 1e6 Pa, both at 44 deg,
 // the other hardens from 1.62952e6 to 1.841807e7 Pa while its friction falls to 12 deg by
 // 3e-8: the trial yields only from 2.38e-8 to 2.71e-8, where cohesion and friction nearly
-// cancel in its yield function. Both soften friction from 40 to 15 deg and cohesion from
-// 1.5e6 to 5e5 Pa over 1e-4: for the trial dip, g is above 0 at both ends and below 0
-// between, and the return is its first root. With either option, g turns where the return
-// moves from a face to an edge (3D and plane strain): past a cohesion rise from 6.5e5 to
-// 7.5e5 Pa at 5.2e-6, the other material falls from 7.5e5 Pa at 4.94e10 Pa per unit plastic
-// strain to 1.7e-5 or 2e-5. For the trial edge, g rises above 0 on the face, falls to 0 on
-// the edge and rises again, above 0 at 2e-5.
+// cancel in its yield function. Both soften friction from 40 to 15 deg and cohesion from 1.5e6
+// to 5e5 Pa over 1e-4: for the trial dip, g is above 0 at both ends and below 0 between, and
+// the return is its first root. With K = 48.18e9 Pa, a cap of 1.098e6 Pa and dilation, past a
+// jump of one from 17e3 to 842e3 Pa at 6.694e-5, the other softens from 1.998e6 to 9.4e4 Pa
+// while its friction rises from 22.75 to 34.33 deg and its dilation falls from 18.59 to
+// 2.48 deg by 1.511e-4 (3D): for the trial apex, the return goes from two faces and the cap to
+// two faces, all three faces and back; g is below 0 at both ends of that piece and above 0
+// between, and the return lies at the apex of the faces. With either option, g turns where the
+// return moves from a face to an edge (3D and plane strain): past a cohesion rise from 6.5e5
+// to 7.5e5 Pa at 5.2e-6, the other material falls from 7.5e5 Pa at 4.94e10 Pa per unit plastic
+// strain to 1.7e-5 or 2e-5. For the trial edge, g rises above 0 on the face, falls to 0 on the
+// edge and rises again, above 0 at 2e-5.
 static void check_turning_returns(const char* prefix, const double rise[3], const double dip[3],
                                   const double edge[3], bool pure_2d) {
     MaterialFixture f(MatProps::rh_ep, 0);
@@ -1286,6 +1293,20 @@ static void check_turning_returns(const char* prefix, const double rise[3], cons
         p.friction_angle0={40,40}; p.friction_angle1={15,15};
         f.set_material();
         check_on_piece("first root where g dips below 0",dip,0,1e-4);
+#ifdef THREED
+        {
+            const auto mixed=p;
+            const double start=6.694e-5, end=1.511e-4, apex[3]={-1.373e6,3.531e6,3.801e6};
+            p.bulk_modulus={48.18e9,48.18e9}; p.tension_max=1.098e6;
+            p.pls0={start,start}; p.pls1={start,end};
+            p.cohesion0={17e3,1998e3}; p.cohesion1={842e3,94e3};
+            p.friction_angle0={22.75,22.75}; p.friction_angle1={22.75,34.33};
+            p.dilation_angle0={2.48,18.59}; p.dilation_angle1={2.48,2.48};
+            f.set_material();
+            check_on_piece("return where the active set changes and comes back",apex,start,end);
+            p=mixed;
+        }
+#endif
     }
     if(!edge) return;
     for(double end : {1.7e-5,2e-5}) {

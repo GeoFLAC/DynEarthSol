@@ -1091,7 +1091,8 @@ static bool near_root(const ReturnPoint& r)
 // Between a and b on one piece, where g has the same sign at both and turns at most once,
 // x is where g goes furthest the other way: its minimum if it is above 0 there, its maximum
 // if below. Golden-section search finds it, and stops at the first point where g has the
-// other sign. Returns false if a return fails.
+// other sign, or where the return has another active set than a's: there [a, b] does not
+// hold one set. Returns false if a return fails.
 #pragma acc routine seq
 static bool find_turn(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                       bool plane_strain, int nd, const ReturnPoint& a, const ReturnPoint& b,
@@ -1105,6 +1106,10 @@ static bool find_turn(const double trial[3], double a1, double a2, const Strengt
         !evaluate_return(trial, a1, a2, curve, plane_strain, nd, lo + r*(hi - lo), v))
         return false;
     for (;;) {
+        if (u.set != a.set || v.set != a.set) {
+            x = u.set != a.set ? u : v;
+            return true;
+        }
         const bool left = s*u.g < s*v.g;
         x = left ? u : v;
         if (s*x.g < 0 || hi - lo <= 1e-9*hi) return true;
@@ -1231,22 +1236,25 @@ static int yield_change(const double trial[3], double a1, double a2, const Stren
 // g(first) > 0 >= g(last). Besides where friction or dilation change, g turns where the active
 // set of the return changes, and between such changes it turns at most once: with friction
 // and dilation fixed, the recorded increment is there the norm of an affine function of
-// delta, and g is convex. [a, b] is split where the set changes, found by bisection, and where
-// the trial starts or stops yielding (yield_change), and each part is searched as find_turn
-// does. Returns 1 if g falls to 0, 0 if not, and -1 if a return fails.
+// delta, and g is convex. [a, b] is split where the set changes, found by bisection from a
+// point with another set than a's: b, seen (a point between a and b the search evaluated),
+// or one find_turn meets; and where the trial starts or stops yielding (yield_change). Each
+// part with one set is searched as find_turn does. Returns 1 if g falls to 0, 0 if not, and
+// -1 if a return fails or the budget runs out.
 #pragma acc routine seq
 static int first_fall(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                       bool plane_strain, int nd, ReturnPoint a, const ReturnPoint& b,
-                      ReturnPoint& first, ReturnPoint& last)
+                      const ReturnPoint& seen, ReturnPoint& first, ReturnPoint& last)
 {
-    for (int part = 0; part < 16; ++part) {
+    for (int part = 0; ; ++part) {
         // [a, c] has a's active set, and d lies just past it; or c and d are b. Where the
-        // trial starts or stops yielding within [a, c], d moves there and [a, d] is split again.
-        // From an elastic a, the yield check alone tells the side of each step, and the return
-        // is solved at d only.
-        ReturnPoint c = b, d = b, x, y;
+        // trial starts or stops yielding within [a, c], or the return has another set there,
+        // d moves there and [a, d] is split again. From an elastic a, the yield check alone
+        // tells the side of each step, and the return is solved at d only.
+        ReturnPoint c = b, d = part == 0 && seen.set != a.set ? seen : b, x, y;
         bool elastic = false;  // the trial yields nowhere in [a, c]
-        for (int split = 0; ; ++split) {
+        bool turned = false;   // x is the turn of g in [a, c]
+        for (;;) {
             if (a.set != d.set) {
                 c = a;
                 const double target = d.delta;
@@ -1271,23 +1279,26 @@ static int first_fall(const double trial[3], double a1, double a2, const Strengt
                         return -1;
                 }
             }
-            if (split == 16) break;
             const int change = yield_change(trial, a1, a2, curve, plane_strain, nd, a, c, y);
             if (change < 0) return -1;
-            if (!change) {
-                elastic = a.set == 0;
-                break;
+            if (change) {
+                d = y;
+                continue;
             }
-            d = y;
+            elastic = a.set == 0;
+            // Where the trial does not yield, nothing is recorded: g = -delta only falls.
+            if (elastic || (a.g > 0) != (c.g > 0)) break;
+            if (!find_turn(trial, a1, a2, curve, plane_strain, nd, a, c, x)) return -1;
+            turned = x.set == a.set;
+            if (turned) break;
+            d = x;
         }
         if (a.g > 0 && !(c.g > 0)) {
             first = a;
             last = c;
             return 1;
         }
-        // Where the trial does not yield, nothing is recorded: g = -delta only falls.
-        if (!elastic && (a.g > 0) == (c.g > 0)) {
-            if (!find_turn(trial, a1, a2, curve, plane_strain, nd, a, c, x)) return -1;
+        if (turned) {
             if (a.g > 0 && x.g < 0) {
                 first = a;
                 last = x;
@@ -1307,7 +1318,6 @@ static int first_fall(const double trial[3], double a1, double a2, const Strengt
         }
         a = d;
     }
-    return 0;
 }
 
 // Illinois regula falsi on [a, b], g(a) > 0 >= g(b), and the return at its root, as
@@ -1350,14 +1360,16 @@ static int solve_bracket(const double trial[3], double a1, double a2, StrengthCu
 }
 
 // The return on the part of a piece from a to its break b: at the first fall of g to 0
-// between them, or otherwise past the break, on the next piece.
+// between them, or otherwise past the break, on the next piece. seen is as for first_fall.
 #pragma acc routine seq
 static int fall_or_cross(const double trial[3], double a1, double a2, StrengthCurve& curve,
                          bool plane_strain, int nd, ReturnPoint a, const ReturnPoint& b,
-                         ReturnPoint& lo, double& hi, double p[3], double& depls)
+                         const ReturnPoint& seen, ReturnPoint& lo, double& hi, double p[3],
+                         double& depls)
 {
     ReturnPoint first, last;
-    const int fall = first_fall(trial, a1, a2, curve, plane_strain, nd, a, b, first, last);
+    const int fall = first_fall(trial, a1, a2, curve, plane_strain, nd, a, b, seen, first,
+                                last);
     if (fall < 0) return reject_no_return;
     if (fall)
         return solve_bracket(trial, a1, a2, curve, plane_strain, nd, first, last, lo, hi, p,
@@ -1365,20 +1377,22 @@ static int fall_or_cross(const double trial[3], double a1, double a2, StrengthCu
     return cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi, p, depls);
 }
 
-// Where the active set changes between start and e, or the trial stops yielding between them,
-// g may fall to 0 before the fall that ends at e: whether it does, with [first, last]
-// bracketing that fall, or -1 if a return fails.
+// Where the active set changes between start and e, at their ends or at seen (a point between
+// them the search evaluated), or the trial stops yielding between them, g may fall to 0
+// before the fall that ends at e: whether it does, with [first, last] bracketing that fall,
+// or -1 if a return fails.
 #pragma acc routine seq
 static int earlier_fall(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                         bool plane_strain, int nd, const ReturnPoint& start, const ReturnPoint& e,
-                        ReturnPoint& first, ReturnPoint& last)
+                        const ReturnPoint& seen, ReturnPoint& first, ReturnPoint& last)
 {
-    if (start.set == e.set) {
+    if (start.set == e.set && seen.set == start.set) {
         ReturnPoint y;
         const int change = yield_change(trial, a1, a2, curve, plane_strain, nd, start, e, y);
         if (change <= 0) return change;
     }
-    const int fall = first_fall(trial, a1, a2, curve, plane_strain, nd, start, e, first, last);
+    const int fall = first_fall(trial, a1, a2, curve, plane_strain, nd, start, e, seen, first,
+                                last);
     return fall > 0 && !(last.delta < e.delta) ? 0 : fall;
 }
 
@@ -1394,12 +1408,14 @@ static int earlier_fall(const double trial[3], double a1, double a2, const Stren
 // changes, from a face to an edge of the yield surface, say. Where friction or
 // dilation change, the trial can also start and stop yielding more than once
 // along a piece, and the range of the strength over parts of it finds where
-// (yield_change). Of the sets of a yielding trial, the search assumes that each
-// holds over one range of delta and that g turns at most once within it, as it
-// does with friction and dilation fixed. Where the set changes within the part
-// of a piece searched, or g has the same sign at both ends of it, first_fall
-// splits it at the changes and looks within each range for a dip below 0 or a
-// rise above 0. With law.start_angles
+// (yield_change). Where they change, a set of a yielding trial can also hold
+// again after another one. Where the set changes within the part of a piece
+// searched, at its ends or at a return the search evaluates within it (in the
+// secant steps or in the search for a turn), or g has the same sign at both ends
+// of it, first_fall splits it at the changes and looks within each range for a
+// dip below 0 or a rise above 0. The search assumes that between the returns it
+// evaluates a set holds over one range of delta, and that g turns at most once
+// within it, as it does with friction and dilation fixed. With law.start_angles
 // only cohesion and the tensile cap change with delta, so the search runs only
 // for returns the closed forms do not give: corners, the tensile cap and
 // breakpoints.
@@ -1418,15 +1434,18 @@ static int search_return(const double trial[3], double a1, double a2,
     if (!finite3(trial)) return reject_nonfinite;
     ReturnPoint lo;           // where the search stands: g > 0, or below 0 past a jump
     ReturnPoint start;        // where it entered the piece: g falls to 0 nowhere before
+    ReturnPoint seen;         // the last return of the secant steps there with another set
+                              // than start's, or start
     if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, start))
         return reject_no_return;
+    seen = start;
     double hi = next_break(curve), entered = curve.from;
     bool from_guess = guess > 0 && hi != no_break && guess < hi;
     bool have_lo = !from_guess;
     if (have_lo) lo = start;
     for (int piece = 0; piece < 128; ++piece) {
         if (curve.from != entered) {
-            start = lo;
+            start = seen = lo;
             entered = curve.from;
         }
         ReturnPoint x, b, first, last;
@@ -1437,7 +1456,7 @@ static int search_return(const double trial[3], double a1, double a2,
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
                 return reject_no_return;
             const int status = fall_or_cross(trial, a1, a2, curve, plane_strain, nd, lo, b, lo,
-                                             hi, p, depls);
+                                             lo, hi, p, depls);
             if (status != keep_searching) return status;
             continue;
         }
@@ -1459,9 +1478,10 @@ static int search_return(const double trial[3], double a1, double a2,
         for (int step = 0; step < 5 && next > (have_lo ? lo.delta : 0) && next < hi; ++step) {
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, next, x))
                 return reject_no_return;
+            if (x.set != start.set) seen = x;
             if (root_found(x)) {
                 const int earlier = earlier_fall(trial, a1, a2, curve, plane_strain, nd, start, x,
-                                                 first, last);
+                                                 seen, first, last);
                 if (earlier < 0) return reject_no_return;
                 const int status = earlier
                     ? solve_bracket(trial, a1, a2, curve, plane_strain, nd, first, last, lo, hi,
@@ -1504,11 +1524,11 @@ static int search_return(const double trial[3], double a1, double a2,
         // break.
         int status;
         if (b.g > 0)
-            status = fall_or_cross(trial, a1, a2, curve, plane_strain, nd, start, b, lo, hi, p,
-                                   depls);
+            status = fall_or_cross(trial, a1, a2, curve, plane_strain, nd, start, b, seen, lo,
+                                   hi, p, depls);
         else {
             const int earlier = earlier_fall(trial, a1, a2, curve, plane_strain, nd, start, b,
-                                             first, last);
+                                             seen, first, last);
             if (earlier < 0) return reject_no_return;
             status = solve_bracket(trial, a1, a2, curve, plane_strain, nd, earlier ? first : lo,
                                    earlier ? last : b, lo, hi, p, depls);
