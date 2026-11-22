@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <climits>
 #include <cmath>
 #include <limits>
 #include <iostream>
@@ -1457,10 +1456,10 @@ static const char* rejection_text(int reason)
 }
 
 static void report_rejected_returns(const Variables& var, int count,
-                                    long long first, int reasons)
+                                    double first, int reasons)
 {
-    const long long element = first / reject_reason_count;
-    const int reason = int(first % reject_reason_count);
+    const long element = long(first) / reject_reason_count;
+    const int reason = int(long(first) % reject_reason_count);
     std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
               << " elements at step " << var.steps << ".\n"
               << "  First element " << element << ": " << rejection_text(reason) << ".\n";
@@ -1501,7 +1500,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
     // Count, lowest element*reject_reason_count+reason, and the set of reasons.
     int rejected_returns = 0;
-    long long first_rejection = LLONG_MAX;
+    double first_rejection = std::numeric_limits<double>::max();
     int rejection_reasons = 0;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, ppressure, dppressure, \
@@ -1898,12 +1897,14 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 ? trace(s)+syy : trace(s);
             dpressure[e] = new_trace-old_s;
         }
-        // Updated without a branch: NVHPC loses conditional updates of these
-        // reductions on the GPU, and the run would go on without exit 54.
+        // Updated without a branch or a select: NVHPC loses conditional updates of
+        // these reductions on the GPU, and the run would go on without exit 54 or
+        // report no element. The key is an exact integer in a double: NVHPC's GPU
+        // min reduction of a long long is wrong.
         rejected_returns += rejection != 0;
         rejection_reasons |= (rejection != 0) << rejection;
-        first_rejection = std::min(first_rejection, rejection != 0 ?
-                                   (long long)e*reject_reason_count + rejection : LLONG_MAX);
+        first_rejection = std::min(first_rejection, double(e)*int(reject_reason_count) + rejection
+                                   + (rejection == 0)*std::numeric_limits<double>::max());
         // std::cerr << "stress " << e << ": ";
         // print(std::cerr, s, NSTR);
         // std::cerr << '\n';
