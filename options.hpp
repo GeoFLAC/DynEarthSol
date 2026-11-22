@@ -124,8 +124,8 @@ inline bool is_plain_item(const std::string &v)
                                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos;
 }
 
-// The text inside one pair of matching quotes, or the text itself: how CLI11 unquotes
-// a value, which a key that was a scalar before it became a list or a string took.
+// The text inside one pair of matching quotes, or the text itself, as CLI11 unquotes a
+// value: the one number a list takes with scalar_too may come in quotes.
 inline std::string unquoted(const std::string &v)
 {
     if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front())
@@ -255,7 +255,7 @@ public:
         has_def_ = true; def_ = s; tokens_ = detail::split_tokens(s); return this;
     }
     List* required() { req_ = true; return this; }
-    // Also take one bare item, "x" for "[x]": a key that was a scalar before it became a list.
+    // Also take one bare item, "x" for "[x]", as the one value of an integer code.
     List* scalar_too() { scalar_ = true; return this; }
 
     void attach(CLI::App *section, const std::string &key,
