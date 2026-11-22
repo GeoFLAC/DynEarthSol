@@ -1237,13 +1237,17 @@ static void check_mixed_cohesions(const char* prefix, const double trial[3], boo
 // g = recorded - delta can turn along a piece. With option 1, friction follows the increment.
 // Two materials mixed 1:1: past a cohesion jump at 1.04e-6, one hardens from 3e5 to 2.1e6 Pa
 // while its friction falls from 40 to 0 deg by 8.79e-6. For the trial rise, g is below 0 at
-// both ends of that piece and above 0 between, where the return lies. Both soften friction
-// from 40 to 15 deg and cohesion from 1.5e6 to 5e5 Pa over 1e-4: for the trial dip, g is
-// above 0 at both ends and below 0 between, and the return is its first root. With either
-// option, g turns where the return moves from a face to an edge (3D and plane strain): past
-// a cohesion rise from 6.5e5 to 7.5e5 Pa at 5.2e-6, the other material falls from 7.5e5 Pa
-// at 4.94e10 Pa per unit plastic strain to 1.7e-5 or 2e-5. For the trial edge, g rises above
-// 0 on the face, falls to 0 on the edge and rises again, above 0 at 2e-5.
+// both ends of that piece and above 0 between, where the return lies. Past a jump of one from
+// 5e3 to 1e5 Pa at 1e-9, the other hardens from 1.59e5 to 1.84214e6 Pa while its friction
+// falls from 58 to 26 deg by 1.2e-8: the trial rise yields only from 8.72e-9 to 1.10e-8, not
+// at the ends of that piece nor where a golden-section search starts, and the return lies
+// there. Both soften friction from 40 to 15 deg and cohesion from 1.5e6 to 5e5 Pa over 1e-4:
+// for the trial dip, g is above 0 at both ends and below 0 between, and the return is its
+// first root. With either option, g turns where the return moves from a face to an edge (3D
+// and plane strain): past a cohesion rise from 6.5e5 to 7.5e5 Pa at 5.2e-6, the other
+// material falls from 7.5e5 Pa at 4.94e10 Pa per unit plastic strain to 1.7e-5 or 2e-5. For
+// the trial edge, g rises above 0 on the face, falls to 0 on the edge and rises again, above
+// 0 at 2e-5.
 static void check_turning_returns(const char* prefix, const double rise[3], const double dip[3],
                                   const double edge[3], bool pure_2d) {
     MaterialFixture f(MatProps::rh_ep, 0);
@@ -1263,6 +1267,11 @@ static void check_turning_returns(const char* prefix, const double rise[3], cons
         p.friction_angle0={40,40}; p.friction_angle1={40,0};
         f.set_material();
         check_on_piece("return where g rises above 0 past a jump",rise,1.04e-6,8.79e-6);
+        p.pls0={1e-9,1e-9}; p.pls1={1e-9,1.2e-8};
+        p.cohesion0={5e3,1.59e5}; p.cohesion1={1e5,1.84214e6};
+        p.friction_angle0={30,58}; p.friction_angle1={30,26};
+        f.set_material();
+        check_on_piece("return where the trial yields again within a piece",rise,1e-9,1.2e-8);
         p.pls0={0,0}; p.pls1={1e-4,1e-4};
         p.cohesion0={1.5e6,1.5e6}; p.cohesion1={5e5,5e5};
         p.friction_angle0={40,40}; p.friction_angle1={15,15};

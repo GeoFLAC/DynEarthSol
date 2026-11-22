@@ -1084,31 +1084,109 @@ static bool find_turn(const double trial[3], double a1, double a2, const Strengt
     }
 }
 
+// Bounds of the largest violation of the trial's surfaces, v, and of the tolerance of the yield
+// checks, tol, over the strengths of the prepared piece between increments x and y. Each
+// surface is linear in anphi and in amc or ten_max, so its extremes lie at the corners of
+// their ranges; anpsi, of the flow only, plays no part.
+#pragma acc routine seq
+static void violation_range(const double trial[3], const StrengthCurve& curve, int nd,
+                            double x, double y, double v[2], double tol[2])
+{
+    double amc[2], anphi[2], ten_max[2];
+    curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, amc, anphi,
+                                        ten_max);
+    v[0] = v[1] = -std::numeric_limits<double>::max();
+    for (int s = 0; s < return_surface_count(nd); ++s) {
+        double lo = std::numeric_limits<double>::max(), hi = -lo;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                const Strength corner = {amc[j], anphi[i], anphi[i], ten_max[j]};
+                double grad[3], flow[3];
+                double f = -return_surface(s, corner, nd, grad, flow);
+                for (int k = 0; k < nd; ++k) f += grad[k]*trial[k];
+                lo = std::min(lo, f);
+                hi = std::max(hi, f);
+            }
+        v[0] = std::max(v[0], lo);
+        v[1] = std::max(v[1], hi);
+    }
+    tol[0] = return_tolerance(trial, amc[0], nd);
+    tol[1] = return_tolerance(trial, amc[1], nd);
+}
+
+// With friction and dilation fixed, the strength along a piece moves one way, and where the trial
+// yields is one range at one end. Where they change, it can yield in several ranges: whether
+// it starts or stops yielding between a and c, where it does the same, as the return y at the
+// first such increment found. The search halves [a, c], left half first, down to a relative
+// 1e-12 of c, except where the range of the strength (piece_strength_range) shows that the
+// trial yields throughout a part, or nowhere in it. Returns 1 if it finds one, 0 if not, and -1
+// if a return fails.
+#pragma acc routine seq
+static int yield_change(const double trial[3], double a1, double a2, const StrengthCurve& curve,
+                        bool plane_strain, int nd, const ReturnPoint& a, const ReturnPoint& c,
+                        ReturnPoint& y)
+{
+    if (!curve.piece.angles_change() || !(c.delta > a.delta)) return 0;
+    const bool yields = a.set != 0;
+    double size = c.delta - a.delta, i = 0;  // part i of [a, c] in parts of this size
+    int level = 0;
+    for (int part = 0; part < 512; ++part) {
+        const double x = a.delta + i*size, z = std::min(c.delta, a.delta + (i + 1)*size);
+        double v[2], tol[2];
+        violation_range(trial, curve, nd, x, z, v, tol);
+        if (!(yields ? v[0] > tol[1] : v[1] <= tol[0]) && size > 1e-12*c.delta) {
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0.5*(x + z), y))
+                return -1;
+            if ((y.set != 0) != yields) return 1;
+            size *= 0.5;
+            i *= 2;
+            ++level;
+            continue;
+        }
+        // On to the next part to the right, up from every right half.
+        for (; level > 0 && std::fmod(i, 2.) == 1; --level) {
+            i = 0.5*(i - 1);
+            size *= 2;
+        }
+        if (level == 0) return 0;
+        i += 1;
+    }
+    return 0;
+}
+
 // The first fall of g to 0 between a and b on one piece, as the bracket [first, last] with
 // g(first) > 0 >= g(last). Besides where friction or dilation change, g turns where the active
 // set of the return changes, and between such changes it turns at most once: with friction
 // and dilation fixed, the recorded increment is there the norm of an affine function of
-// delta, and g is convex. [a, b] is split where the set changes, found by bisection, and each
-// part is searched as find_turn does. Returns 1 if g falls to 0, 0 if not, and -1 if a return
-// fails.
+// delta, and g is convex. [a, b] is split where the set changes, found by bisection, and where
+// the trial starts or stops yielding (yield_change), and each part is searched as find_turn
+// does. Returns 1 if g falls to 0, 0 if not, and -1 if a return fails.
 #pragma acc routine seq
 static int first_fall(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                       bool plane_strain, int nd, ReturnPoint a, const ReturnPoint& b,
                       ReturnPoint& first, ReturnPoint& last)
 {
     for (int part = 0; part < 16; ++part) {
-        // [a, c] has a's active set, and d lies just past it; or c and d are b.
-        ReturnPoint c = b, d = b, x;
-        if (a.set != b.set) {
-            c = a;
-            for (int it = 0; it < 60 && d.delta - c.delta > 1e-12*d.delta; ++it) {
-                ReturnPoint m;
-                if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd,
-                                     0.5*(c.delta + d.delta), m))
-                    return -1;
-                if (m.set == a.set) c = m;
-                else d = m;
+        // [a, c] has a's active set, and d lies just past it; or c and d are b. Where the
+        // trial starts or stops yielding within [a, c], d moves there and [a, d] is split again.
+        ReturnPoint c = b, d = b, x, y;
+        for (int split = 0; ; ++split) {
+            if (a.set != d.set) {
+                c = a;
+                for (int it = 0; it < 60 && d.delta - c.delta > 1e-12*d.delta; ++it) {
+                    ReturnPoint m;
+                    if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd,
+                                         0.5*(c.delta + d.delta), m))
+                        return -1;
+                    if (m.set == a.set) c = m;
+                    else d = m;
+                }
             }
+            if (split == 16) break;
+            const int change = yield_change(trial, a1, a2, curve, plane_strain, nd, a, c, y);
+            if (change < 0) return -1;
+            if (!change) break;
+            d = y;
         }
         if (a.g > 0 && !(c.g > 0)) {
             first = a;
@@ -1194,15 +1272,19 @@ static int fall_or_cross(const double trial[3], double a1, double a2, StrengthCu
     return cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi, p, depls);
 }
 
-// Where the active set changes between start and e, g may fall to 0 before the fall that
-// ends at e: whether it does, with [first, last] bracketing that fall, or -1 if a return
-// fails.
+// Where the active set changes between start and e, or the trial stops yielding between them,
+// g may fall to 0 before the fall that ends at e: whether it does, with [first, last]
+// bracketing that fall, or -1 if a return fails.
 #pragma acc routine seq
 static int earlier_fall(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                         bool plane_strain, int nd, const ReturnPoint& start, const ReturnPoint& e,
                         ReturnPoint& first, ReturnPoint& last)
 {
-    if (start.set == e.set) return 0;
+    if (start.set == e.set) {
+        ReturnPoint y;
+        const int change = yield_change(trial, a1, a2, curve, plane_strain, nd, start, e, y);
+        if (change <= 0) return change;
+    }
     const int fall = first_fall(trial, a1, a2, curve, plane_strain, nd, start, e, first, last);
     return fall > 0 && !(last.delta < e.delta) ? 0 : fall;
 }
@@ -1216,12 +1298,15 @@ static int earlier_fall(const double trial[3], double a1, double a2, const Stren
 // bracket, the search goes on to where it is back above 0; beyond the last
 // break the strength stays and g only falls. Within a piece g can turn where
 // friction or dilation change along it and where the active set of the return
-// changes, from a face to an edge of the yield surface, say. The search assumes
-// that each set holds over one range of delta and that g turns at most once
-// within it, as it does with friction and dilation fixed. Where the set changes
-// within the part of a piece searched, or g has the same sign at both ends of
-// it, first_fall splits it at the changes and looks within each range for a dip
-// below 0 or a rise above 0. With law.start_angles
+// changes, from a face to an edge of the yield surface, say. Where friction or
+// dilation change, the trial can also start and stop yielding more than once
+// along a piece, and the range of the strength over parts of it finds where
+// (yield_change). Of the sets of a yielding trial, the search assumes that each
+// holds over one range of delta and that g turns at most once within it, as it
+// does with friction and dilation fixed. Where the set changes within the part
+// of a piece searched, or g has the same sign at both ends of it, first_fall
+// splits it at the changes and looks within each range for a dip below 0 or a
+// rise above 0. With law.start_angles
 // only cohesion and the tensile cap change with delta, so the search runs only
 // for returns the closed forms do not give: corners, the tensile cap and
 // breakpoints.

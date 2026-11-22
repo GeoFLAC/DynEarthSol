@@ -116,6 +116,11 @@ public:
     #pragma acc routine seq
     void piece_strength(const StrengthPiece& piece, double offset,
                         double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    // The lowest and highest amc, anphi and ten_max of the piece at the offsets from x to y,
+    // for a cohesion that is not negative.
+    #pragma acc routine seq
+    void piece_strength_range(const StrengthPiece& piece, double x, double y,
+                              double amc[2], double anphi[2], double ten_max[2]) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
@@ -228,6 +233,10 @@ private:
     // tables of Mohr-Coulomb.
     #pragma acc routine seq
     void angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const;
+    // The cohesion and angle factors at plastic strain piece.pls + offset.
+    #pragma acc routine seq
+    void piece_point(const StrengthPiece& piece, double offset,
+                     double& cohesion, AngleFactors& factors) const;
     #pragma acc routine seq
     void strength_from(double cohesion, const AngleFactors& factors,
                        double& amc, double& anphi, double& anpsi, double& ten_max) const;

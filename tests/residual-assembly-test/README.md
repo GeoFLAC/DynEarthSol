@@ -104,7 +104,9 @@ next piece's), two materials whose mean cohesion rises at once and then falls,
 at once or over a range (the return lies past the fall), with option 1 a piece
 past a cohesion jump whose friction softens while its cohesion hardens, where
 `g = recorded - delta` is below 0 at both ends and above 0 between (the return
-lies there), and a piece softening friction and cohesion where g is above 0 at
+lies there), also where the trial yields only within the piece, not at its ends
+nor where a golden-section search starts, and a piece softening friction and
+cohesion where g is above 0 at
 both ends and below 0 between (the return is its first root); with either option,
 in 3D and plane strain, a steep cohesion fall past a jump where the return moves
 from a face to an edge and g rises, falls to its first root and rises again

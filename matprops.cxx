@@ -605,19 +605,48 @@ void MatProps::rsf_strength_piece(int e, double pls, double slip_rate, double st
     finish_piece(piece);
 }
 
-void MatProps::piece_strength(const StrengthPiece& piece, double offset,
-                              double& amc, double& anphi, double& anpsi, double& ten_max) const
+void MatProps::piece_point(const StrengthPiece& piece, double offset,
+                           double& cohesion, AngleFactors& factors) const
 {
-    const double cohesion = piece.cohesion + piece.dcohesion*offset;
+    cohesion = piece.cohesion + piece.dcohesion*offset;
     if (!piece.angles_change()) {
-        strength_from(cohesion, piece.factors, amc, anphi, anpsi, ten_max);
+        factors = piece.factors;
         return;
     }
     double phi = piece.friction + piece.dfriction*offset;
     if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    AngleFactors factors;
     angle_factors(phi, piece.dilation + piece.ddilation*offset, piece.rsf != 0, factors);
+}
+
+void MatProps::piece_strength(const StrengthPiece& piece, double offset,
+                              double& amc, double& anphi, double& anpsi, double& ten_max) const
+{
+    double cohesion;
+    AngleFactors factors;
+    piece_point(piece, offset, cohesion, factors);
     strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
+}
+
+// Cohesion changes linearly along a piece and so does the friction angle, which the
+// rate-and-state terms raise monotonically; anphi, sqrt_anphi and tan_phi rise with it. Each
+// therefore takes its extremes at x and y, and the strength those of their products.
+void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double y,
+                                    double amc[2], double anphi[2], double ten_max[2]) const
+{
+    double c[2];
+    AngleFactors f[2];
+    piece_point(piece, x, c[0], f[0]);
+    piece_point(piece, y, c[1], f[1]);
+    const double c_lo = std::min(c[0], c[1]), c_hi = std::max(c[0], c[1]);
+    const double t_lo = std::min(f[0].tan_phi, f[1].tan_phi);
+    const double t_hi = std::max(f[0].tan_phi, f[1].tan_phi);
+    anphi[0] = std::min(f[0].anphi, f[1].anphi);
+    anphi[1] = std::max(f[0].anphi, f[1].anphi);
+    amc[0] = 2 * c_lo * std::min(f[0].sqrt_anphi, f[1].sqrt_anphi);
+    amc[1] = 2 * c_hi * std::max(f[0].sqrt_anphi, f[1].sqrt_anphi);
+    // As strength_from: cohesion/tan_phi up to tension_max, which zero friction (tan_phi 0) gives.
+    ten_max[0] = t_hi > 0 ? std::min(tension_max, c_lo / t_hi) : tension_max;
+    ten_max[1] = t_lo > 0 ? std::min(tension_max, c_hi / t_lo) : tension_max;
 }
 
 void MatProps::update_state_variable(int e, double slip_rate, double& state_variable,
