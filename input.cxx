@@ -725,8 +725,7 @@ static void declare_parameters(opt::Registry &cfg,
          "5: normal component fixed at 0, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
          "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component free;\n"
          "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
-         "11: horizontal normal component fixed, z component and horizontal shear component free, only in 3D;\n"
-         "13: horizontal normal component fixed, z component and horizontal shear component fixed at 0, only in 3D;\n"
+         "Other values set no component and are refused; 11 and 13 are for the n boundaries.\n"
          "Or one letter per component of the side's frame (n, t_h, t_v): n is the outward normal, "
          "t_h = up x n (+x on the top and bottom) and t_v = n x t_h; here (-x, -y, +z), in 2D (-x, +z). "
          "'v' holds the component at its value in bc.vbc_val_x0, then a list such as '[1e-9, 0, 0]' "
@@ -1401,7 +1400,7 @@ static void print_bc_table(const Param &p)
         std::cout << " types=" << std::string(s.type, NDIMS) << " values=";
         for (int d=0; d<NDIMS; ++d) std::cout << (d ? "," : "") << s.value[d];
         std::cout << " normal_follows_period=" << s.normal_follows_period << " taper=" << s.taper
-                  << " support=" << s.support << " noop=" << s.noop << " max_speed=" << s.max_speed
+                  << " support=" << s.support << " max_speed=" << s.max_speed
                   << " release_time=";
         if (s.release_time == std::numeric_limits<double>::max()) std::cout << "none";
         else std::cout << s.release_time;
@@ -1884,6 +1883,35 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             std::cerr << "Warning: water loading is turned on, setting bc.vbc_z1 to 0.\n";
         }
 
+        // A side-wall or z code that sets no component is refused: it left the side free
+        // without the support code 0 gives (#115).
+        {
+            static const char *names[] = {"x0", "x1", "y0", "y1"};
+            const int codes[] = {p.bc.vbc_x0, p.bc.vbc_x1, p.bc.vbc_y0, p.bc.vbc_y1};
+            for (int i=iboundx0; i<=iboundy1; ++i) {
+#ifndef THREED
+                if (i == iboundy0 || i == iboundy1) continue;  // 2D has no y walls
+#endif
+                if (letters(i)) continue;
+                bool sets_something = codes[i] >= 0 && codes[i] <= 7;
+#ifndef THREED
+                sets_something = sets_something && codes[i] != 5 && codes[i] != 7;
+#endif
+                if (sets_something) continue;
+                std::cerr << "Error: bc.vbc_" << names[i] << " = " << codes[i] << " sets no velocity "
+                          << "component. Use 0 for a free side with lithostatic support, another code "
+#ifdef THREED
+                          << "from 1 to 7, "
+#else
+                          << "from 1, 2, 3, 4 and 6, "
+#endif
+                          << "or one letter per component; 11 and 13 are for the n boundaries.\n";
+                die(EXIT_CONFIG_VALUE);
+            }
+        }
+        if ( (!letters(iboundz0) && p.bc.vbc_z0 < 0) || (!letters(iboundz1) && p.bc.vbc_z1 < 0) ) {
+            die(EXIT_CONFIG_VALUE, "bc.vbc_z0 and bc.vbc_z1 cannot be negative.");
+        }
 #ifdef THREED
         if ( !letters(iboundz0) && p.bc.vbc_z0 > 3) {
             die(EXIT_CONFIG_VALUE, "bc.vbc_z0 is not 0, 1, 2, or 3.");

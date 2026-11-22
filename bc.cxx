@@ -67,10 +67,9 @@ bool is_on_boundary(const uint_vec &bcflag, int node)
 
 
 namespace {
-// Today's code 0 on a side: every component free, from a code that sets something.
+// Today's code 0 on a side: every component free.
 bool all_free(const SideBC &s)
 {
-    if (s.noop) return false;
     for (int d=0; d<NDIMS; ++d)
         if (s.type[d] != 'f') return false;
     return true;
@@ -178,19 +177,20 @@ void convert_bc_codes(Param &p)
         const int *row = nullptr;
         int global[NDIMS];  // the global axis of each row entry
         if (z_side) {
-            if (code < int(sizeof(z_rows) / sizeof(z_rows[0]))) row = z_rows[code];
+            if (code >= 0 && code < int(sizeof(z_rows) / sizeof(z_rows[0]))) row = z_rows[code];
             for (int d=0; d<NDIMS; ++d) global[d] = d;
             s.support = (code == 0 || code == 2 || code == 4) &&
                 ((i == iboundz0) ? bc.has_winkler_foundation : bc.has_water_loading);
         }
         else {
-            const bool noop_code = (code < 0 || code > 7)
+            // input.cxx refuses the codes that set nothing: anything else than 0 to 7, and 5
+            // and 7 in 2D.
+            const bool sets_nothing = (code < 0 || code > 7)
 #ifndef THREED
                 || code == 5 || code == 7
 #endif
                 ;
-            if (!noop_code) row = wall_rows[code];
-            s.noop = noop_code;
+            if (!sets_nothing) row = wall_rows[code];
 #ifdef THREED
             const int normal = (i < iboundy0) ? 0 : 1;
             global[0] = normal; global[1] = 1 - normal; global[2] = 2;

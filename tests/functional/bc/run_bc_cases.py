@@ -10,8 +10,8 @@ be rejected with the same exit code. This replaces a make set / make cmp pair pe
 When the current executable prints its per-side table ([bc][side] lines), the table
 must match the conversion tables of #115 in the side frames chosen there.
 
-Side-wall codes that set no velocity component are tagged "noop". The odd ones still
-enter find_max_vbc, and so dt.
+Side-wall codes that set no velocity component ran on the parent; the current executable
+refuses them (#115), and these cases expect its exit code 11.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
@@ -44,7 +44,7 @@ VALUES = dict(vbc_val_x0='-1e-9', vbc_val_x1='2e-9', vbc_val_y0='3e-10', vbc_val
               vbc_val_y0_l='9e-10', vbc_val_y1_l='-1.1e-9', vbc_val_n0='1.2e-9',
               vbc_val_n1='1.3e-9', vbc_val_n2='1.4e-9', vbc_val_n3='1.5e-9')
 SIDE_CODES = {2: list(range(8)) + [8, 11, 13], 3: list(range(8)) + [8, 11, 13]}
-NOOP = {2: {5, 7, 8, 11, 13}, 3: {8, 11, 13}}  # side-wall codes that set no component
+NOOP = {2: {5, 7, 8, 11, 13}, 3: {8, 11, 13}}  # side-wall codes that set no component, now refused
 Z_CODES = {2: range(5), 3: range(4)}
 PT_CONTROL = dict(has_PT='yes', PT_max_iter='20000', PT_relative_tolerance='1e-8',
                   PT_absolute_tolerance='1e-12', is_quasi_static='yes', damping_option='1',
@@ -78,8 +78,10 @@ def base(ndims, mesh):
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
          same_as=None):
-    return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh,
-                noop=noop, exit_code=exit_code, letters=letters, same_as=same_as)
+    # exit_code is the parent's; a code that sets nothing ran there and is refused now.
+    return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
+                exit_code=exit_code, current_exit=11 if noop else exit_code, letters=letters,
+                same_as=same_as)
 
 
 def effective_cfg(spec):
@@ -97,7 +99,7 @@ def as_letters(spec):
     winkler, water = support_options(cfg)
     bc = {}
     for side, e in table.items():
-        if e['noop'] or e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
+        if e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
             return None
         if e['support'] != letters_support(side, e['types'], winkler, water):
             return None  # 2D code 4: supported, although its normal is held
@@ -170,7 +172,7 @@ def cases():
         vbc_val_division_x1_min='0.4', vbc_val_division_x1_max='0.9', vbc_val_x1_ratio0='0.2',
         vbc_val_x1_ratio1='1', vbc_val_x1_ratio2='0.7', vbc_val_x1_ratio3='0.5')))
 
-    found += [c for c in map(as_letters, [c for c in found if not c['exit_code']]) if c]
+    found += [c for c in map(as_letters, [c for c in found if not c['current_exit']]) if c]
     for nd in (2, 3):
         d, zeros = f'{nd}d', '[' + ', '.join(['0'] * nd) + ']'
         held, free = 'v' * nd, 'f' * nd
@@ -241,7 +243,7 @@ def letters_entry(ndims, side, bc, winkler, water):
                 values=[v if c == 'v' else 0.0 for c, v in zip(types, values)],
                 normal_follows_period=side[0] in 'xy' and types[0] == 'v',
                 taper=ndims == 2 and side == 'x0' and types[0] == 'v',
-                support=letters_support(side, types, winkler, water), noop=False,
+                support=letters_support(side, types, winkler, water),
                 max_speed=max([abs(v) for v in held] or [0.0]),
                 release_time=bc.get('vbc_val_z1_loading_period') if side == 'z1' else None, stress='none')
 
@@ -280,7 +282,6 @@ def expected_table(ndims, cfg):
             frame=FRAMES[ndims][side], types=types, values=values, normal_follows_period=period,
             taper=ndims == 2 and side == 'x0' and code == 3,
             support=code in (0, 2, 4) and (side != 'z0' or winkler) and (side != 'z1' or water),
-            noop=side[0] != 'z' and row is None,
             max_speed=abs(known['V']) if code % 2 == 1 or code == 4 else 0.0,
             release_time=bc.get('vbc_val_z1_loading_period') if side == 'z1' else None,
             stress='{}:{}'.format(stress_axes[stress], float(bc['stress_val_' + side]))
@@ -294,7 +295,7 @@ def expected_table(ndims, cfg):
         table[side] = dict(frame='horizontal-normal' if code in (11, 13) else 'normal',
                            types='v' + ('v' if full else 'f') * (ndims - 1),
                            values=[value] + [0.0] * (ndims - 1), normal_follows_period=False, taper=False,
-                           support=False, noop=False, max_speed=abs(value), release_time=None, stress='none')
+                           support=False, max_speed=abs(value), release_time=None, stress='none')
     return table
 
 
@@ -315,7 +316,7 @@ def check_table(log, ndims, cfg):
         have = dict(frame=got['frame'], types=got['types'],
                     values=[float(x) for x in got['values'].split(',')],
                     normal_follows_period=got['normal_follows_period'] == '1', taper=got['taper'] == '1',
-                    support=got['support'] == '1', noop=got['noop'] == '1',
+                    support=got['support'] == '1',
                     max_speed=float(got['max_speed']),
                     release_time=None if release == 'none' else float(release),
                     stress=got['stress'] if got['stress'] == 'none' else
@@ -344,10 +345,12 @@ def run(exe, folder, spec):
 def compare(parent, current, spec):
     if parent.returncode != spec['exit_code']:
         raise RuntimeError('parent exited {} where {} was expected'.format(parent.returncode, spec['exit_code']))
-    if current.returncode != parent.returncode:
-        raise RuntimeError('exit {} differs from the parent\'s {}'.format(current.returncode, parent.returncode))
-    if parent.returncode:
-        return 'rejected as before (exit {})'.format(parent.returncode)
+    if current.returncode != spec['current_exit']:
+        raise RuntimeError('exit {} where {} was expected (the parent\'s: {})'.format(
+            current.returncode, spec['current_exit'], parent.returncode))
+    if current.returncode:
+        return '{} (exit {})'.format('rejected as before' if parent.returncode else 'now rejected',
+                                     current.returncode)
     # A build that prints the per-side table must print the one #115 expects.
     table = check_table(current.stdout, spec['ndims'], current.cfg)
     count = same_outputs(parent.folder, current.folder)
@@ -393,7 +396,7 @@ def main():
     selected = [c for c in cases() if any(fnmatch.fnmatch(c['name'], g) for g in a.cases)]
     if a.list:
         for c in selected:
-            print(c['name'] + ('  (noop)' if c['noop'] else '') +
+            print(c['name'] + ('  (sets nothing; now rejected)' if c['noop'] else '') +
                   ('  (rejected, exit {})'.format(c['exit_code']) if c['exit_code'] else '') +
                   ('  (same as {})'.format(c['same_as']) if c['same_as'] else ''))
         return 0
