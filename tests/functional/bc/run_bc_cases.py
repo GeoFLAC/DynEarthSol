@@ -377,10 +377,15 @@ def letters_support(side, types, winkler, water):
     return free and (winkler if side == 'z0' else water if side == 'z1' else True)
 
 
+def side_values(bc, side):
+    """The values in vbc_val_<side>: a list such as [1e-9, 0, 0], or one number."""
+    return [float(x) for x in bc['vbc_val_' + side].strip('[]').split(',')]
+
+
 def letters_entry(ndims, side, bc, winkler, water):
     """A side given as letters: the values are already in its frame."""
     types = bc['vbc_' + side]
-    values = [float(x) for x in bc['vbc_val_' + side].strip('[]').split(',')]
+    values = side_values(bc, side)
     if (side == 'z0' and winkler) or (side == 'z1' and water):
         types = types.replace('v', 'f')  # the velocity is freed; a traction stays
     held = [v for c, v in zip(types, values) if c == 'v']
@@ -524,7 +529,7 @@ def corner_normal_velocity(result, spec):
     normals = saved_field(chkpt, 'boundary normals').reshape(-1, nd)
     checked = []
     for b in ['n0'] + [s for s in sides if s[0] == 'n']:
-        held = float(result.cfg['bc']['vbc_val_' + b].strip('[]').split(',')[0])
+        held = side_values(result.cfg['bc'], b)[0]
         checked.append('{} {:g}'.format(b, held))
         normal = velocity[on] @ normals[FLAG_BITS[b].bit_length() - 1]
         worst = float(np.max(np.abs(normal - held)))

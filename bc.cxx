@@ -423,15 +423,10 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
 namespace {
 double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
 {
-    const bool lo = (t % 2 == 0), y = (t >= 2);
     const SideBC &s = bc.side[t];
     if (!s.normal_follows_period) return 0.;
     const double v = frame_sign(t, 0) * s.value[0];
-    const double_vec &time = y ? (lo ? bc.vbc_period_y0_time_in_yr : bc.vbc_period_y1_time_in_yr)
-                               : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
-    const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
-                                : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
-    return v * interp1(time, ratio, time_in_yr);
+    return v * interp1(bc.*side_period_time[t], bc.*side_period_ratio[t], time_in_yr);
 }
 } // anonymous namespace
 
@@ -460,6 +455,17 @@ struct WallBC {
     bool taper;
 };
 
+// The z sides of the node set the components they hold.
+#pragma acc routine seq
+void apply_z_sides(const WallBC *walls, uint flag, ArrayAccessor v)
+{
+    for (int b=iboundz0; b<=iboundz1; ++b) {
+        if (!(flag & (1U << b))) continue;
+        for (int d=0; d<NDIMS; ++d)
+            if (walls[b].mode[d] != FREE) v[d] = walls[b].value[d];
+    }
+}
+
 // What a side is to an n boundary of code 1 or 11 that meets it: a side that holds no
 // velocity, or no longer does, lets it set its normal; a side holding only its normal (11
 // only when normalized) projects onto the edge. Where a side at the node holds other
@@ -474,20 +480,21 @@ void normal_part(ConstArrayAccessor n, bool horizontal, double r[NDIMS])
     for (int d=0; d<NDIMS; ++d) r[d] = (horizontal && d == NDIMS-1) ? 0 : n[d];
 }
 
-// Removes from r its parts along the first k vectors of the orthonormal basis; returns r.r
-// before and after.
+// Removes from r its parts along the first k vectors of the orthonormal basis, and puts r.r
+// in left; returns whether more than rounding is left.
 #pragma acc routine seq
-void remove_parts(const double basis[NDIMS][NDIMS], int k, double r[NDIMS], double &before,
-                  double &after)
+bool remove_parts(const double basis[NDIMS][NDIMS], int k, double r[NDIMS], double &left)
 {
-    before = after = 0;
+    double before = 0;
     for (int d=0; d<NDIMS; ++d) before += r[d] * r[d];
     for (int j=0; j<k; ++j) {
         double rb = 0;
         for (int d=0; d<NDIMS; ++d) rb += r[d] * basis[j][d];
         for (int d=0; d<NDIMS; ++d) r[d] -= rb * basis[j][d];
     }
-    for (int d=0; d<NDIMS; ++d) after += r[d] * r[d];
+    left = 0;
+    for (int d=0; d<NDIMS; ++d) left += r[d] * r[d];
+    return left > 1e-12 * before;
 }
 
 // Sets v.n of n boundary ib (over the horizontal components, for 11) to target by the
@@ -501,7 +508,7 @@ void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const
 {
     if (horizontal[ib]) axes |= 1 << (NDIMS-1);
     // An orthonormal basis of what is kept, the axes first.
-    double basis[NDIMS][NDIMS], before, after;
+    double basis[NDIMS][NDIMS], left;
     int k = 0;
     for (int d=0; d<NDIMS; ++d) {
         if (!(axes & (1 << d))) continue;
@@ -512,24 +519,19 @@ void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const
         if (!(flag & (1U << ic)) || meets[ic] == MEETS_FREE) continue;
         double r[NDIMS];
         normal_part((*var.bnormals)[ic], horizontal[ic], r);
-        remove_parts(basis, k, r, before, after);
-        if (!(after > 1e-12 * before)) continue;  // already kept
-        for (int d=0; d<NDIMS; ++d) basis[k][d] = r[d] / std::sqrt(after);
+        if (!remove_parts(basis, k, r, left)) continue;  // already kept
+        for (int d=0; d<NDIMS; ++d) basis[k][d] = r[d] / std::sqrt(left);
         ++k;
     }
     double n[NDIMS], p[NDIMS];
     normal_part((*var.bnormals)[ib], horizontal[ib], n);
     for (int d=0; d<NDIMS; ++d) p[d] = n[d];
-    remove_parts(basis, k, p, before, after);  // p: the part of n free to change
-    if (!(after > 1e-12 * before)) return;
-    for (int b=iboundz0; b<=iboundz1; ++b)
-        if (flag & (1U << b))
-            for (int d=0; d<NDIMS; ++d)
-                if (walls[b].mode[d] != FREE) v[d] = walls[b].value[d];
+    if (!remove_parts(basis, k, p, left)) return;  // p: the part of n free to change
+    apply_z_sides(walls, flag, v);
     double vn = 0;
     for (int d=0; d<NDIMS; ++d) vn += v[d] * n[d];
     for (int d=0; d<NDIMS; ++d)
-        if (!(axes & (1 << d))) v[d] += (target - vn) * p[d] / after;
+        if (!(axes & (1 << d))) v[d] += (target - vn) * p[d] / left;
 }
 } // anonymous namespace
 
@@ -542,10 +544,6 @@ void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const
 double_vec vbc_controls(const Param &param, const Variables &var)
 {
     const BC &bc = param.bc;
-    const double_vec *period[] = {&bc.vbc_period_x0_time_in_yr, &bc.vbc_period_x0_ratio,
-                                  &bc.vbc_period_x1_time_in_yr, &bc.vbc_period_x1_ratio,
-                                  &bc.vbc_period_y0_time_in_yr, &bc.vbc_period_y0_ratio,
-                                  &bc.vbc_period_y1_time_in_yr, &bc.vbc_period_y1_ratio};
     double_vec c;
     auto add = [&c](const double_vec &table) {
         c.push_back(table.size());
@@ -562,8 +560,8 @@ double_vec vbc_controls(const Param &param, const Variables &var)
         c.push_back(s.horizontal_normal);
         c.push_back(s.normal_follows_period);
         if (!s.normal_follows_period) continue;
-        add(*period[2*i]);
-        add(*period[2*i + 1]);
+        add(bc.*side_period_time[i]);
+        add(bc.*side_period_ratio[i]);
 #ifndef THREED
         add(i == iboundx0 ? var.vbc_vertical_div_x0 : var.vbc_vertical_div_x1);
         add(i == iboundx0 ? var.vbc_vertical_ratio_x0 : var.vbc_vertical_ratio_x1);
@@ -841,12 +839,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         // fast path: vz is usually free in the models
         if (!any_z) continue;
 
-        for (int b=iboundz0; b<=iboundz1; ++b) {
-            if (!(flag & (1U << b))) continue;
-            const WallBC &w = walls[b];
-            for (int d=0; d<NDIMS; ++d)
-                if (w.mode[d] != FREE) v[d] = w.value[d];
-        }
+        apply_z_sides(walls, flag, v);
     }
 #ifndef THREED
     #pragma acc exit data copyout(zmin) async

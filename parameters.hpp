@@ -418,7 +418,8 @@ struct BC {
 };
 
 // Each side's name and input fields, in side order: x0, x1, y0, y1, z0, z1, then n0 to n3.
-// The lateral values cover the side walls, the stress codes and values the z sides too.
+// The lateral values and period tables cover the side walls, the stress codes and values the
+// z sides too.
 const char *const side_name[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
 int BC::*const side_vbc_code[nbdrytypes] = {&BC::vbc_x0, &BC::vbc_x1, &BC::vbc_y0, &BC::vbc_y1,
                                              &BC::vbc_z0, &BC::vbc_z1, &BC::vbc_n0, &BC::vbc_n1,
@@ -429,6 +430,10 @@ double BC::*const side_vbc_value[nbdrytypes] = {&BC::vbc_val_x0, &BC::vbc_val_x1
                                                 &BC::vbc_val_n3};
 double BC::*const side_vbc_lateral[4] = {&BC::vbc_val_x0_l, &BC::vbc_val_x1_l, &BC::vbc_val_y0_l,
                                          &BC::vbc_val_y1_l};
+double_vec BC::*const side_period_time[4] = {&BC::vbc_period_x0_time_in_yr, &BC::vbc_period_x1_time_in_yr,
+                                             &BC::vbc_period_y0_time_in_yr, &BC::vbc_period_y1_time_in_yr};
+double_vec BC::*const side_period_ratio[4] = {&BC::vbc_period_x0_ratio, &BC::vbc_period_x1_ratio,
+                                              &BC::vbc_period_y0_ratio, &BC::vbc_period_y1_ratio};
 int BC::*const side_stress_code[nbdrytypes_hydro] = {&BC::stress_bc_x0, &BC::stress_bc_x1,
                                                      &BC::stress_bc_y0, &BC::stress_bc_y1,
                                                      &BC::stress_bc_z0, &BC::stress_bc_z1};
