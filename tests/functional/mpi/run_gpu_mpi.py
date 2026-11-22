@@ -24,13 +24,15 @@ def compare_fields(reference, current, frame, kind='save', rtol=1e-8, prefix='re
     import h5py
     import numpy as np
     name = '{}.{}.{:06d}.vtkhdf'.format(prefix,kind,frame)
+    # A restart also reads a checkpoint's root datasets, such as volume_old.
+    group='/' if kind=='chkpt' else 'VTKHDF'
     def arrays(path):
         found={}
         with h5py.File(str(path),'r') as file:
             def visit(name,obj):
                 if isinstance(obj,h5py.Dataset) and name.split('/')[-1]!='walltime_sec':
                     found[name]=obj[()]
-            file['VTKHDF'].visititems(visit)
+            file[group].visititems(visit)
         return found
     old,new=arrays(reference/name),arrays(current/name)
     if not old or old.keys()!=new.keys():raise RuntimeError('Physical dataset sets differ: '+name)
