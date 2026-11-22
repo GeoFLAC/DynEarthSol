@@ -17,8 +17,9 @@ stress_bc_* of an unknown type or on a 2D y wall.
 Cases marked restart also restart from checkpoint 1 with the current executable, and
 every later frame must match the run's bit for bit: the n boundaries keep the normals of
 the starting mesh, which the checkpoints now carry, and the restart keeps the velocity.
-Cases marked corner check, at the nodes on n0 and one other side only, that the velocity
-along n0's normal is the value n0 holds.
+Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
+along n0's normal is the value n0 holds and that the components the sides hold keep their
+values.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
@@ -88,7 +89,8 @@ def base(ndims, mesh):
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
          same_as=None, refused=False, restart=False, corner=None, quoted=()):
     # exit_code is the parent's; input that set nothing ran there and is refused now.
-    # corner is (side, frame); quoted lists the bc keys written in quotes.
+    # corner is (sides, frame, {global axis: value held there}); quoted lists the bc keys
+    # written in quotes.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
                 same_as=same_as, restart=restart, corner=corner, quoted=quoted)
@@ -173,6 +175,17 @@ def changes(spec):
             found.append('{} support {}'.format(side, 'added' if e['support'] else 'removed'))
     if spec['mesh'] == 'cut' and table['z1']['release_time'] is not None and table['z1']['types'][0] == 'v':
         found.append('n0 sets its normal at the z1 edge once z1 is released')
+    if spec['mesh'] == 'cut' and table['n0']['types'] == 'v' + 'f' * (nd - 1):
+        normal = dict(zip('xyz' if nd == 3 else 'xz', CUT_NORMAL[nd]))
+        if table['n0']['frame'] == 'horizontal-normal':
+            normal['z'] = 0.0
+        for side in CUT_SIDES[nd]:
+            e = table[side]
+            held = {a[1] for a, t in zip(FRAMES[nd][side].split(','), e['types']) if t == 'v'}
+            if not held or e['types'] == 'v' + 'f' * (nd - 1):
+                continue
+            if any(normal[a] for a in held) and any(normal[a] for a in normal if a not in held):
+                found.append('n0 sets its normal on the {} edge through what {} leaves free'.format(side, side))
     return '; '.join(found) or None
 
 
@@ -218,7 +231,8 @@ def cases():
         found.append(case(f'{d}-stress-held-tangential', nd, dict(vbc_x0='2', stress_bc_x0='3',
                                                                   stress_val_x0='2e4')))
         found.append(case(f'{d}-stress-held-n-corner', nd, dict(vbc_z1='2', stress_bc_z1='1',
-                                                                stress_val_z1='-4e4'), mesh='cut'))
+                                                                stress_val_z1='-4e4'), mesh='cut',
+                          corner=(('z1',), 3, dict(x=0.0, y=0.0) if nd == 3 else dict(x=0.0))))
         # What adds nothing is refused: an unknown type, and (2D) the y walls.
         found.append(case(f'{d}-stress-type4', nd, dict(vbc_x0='0', stress_bc_x0='4', stress_val_x0='2e4'),
                           refused=True))
@@ -233,7 +247,7 @@ def cases():
                                   mesh='cut', restart=True))
         # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
         found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
-                          mesh='cut', corner=('z1', 3)))
+                          mesh='cut', corner=(('z1',), 3, {})))
         # Quoted values, as the codes and scalars took them before they became text and lists.
         found.append(case(f'{d}-quoted', nd, dict(vbc_x0='3', vbc_val_x0='-1e-9'),
                           quoted=('vbc_val_x0', 'vbc_x0')))
@@ -296,7 +310,20 @@ def cases():
     # on their edge.
     found.append(case('3d-n-x1-tangent-letters', 3, dict(vbc_x1='fvf', vbc_val_x1='[0, 3e-10, 0]',
                                                          vbc_val_x1_l='0'), mesh='cut', letters=True,
-                      corner=('x1', 3)))
+                      corner=(('x1',), 3, dict(y=3e-10))))
+    # Two side walls holding a tangent each, x1 its y and y0 its x: on their corner, n0 sets
+    # its normal through z, which neither holds.
+    found.append(case('3d-n-two-tangents-letters', 3, dict(vbc_x1='fvf', vbc_val_x1='[0, 3e-10, 0]',
+                                                          vbc_val_x1_l='0', vbc_y0='fvf',
+                                                          vbc_val_y0='[0, 0, 0]', vbc_val_y0_l='0'),
+                      mesh='cut', letters=True, corner=(('x1', 'y0'), 3, dict(x=0.0, y=3e-10))))
+    # x1 holding only its normal and y0 only z, at values n0's normal can keep: on their corner
+    # n0 moves neither.
+    found.append(case('3d-n-normal-and-tangent-letters', 3, dict(vbc_x1='vff', vbc_val_x1='[0, 0, 0]',
+                                                                vbc_val_x1_l='0', vbc_y0='ffv',
+                                                                vbc_val_y0=f'[0, 0, {Z_HOLD!r}]',
+                                                                vbc_val_y0_l='0'),
+                      mesh='cut', letters=True, corner=(('x1', 'y0'), 3, dict(x=0.0, z=Z_HOLD))))
     # What the codes cannot give: a side wall with a vertical velocity, and a 2D x0 held by
     # its normal only that tapers off over the bottom shear zone.
     found.append(case('3d-x0-vertical-letters', 3, dict(vbc_x0='vvv', vbc_val_x0='[1e-9, 2e-10, -3e-10]',
@@ -420,8 +447,12 @@ def check_table(log, ndims, cfg):
                     release_time=None if release == 'none' else float(release),
                     stress=got['stress'] if got['stress'] == 'none' else
                     '{}:{}'.format(got['stress'][0], float(got['stress'][2:])))
+        # The log prints 6 significant digits, as '%g' does.
+        printed_as = lambda x: float('{:g}'.format(float(x)))
+        want = dict(want, values=[printed_as(v) for v in want['values']],
+                    max_speed=printed_as(want['max_speed']))
         if want['release_time'] is not None:
-            want = dict(want, release_time=float(want['release_time']))
+            want = dict(want, release_time=printed_as(want['release_time']))
         if have != want:
             diff = {k: (have[k], want[k]) for k in want if have[k] != want[k]}
             raise RuntimeError('table side {}: printed vs expected {}'.format(side, diff))
@@ -440,26 +471,33 @@ def run(exe, folder, spec):
     return result
 
 
-# The outward unit normal of n0 in cut-corner-{2,3}d.poly, and the boundary flag bits.
+# The outward unit normal of n0 in cut-corner-{2,3}d.poly, the sides it meets there, and the
+# boundary flag bits.
 CUT_NORMAL = {2: (0.5**0.5, 0.5**0.5), 3: (0.5**0.5, 0.0, 0.5**0.5)}
+CUT_SIDES = {2: ('x1', 'z1'), 3: ('x1', 'y0', 'y1', 'z1')}
+Z_HOLD = 1.2e-9 * 2**0.5  # with x = 0, the z velocity that gives n0's 1.2e-9 in 3D
 FLAG_BITS = dict(x0=1, x1=2, y0=4, y1=8, z0=16, z1=32, n0=64)
 
 
-def corner_normal_velocity(result, spec):
-    """At the nodes on n0 and spec['corner'] side only, the velocity along n0's normal is
-    the value n0 holds."""
+def saved_field(saved, name):
+    """The field name of a save or checkpoint read by fields(), as a flat array."""
     import numpy as np
-    side, frame = spec['corner']
+    key = next(k for k in saved if not k.startswith('@') and k.split('/')[-1] == name)
+    return np.frombuffer(saved[key], eval(saved['@' + key + '.layout'].decode())[1])
+
+
+def corner_normal_velocity(result, spec):
+    """At the nodes on n0 and the spec['corner'] sides only, the velocity along n0's normal
+    is the value n0 holds, and the components the sides hold keep their values."""
+    import numpy as np
+    sides, frame, held_there = spec['corner']
+    side = '+'.join(sides)
     nd = spec['ndims']
     saved = fields(result.folder/'bc.save.{:06d}'.format(frame))
-    def array(name):
-        key = next(k for k in saved if not k.startswith('@') and k.split('/')[-1] == name)
-        layout = saved['@' + key + '.layout']
-        return np.frombuffer(saved[key], eval(layout.decode())[1])
-    flag = array('bcflag')
-    velocity = array('velocity')
+    flag = saved_field(saved, 'bcflag')
+    velocity = saved_field(saved, 'velocity')
     velocity = velocity.reshape(flag.size, -1)[:, :nd]  # VTKHDF keeps 3 components in 2D
-    on = flag == FLAG_BITS['n0'] | FLAG_BITS[side]
+    on = flag == FLAG_BITS['n0'] + sum(FLAG_BITS[s] for s in sides)
     if not on.any():
         raise RuntimeError('no node lies on n0 and {} only'.format(side))
     held = float(result.cfg['bc']['vbc_val_n0'].strip('[]').split(',')[0])
@@ -468,7 +506,13 @@ def corner_normal_velocity(result, spec):
     if worst > 1e-9*abs(held):
         raise RuntimeError('velocity along the n0 normal at the {} nodes on n0 and {}: {} instead '
                            'of {}'.format(int(on.sum()), side, normal.tolist(), held))
-    return 'n0 normal velocity {:g} at its {} nodes with {}'.format(held, int(on.sum()), side)
+    for axis, value in held_there.items():
+        got = velocity[on][:, 'xyz'.index(axis) if nd == 3 else 'xz'.index(axis)]
+        if (got != value).any():
+            raise RuntimeError('{} velocity at the {} nodes on n0 and {}: {} instead of {}'.format(
+                axis, int(on.sum()), side, got.tolist(), value))
+    return 'n0 normal velocity {:g} at its {} nodes with {}{}'.format(
+        held, int(on.sum()), side, ''.join(', {} {:g}'.format(a, v) for a, v in held_there.items()))
 
 
 def compare(parent, current, spec):

@@ -471,9 +471,9 @@ struct WallBC {
 
 // What a side is to an n boundary of code 1 or 11 that meets it: a side that holds no
 // velocity, or no longer does, lets it set its normal; a side holding only its normal (11
-// only when normalized) projects onto the edge. A side holding other components lets it
-// set its normal where that normal is orthogonal to all of them, so that neither moves the
-// other's components, and does nothing elsewhere.
+// only when normalized) projects onto the edge. Where a side at the node holds other
+// components, the n boundary instead sets its normal through the components that no side
+// there holds, its normal included, and does nothing where its normal lies in the held ones.
 enum { MEETS_FREE, MEETS_NORMAL, MEETS_HORIZONTAL_NORMAL, MEETS_HELD };
 
 // Whether the normal n of an n boundary (its horizontal part, for 11 and 13) has no
@@ -486,6 +486,29 @@ bool normal_clear_of(int axes, ConstArrayAccessor n, bool horizontal)
         if (std::fabs(n[d]) > 1e-12) return false;
     }
     return true;
+}
+
+// Sets v.n (over the horizontal components, for 11) to target through the global components
+// outside the mask, which keep their values; nothing where n has no component outside it.
+// The z sides of the node, which apply their components last, give them first.
+#pragma acc routine seq
+void set_normal_outside(int axes, ConstArrayAccessor n, ArrayAccessor v, bool horizontal,
+                        double target, const WallBC *walls, uint flag)
+{
+    if (normal_clear_of(((1 << NDIMS) - 1) & ~axes, n, horizontal)) return;
+    for (int b=iboundz0; b<=iboundz1; ++b)
+        if (flag & (1U << b))
+            for (int d=0; d<NDIMS; ++d)
+                if (walls[b].mode[d] != FREE) v[d] = walls[b].value[d];
+    double vn = 0, nn = 0;
+    for (int d=0; d<NDIMS; ++d) {
+        if (horizontal && d == NDIMS-1) continue;
+        vn += v[d] * n[d];
+        if (!(axes & (1 << d))) nn += n[d] * n[d];
+    }
+    for (int d=0; d<NDIMS; ++d)
+        if (!(axes & (1 << d)) && !(horizontal && d == NDIMS-1))
+            v[d] += (target - vn) * n[d] / nn;
 }
 } // anonymous namespace
 
@@ -665,6 +688,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 
             if ((flag & (1 << ib)) && held[ib]) {
                 double fac = 0;
+                int axes = 0;  // the global axes held by the sides at this node
+                bool held_other = false;  // one of them holds more than its normal
+                for (int ic=iboundx0; ic<ib; ic++) {
+                    if (!(flag & (1 << ic)) || meets[ic] == MEETS_FREE) continue;
+                    axes |= held_axes[ic];
+                    held_other |= meets[ic] == MEETS_HELD;
+                }
                 if (!full[ib] && !horizontal[ib]) {  // the normal held, as code 1
                     if (flag == (1U << ib)) {  // ordinary boundary
                         double vn = 0;
@@ -674,11 +704,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                         for (int d=0; d<NDIMS; d++)
                             v[d] += (n_value[ib] - vn) * n[d];  // setting normal velocity
                     }
+                    else if (held_other) {  // the sides at this node together
+                        set_normal_outside(axes, n, v, false, n_value[ib], walls, flag);
+                    }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (meets[ic] == MEETS_FREE ||
-                                    (meets[ic] == MEETS_HELD && normal_clear_of(held_axes[ic], n, false))) {
+                                if (meets[ic] == MEETS_FREE) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         vn += v[d] * n[d];  // normal velocity
@@ -708,11 +740,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                         for (int d=0; d<NDIMS-1; d++)
                             v[d] += (n_value[ib] * (normalized ? 1/fac : fac) - vn) * n[d] / (normalized ? (1 - n[NDIMS-1]*n[NDIMS-1]) : 1.0);  // setting normal velocity
                     }
+                    else if (held_other) {  // the sides at this node together
+                        set_normal_outside(axes, n, v, true, n_value[ib] / fac, walls, flag);
+                    }
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (meets[ic] == MEETS_FREE ||
-                                    (meets[ic] == MEETS_HELD && normal_clear_of(held_axes[ic], n, true))) {
+                                if (meets[ic] == MEETS_FREE) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS-1; d++)
                                         vn += v[d] * n[d];  // normal velocity
