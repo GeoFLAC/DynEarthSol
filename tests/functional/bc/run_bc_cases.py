@@ -13,6 +13,11 @@ must match the conversion tables of #115 in the side frames chosen there.
 Side-wall codes that set no velocity component are tagged "noop". The odd ones still
 enter find_max_vbc, and so dt.
 
+Cases ending in "-letters" give the same conditions as letters in the side frames
+(vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
+match the integer-code case they repeat bit for bit. Other letters cases check
+conditions the codes cannot give and the input the letters reject.
+
     python3 tests/functional/bc/run_bc_cases.py \
         --parent2d <parent build>/dynearthsol2d --current2d ./dynearthsol2d \
         --parent3d <parent build>/dynearthsol3d --current3d ./dynearthsol3d \
@@ -71,9 +76,47 @@ def base(ndims, mesh):
     return cfg
 
 
-def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0):
+def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
+         same_as=None):
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh,
-                noop=noop, exit_code=exit_code)
+                noop=noop, exit_code=exit_code, letters=letters, same_as=same_as)
+
+
+def effective_cfg(spec):
+    cfg = base(spec['ndims'], spec['mesh'])
+    cfg['bc'].update(spec['bc'])
+    cfg['control'].update(spec['control'])
+    return cfg
+
+
+def as_letters(spec):
+    """The same conditions as letters, or None where letters cannot say them."""
+    nd = spec['ndims']
+    cfg = effective_cfg(spec)
+    table = expected_table(nd, cfg)
+    winkler, water = support_options(cfg)
+    bc = {}
+    for side, e in table.items():
+        if e['noop'] or e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
+            return None
+        if e['support'] != letters_support(side, e['types'], winkler, water):
+            return None  # 2D code 4: supported, although its normal is held
+        bc['vbc_' + side] = e['types']
+        bc['vbc_val_' + side] = '[' + ', '.join(repr(v) for v in e['values']) + ']'
+        if side[0] in 'xy':
+            bc['vbc_val_{}_l'.format(side)] = '0'
+    taper = float(cfg['bc'].get('bottom_shear_zone_thickness', '0')) > 0
+    if nd == 2 and taper and table['x0']['types'][0] == 'v' and not table['x0']['taper']:
+        return None  # letters taper any held x0 normal; the codes, 3 only
+    letters = case(spec['name'] + '-letters', nd, dict(spec['bc'], **bc), spec['control'], spec['mesh'],
+                   letters=True, same_as=spec['name'])
+    if max_speed(table) != max_speed(expected_table(nd, effective_cfg(letters))):
+        return None  # find_max_vbc skips code 6 and its L; letters count every held value
+    return letters
+
+
+def max_speed(table):
+    return max([1e-12] + [e['max_speed'] for e in table.values()])
 
 
 def cases():
@@ -126,6 +169,39 @@ def cases():
         vbc_val_x0_ratio1='0.6', vbc_val_x0_ratio2='0.3', vbc_val_x0_ratio3='0.1',
         vbc_val_division_x1_min='0.4', vbc_val_division_x1_max='0.9', vbc_val_x1_ratio0='0.2',
         vbc_val_x1_ratio1='1', vbc_val_x1_ratio2='0.7', vbc_val_x1_ratio3='0.5')))
+
+    found += [c for c in map(as_letters, [c for c in found if not c['exit_code']]) if c]
+    for nd in (2, 3):
+        d, zeros = f'{nd}d', '[' + ', '.join(['0'] * nd) + ']'
+        held, free = 'v' * nd, 'f' * nd
+        # The Winkler foundation and water loading free a held z0 and z1, as they do code 1 to 3.
+        found.append(case(f'{d}-winkler-held-letters', nd, dict(has_winkler_foundation='yes',
+                          vbc_z0=held, vbc_val_z0=zeros), letters=True, same_as=f'{d}-winkler'))
+        found.append(case(f'{d}-water-loading-held-letters', nd, dict(has_water_loading='yes',
+                          vbc_z1=held, vbc_val_z1=zeros), letters=True, same_as=f'{d}-water-loading'))
+        # What the codes cannot give: a free (supported) n boundary.
+        found.append(case(f'{d}-n-free-letters', nd, dict(vbc_n0=free, vbc_val_n0=zeros), mesh='cut',
+                          letters=True))
+        rejected = [('t', dict(vbc_x0='t' + 'f' * (nd - 1), vbc_val_x0=zeros)),
+                    ('length', dict(vbc_x0='v' * (nd + 1), vbc_val_x0='[' + ', '.join(['0'] * (nd + 1)) + ']')),
+                    ('letter', dict(vbc_x0='x' + 'f' * (nd - 1), vbc_val_x0=zeros)),
+                    ('scalar', dict(vbc_x0='v' + 'f' * (nd - 1), vbc_val_x0='1e-9')),
+                    ('code-list', dict(vbc_x0='1', vbc_val_x0=zeros)),
+                    ('lateral', dict(vbc_x0=held, vbc_val_x0=zeros, vbc_val_x0_l='1e-10')),
+                    ('stress', dict(vbc_x0=free, vbc_val_x0=zeros, stress_bc_x0='1', stress_val_x0='1e4')),
+                    ('n-tangent', dict(vbc_n0=held, vbc_val_n0='[1e-9, 1e-10' + ', 0' * (nd - 2) + ']')),
+                    ('n-partial', dict(vbc_n0='f' + 'v' * (nd - 1), vbc_val_n0=zeros))]
+        if nd == 2:
+            rejected.append(('y', dict(vbc_y0='ff', vbc_val_y0='[0, 0]')))
+        for what, bc in rejected:
+            found.append(case(f'{d}-letters-reject-{what}', nd, bc, mesh='cut' if what.startswith('n-') else 'box',
+                              exit_code=11, letters=True))
+    # What the codes cannot give: a side wall with a vertical velocity, and a 2D x0 held by
+    # its normal only that tapers off over the bottom shear zone.
+    found.append(case('3d-x0-vertical-letters', 3, dict(vbc_x0='vvv', vbc_val_x0='[1e-9, 2e-10, -3e-10]',
+                                                        vbc_val_x0_l='0'), letters=True))
+    found.append(case('2d-x0-taper-vf-letters', 2, dict(vbc_x0='vf', vbc_val_x0='[1e-9, 0]', vbc_val_x0_l='0',
+                                                        bottom_shear_zone_thickness='4e3'), letters=True))
     return found
 
 
@@ -142,14 +218,43 @@ FRAMES = {3: dict(x0='-x,-y,+z', x1='+x,+y,+z', y0='-y,+x,+z', y1='+y,-x,+z', z0
           2: dict(x0='-x,+z', x1='+x,+z', z0='-z,+x', z1='+z,+x')}
 
 
+def support_options(cfg):
+    gravity = float(cfg['control'].get('gravity', '10')) != 0
+    winkler = gravity and cfg['bc'].get('has_winkler_foundation', 'yes') in ('yes', 'true', '1')
+    water = gravity and cfg['bc'].get('has_water_loading', 'yes') in ('yes', 'true', '1')
+    return winkler, water
+
+
+def letters_support(side, types, winkler, water):
+    free = types[0] == 'f'
+    return free and (winkler if side == 'z0' else water if side == 'z1' else True)
+
+
+def letters_entry(ndims, side, bc, winkler, water):
+    """A side given as letters: the values are already in its frame."""
+    types = bc['vbc_' + side]
+    values = [float(x) for x in bc['vbc_val_' + side].strip('[]').split(',')]
+    if (side == 'z0' and winkler) or (side == 'z1' and water):
+        types = 'f' * ndims
+    held = [v for c, v in zip(types, values) if c == 'v']
+    return dict(frame=FRAMES[ndims][side] if side[0] != 'n' else 'normal', types=types,
+                values=[v if c == 'v' else 0.0 for c, v in zip(types, values)],
+                normal_follows_period=side[0] in 'xy' and types[0] == 'v',
+                taper=ndims == 2 and side == 'x0' and types[0] == 'v',
+                support=letters_support(side, types, winkler, water), noop=False,
+                max_speed=max([abs(v) for v in held] or [0.0]),
+                release_time=bc.get('vbc_val_z1_loading_period') if side == 'z1' else None, stress='none')
+
+
 def expected_table(ndims, cfg):
-    bc, control = cfg['bc'], cfg['control']
-    gravity = float(control.get('gravity', '10')) != 0
-    winkler = gravity and bc.get('has_winkler_foundation', 'yes') in ('yes', 'true', '1')
-    water = gravity and bc.get('has_water_loading', 'yes') in ('yes', 'true', '1')
+    bc = cfg['bc']
+    winkler, water = support_options(cfg)
     axes = 'xyz' if ndims == 3 else 'xz'
     table = {}
     for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1') if ndims == 3 else ('x0', 'x1', 'z0', 'z1'):
+        if bc['vbc_' + side][0].isalpha():
+            table[side] = letters_entry(ndims, side, bc, winkler, water)
+            continue
         code = int(bc['vbc_' + side])
         if (side == 'z0' and winkler) or (side == 'z1' and water):
             code = 0
@@ -181,6 +286,9 @@ def expected_table(ndims, cfg):
             stress='{}:{}'.format(stress_axes[stress], float(bc['stress_val_' + side]))
                    if stress in stress_axes else 'none')
     for side in ('n0', 'n1', 'n2', 'n3'):
+        if bc['vbc_' + side][0].isalpha():
+            table[side] = letters_entry(ndims, side, bc, winkler, water)
+            continue
         code, value = int(bc['vbc_' + side]), float(bc['vbc_val_' + side])
         full = code in (3, 13)
         table[side] = dict(frame='horizontal-normal' if code in (11, 13) else 'normal',
@@ -227,9 +335,7 @@ def outputs(folder):
 
 
 def run(exe, folder, spec):
-    cfg = base(spec['ndims'], spec['mesh'])
-    cfg['bc'].update(spec['bc'])
-    cfg['control'].update(spec['control'])
+    cfg = effective_cfg(spec)
     result = run_des(exe, folder, 'bc', cfg, timeout=600, check=False)
     result.folder, result.cfg = folder, cfg
     return result
@@ -244,7 +350,11 @@ def compare(parent, current, spec):
         return 'rejected as before (exit {})'.format(parent.returncode)
     # A build that prints the per-side table must print the one #115 expects.
     table = check_table(current.stdout, spec['ndims'], current.cfg)
-    old, new = parent.folder, current.folder
+    count = same_outputs(parent.folder, current.folder)
+    return 'bit-exact ({} files){}'.format(count, ', table as expected' if table else '')
+
+
+def same_outputs(old, new):
     names = outputs(old)
     if not names or names != outputs(new):
         raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new)))
@@ -255,7 +365,20 @@ def compare(parent, current, spec):
         for key in a:
             if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]:
                 raise RuntimeError('{}: {} differs'.format(name, key))
-    return 'bit-exact ({} files){}'.format(len(names), ', table as expected' if table else '')
+    return len(names)
+
+
+def compare_letters(current, spec, reference):
+    if current.returncode != spec['exit_code']:
+        raise RuntimeError('exited {} where {} was expected'.format(current.returncode, spec['exit_code']))
+    if current.returncode:
+        return 'rejected (exit {})'.format(current.returncode)
+    if not check_table(current.stdout, spec['ndims'], current.cfg):
+        raise RuntimeError('no per-side table printed')
+    if reference is None:
+        return 'runs, table as expected'
+    count = same_outputs(reference.folder, current.folder)
+    return 'bit-exact with {} ({} files), table as expected'.format(spec['same_as'], count)
 
 
 def main():
@@ -271,7 +394,8 @@ def main():
     if a.list:
         for c in selected:
             print(c['name'] + ('  (noop)' if c['noop'] else '') +
-                  ('  (rejected, exit {})'.format(c['exit_code']) if c['exit_code'] else ''))
+                  ('  (rejected, exit {})'.format(c['exit_code']) if c['exit_code'] else '') +
+                  ('  (same as {})'.format(c['same_as']) if c['same_as'] else ''))
         return 0
     if not a.workdir:
         p.error('--workdir is required')
@@ -287,13 +411,21 @@ def main():
         p.error('no case selected for the executables given')
     a.workdir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='bc-', dir=str(a.workdir))).resolve()
-    results, failures = [], []
+    results, failures, ran = [], [], {}
+    every = {c['name']: c for c in cases()}
     for spec in selected:
         parent_exe, current_exe = exes[spec['ndims']]
-        parent = run(parent_exe, work/'parent'/spec['name'], spec)
+        if not spec['letters']:
+            parent = run(parent_exe, work/'parent'/spec['name'], spec)
         current = run(current_exe, work/'current'/spec['name'], spec)
+        ran[spec['name']] = current
+        reference = None
+        if spec['same_as']:
+            if spec['same_as'] not in ran:
+                ran[spec['same_as']] = run(current_exe, work/'current'/spec['same_as'], every[spec['same_as']])
+            reference = ran[spec['same_as']]
         try:
-            verdict = compare(parent, current, spec)
+            verdict = compare_letters(current, spec, reference) if spec['letters'] else compare(parent, current, spec)
             ok = True
         except RuntimeError as error:
             verdict, ok = str(error), False
