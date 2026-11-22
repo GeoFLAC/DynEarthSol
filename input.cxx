@@ -1457,7 +1457,8 @@ static void print_bc_table(const Param &p)
 
 
 // vbc_* is an integer code, or one letter per component of the side's frame (#115); vbc_val_*
-// is then one number, or one per letter. A code and its value go to the integer fields.
+// is then one number, or one per letter. A code and its value go to the integer fields, the
+// letters' values to vbc_component_values; the other set is 0.
 static void read_side_bcs(const opt::Registry &vm, Param &p)
 {
     static const char *names[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
@@ -1490,8 +1491,13 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
             }
             *codes[i] = static_cast<int>(code);
             *values[i] = numbers[0];
+            for (int d=0; d<NDIMS; ++d) bc.vbc_component_values[i][d] = 0;
             continue;
         }
+        // Letters leave the code and its scalar unused; give them a value, as
+        // validate_parameters and convert_bc_codes copy every side's.
+        *codes[i] = 0;
+        *values[i] = 0;
 
         if (text.size() != NDIMS || text.find_first_not_of("vft") != std::string::npos) {
             std::cerr << "Error: " << key << " must be an integer code or " << NDIMS
