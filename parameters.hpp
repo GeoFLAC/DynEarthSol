@@ -1,6 +1,7 @@
 #ifndef DYNEARTHSOL3D_PARAMETERS_HPP
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <utility>
@@ -309,6 +310,10 @@ const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, -2, 3}, {1, 2, 3}, {-2, 1,
 const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, 2}, {1, 2}, {0, 0}, {0, 0}, {-2, 1}, {2, 1}};
 #endif
 
+// The global axis of component d of side i's frame, and its sign.
+inline int frame_axis(int i, int d) { return std::abs(side_frame[i][d]) - 1; }
+inline double frame_sign(int i, int d) { return side_frame[i][d] < 0 ? -1. : 1.; }
+
 struct BC {
     double surface_temperature;
     double mantle_temperature;
@@ -411,6 +416,25 @@ struct BC {
 
     SideBC side[nbdrytypes];  // filled from the codes above by validate_parameters()
 };
+
+// Each side's name and input fields, in side order: x0, x1, y0, y1, z0, z1, then n0 to n3.
+// The lateral values cover the side walls, the stress codes and values the z sides too.
+const char *const side_name[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
+int BC::*const side_vbc_code[nbdrytypes] = {&BC::vbc_x0, &BC::vbc_x1, &BC::vbc_y0, &BC::vbc_y1,
+                                             &BC::vbc_z0, &BC::vbc_z1, &BC::vbc_n0, &BC::vbc_n1,
+                                             &BC::vbc_n2, &BC::vbc_n3};
+double BC::*const side_vbc_value[nbdrytypes] = {&BC::vbc_val_x0, &BC::vbc_val_x1, &BC::vbc_val_y0,
+                                                &BC::vbc_val_y1, &BC::vbc_val_z0, &BC::vbc_val_z1,
+                                                &BC::vbc_val_n0, &BC::vbc_val_n1, &BC::vbc_val_n2,
+                                                &BC::vbc_val_n3};
+double BC::*const side_vbc_lateral[4] = {&BC::vbc_val_x0_l, &BC::vbc_val_x1_l, &BC::vbc_val_y0_l,
+                                         &BC::vbc_val_y1_l};
+int BC::*const side_stress_code[nbdrytypes_hydro] = {&BC::stress_bc_x0, &BC::stress_bc_x1,
+                                                     &BC::stress_bc_y0, &BC::stress_bc_y1,
+                                                     &BC::stress_bc_z0, &BC::stress_bc_z1};
+double BC::*const side_stress_value[nbdrytypes_hydro] = {&BC::stress_val_x0, &BC::stress_val_x1,
+                                                         &BC::stress_val_y0, &BC::stress_val_y1,
+                                                         &BC::stress_val_z0, &BC::stress_val_z1};
 
 struct IC {
     int mattype_option;

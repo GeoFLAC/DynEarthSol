@@ -597,14 +597,20 @@ def same_outputs(old, new, model='bc', ignored=()):
     return len(names)
 
 
+def restart_from_1(exe, folder, result, model, bc=None):
+    """Restart the run of result in folder from checkpoint 1 as model, with bc values changed."""
+    cfg = copy.deepcopy(result.cfg)
+    cfg['bc'].update(bc or {})
+    cfg['sim'].update(modelname=model, is_restarting='true', restarting_from_modelname='bc',
+                      restarting_from_frame='1')
+    again = run_des(exe, folder, model, cfg, timeout=600, check=False)
+    if again.returncode:
+        raise RuntimeError('the {} restart from checkpoint 1 exited {}'.format(model, again.returncode))
+
+
 def same_after_restart(exe, result):
     """Restart the run from checkpoint 1: every later frame must match the run's."""
-    cfg = copy.deepcopy(result.cfg)
-    cfg['sim'].update(modelname='again', is_restarting='true', restarting_from_modelname='bc',
-                      restarting_from_frame='1')
-    again = run_des(exe, result.folder, 'again', cfg, timeout=600, check=False)
-    if again.returncode:
-        raise RuntimeError('the restart from checkpoint 1 exited {}'.format(again.returncode))
+    restart_from_1(exe, result.folder, result, 'again')
     later = [n for n in outputs(result.folder) if int(n.split('.')[-1]) > 1]
     for name in later:
         twin = result.folder/name.replace('bc.', 'again.', 1)
@@ -620,13 +626,7 @@ def same_changed_restart(parent_exe, current_exe, parent, current, spec):
     """Restart both runs from checkpoint 1 with spec['changed_restart']: every later frame
     must match the parent's restart."""
     for exe, result in ((parent_exe, parent), (current_exe, current)):
-        cfg = copy.deepcopy(result.cfg)
-        cfg['bc'].update(spec['changed_restart'])
-        cfg['sim'].update(modelname='changed', is_restarting='true', restarting_from_modelname='bc',
-                          restarting_from_frame='1')
-        again = run_des(exe, result.folder, 'changed', cfg, timeout=600, check=False)
-        if again.returncode:
-            raise RuntimeError('the changed restart from checkpoint 1 exited {}'.format(again.returncode))
+        restart_from_1(exe, result.folder, result, 'changed', spec['changed_restart'])
     count = same_outputs(parent.folder, current.folder, 'changed')
     return 'changed restart matches the parent\'s ({} files)'.format(count)
 
@@ -648,17 +648,10 @@ def edge_restart(exe, result):
         stream.visit(lambda key: found.append(key) if key.split('/')[-1] in RECORD else None)
         for key in found:
             del stream[key]
-    def restart(where, model, bc):
-        cfg = copy.deepcopy(result.cfg)
-        cfg['bc'].update(bc)
-        cfg['sim'].update(modelname=model, is_restarting='true', restarting_from_modelname='bc',
-                          restarting_from_frame='1')
-        again = run_des(exe, where, model, cfg, timeout=600, check=False)
-        if again.returncode:
-            raise RuntimeError('the {} restart from checkpoint 1 exited {}'.format(model, again.returncode))
-    restart(bare, 'old', {})  # the run's conditions applied to the checkpointed velocity
-    flag = saved_field(fields(folder/'bc.save.000001'), 'bcflag')
-    saved = saved_field(fields(folder/'bc.save.000001'), 'velocity').reshape(flag.size, -1)
+    restart_from_1(exe, bare, result, 'old')  # the run's conditions applied to the checkpointed velocity
+    run = fields(folder/'bc.save.000001')
+    flag = saved_field(run, 'bcflag')
+    saved = saved_field(run, 'velocity').reshape(flag.size, -1)
     mapped = saved_field(fields(bare/'old.save.000001'), 'velocity').reshape(flag.size, -1)
     edge = np.flatnonzero(flag == FLAG_BITS['n0'] + FLAG_BITS['x1'])
     node = edge[np.argmax(np.abs(mapped[edge, 1] - saved[edge, 1]))]
@@ -666,8 +659,8 @@ def edge_restart(exe, result):
         raise RuntimeError('the edge map leaves the y velocity of every node on x1 and n0')
     change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
                   vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
-    restart(folder, 'changed', change)
-    restart(bare, 'changed', change)
+    restart_from_1(exe, folder, result, 'changed', change)
+    restart_from_1(exe, bare, result, 'changed', change)
     count = same_outputs(bare, folder, 'changed')
     return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
            'without the record ({} files)'.format(int(node), count)

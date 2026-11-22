@@ -106,24 +106,14 @@ void convert_bc_codes(Param &p)
 #endif
 
     BC &bc = p.bc;
-    const int codes[nbdrytypes] = {bc.vbc_x0, bc.vbc_x1, bc.vbc_y0, bc.vbc_y1, bc.vbc_z0, bc.vbc_z1,
-                                   bc.vbc_n0, bc.vbc_n1, bc.vbc_n2, bc.vbc_n3};
-    const double values[nbdrytypes] = {bc.vbc_val_x0, bc.vbc_val_x1, bc.vbc_val_y0, bc.vbc_val_y1,
-                                       bc.vbc_val_z0, bc.vbc_val_z1, bc.vbc_val_n0, bc.vbc_val_n1,
-                                       bc.vbc_val_n2, bc.vbc_val_n3};
-    const double lateral[4] = {bc.vbc_val_x0_l, bc.vbc_val_x1_l, bc.vbc_val_y0_l, bc.vbc_val_y1_l};
-    const int stress_codes[nbdrytypes_hydro] = {bc.stress_bc_x0, bc.stress_bc_x1, bc.stress_bc_y0,
-                                                bc.stress_bc_y1, bc.stress_bc_z0, bc.stress_bc_z1};
-    const double stress_values[nbdrytypes_hydro] = {bc.stress_val_x0, bc.stress_val_x1, bc.stress_val_y0,
-                                                    bc.stress_val_y1, bc.stress_val_z0, bc.stress_val_z1};
     for (int i=0; i<nbdrytypes; ++i) {
         SideBC &s = bc.side[i];
         s = SideBC{};
         for (int d=0; d<NDIMS; ++d) s.type[d] = 'f';
         s.release_time = (i == iboundz1) ? bc.vbc_val_z1_loading_period : std::numeric_limits<double>::max();
         s.stress_axis = -1;
-        const int code = codes[i];
-        const double v = values[i];
+        const int code = bc.*side_vbc_code[i];
+        const double v = bc.*side_vbc_value[i];
 
         const std::string &text = bc.vbc_text[i];
         if (!text.empty() && std::isalpha(static_cast<unsigned char>(text[0]))) {
@@ -162,13 +152,14 @@ void convert_bc_codes(Param &p)
 
         // stress_bc_*: the global stress component k, applied on each facet as S n_k with the
         // facet's area-weighted normal n (input.cxx refuses what adds nothing).
-        if (stress_codes[i] >= 1 && stress_codes[i] <= 3) {
+        const int stress_code = bc.*side_stress_code[i];
+        if (stress_code >= 1 && stress_code <= 3) {
 #ifdef THREED
-            s.stress_axis = stress_codes[i] - 1;
+            s.stress_axis = stress_code - 1;
 #else
-            if (stress_codes[i] != 2) s.stress_axis = (stress_codes[i] == 1) ? 0 : 1;
+            if (stress_code != 2) s.stress_axis = (stress_code == 1) ? 0 : 1;
 #endif
-            s.stress_value = stress_values[i];
+            s.stress_value = bc.*side_stress_value[i];
         }
 #ifndef THREED
         if (i == iboundy0 || i == iboundy1) continue;
@@ -202,12 +193,12 @@ void convert_bc_codes(Param &p)
         if (!row) continue;
 
         for (int d=0; d<NDIMS; ++d) {
-            const int axis = std::abs(side_frame[i][d]) - 1;
-            const double sign = (side_frame[i][d] < 0) ? -1. : 1.;
+            const int axis = frame_axis(i, d);
+            const double sign = frame_sign(i, d);
             int k = 0;
             while (global[k] != axis) ++k;
             if (row[k] == F) continue;
-            const double held = (row[k] == Z) ? 0. : (row[k] == L) ? lateral[i] : v;
+            const double held = (row[k] == Z) ? 0. : (row[k] == L) ? bc.*side_vbc_lateral[i] : v;
             s.type[d] = 'v';
             s.value[d] = sign * held;
             s.max_speed = std::max(s.max_speed, std::fabs(held));
@@ -435,7 +426,7 @@ double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
     const bool lo = (t % 2 == 0), y = (t >= 2);
     const SideBC &s = bc.side[t];
     if (!s.normal_follows_period) return 0.;
-    const double v = (side_frame[t][0] < 0 ? -1. : 1.) * s.value[0];
+    const double v = frame_sign(t, 0) * s.value[0];
     const double_vec &time = y ? (lo ? bc.vbc_period_y0_time_in_yr : bc.vbc_period_y1_time_in_yr)
                                : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
     const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
@@ -569,8 +560,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         if (var.time > s.release_time) continue;
         for (int d=0; d<NDIMS; ++d) {
             if (s.type[d] != 'v') continue;
-            const int axis = std::abs(side_frame[i][d]) - 1;
-            const double v = (side_frame[i][d] < 0 ? -1. : 1.) * s.value[d];
+            const int axis = frame_axis(i, d);
+            const double v = frame_sign(i, d) * s.value[d];
             w.mode[axis] = CONSTANT;
             if (d == 0 && s.normal_follows_period) {
                 const double applied = homogeneous ? 0.0 : side_wall_normal_vbc(bc, i, t_now);
@@ -600,7 +591,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         // so it counts as holding every axis.
         held_axes[i] = (i < iboundn0) ? 0 : (1 << NDIMS) - 1;
         for (int d=0; d<NDIMS && i < iboundn0; ++d)
-            if (s.type[d] == 'v') held_axes[i] |= 1 << (std::abs(side_frame[i][d]) - 1);
+            if (s.type[d] == 'v') held_axes[i] |= 1 << frame_axis(i, d);
         const bool released = var.time > s.release_time;
         meets[i] = (released || all_free(s)) ? MEETS_FREE : !normal_only(s) ? MEETS_HELD
                  : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
@@ -1008,7 +999,7 @@ void side_axes(const Variables &var, int i, double axes[NDIMS][NDIMS])
         for (int d=0; d<NDIMS; ++d) axes[c][d] = 0;
     if (i < iboundn0) {
         for (int c=0; c<NDIMS; ++c)
-            axes[c][std::abs(side_frame[i][c]) - 1] = (side_frame[i][c] < 0) ? -1. : 1.;
+            axes[c][frame_axis(i, c)] = frame_sign(i, c);
         return;
     }
     ConstArrayAccessor n = (*var.bnormals)[i];

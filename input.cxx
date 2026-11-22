@@ -1409,13 +1409,10 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 // boundary, the edge map passes the load on to the other components.
 static void check_stress_bcs(const Param &p)
 {
-    static const char *names[nbdrytypes_hydro] = {"x0", "x1", "y0", "y1", "z0", "z1"};
-    const int codes[nbdrytypes_hydro] = {p.bc.stress_bc_x0, p.bc.stress_bc_x1, p.bc.stress_bc_y0,
-                                         p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
     for (int i=0; i<nbdrytypes_hydro; ++i) {
-        const int code = codes[i];
+        const int code = p.bc.*side_stress_code[i];
         if (code == 0) continue;
-        const std::string key = std::string("bc.stress_bc_") + names[i];
+        const std::string key = std::string("bc.stress_bc_") + side_name[i];
 #ifndef THREED
         if (i == iboundy0 || i == iboundy1) {
             std::cerr << "Error: " << key << " = " << code << ": 2D has no y walls.\n";
@@ -1437,20 +1434,19 @@ static void check_stress_bcs(const Param &p)
 // One line per side, which tests/functional/bc/run_bc_cases.py checks.
 static void print_bc_table(const Param &p)
 {
-    static const char *names[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
     const char *axes = (NDIMS == 3) ? "xyz" : "xz";
     for (int i=0; i<nbdrytypes; ++i) {
 #ifndef THREED
         if (i == iboundy0 || i == iboundy1) continue;
 #endif
         const SideBC &s = p.bc.side[i];
-        std::cout << "[bc][side] name=" << names[i] << " frame=";
+        std::cout << "[bc][side] name=" << side_name[i] << " frame=";
         if (i >= iboundn0)
             std::cout << (s.horizontal_normal ? "horizontal-normal" : "normal");
         else
             for (int d=0; d<NDIMS; ++d)
-                std::cout << (d ? "," : "") << (side_frame[i][d] < 0 ? '-' : '+')
-                          << axes[std::abs(side_frame[i][d]) - 1];
+                std::cout << (d ? "," : "") << (frame_sign(i, d) < 0 ? '-' : '+')
+                          << axes[frame_axis(i, d)];
         std::cout << " types=" << std::string(s.type, NDIMS) << " values=";
         for (int d=0; d<NDIMS; ++d) std::cout << (d ? "," : "") << s.value[d];
         std::cout << " normal_follows_period=" << s.normal_follows_period << " taper=" << s.taper
@@ -1471,19 +1467,10 @@ static void print_bc_table(const Param &p)
 // letters' values to vbc_component_values; the other set is 0.
 static void read_side_bcs(const opt::Registry &vm, Param &p)
 {
-    static const char *names[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
     BC &bc = p.bc;
-    int *codes[nbdrytypes] = {&bc.vbc_x0, &bc.vbc_x1, &bc.vbc_y0, &bc.vbc_y1, &bc.vbc_z0, &bc.vbc_z1,
-                              &bc.vbc_n0, &bc.vbc_n1, &bc.vbc_n2, &bc.vbc_n3};
-    double *values[nbdrytypes] = {&bc.vbc_val_x0, &bc.vbc_val_x1, &bc.vbc_val_y0, &bc.vbc_val_y1,
-                                  &bc.vbc_val_z0, &bc.vbc_val_z1, &bc.vbc_val_n0, &bc.vbc_val_n1,
-                                  &bc.vbc_val_n2, &bc.vbc_val_n3};
-    const double lateral[4] = {bc.vbc_val_x0_l, bc.vbc_val_x1_l, bc.vbc_val_y0_l, bc.vbc_val_y1_l};
-    const int stress_codes[nbdrytypes_hydro] = {bc.stress_bc_x0, bc.stress_bc_x1, bc.stress_bc_y0,
-                                                bc.stress_bc_y1, bc.stress_bc_z0, bc.stress_bc_z1};
     for (int i=0; i<nbdrytypes; ++i) {
-        const std::string key = std::string("bc.vbc_") + names[i];
-        const std::string value_key = std::string("bc.vbc_val_") + names[i];
+        const std::string key = std::string("bc.vbc_") + side_name[i];
+        const std::string value_key = std::string("bc.vbc_val_") + side_name[i];
         // The raw text, without the quotes a code may carry.
         bc.vbc_text[i] = opt::detail::unquoted(bc.vbc_text[i]);
         const std::string &text = bc.vbc_text[i];
@@ -1501,15 +1488,15 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
                           << key << ", got '" << list << "'.\n";
                 die(EXIT_CONFIG_VALUE);
             }
-            *codes[i] = static_cast<int>(code);
-            *values[i] = numbers[0];
+            bc.*side_vbc_code[i] = static_cast<int>(code);
+            bc.*side_vbc_value[i] = numbers[0];
             for (int d=0; d<NDIMS; ++d) bc.vbc_component_values[i][d] = 0;
             continue;
         }
         // Letters leave the code and its scalar unused; give them a value, as
         // validate_parameters and convert_bc_codes copy every side's.
-        *codes[i] = 0;
-        *values[i] = 0;
+        bc.*side_vbc_code[i] = 0;
+        bc.*side_vbc_value[i] = 0;
 
         if (text.size() != NDIMS || text.find_first_not_of("vft") != std::string::npos) {
             std::cerr << "Error: " << key << " must be an integer code or " << NDIMS
@@ -1529,13 +1516,13 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
             die(EXIT_CONFIG_VALUE);
         }
         for (int d=0; d<NDIMS; ++d) bc.vbc_component_values[i][d] = numbers[d];
-        if (i < 4 && lateral[i] != 0) {
-            std::cerr << "Error: bc.vbc_val_" << names[i] << "_l is for the integer codes; with "
+        if (i < 4 && bc.*side_vbc_lateral[i] != 0) {
+            std::cerr << "Error: bc.vbc_val_" << side_name[i] << "_l is for the integer codes; with "
                       << key << " = " << text << ", give the tangential values in " << value_key << ".\n";
             die(EXIT_CONFIG_VALUE);
         }
-        if (i < nbdrytypes_hydro && stress_codes[i] != 0) {
-            std::cerr << "Error: bc.stress_bc_" << names[i] << " is for the integer codes; with "
+        if (i < nbdrytypes_hydro && bc.*side_stress_code[i] != 0) {
+            std::cerr << "Error: bc.stress_bc_" << side_name[i] << " is for the integer codes; with "
                       << key << " = " << text << ", give a traction as t.\n";
             die(EXIT_CONFIG_VALUE);
         }
@@ -1950,29 +1937,26 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
 
         // A side-wall or z code that sets no component is refused: it left the side free
         // without the support code 0 gives.
-        {
-            static const char *names[] = {"x0", "x1", "y0", "y1"};
-            const int codes[] = {p.bc.vbc_x0, p.bc.vbc_x1, p.bc.vbc_y0, p.bc.vbc_y1};
-            for (int i=iboundx0; i<=iboundy1; ++i) {
+        for (int i=iboundx0; i<=iboundy1; ++i) {
 #ifndef THREED
-                if (i == iboundy0 || i == iboundy1) continue;  // 2D has no y walls
+            if (i == iboundy0 || i == iboundy1) continue;  // 2D has no y walls
 #endif
-                if (letters(i)) continue;
-                bool sets_something = codes[i] >= 0 && codes[i] <= 7;
+            if (letters(i)) continue;
+            const int code = p.bc.*side_vbc_code[i];
+            bool sets_something = code >= 0 && code <= 7;
 #ifndef THREED
-                sets_something = sets_something && codes[i] != 5 && codes[i] != 7;
+            sets_something = sets_something && code != 5 && code != 7;
 #endif
-                if (sets_something) continue;
-                std::cerr << "Error: bc.vbc_" << names[i] << " = " << codes[i] << " sets no velocity "
-                          << "component. Use 0 for a free side with lithostatic support, another code "
+            if (sets_something) continue;
+            std::cerr << "Error: bc.vbc_" << side_name[i] << " = " << code << " sets no velocity "
+                      << "component. Use 0 for a free side with lithostatic support, another code "
 #ifdef THREED
-                          << "from 1 to 7, "
+                      << "from 1 to 7, "
 #else
-                          << "from 1, 2, 3, 4 and 6, "
+                      << "from 1, 2, 3, 4 and 6, "
 #endif
-                          << "or one letter per component; 11 and 13 are for the n boundaries.\n";
-                die(EXIT_CONFIG_VALUE);
-            }
+                      << "or one letter per component; 11 and 13 are for the n boundaries.\n";
+            die(EXIT_CONFIG_VALUE);
         }
         if ( (!letters(iboundz0) && p.bc.vbc_z0 < 0) || (!letters(iboundz1) && p.bc.vbc_z1 < 0) ) {
             die(EXIT_CONFIG_VALUE, "bc.vbc_z0 and bc.vbc_z1 cannot be negative.");
