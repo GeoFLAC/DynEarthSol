@@ -1170,6 +1170,64 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     flag("unloaded increment is zero",(*f.dpls)[0]<=1e-12*increment);
 }
 
+// Cohesion that jumps at one plastic strain (pls0 = pls1), for a trial whose return
+// at 1e5 Pa records inc: a drop to 1e4 at 1e-5 (the return goes on past it), and a
+// drop and a rise between 1e4 and 1e5 at inc itself, where the return lands on the
+// jump. The strength there is the next piece's: past the drop, on the stronger side
+// of the rise with the increment inc.
+static void check_cohesion_jumps(MaterialFixture& f, const char* prefix, const double trial[3]) {
+    auto& p=f.m->param.mat;
+    char name[128];
+    set_mc_material(f, 0);
+    f.set_principal(trial);
+    for(int e=0;e<f.m->var.nelem;++e) (*f.pls)[e]=0;
+    f.update();
+    const double inc=(*f.dpls)[0];
+    p.pls0=p.pls1={1e-5};
+    p.cohesion1={1e4};
+    f.set_material();
+    std::snprintf(name,sizeof name,"%scohesion drop at one plastic strain",prefix);
+    check_law_return(f,name,trial,1e-5);
+    p.pls0=p.pls1={inc};
+    f.set_material();
+    std::snprintf(name,sizeof name,"%scohesion drop where the return lands",prefix);
+    check_law_return(f,name,trial,inc);
+    p.cohesion0={1e4}; p.cohesion1={1e5};
+    f.set_material();
+    std::snprintf(name,sizeof name,"%scohesion rise where the return lands",prefix);
+    check_law_return(f,name,trial,inc);
+    std::snprintf(name,sizeof name,"%scohesion rise where the return lands: history",prefix);
+    check(name,(*f.pls)[0],inc);
+}
+
+// Two materials mixed 1:1 whose cohesions jump the other way: the mean rises from
+// 4e5 to 6.5e5 Pa at 1e-5 and falls to 3.25e5 Pa at 1.4e-5, at once or over
+// [1.1e-5, 1.4e-5], for a trial whose return records more than 1.4e-5 at the residual
+// strength. No increment records itself at the rise; the return lies past the fall.
+static void check_mixed_cohesions(const char* prefix, const double trial[3], bool pure_2d) {
+    MaterialFixture f(MatProps::rh_ep, 0);
+    auto& p=f.m->param.mat;
+    if(pure_2d) p.is_plane_strain=false;
+    set_mc_material(f, 0);
+    p.nmat=2;
+    for(auto* v : {&p.rho0,&p.alpha,&p.porosity,&p.bulk_modulus,&p.shear_modulus,
+                   &p.visc_exponent,&p.visc_coefficient,&p.visc_activation_energy,
+                   &p.visc_activation_volume,&p.biot_coeff,&p.heat_capacity,&p.therm_cond,
+                   &p.fluid_bulk_modulus,&p.friction_angle0,&p.friction_angle1,
+                   &p.dilation_angle0,&p.dilation_angle1})
+        v->resize(2,v->front());
+    for(auto& marks : f.m->markers) marks={1,1};
+    char name[128];
+    for(double fall : {1.4e-5,1.1e-5}) {
+        p.pls0={1e-5,fall}; p.pls1={1e-5,1.4e-5};
+        p.cohesion0={5e4,7.5e5}; p.cohesion1={5.5e5,1e5};
+        f.set_material();
+        std::snprintf(name,sizeof name,"%smixed cohesions that rise and then fall%s",prefix,
+                      fall<1.4e-5 ? " over a range" : "");
+        check_law_return(f,name,trial,1.4e-5);
+    }
+}
+
 #ifndef THREED
 // Pure 2D (not plane strain): the single-face return softens by exactly the
 // increment it stores, so the strength rebuilt from history keeps it on yield.
@@ -1222,6 +1280,9 @@ static void test_pure_2d_law_returns() {
     const double deep[3]={-1e8,-1e7,0};
     check_law_return(f,"pure 2D softening past the segment from nonzero history",deep,
                      p.pls1[0],0.0003829357836281204);
+    const double far[3]={-6e6,-1e6,0};
+    check_cohesion_jumps(f,"pure 2D ",far);
+    check_mixed_cohesions("pure 2D ",far,true);
     p.pls0={0}; p.pls1={1e-5};
     set_mc_material(f, 10);
     p.friction_angle1={20}; p.dilation_angle1={0};
@@ -1273,6 +1334,9 @@ static void test_mohr_coulomb_law_returns() {
     const double deep[3]={-1e8,-1e8,-1e7};
     check_law_return(f,"softening past the segment from nonzero history",deep,
                      p.pls1[0],0.0003829357836281204);
+    const double far[3]={-6e6,-2e6,-1e6};
+    check_cohesion_jumps(f,"",far);
+    check_mixed_cohesions("",far,false);
     // Friction 30 -> 20 deg and dilation 10 -> 0 deg over 1e-5: the step
     // ends inside the segment with strength and flow of the stored history
     // (option 1) or of the start of the step (option 0).
@@ -1396,6 +1460,41 @@ static void test_rsf_law_returns() {
     }
 }
 
+// Laws that jump up where the return would land, so that no increment records
+// itself: the run stops with status 54 and that cause.
+static void test_rejected_jump(bool cap) {
+    // Option 1 for the cap: the fixture reads it when it is built.
+    return_mapping_option=cap ? 1 : 0;
+    MaterialFixture f(MatProps::rh_ep, 0);
+    set_mc_material(f, 0);
+    auto& p=f.m->param.mat;
+    if(cap) {
+        // No cohesion and friction 30 -> 0 deg over 1.5e-6, with the end-of-step
+        // angles: the tensile cap opens from 0 to 1e5 Pa where the friction reaches 0.
+        // Hydrostatic tension 2e5 Pa returns past that on the closed cap and short of
+        // it on the open one. In 2D, pure 2D: plane strain measures plastic strain by
+        // its largest shear, which this flow leaves at 0.
+        p.is_plane_strain=false;
+        p.pls0={0}; p.pls1={1.5e-6};
+        p.cohesion0=p.cohesion1={0};
+        p.friction_angle0={30}; p.friction_angle1={0};
+        p.tension_max=1e5;
+        f.set_material();
+        const double trial[3]={2e5,2e5,2e5};
+        f.set_principal(trial);
+    }
+    else {
+        // Cohesion rises 1e4 -> 1e5 at 1e-5: the weaker strength returns past the rise
+        // (1.26e-5) and the stronger short of it (7.4e-6).
+        p.pls0=p.pls1={1e-5};
+        p.cohesion0={1e4}; p.cohesion1={1e5};
+        f.set_material();
+        const double trial[3]={-1.2e6,-2e5,-1e5};
+        f.set_principal(trial);
+    }
+    f.update();
+}
+
 // A non-finite trial has no admissible return. update_stress must stop the
 // process with status 54; check.sh runs this case separately, in 2D both in
 // plane strain and in pure 2D.
@@ -1497,6 +1596,11 @@ int main(int argc, char** argv) {
     if(argc==2 && (std::strcmp(argv[1],"--reject-mc-return")==0 ||
                    std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0)) {
         test_rejected_mc_return(NDIMS==2 && std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0);
+        return 1;  // check.sh requires status 54 from update_stress
+    }
+    if(argc==2 && (std::strcmp(argv[1],"--reject-mc-jump")==0 ||
+                   std::strcmp(argv[1],"--reject-mc-cap-jump")==0)) {
+        test_rejected_jump(std::strcmp(argv[1],"--reject-mc-cap-jump")==0);
         return 1;  // check.sh requires status 54 from update_stress
     }
     test_darcy_gravity_limit();

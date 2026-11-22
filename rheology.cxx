@@ -634,7 +634,9 @@ enum ReturnRejection {
     reject_no_return = 2,    // no set of shear faces and tensile caps gives nonnegative
                              // multipliers and a stress inside every surface
     reject_no_root = 3,      // the law has more pieces than consistent_return searches
-    reject_reason_count = 4
+    reject_no_increment = 4, // no plastic increment returns the stress to the strength of the
+                             // history it stores: the law jumps up there
+    reject_reason_count = 5
 };
 
 #pragma acc routine seq
@@ -755,6 +757,36 @@ static double next_break(const StrengthCurve& curve)
     return increment;
 }
 
+#pragma acc routine seq
+static bool near_value(double x, double y)
+{
+    return std::fabs(x - y) <= 1e-12*std::max(std::fabs(x), std::fabs(y));
+}
+
+// Whether two strengths agree to the relative 1e-12 of the yield checks: the
+// two pieces of a continuous law at their break differ only by rounding.
+#pragma acc routine seq
+static bool same_strength(const Strength& a, const Strength& b)
+{
+    return near_value(a.amc, b.amc) && near_value(a.anphi, b.anphi) &&
+        near_value(a.anpsi, b.anpsi) && near_value(a.ten_max, b.ten_max);
+}
+
+// Whether the plastic strain that an increment stores, pls + recorded, reaches
+// the end of the prepared piece where the law jumps (pls0 = pls1): its strength
+// is then the next piece's, not this one's. Where the law is continuous there,
+// the two differ only by rounding.
+#pragma acc routine seq
+static bool reaches_jump(const StrengthCurve& curve, double recorded)
+{
+    const double end = curve.piece.end;
+    if (end == no_break || curve.law.pls + recorded < end) return false;
+    const double at = next_break(curve);
+    StrengthCurve next = curve;
+    prepare_piece(next, at);
+    return !same_strength(strength_at(curve, at), strength_at(next, at));
+}
+
 // The closed-form returns hold friction and dilation fixed, so they apply
 // only where neither changes along the piece (always with law.start_angles).
 // Elsewhere their result is the starting guess of consistent_return.
@@ -773,7 +805,7 @@ static bool closed_form_consistent(const StrengthCurve& curve, const double p[3]
                                    int nd = 3)
 {
     if (depls == 0) return true;
-    if (!(depls <= next_break(curve))) return false;
+    if (!(depls <= next_break(curve)) || reaches_jump(curve, depls)) return false;
     const StrengthLaw& law = curve.law;
     const Strength end = strength_at(curve, depls);
     const double tolerance = return_tolerance(p, end.amc, nd);
@@ -970,13 +1002,61 @@ static bool root_found(const ReturnPoint& r)
     return std::fabs(r.g) <= 1e-12*std::max(r.delta, r.recorded);
 }
 
+static constexpr int keep_searching = -1;
+
+// Go on to the next piece at the break hi, from the point end_point there. Where
+// the law is continuous, the search goes on from end_point. Where it jumps, the
+// break is evaluated again with the next piece's strength: a root there is the
+// return, and otherwise the search goes on from there. If g is then below 0, no
+// increment near the break records itself: less flow stores a history on this
+// piece, more on the next.
+#pragma acc routine seq
+static int cross_break(const double trial[3], double a1, double a2, StrengthCurve& curve,
+                       bool plane_strain, int nd, const ReturnPoint& end_point,
+                       ReturnPoint& lo, double& hi, double p[3], double& depls)
+{
+    const double at = hi;
+    const Strength end = strength_at(curve, at);
+    prepare_piece(curve, at);
+    hi = next_break(curve);
+    lo = end_point;
+    if (same_strength(end, strength_at(curve, at))) return keep_searching;
+    if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, at, lo))
+        return reject_no_return;
+    if (root_found(lo)) return accept_return(lo, p, depls);
+    return keep_searching;
+}
+
+// Accept a root on the prepared piece, unless the history it stores reaches a
+// jump of the law; that one goes on at the break as above.
+#pragma acc routine seq
+static int finish_return(const double trial[3], double a1, double a2, StrengthCurve& curve,
+                         bool plane_strain, int nd, const ReturnPoint& r,
+                         ReturnPoint& lo, double& hi, double p[3], double& depls)
+{
+    if (!reaches_jump(curve, r.recorded)) return accept_return(r, p, depls);
+    return cross_break(trial, a1, a2, curve, plane_strain, nd, r, lo, hi, p, depls);
+}
+
+// A collapsed bracket of g: within rounding of a root where g is continuous;
+// a g still far from 0 means the strength jumps inside it.
+#pragma acc routine seq
+static bool near_root(const ReturnPoint& r)
+{
+    return std::fabs(r.g) <= 1e-9*std::max(r.delta, r.recorded);
+}
+
 // Backward-Euler return for the whole strength law: the plastic increment
 // delta whose fixed-strength return at strength(pls+delta) records delta.
-// g(delta) = recorded - delta is continuous, and g(0) > 0 when the trial
-// yields. The law's linear pieces are searched in order; where it stays
-// constant the root is exact. With law.start_angles only cohesion and the
-// tensile cap change with delta, so the search runs only for returns the
-// closed forms do not give: corners, the tensile cap and breakpoints.
+// g(delta) = recorded - delta is continuous where the law is, and g(0) > 0
+// when the trial yields. The law's linear pieces are searched in order for the
+// first increment where g falls to 0; where it stays constant the root is
+// exact. Where g jumps below 0 instead, at a rise of the law or inside a
+// bracket, the search goes on to the piece that brings it back above 0; beyond
+// the last break the strength stays and g only falls. With law.start_angles
+// only cohesion and the tensile cap change with delta, so the search runs only
+// for returns the closed forms do not give: corners, the tensile cap and
+// breakpoints.
 //
 // On each piece, secant steps come first: the strength changes little within
 // one step, so g is nearly linear and they usually converge in a few
@@ -990,7 +1070,7 @@ static int consistent_return(const double trial[3], double a1, double a2,
                              double guess, double p[3], double& depls)
 {
     if (!finite3(trial)) return reject_nonfinite;
-    ReturnPoint lo;           // the largest increment known to have g > 0
+    ReturnPoint lo;           // where the search stands: g > 0, or below 0 past a jump
     bool have_lo = false;
     double hi = next_break(curve);
     bool from_guess = guess > 0 && hi != no_break && guess < hi;
@@ -1000,21 +1080,42 @@ static int consistent_return(const double trial[3], double a1, double a2,
         have_lo = true;
     }
     for (int piece = 0; piece < 128; ++piece) {
-        if (have_lo && (!(lo.g > 0) || hi == no_break))
+        if (have_lo && lo.g < 0 && !root_found(lo)) {
+            // Below 0 past a jump: on to the end of the piece and across the break.
+            if (hi == no_break) return reject_no_increment;
+            ReturnPoint b;
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
+                return reject_no_return;
+            const int status = cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi,
+                                           p, depls);
+            if (status != keep_searching) return status;
+            continue;
+        }
+        if (have_lo && (!(lo.g > 0) || hi == no_break)) {
             // Root at lo, or a constant strength beyond lo: recorded(lo) is the root.
-            return accept_return(lo, p, depls);
+            const int status = finish_return(trial, a1, a2, curve, plane_strain, nd, lo, lo, hi,
+                                             p, depls);
+            if (status != keep_searching) return status;
+            continue;
+        }
 
         // Secant steps. The first point is the guess or lo; the next goes to
         // its recorded increment, where g = 0 if the strength did not change.
         ReturnPoint x, prev, b;
-        bool have_prev = have_lo, bracketed = false;
+        bool have_prev = have_lo, bracketed = false, moved = false;
         if (have_lo) prev = lo;
         double next = from_guess ? guess : lo.recorded;
         from_guess = false;
         for (int step = 0; step < 5 && next > (have_lo ? lo.delta : 0) && next < hi; ++step) {
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, next, x))
                 return reject_no_return;
-            if (root_found(x)) return accept_return(x, p, depls);
+            if (root_found(x)) {
+                const int status = finish_return(trial, a1, a2, curve, plane_strain, nd, x, lo, hi,
+                                                 p, depls);
+                if (status != keep_searching) return status;
+                have_lo = moved = true;
+                break;
+            }
             if (x.g < 0) {
                 b = x;
                 bracketed = true;
@@ -1033,6 +1134,7 @@ static int consistent_return(const double trial[3], double a1, double a2,
             if (!(slope < 0)) break;
             next = x.delta - x.g/slope;
         }
+        if (moved) continue;
         if (!have_lo) {
             // The guess overshot the root: bracket it from 0.
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0, lo))
@@ -1044,22 +1146,25 @@ static int consistent_return(const double trial[3], double a1, double a2,
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
                 return reject_no_return;
             if (b.g > 0) {
-                lo = b;
-                prepare_piece(curve, hi);
-                hi = next_break(curve);
+                // The root lies past the break, on the next piece.
+                const int status = cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi,
+                                               p, depls);
+                if (status != keep_searching) return status;
                 continue;
             }
         }
         // Illinois regula falsi on [lo, b], g(lo) > 0 >= g(b).
         ReturnPoint a = lo;
         int side = 0;
+        if (b.g == 0) x = b;
         for (int it = 0; it < 200 && b.g != 0; ++it) {
             double xd = (a.delta*b.g - b.delta*a.g)/(b.g - a.g);
             if (!(xd > a.delta && xd < b.delta)) xd = 0.5*(a.delta + b.delta);
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, xd, x))
                 return reject_no_return;
-            if (root_found(x) || b.delta - a.delta <= 1e-15*b.delta)
-                return accept_return(x, p, depls);
+            if (root_found(x)) break;
+            // The bracket collapsed: g jumps across 0 inside it if it is far from 0.
+            if (b.delta - a.delta <= 1e-15*b.delta) break;
             if (x.g > 0) {
                 const double gb = b.g;
                 a = x;
@@ -1073,7 +1178,14 @@ static int consistent_return(const double trial[3], double a1, double a2,
                 side = -1;
             }
         }
-        return accept_return(b.g == 0 ? b : x, p, depls);
+        if (!near_root(x)) {
+            // No root at the jump of g: the search goes on from below it.
+            lo = b;
+            continue;
+        }
+        const int status = finish_return(trial, a1, a2, curve, plane_strain, nd, x, lo, hi,
+                                         p, depls);
+        if (status != keep_searching) return status;
     }
     return reject_no_root;
 }
@@ -1450,6 +1562,9 @@ static const char* rejection_text(int reason)
         return "no set of shear faces and tensile caps gives an admissible return";
     case reject_no_root:
         return "the strength law has more linear pieces than the return searches";
+    case reject_no_increment:
+        return "no plastic increment returns the stress to the strength of the plastic strain "
+               "it stores, where the strength law jumps";
     default:
         return "unknown";
     }
@@ -1468,6 +1583,8 @@ static void report_rejected_returns(const Variables& var, int count,
             std::cerr << "  Also: " << rejection_text(r) << ".\n";
     die(EXIT_RUNTIME_NONCONVERGENCE,
         reasons & (1 << reject_nonfinite) ? "Non-finite stress: check the time step." :
+        reasons & (1 << reject_no_increment) ?
+            "Spread the change of the strength law over a range of plastic strain." :
             "Please report this stress state.");
 }
 

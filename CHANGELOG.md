@@ -311,7 +311,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   non-finite trial stops with exit status 54 in 3D, plane strain and pure 2D,
   on the CPU and the GPU, also within a PT iteration, naming the step, the
   first element and the cause; an elasto-visco-plastic element whose viscous
-  stress is selected does not stop. Mesh regularization of strong softening
+  stress is selected does not stop. A law that jumps at one plastic strain
+  (`pls0 = pls1`) is followed across the jump, and the stored history takes the
+  strength past it. Where the law jumps up so that no plastic increment near
+  the jump returns the stress to the strength of the history it stores, the
+  return lies where a later fall of the law, such as that of a second material
+  in the element, brings one back; without one, the run stops with status 54
+  and that cause. Mesh regularization of strong softening
   remains separate ([#136]).
 - New option `control.iterative_return_mapping_option` (default 0). With 1
   (experimental), the return iterates until cohesion, friction and dilation

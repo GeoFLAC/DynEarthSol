@@ -98,7 +98,11 @@ flows of the active surfaces, nonnegative plastic work, and unchanged by a
 second, unloaded update. Cases: a
 cohesion drop faster than elastic unloading (the return must reach the residual
 strength), also from a nonzero history whose distance to the breakpoint rounds
-one ulp short, friction and dilation softening within the step, tension with a
+one ulp short, a cohesion that drops or rises at one plastic strain (`pls0 =
+pls1`), also where the return lands exactly on it (the strength there is the
+next piece's), two materials whose mean cohesion rises at once and then falls,
+at once or over a range (the return lies past the fall), friction and dilation
+softening within the step, tension with a
 friction angle constant or 1e-8 degrees from constant (the two returns must
 agree), rate-and-state softening to its residual cohesion, a single state update per
 step, and friction softening whose stress lies on the face of the stored
@@ -118,7 +122,11 @@ which may yield again because the stored history has weakened them; its
 rate-and-state case stores the coefficient of the start of the step.
 
 `check.sh` also runs a non-finite trial in a separate process. It must report
-its cause and first element and exit with status 54 on every test backend.
+its cause and first element and exit with status 54 on every test backend. So
+must two laws that jump up where the return would land, so that no plastic
+increment records itself: a cohesion rise, and a tensile cap that opens where
+the friction softens to 0 (option 1; pure 2D in 2D, since plane strain measures
+plastic strain by its largest shear).
 The material kernel completes before the host checks this return status.
 
 For a fixed friction angle, the closed-form return uses
