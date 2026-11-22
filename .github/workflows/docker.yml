@@ -135,7 +135,7 @@ jobs:
               -e "s/^output_step_interval = .*/output_step_interval = 100/" \
               ~/DynEarthSol/examples/defaults.cfg > t.cfg
           ~/DynEarthSol/dynearthsol2d t.cfg
-          python3 -c "import numpy, scipy"
+          python3 ~/DynEarthSol/2vtk.py result
           cd ~/DynEarthSol
           make -j$(nproc) ndims=3 $CXX_ARG
         '

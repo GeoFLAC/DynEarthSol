@@ -31,13 +31,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       apt-get install -y clang libomp-dev; \
     fi
 
-# Plain image: HDF5, and numpy/scipy for the Python utilities.
+# Plain image: HDF5, and numpy, scipy and h5py for the Python utilities.
 FROM base AS env-0
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,target=/root/.cache/pip \
     apt-get update && apt-get install -y libhdf5-dev pkg-config \
-    && pip install numpy scipy
+    && pip install numpy scipy h5py
 
 # GoSPL image: Miniforge, the gospl env (Python 3.11, the Makefile default)
 # and gospl_extensions, in /opt, writable by the `conda` group.
