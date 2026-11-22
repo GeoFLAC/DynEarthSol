@@ -116,11 +116,19 @@ public:
     #pragma acc routine seq
     void piece_strength(const StrengthPiece& piece, double offset,
                         double& amc, double& anphi, double& anpsi, double& ten_max) const;
-    // The lowest and highest amc, anphi and ten_max of the piece at the offsets from x to y,
-    // for a cohesion that is not negative.
+    // The strength of a piece over the offsets from x to y, for a cohesion that is not
+    // negative: the lowest and highest amc, anphi and ten_max, and bounds of the size of
+    // their second derivatives per unit plastic strain (for ten_max, of cohesion/tan_phi
+    // before the cap at tension_max; -1 where not known) and of the error of the lookup
+    // tables in them.
+    struct StrengthRange {
+        double amc[2], anphi[2], ten_max[2];
+        double curvature_amc, curvature_anphi, curvature_ten;
+        double error_amc, error_anphi, error_ten;
+    };
     #pragma acc routine seq
     void piece_strength_range(const StrengthPiece& piece, double x, double y,
-                              double amc[2], double anphi[2], double ten_max[2]) const;
+                              StrengthRange& range) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,

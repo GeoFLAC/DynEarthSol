@@ -320,9 +320,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   and that cause. Where more than one plastic increment returns the stress to
   the strength of the history it stores, as where friction or dilation change
   along a piece of the law or the return moves from a face of the yield
-  surface to an edge, the return takes the smallest. Mesh regularization of
-  strong softening
-  remains separate ([#136]).
+  surface to an edge, the return takes the smallest. A search for the return
+  that needs more than 4,096 evaluations stops with status 54 and that cause.
+  Mesh regularization of strong softening remains separate ([#136]).
 - New option `control.iterative_return_mapping_option` (default 0). With 1
   (experimental), the return iterates until cohesion, friction and dilation
   all match the plastic strain at the end of the step (backward Euler), and

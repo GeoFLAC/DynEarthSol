@@ -630,8 +630,19 @@ void MatProps::piece_strength(const StrengthPiece& piece, double offset,
 // Cohesion changes linearly along a piece and so does the friction angle, which the
 // rate-and-state terms raise monotonically; anphi, sqrt_anphi and tan_phi rise with it. Each
 // therefore takes its extremes at x and y, and the strength those of their products.
+//
+// Where the friction angle phi itself is linear, at dphi per unit plastic strain, u =
+// sqrt_anphi = tan(pi/4 + phi/2) and w = 1/tan_phi change by u' = dphi (1 + u^2)/2 and w' =
+// -dphi (1 + w^2), so that
+//   anphi'' = dphi^2 (1 + u^2)(1 + 3u^2)/2,
+//   amc''   = (1 + u^2)(2 dcohesion dphi + cohesion dphi^2 u),
+//   (cohesion w)'' = (1 + w^2)(2 cohesion dphi^2 w - 2 dcohesion dphi),
+// each largest in size at the largest u, w and cohesion. The lookup tables of the GPU build
+// interpolate sin and tan linearly, within h^2/8 of sin and h^2 tan (1 + tan^2)/4 of tan for
+// a table step h, and anphi, sqrt_anphi and cohesion/tan_phi follow them through their
+// derivatives, bounded here twice over.
 void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double y,
-                                    double amc[2], double anphi[2], double ten_max[2]) const
+                                    StrengthRange& range) const
 {
     double c[2];
     AngleFactors f[2];
@@ -640,13 +651,36 @@ void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double
     const double c_lo = std::min(c[0], c[1]), c_hi = std::max(c[0], c[1]);
     const double t_lo = std::min(f[0].tan_phi, f[1].tan_phi);
     const double t_hi = std::max(f[0].tan_phi, f[1].tan_phi);
-    anphi[0] = std::min(f[0].anphi, f[1].anphi);
-    anphi[1] = std::max(f[0].anphi, f[1].anphi);
-    amc[0] = 2 * c_lo * std::min(f[0].sqrt_anphi, f[1].sqrt_anphi);
-    amc[1] = 2 * c_hi * std::max(f[0].sqrt_anphi, f[1].sqrt_anphi);
+    const double u_lo = std::min(f[0].sqrt_anphi, f[1].sqrt_anphi);
+    const double u_hi = std::max(f[0].sqrt_anphi, f[1].sqrt_anphi);
+    range.anphi[0] = std::min(f[0].anphi, f[1].anphi);
+    range.anphi[1] = std::max(f[0].anphi, f[1].anphi);
+    range.amc[0] = 2 * c_lo * u_lo;
+    range.amc[1] = 2 * c_hi * u_hi;
     // As strength_from: cohesion/tan_phi up to tension_max, which zero friction (tan_phi 0) gives.
-    ten_max[0] = t_hi > 0 ? std::min(tension_max, c_lo / t_hi) : tension_max;
-    ten_max[1] = t_lo > 0 ? std::min(tension_max, c_hi / t_lo) : tension_max;
+    range.ten_max[0] = t_hi > 0 ? std::min(tension_max, c_lo / t_hi) : tension_max;
+    range.ten_max[1] = t_lo > 0 ? std::min(tension_max, c_hi / t_lo) : tension_max;
+
+    range.curvature_amc = range.curvature_anphi = range.curvature_ten = -1;
+    range.error_amc = range.error_anphi = range.error_ten = 0;
+    if (piece.rsf == 1 && piece.dfriction != 0) return;
+    const double dphi = (piece.rsf == 2 ? 0 : piece.dfriction) * DEG2RAD;
+    const double dc = std::fabs(piece.dcohesion * dphi);
+    range.curvature_anphi = 0.5 * dphi * dphi * (1 + u_hi * u_hi) * (1 + 3 * u_hi * u_hi);
+    range.curvature_amc = (1 + u_hi * u_hi) * (2 * dc + c_hi * dphi * dphi * u_hi);
+    if (t_lo > 0) {
+        const double w = 1 / t_lo;
+        range.curvature_ten = (1 + w * w) * 2 * (dc + c_hi * dphi * dphi * w);
+    }
+#ifdef NPROF
+    if (piece.rsf != 0) return;
+    const double sin_error = SIN_XDELTA * SIN_XDELTA / 8;
+    const double tan_error = TAN_XDELTA * TAN_XDELTA * t_hi * (1 + t_hi * t_hi) / 4;
+    // d anphi/d sin = (anphi + 1)^2/2, d sqrt_anphi = d anphi/(2 sqrt_anphi).
+    range.error_anphi = (range.anphi[1] + 1) * (range.anphi[1] + 1) * sin_error;
+    range.error_amc = 2 * c_hi * range.error_anphi / u_lo;
+    if (t_lo > 0) range.error_ten = 2 * c_hi * tan_error / (t_lo * t_lo);
+#endif
 }
 
 void MatProps::update_state_variable(int e, double slip_rate, double& state_variable,

@@ -636,7 +636,8 @@ enum ReturnRejection {
     reject_no_root = 3,      // the law has more pieces than consistent_return searches
     reject_no_increment = 4, // no plastic increment returns the stress to the strength of the
                              // history it stores: the law jumps up there
-    reject_reason_count = 5
+    reject_budget = 5,       // the search used up return_budget before it finished
+    reject_reason_count = 6
 };
 
 #pragma acc routine seq
@@ -680,6 +681,8 @@ struct StrengthCurve {
     // Friction and dilation at delta = 0, for law.start_angles.
     double start_friction, start_dilation;
     MatProps::AngleFactors start_factors;
+    // What the search of consistent_return has evaluated on this curve (spend).
+    mutable int evaluations;
 };
 
 // For law.start_angles: the angles of every piece are those at delta = 0.
@@ -828,13 +831,27 @@ static int return_surface_count(int nd)
 }
 
 #pragma acc routine seq
+static int return_face_count(int nd)
+{
+    return nd == 3 ? 3 : 1;
+}
+
+// The principal stresses (low, high) of face s.
+#pragma acc routine seq
+static void face_stresses(int s, int nd, int& low, int& high)
+{
+    low = s == 1 ? 1 : 0;
+    high = nd == 2 ? 1 : (s == 2 ? 1 : 2);
+}
+
+#pragma acc routine seq
 static double return_surface(int s, const Strength& r, int nd, double grad[3], double flow[3])
 {
-    const int faces = nd == 3 ? 3 : 1;
+    const int faces = return_face_count(nd);
     for (int k = 0; k < 3; ++k) grad[k] = flow[k] = 0;
     if (s < faces) {
-        const int low = s == 1 ? 1 : 0;
-        const int high = nd == 2 ? 1 : (s == 2 ? 1 : 2);
+        int low, high;
+        face_stresses(s, nd, low, high);
         grad[high] = r.anphi;
         grad[low] = -1;
         flow[high] = r.anpsi;
@@ -844,6 +861,16 @@ static double return_surface(int s, const Strength& r, int nd, double grad[3], d
     const int cap = nd-1 - (s-faces);
     grad[cap] = flow[cap] = 1;
     return r.ten_max;
+}
+
+// How far the stress p lies outside surface s, grad.p - offset.
+#pragma acc routine seq
+static double surface_violation(int s, const Strength& r, int nd, const double p[3])
+{
+    double grad[3], flow[3];
+    double f = -return_surface(s, r, nd, grad, flow);
+    for (int k = 0; k < nd; ++k) f += grad[k]*p[k];
+    return f;
 }
 
 // Gaussian elimination with partial pivoting; false if (near) singular.
@@ -975,13 +1002,25 @@ struct ReturnPoint {
     int set;
 };
 
+// The fixed-strength returns and parts of strength ranges the search of one element's return
+// may evaluate: a bound on its work, many times what returns take on the strength laws of the
+// tests and examples. Past it the return is rejected (reject_budget), not taken as found.
+static constexpr int return_budget = 4096;
+
+#pragma acc routine seq
+static bool spend(const StrengthCurve& curve)
+{
+    return ++curve.evaluations <= return_budget;
+}
+
 #pragma acc routine seq
 static bool evaluate_return(const double trial[3], double a1, double a2,
                             const StrengthCurve& curve, bool plane_strain, int nd,
                             double delta, ReturnPoint& r)
 {
     r.delta = delta;
-    if (!fixed_strength_return(trial, a1, a2, strength_at(curve, delta), plane_strain, nd,
+    if (!spend(curve) ||
+        !fixed_strength_return(trial, a1, a2, strength_at(curve, delta), plane_strain, nd,
                                r.p, r.recorded, r.set))
         return false;
     r.g = r.recorded - delta;
@@ -1086,41 +1125,73 @@ static bool find_turn(const double trial[3], double a1, double a2, const Strengt
 
 // Bounds of the largest violation of the trial's surfaces, v, and of the tolerance of the yield
 // checks, tol, over the strengths of the prepared piece between increments x and y. Each
-// surface is linear in anphi and in amc or ten_max, so its extremes lie at the corners of
-// their ranges; anpsi, of the flow only, plays no part.
+// surface is linear in anphi and in amc or ten_max (anpsi, of the flow only, plays no part),
+// so it lies within its values at the corners of their ranges. Where the curvature of the
+// strength is known, it also lies within curvature (y-x)^2/8 of the chord between its values
+// at x and y, which follows cohesion and friction together: the bound narrows with the square
+// of y-x even where their changes nearly cancel. Twice the lookup tables' error covers the
+// difference between their strength and the smooth one.
 #pragma acc routine seq
 static void violation_range(const double trial[3], const StrengthCurve& curve, int nd,
                             double x, double y, double v[2], double tol[2])
 {
-    double amc[2], anphi[2], ten_max[2];
-    curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, amc, anphi,
-                                        ten_max);
+    MatProps::StrengthRange range;
+    curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, range);
+    const Strength ends[2] = {strength_at(curve, x), strength_at(curve, y)};
+    const double chord = 0.125*(y - x)*(y - x);
     v[0] = v[1] = -std::numeric_limits<double>::max();
     for (int s = 0; s < return_surface_count(nd); ++s) {
         double lo = std::numeric_limits<double>::max(), hi = -lo;
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
-                const Strength corner = {amc[j], anphi[i], anphi[i], ten_max[j]};
-                double grad[3], flow[3];
-                double f = -return_surface(s, corner, nd, grad, flow);
-                for (int k = 0; k < nd; ++k) f += grad[k]*trial[k];
+                const Strength corner = {range.amc[j], range.anphi[i], range.anphi[i],
+                                         range.ten_max[j]};
+                const double f = surface_violation(s, corner, nd, trial);
                 lo = std::min(lo, f);
                 hi = std::max(hi, f);
             }
+        double curvature = range.curvature_ten, error = range.error_ten;
+        if (s < return_face_count(nd)) {
+            int low, high;
+            face_stresses(s, nd, low, high);
+            const double scale = std::fabs(trial[high]);
+            curvature = range.curvature_anphi < 0 || range.curvature_amc < 0 ? -1 :
+                scale*range.curvature_anphi + range.curvature_amc;
+            error = scale*range.error_anphi + range.error_amc;
+        }
+        if (curvature >= 0) {
+            const double fx = surface_violation(s, ends[0], nd, trial);
+            const double fy = surface_violation(s, ends[1], nd, trial);
+            const double slack = curvature*chord + 2*error;
+            lo = std::max(lo, std::min(fx, fy) - slack);
+            hi = std::min(hi, std::max(fx, fy) + slack);
+        }
         v[0] = std::max(v[0], lo);
         v[1] = std::max(v[1], hi);
     }
-    tol[0] = return_tolerance(trial, amc[0], nd);
-    tol[1] = return_tolerance(trial, amc[1], nd);
+    tol[0] = return_tolerance(trial, range.amc[0], nd);
+    tol[1] = return_tolerance(trial, range.amc[1], nd);
+}
+
+// Whether the trial yields at increment delta, as the first check of fixed_strength_return.
+#pragma acc routine seq
+static bool yields_at(const double trial[3], const StrengthCurve& curve, int nd, double delta)
+{
+    const Strength r = strength_at(curve, delta);
+    const double tolerance = return_tolerance(trial, r.amc, nd);
+    for (int s = 0; s < return_surface_count(nd); ++s)
+        if (surface_violation(s, r, nd, trial) > tolerance) return true;
+    return false;
 }
 
 // With friction and dilation fixed, the strength along a piece moves one way, and where the trial
 // yields is one range at one end. Where they change, it can yield in several ranges: whether
 // it starts or stops yielding between a and c, where it does the same, as the return y at the
 // first such increment found. The search halves [a, c], left half first, down to a relative
-// 1e-12 of c, except where the range of the strength (piece_strength_range) shows that the
-// trial yields throughout a part, or nowhere in it. Returns 1 if it finds one, 0 if not, and -1
-// if a return fails.
+// 1e-12 of c, except where violation_range shows that the trial yields throughout a part, or
+// nowhere in it, and checks the middle of each part it halves as yields_at does. Each part
+// counts against return_budget. Returns 1 if it finds a change, 0 once it has shown there is
+// none, and -1 if a return fails or the budget runs out.
 #pragma acc routine seq
 static int yield_change(const double trial[3], double a1, double a2, const StrengthCurve& curve,
                         bool plane_strain, int nd, const ReturnPoint& a, const ReturnPoint& c,
@@ -1130,14 +1201,17 @@ static int yield_change(const double trial[3], double a1, double a2, const Stren
     const bool yields = a.set != 0;
     double size = c.delta - a.delta, i = 0;  // part i of [a, c] in parts of this size
     int level = 0;
-    for (int part = 0; part < 512; ++part) {
+    for (;;) {
+        if (!spend(curve)) return -1;
         const double x = a.delta + i*size, z = std::min(c.delta, a.delta + (i + 1)*size);
         double v[2], tol[2];
         violation_range(trial, curve, nd, x, z, v, tol);
         if (!(yields ? v[0] > tol[1] : v[1] <= tol[0]) && size > 1e-12*c.delta) {
-            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, 0.5*(x + z), y))
-                return -1;
-            if ((y.set != 0) != yields) return 1;
+            const double m = 0.5*(x + z);
+            if (yields_at(trial, curve, nd, m) != yields) {
+                if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, m, y)) return -1;
+                if ((y.set != 0) != yields) return 1;
+            }
             size *= 0.5;
             i *= 2;
             ++level;
@@ -1151,7 +1225,6 @@ static int yield_change(const double trial[3], double a1, double a2, const Stren
         if (level == 0) return 0;
         i += 1;
     }
-    return 0;
 }
 
 // The first fall of g to 0 between a and b on one piece, as the bracket [first, last] with
@@ -1169,23 +1242,42 @@ static int first_fall(const double trial[3], double a1, double a2, const Strengt
     for (int part = 0; part < 16; ++part) {
         // [a, c] has a's active set, and d lies just past it; or c and d are b. Where the
         // trial starts or stops yielding within [a, c], d moves there and [a, d] is split again.
+        // From an elastic a, the yield check alone tells the side of each step, and the return
+        // is solved at d only.
         ReturnPoint c = b, d = b, x, y;
+        bool elastic = false;  // the trial yields nowhere in [a, c]
         for (int split = 0; ; ++split) {
             if (a.set != d.set) {
                 c = a;
+                const double target = d.delta;
                 for (int it = 0; it < 60 && d.delta - c.delta > 1e-12*d.delta; ++it) {
+                    const double mid = 0.5*(c.delta + d.delta);
+                    if (a.set == 0) {
+                        if (!spend(curve)) return -1;
+                        if (yields_at(trial, curve, nd, mid)) d.delta = mid;
+                        else c.delta = mid;
+                        continue;
+                    }
                     ReturnPoint m;
-                    if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd,
-                                         0.5*(c.delta + d.delta), m))
+                    if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, mid, m))
                         return -1;
                     if (m.set == a.set) c = m;
                     else d = m;
+                }
+                if (a.set == 0) {
+                    c.g = c.recorded - c.delta;
+                    if (d.delta != target &&
+                        !evaluate_return(trial, a1, a2, curve, plane_strain, nd, d.delta, d))
+                        return -1;
                 }
             }
             if (split == 16) break;
             const int change = yield_change(trial, a1, a2, curve, plane_strain, nd, a, c, y);
             if (change < 0) return -1;
-            if (!change) break;
+            if (!change) {
+                elastic = a.set == 0;
+                break;
+            }
             d = y;
         }
         if (a.g > 0 && !(c.g > 0)) {
@@ -1193,7 +1285,8 @@ static int first_fall(const double trial[3], double a1, double a2, const Strengt
             last = c;
             return 1;
         }
-        if ((a.g > 0) == (c.g > 0)) {
+        // Where the trial does not yield, nothing is recorded: g = -delta only falls.
+        if (!elastic && (a.g > 0) == (c.g > 0)) {
             if (!find_turn(trial, a1, a2, curve, plane_strain, nd, a, c, x)) return -1;
             if (a.g > 0 && x.g < 0) {
                 first = a;
@@ -1318,9 +1411,9 @@ static int earlier_fall(const double trial[3], double a1, double a2, const Stren
 // piece. A root the secant steps do not reach is bracketed and found by
 // Illinois regula falsi (solve_bracket).
 #pragma acc routine seq
-static int consistent_return(const double trial[3], double a1, double a2,
-                             StrengthCurve& curve, bool plane_strain, int nd,
-                             double guess, double p[3], double& depls)
+static int search_return(const double trial[3], double a1, double a2,
+                         StrengthCurve& curve, bool plane_strain, int nd,
+                         double guess, double p[3], double& depls)
 {
     if (!finite3(trial)) return reject_nonfinite;
     ReturnPoint lo;           // where the search stands: g > 0, or below 0 past a jump
@@ -1423,6 +1516,18 @@ static int consistent_return(const double trial[3], double a1, double a2,
         if (status != keep_searching) return status;
     }
     return reject_no_root;
+}
+
+// The return search_return finds; one whose search used up return_budget is rejected as
+// such, not as one without an admissible return.
+#pragma acc routine seq
+static int consistent_return(const double trial[3], double a1, double a2,
+                             StrengthCurve& curve, bool plane_strain, int nd,
+                             double guess, double p[3], double& depls)
+{
+    const int status = search_return(trial, a1, a2, curve, plane_strain, nd, guess, p, depls);
+    return status == reject_no_return && curve.evaluations > return_budget ? reject_budget
+                                                                           : status;
 }
 
 
@@ -1800,6 +1905,8 @@ static const char* rejection_text(int reason)
     case reject_no_increment:
         return "no plastic increment returns the stress to the strength of the plastic strain "
                "it stores, where the strength law jumps";
+    case reject_budget:
+        return "the search for the return reached its limit of evaluations";
     default:
         return "unknown";
     }
