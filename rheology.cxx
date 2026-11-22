@@ -1046,14 +1046,55 @@ static bool near_root(const ReturnPoint& r)
     return std::fabs(r.g) <= 1e-9*std::max(r.delta, r.recorded);
 }
 
+// Between a and b on one piece, where g has the same sign at both, x is where g goes
+// furthest the other way: its minimum if it is above 0 there, its maximum if below. g turns
+// only where friction or dilation change along the piece, and at most once, so
+// golden-section search finds it, and stops at the first point where g has the other sign;
+// elsewhere x is a. Returns false if a return fails.
+#pragma acc routine seq
+static bool find_turn(const double trial[3], double a1, double a2, const StrengthCurve& curve,
+                      bool plane_strain, int nd, const ReturnPoint& a, const ReturnPoint& b,
+                      ReturnPoint& x)
+{
+    x = a;
+    if (!curve.piece.angles_change()) return true;
+    const double s = a.g > 0 ? 1 : -1;  // the search lowers s*g
+    const double r = 0.6180339887498949;  // (sqrt(5) - 1)/2
+    double lo = a.delta, hi = b.delta;
+    ReturnPoint u, v;
+    if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi - r*(hi - lo), u) ||
+        !evaluate_return(trial, a1, a2, curve, plane_strain, nd, lo + r*(hi - lo), v))
+        return false;
+    for (;;) {
+        const bool left = s*u.g < s*v.g;
+        x = left ? u : v;
+        if (s*x.g < 0 || hi - lo <= 1e-9*hi) return true;
+        if (left) {
+            hi = v.delta;
+            v = u;
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi - r*(hi - lo), u))
+                return false;
+        }
+        else {
+            lo = u.delta;
+            u = v;
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, lo + r*(hi - lo), v))
+                return false;
+        }
+    }
+}
+
 // Backward-Euler return for the whole strength law: the plastic increment
 // delta whose fixed-strength return at strength(pls+delta) records delta.
 // g(delta) = recorded - delta is continuous where the law is, and g(0) > 0
 // when the trial yields. The law's linear pieces are searched in order for the
 // first increment where g falls to 0; where it stays constant the root is
 // exact. Where g jumps below 0 instead, at a rise of the law or inside a
-// bracket, the search goes on to the piece that brings it back above 0; beyond
-// the last break the strength stays and g only falls. With law.start_angles
+// bracket, the search goes on to where it is back above 0; beyond the last
+// break the strength stays and g only falls. Where friction or dilation change
+// along a piece, g can turn there, once: where it has the same sign at both
+// ends of a piece, the search looks for a dip below 0 or a rise above 0
+// between them (find_turn). With law.start_angles
 // only cohesion and the tensile cap change with delta, so the search runs only
 // for returns the closed forms do not give: corners, the tensile cap and
 // breakpoints.
@@ -1081,11 +1122,17 @@ static int consistent_return(const double trial[3], double a1, double a2,
     }
     for (int piece = 0; piece < 128; ++piece) {
         if (have_lo && lo.g < 0 && !root_found(lo)) {
-            // Below 0 past a jump: on to the end of the piece and across the break.
+            // Below 0 past a jump: on from where g rises above 0 within the piece, if it
+            // does, and otherwise across the break.
             if (hi == no_break) return reject_no_increment;
-            ReturnPoint b;
-            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
+            ReturnPoint b, x;
+            if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b) ||
+                (b.g < 0 && !find_turn(trial, a1, a2, curve, plane_strain, nd, lo, b, x)))
                 return reject_no_return;
+            if (b.g < 0 && x.g > 0) {
+                lo = x;
+                continue;
+            }
             const int status = cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi,
                                            p, depls);
             if (status != keep_searching) return status;
@@ -1146,11 +1193,22 @@ static int consistent_return(const double trial[3], double a1, double a2,
             if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, hi, b))
                 return reject_no_return;
             if (b.g > 0) {
-                // The root lies past the break, on the next piece.
-                const int status = cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo, hi,
-                                               p, depls);
-                if (status != keep_searching) return status;
-                continue;
+                // The root lies before where g dips below 0 within the piece, if it does, and
+                // otherwise past the break, on the next piece.
+                ReturnPoint s;
+                if (!evaluate_return(trial, a1, a2, curve, plane_strain, nd, curve.from, s) ||
+                    (s.g > 0 && !find_turn(trial, a1, a2, curve, plane_strain, nd, s, b, x)))
+                    return reject_no_return;
+                if (s.g > 0 && x.g < 0) {
+                    lo = s;
+                    b = x;
+                }
+                else {
+                    const int status = cross_break(trial, a1, a2, curve, plane_strain, nd, b, lo,
+                                                   hi, p, depls);
+                    if (status != keep_searching) return status;
+                    continue;
+                }
             }
         }
         // Illinois regula falsi on [lo, b], g(lo) > 0 >= g(b).

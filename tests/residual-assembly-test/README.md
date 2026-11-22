@@ -101,7 +101,11 @@ strength), also from a nonzero history whose distance to the breakpoint rounds
 one ulp short, a cohesion that drops or rises at one plastic strain (`pls0 =
 pls1`), also where the return lands exactly on it (the strength there is the
 next piece's), two materials whose mean cohesion rises at once and then falls,
-at once or over a range (the return lies past the fall), friction and dilation
+at once or over a range (the return lies past the fall), with option 1 a piece
+past a cohesion jump whose friction softens while its cohesion hardens, where
+`g = recorded - delta` is below 0 at both ends and above 0 between (the return
+lies there), and a piece softening friction and cohesion where g is above 0 at
+both ends and below 0 between (the return is its first root), friction and dilation
 softening within the step, tension with a
 friction angle constant or 1e-8 degrees from constant (the two returns must
 agree), rate-and-state softening to its residual cohesion, a single state update per

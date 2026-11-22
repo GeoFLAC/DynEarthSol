@@ -323,7 +323,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   (experimental), the return iterates until cohesion, friction and dilation
   all match the plastic strain at the end of the step (backward Euler), and
   rate-and-state models store the friction coefficient of the final plastic
-  history. This depends less on the step size but costs more where friction
+  history. Where friction or dilation changes along a piece of the law, more
+  than one increment within the piece can match; the return takes the first.
+  This depends less on the step size but costs more where friction
   or dilation weakens: on one thread the 2D accretionary-wedge example runs
   about 6% longer than before with the default and about 13% longer with 1.
   Both give the same result when only cohesion weakens ([#136]).
