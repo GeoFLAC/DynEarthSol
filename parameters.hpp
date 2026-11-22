@@ -404,6 +404,11 @@ struct BC {
     double stress_val_z0;
     double stress_val_z1;
 
+    // The text of vbc_*: an integer code (also in vbc_* above), or one letter per component
+    // of the side's frame, whose values vbc_val_* then lists. Empty: use the integer code.
+    std::string vbc_text[nbdrytypes];
+    double vbc_component_values[nbdrytypes][NDIMS];
+
     SideBC side[nbdrytypes];  // filled from the codes above by validate_parameters()
 };
 

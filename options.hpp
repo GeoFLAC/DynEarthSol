@@ -64,6 +64,7 @@ struct Entry {
     std::any ref;                           // T*, for typed access
     std::string (*to_str)(const Entry &) = nullptr;
     const std::vector<std::string> *tokens = nullptr;  // list options only
+    bool scalar_too = false;                           // a list that also takes one bare item
     std::string *text = nullptr;                       // string options only
 };
 
@@ -117,6 +118,12 @@ inline std::string trim(const std::string &s)
 // text with no brackets, quotes or blanks, so the reader that converts it and the
 // text CLI11 would hand over agree. Anything else, such as "[[1]]", "[\"1\"]",
 // "[1,,2]" or "[1 2]", was an error before and stays one.
+inline bool is_plain_item(const std::string &v)
+{
+    return ! v.empty() && v.find_first_not_of("0123456789+-.abcdefghijklmnopqrstuvwxyz"
+                                               "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos;
+}
+
 inline bool is_plain_list(const std::string &v)
 {
     if (v.size() < 2 || v.front() != '[' || v.back() != ']') return false;
@@ -132,8 +139,7 @@ inline bool is_plain_list(const std::string &v)
             // Only a trailing comma leaves the last item empty, and then not alone.
             if (! (last && begin > 0)) return false;
         }
-        else if (item.find_first_not_of("0123456789+-.abcdefghijklmnopqrstuvwxyz"
-                                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
+        else if (! is_plain_item(item))
             return false;
         if (last) return true;
         begin = comma + 1;
@@ -240,6 +246,8 @@ public:
         has_def_ = true; def_ = s; tokens_ = detail::split_tokens(s); return this;
     }
     List* required() { req_ = true; return this; }
+    // Also take one bare item, "x" for "[x]": a key that was a scalar before it became a list.
+    List* scalar_too() { scalar_ = true; return this; }
 
     void attach(CLI::App *section, const std::string &key,
                 const std::string &help, detail::Entry &e) override
@@ -251,13 +259,14 @@ public:
         e.has_default = has_def_;
         e.required = req_;
         e.tokens = &tokens_;
+        e.scalar_too = scalar_;
         e.to_str = [](const detail::Entry &x) { return detail::join_tokens(*x.tokens); };
     }
 
 private:
     std::vector<std::string> tokens_;
     std::string def_;
-    bool has_def_ = false, req_ = false;
+    bool has_def_ = false, req_ = false, scalar_ = false;
 };
 
 
@@ -391,9 +400,10 @@ public:
                 defer("option '" + key + "' cannot start with three quotes (multi-line "
                       "strings are not supported), got '" + value + "'");
             else if (e->tokens) {
-                if (! detail::is_plain_list(value))
+                if (! detail::is_plain_list(value) && ! (e->scalar_too && detail::is_plain_item(value)))
                     defer("option '" + key + "' must be a list written as "
-                          "'[d0, d1, ...]' of plain numbers, got '" + value + "'");
+                          "'[d0, d1, ...]' of plain numbers" + (e->scalar_too ? " or one number" : "")
+                          + ", got '" + value + "'");
             }
             else if (! value.empty() && value.front() == '[')
                 defer("option '" + key + "' is not a list, but its value starts with '[': '"

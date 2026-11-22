@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -124,6 +125,27 @@ void convert_bc_codes(Param &p)
         s.stress_axis = -1;
         const int code = codes[i];
         const double v = values[i];
+
+        const std::string &text = bc.vbc_text[i];
+        if (!text.empty() && std::isalpha(static_cast<unsigned char>(text[0]))) {
+            // Given by components: the values are already in the side's frame. A free normal
+            // carries the support; only the normal value follows the period table, and in 2D
+            // the depth profile and the bottom shear zone of x0.
+            for (int d=0; d<NDIMS; ++d) {
+                if (text[d] != 'v') continue;
+                s.type[d] = 'v';
+                s.value[d] = bc.vbc_component_values[i][d];
+                s.max_speed = std::max(s.max_speed, std::fabs(s.value[d]));
+            }
+            const bool free_normal = (text[0] == 'f');
+            s.support = (i == iboundz0) ? free_normal && bc.has_winkler_foundation
+                      : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
+            if (i < iboundz0) {
+                s.normal_follows_period = !free_normal;
+                s.taper = (NDIMS == 2 && i == iboundx0 && !free_normal);
+            }
+            continue;
+        }
 
         if (i >= iboundn0) {
             // n0 to n3 accept 1, 3, 11 and 13 only (input.cxx checks). The frame is the
@@ -483,10 +505,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     }
 
     int meets[nbdrytypes];
-    bool horizontal[nbdrytypes], full[nbdrytypes];
+    bool held[nbdrytypes], horizontal[nbdrytypes], full[nbdrytypes];
     double n_value[nbdrytypes];
     for (int i=0; i<nbdrytypes; ++i) {
         const SideBC &s = bc.side[i];
+        held[i] = (s.type[0] == 'v');
         horizontal[i] = s.horizontal_normal;
         full[i] = true;
         for (int d=0; d<NDIMS; ++d)
@@ -553,22 +576,22 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #ifndef ACC
 #ifdef THREED
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, walls, any_z, meets, horizontal, full, n_value)
+        shared(var, vel, normalized, walls, any_z, meets, held, horizontal, full, n_value)
 #else
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, walls, any_z, meets, horizontal, full, n_value, zmin, thickness, \
+        shared(var, vel, normalized, walls, any_z, meets, held, horizontal, full, n_value, zmin, thickness, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
 #endif
 #endif
 #ifdef THREED
     #pragma acc parallel loop gang vector async \
-        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], horizontal[0:nbdrytypes], \
-               full[0:nbdrytypes], n_value[0:nbdrytypes])
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held[0:nbdrytypes], \
+               horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #else
     #pragma acc parallel loop gang vector async present(zmin) \
-        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], horizontal[0:nbdrytypes], \
-               full[0:nbdrytypes], n_value[0:nbdrytypes])
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held[0:nbdrytypes], \
+               horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -608,7 +631,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         for (int ib=iboundn0; ib<=iboundn3; ib++) {
             ConstArrayAccessor n = (*var.bnormals)[ib]; // unit normal vector
 
-            if (flag & (1 << ib)) {
+            if ((flag & (1 << ib)) && held[ib]) {
                 double fac = 0;
                 if (!full[ib] && !horizontal[ib]) {  // the normal held, as code 1
                     if (flag == (1U << ib)) {  // ordinary boundary
