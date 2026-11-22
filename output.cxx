@@ -490,7 +490,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
     {
-        // The boundary normals of the starting mesh, which a restart keeps (#115).
+        // The boundary normals of the starting mesh, which a restart keeps.
         double_vec normals(nbdrytypes * NDIMS);
         for (int i=0; i<nbdrytypes; ++i)
             for (int d=0; d<NDIMS; ++d) normals[i*NDIMS + d] = (*var.bnormals)[i][d];

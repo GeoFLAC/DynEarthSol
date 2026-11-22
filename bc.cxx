@@ -67,7 +67,7 @@ bool is_on_boundary(const uint_vec &bcflag, int node)
 
 
 namespace {
-// Today's code 0 on a side: no velocity component held (tractions aside).
+// Code 0 on a side: no velocity component held (tractions aside).
 bool all_free(const SideBC &s)
 {
     for (int d=0; d<NDIMS; ++d)
@@ -75,7 +75,7 @@ bool all_free(const SideBC &s)
     return true;
 }
 
-// Today's codes 1 and 11: the normal velocity held, the other components not.
+// Codes 1 and 11: the normal velocity held, the other components not.
 bool normal_only(const SideBC &s)
 {
     if (s.type[0] != 'v') return false;
@@ -88,10 +88,10 @@ bool normal_only(const SideBC &s)
 
 // Read the velocity and stress codes into one table per side, in the side's frame
 // (see SideBC). Zeros on a negative axis are stored as -0.0, so that turning a value
-// back into a global component gives today's +0.0.
+// back into a global component gives +0.0.
 void convert_bc_codes(Param &p)
 {
-    // What each code holds today, per global component (the conversion tables of #115).
+    // What each code holds, per global component.
     // N is the normal value, which follows the period table; V the value; L the lateral
     // value; Z holds the component at 0; F leaves it free. Side walls list (normal,
     // lateral, z) in 3D and (x, z) in 2D; z sides list (x, y, z) or (x, z).
@@ -241,7 +241,7 @@ void create_boundary_normals(const Param &param, const Variables &var, array_t &
      * their vbc are well defined.
      *
      * The normals are those of the starting mesh: the run keeps them, and so do
-     * its checkpoints (#115), even where a boundary bends later. A side without
+     * its checkpoints, even where a boundary bends later. A side without
      * facets gets 0.
      */
 
@@ -1046,7 +1046,7 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
     #pragma acc wait
 
     // stress_bc_* (codes only) loads each facet with S n_k on component k, n being the
-    // facet's area-weighted normal. A traction t (letters only, #115) loads it with T times
+    // facet's area-weighted normal. A traction t (letters only) loads it with T times
     // the facet area along the frame axis. The facet's nodes share the load.
     for (int i = 0; i < nbdrytypes; ++i) {
     const SideBC &side = param.bc.side[i];

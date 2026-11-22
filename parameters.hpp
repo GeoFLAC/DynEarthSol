@@ -281,11 +281,11 @@ struct Control {
 
 };
 
-// One side's velocity and stress conditions, read from the integer codes (#115).
+// One side's velocity and stress conditions, from the integer codes or the letters.
 // Components are in the side's frame (n, t_h, t_v): n is the outward normal,
 // t_h = up x n (+x on the top and bottom) and t_v = n x t_h. 2D keeps the in-plane
 // pair: (n, t_v) on x walls and n boundaries, (n, t_h) on z walls. The other members
-// reproduce how the codes behave today.
+// reproduce how the codes behave.
 struct SideBC {
     char type[NDIMS];            // 'v': velocity held at value; 't': traction; 'f': free
     double value[NDIMS];         // along the frame axis: m/s for 'v', Pa for 't' (outward positive)

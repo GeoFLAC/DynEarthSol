@@ -587,7 +587,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 
     if (bin_chkpt.has_array("boundary normals")) {
         // The run keeps the normals of its starting mesh, even where a boundary bends; so
-        // does its restart (#115). Older checkpoints recompute them from the mesh.
+        // does its restart. Checkpoints without them recompute them from the mesh.
         double_vec normals(nbdrytypes * NDIMS);
         bin_chkpt.read_array(normals, "boundary normals");
         for (int i=0; i<nbdrytypes; ++i)

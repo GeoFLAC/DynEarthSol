@@ -1403,7 +1403,7 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 
 
 // stress_bc_* loads global component k of each facet with S n_k, n being the facet's
-// area-weighted normal; #115 keeps that. Refuse what adds nothing: an unknown type and the
+// area-weighted normal. Refuse what adds nothing: an unknown type and the
 // y walls in 2D. A tangential component stays: it is zero on a flat side but loads a
 // tilted facet. So does a component the velocity code holds: where the side meets an n
 // boundary, the edge map passes the load on to the other components.
@@ -1434,7 +1434,7 @@ static void check_stress_bcs(const Param &p)
 }
 
 
-// One line per side, for checking the table against the conversion tables of #115.
+// One line per side, which tests/functional/bc/run_bc_cases.py checks.
 static void print_bc_table(const Param &p)
 {
     static const char *names[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
@@ -1466,7 +1466,7 @@ static void print_bc_table(const Param &p)
 }
 
 
-// vbc_* is an integer code, or one letter per component of the side's frame (#115); vbc_val_*
+// vbc_* is an integer code, or one letter per component of the side's frame; vbc_val_*
 // is then one number, or one per letter. A code and its value go to the integer fields, the
 // letters' values to vbc_component_values; the other set is 0.
 static void read_side_bcs(const opt::Registry &vm, Param &p)
@@ -1484,7 +1484,7 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
     for (int i=0; i<nbdrytypes; ++i) {
         const std::string key = std::string("bc.vbc_") + names[i];
         const std::string value_key = std::string("bc.vbc_val_") + names[i];
-        // The raw text; a quoted code or letters read as before, when vbc_* was an integer.
+        // The raw text, without the quotes a code may carry.
         bc.vbc_text[i] = opt::detail::unquoted(bc.vbc_text[i]);
         const std::string &text = bc.vbc_text[i];
         const std::string list = vm.str(value_key);
@@ -1949,7 +1949,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
 
         // A side-wall or z code that sets no component is refused: it left the side free
-        // without the support code 0 gives (#115).
+        // without the support code 0 gives.
         {
             static const char *names[] = {"x0", "x1", "y0", "y1"};
             const int codes[] = {p.bc.vbc_x0, p.bc.vbc_x1, p.bc.vbc_y0, p.bc.vbc_y1};
