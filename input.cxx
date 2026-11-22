@@ -824,22 +824,30 @@ static void declare_parameters(opt::Registry &cfg,
          "Loading period for the velocity on the top side")
 
         ("bc.vbc_n0", opt::value<std::string>(&p.bc.vbc_text[iboundn0])->default_value("1"),
-         "Type of boundary condition for slant boundary #0: 1, 3, 11 or 13, or letters in the frame of its normal as for bc.vbc_x0: vff, vvv with tangential values 0, or fff.")
+         "Type of boundary condition for slant boundary #0: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n0", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #0 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
         ("bc.vbc_n1", opt::value<std::string>(&p.bc.vbc_text[iboundn1])->default_value("1"),
-         "Type of boundary condition for slant boundary #1: 1, 3, 11 or 13, or letters in the frame of its normal as for bc.vbc_x0: vff, vvv with tangential values 0, or fff.")
+         "Type of boundary condition for slant boundary #1: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n1", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #1 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
         ("bc.vbc_n2", opt::value<std::string>(&p.bc.vbc_text[iboundn2])->default_value("1"),
-         "Type of boundary condition for slant boundary #2: 1, 3, 11 or 13, or letters in the frame of its normal as for bc.vbc_x0: vff, vvv with tangential values 0, or fff.")
+         "Type of boundary condition for slant boundary #2: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n2", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #2 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")
         ("bc.vbc_n3", opt::value<std::string>(&p.bc.vbc_text[iboundn3])->default_value("1"),
-         "Type of boundary condition for slant boundary #3: 1, 3, 11 or 13, or letters in the frame of its normal as for bc.vbc_x0: vff, vvv with tangential values 0, or fff.")
+         "Type of boundary condition for slant boundary #3: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n3", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #3 (if velocity, unit is m/s, "
          "outward normal direction is positive; if stress, unit is Pa)")

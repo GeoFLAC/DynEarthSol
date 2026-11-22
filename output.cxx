@@ -488,6 +488,13 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+    {
+        // The boundary normals of the starting mesh, which a restart keeps (#115).
+        double_vec normals(nbdrytypes * NDIMS);
+        for (int i=0; i<nbdrytypes; ++i)
+            for (int d=0; d<NDIMS; ++d) normals[i*NDIMS + d] = (*var.bnormals)[i][d];
+        bin.write_aux_array(normals, "boundary normals", normals.size());
+    }
     const double_vec controls = dt_controls(param);
     bin.write_scalar(1, "dt controls version");
     bin.write_aux_array(controls, "dt controls", controls.size());

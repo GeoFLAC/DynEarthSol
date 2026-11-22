@@ -585,7 +585,17 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
+    if (bin_chkpt.has_array("boundary normals")) {
+        // The run keeps the normals of its starting mesh, even where a boundary bends; so
+        // does its restart (#115). Older checkpoints recompute them from the mesh.
+        double_vec normals(nbdrytypes * NDIMS);
+        bin_chkpt.read_array(normals, "boundary normals");
+        for (int i=0; i<nbdrytypes; ++i)
+            for (int d=0; d<NDIMS; ++d) (*var.bnormals)[i][d] = normals[i*NDIMS + d];
+        create_boundary_edges(param, var, var.edge_vec, var.edge_slot);
+    }
+    else
+        create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
 
     // PT checkpoints carry the accepted velocity. The legacy boundary map can
     // change it (notably on oblique boundaries); the next PT solve imposes its

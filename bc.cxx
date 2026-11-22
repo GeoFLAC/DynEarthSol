@@ -240,15 +240,19 @@ void create_boundary_normals(const Param &param, const Variables &var, array_t &
      * The second type iboundn?, on the other hand, must be a plane so that
      * their vbc are well defined.
      *
-     * If the normal component of the boundary velocity is fixed, the boundary
-     * normal will not change with time.
+     * The normals are those of the starting mesh: the run keeps them, and so do
+     * its checkpoints (#115), even where a boundary bends later. A side without
+     * facets gets 0.
      */
 
     #pragma acc wait
 
     for (int i=0; i<nbdrytypes; i++) {
         double normal[NDIMS] = {0};
-        if (var.bfacets[i]->size() == 0) continue;
+        if (var.bfacets[i]->size() == 0) {
+            for (int d=0; d<NDIMS; d++) bnormals[i][d] = 0;
+            continue;
+        }
 
         for (auto j=var.bfacets[i]->begin(); j<var.bfacets[i]->end(); ++j) {
             int e = j->first;
@@ -298,6 +302,14 @@ void create_boundary_normals(const Param &param, const Variables &var, array_t &
         }
     }
 
+    create_boundary_edges(param, var, edge_vec, edge_slot);
+}
+
+
+void create_boundary_edges(const Param &param, const Variables &var, double_vec& edge_vec,
+                           int* edge_slot)
+{
+    // The edge direction of each pair of boundaries, from var.bnormals.
     // -1 = this pair of boundaries shares no edge. Only pairs with facets on both sides
     // get an entry, so the table is sparse and the absent case has to be representable.
     std::fill_n(edge_slot, nbdrytypes * nbdrytypes, -1);

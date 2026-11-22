@@ -14,6 +14,10 @@ Input that adds nothing ran on the parent; the current executable refuses it (#1
 these cases expect its exit code 11: side-wall codes that set no velocity component, and
 stress_bc_* of an unknown type or on a component the velocity code holds.
 
+Cases marked restart also restart from checkpoint 1 with the current executable; the n
+boundaries keep the normals of the starting mesh, which the checkpoints now carry. With
+restart='exact', every later frame must match the run's bit for bit.
+
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
 match the integer-code case they repeat bit for bit. Other letters cases check
@@ -27,6 +31,7 @@ conditions the codes cannot give and the input the letters reject.
 Build both with hdf5=1. --cases takes glob patterns of case names; --list prints them.
 """
 import argparse
+import copy
 import fnmatch
 import json
 from pathlib import Path
@@ -79,17 +84,22 @@ def base(ndims, mesh):
 
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
-         same_as=None, refused=False):
-    # exit_code is the parent's; input that set nothing ran there and is refused now.
+         same_as=None, refused=False, restart=False):
+    # exit_code is the parent's; input that set nothing ran there and is refused now. A case
+    # with restart also restarts from checkpoint 1: 'exact' must give the later frames bit for
+    # bit, 'runs' must only run. Where an n boundary holds just its normal, apply_vbcs at the
+    # restart moves the velocity of the edge nodes once more, as before #115.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
-                same_as=same_as)
+                same_as=same_as, restart=restart)
 
 
 def effective_cfg(spec):
     cfg = base(spec['ndims'], spec['mesh'])
     cfg['bc'].update(spec['bc'])
     cfg['control'].update(spec['control'])
+    if spec['restart']:
+        cfg['sim']['has_marker_output'] = 'yes'  # a restart reads the markers
     return cfg
 
 
@@ -113,7 +123,7 @@ def as_letters(spec):
     if nd == 2 and taper and table['x0']['types'][0] == 'v' and not table['x0']['taper']:
         return None  # letters taper any held x0 normal; the codes, 3 only
     return case(spec['name'] + '-letters', nd, dict(spec['bc'], **bc), spec['control'], spec['mesh'],
-                letters=True, same_as=spec['name'])
+                letters=True, same_as=spec['name'], restart=spec['restart'])
 
 
 def max_speed(table):
@@ -190,7 +200,7 @@ def cases():
         if nd == 3:
             stress.update(vbc_y0='0', vbc_y1='0', stress_bc_y0='2', stress_val_y0='6e4',
                           stress_bc_y1='1', stress_val_y1='-7e4')
-        found.append(case(f'{d}-stress', nd, stress))
+        found.append(case(f'{d}-stress', nd, stress, restart='exact'))
         # A tangential component loads a tilted facet: x on a top that rises to the east.
         found.append(case(f'{d}-stress-slope', nd, dict(stress_bc_z1='1', stress_val_z1='-4e4'), mesh='slope'))
         # A held component is loaded once its hold ends.
@@ -211,7 +221,7 @@ def cases():
                 if nd == 3:
                     others.update(vbc_y0=str(sides), vbc_y1=str(sides))
                 found.append(case(f'{d}-n-c{code}-sides{sides}', nd, dict(vbc_n0=str(code), **others),
-                                  mesh='cut'))
+                                  mesh='cut', restart='exact' if code in (3, 13) else 'runs'))
         for code in (1, 3, 6):
             found.append(case(f'{d}-pt-x-c{code}', nd, dict(vbc_x0=str(code), vbc_x1=str(code)),
                               control=PT_CONTROL))
@@ -234,15 +244,20 @@ def cases():
                           vbc_z0=held, vbc_val_z0=zeros), letters=True, same_as=f'{d}-winkler'))
         found.append(case(f'{d}-water-loading-held-letters', nd, dict(has_water_loading='yes',
                           vbc_z1=held, vbc_val_z1=zeros), letters=True, same_as=f'{d}-water-loading'))
-        # What the codes cannot give: a free (supported) n boundary.
+        # What the codes cannot give: a free (supported) n boundary, and one under a normal
+        # traction. Both bend; their frame stays that of the starting mesh, also on restart.
         found.append(case(f'{d}-n-free-letters', nd, dict(vbc_n0=free, vbc_val_n0=zeros), mesh='cut',
-                          letters=True))
+                          letters=True, restart='exact'))
+        found.append(case(f'{d}-n-normal-traction-letters', nd, dict(vbc_n0='t' + 'f' * (nd - 1),
+                          vbc_val_n0='[-2e4' + ', 0' * (nd - 1) + ']'), mesh='cut', letters=True,
+                          restart='exact'))
         # Tractions the codes cannot give: shear on a side wall and on an n boundary, and a
         # traction that stays when the Winkler foundation or water loading frees the velocity.
         found.append(case(f'{d}-x0-shear-letters', nd, dict(vbc_x0='ft' + 'f' * (nd - 2), vbc_val_x0_l='0',
                           vbc_val_x0='[0, 5e4' + ', 0' * (nd - 2) + ']'), letters=True))
         found.append(case(f'{d}-n-traction-letters', nd, dict(vbc_n0='vt' + 'f' * (nd - 2),
-                          vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True))
+                          vbc_val_n0='[1.2e-9, -2e4' + ', 0' * (nd - 2) + ']'), mesh='cut', letters=True,
+                          restart='runs'))
         found.append(case(f'{d}-winkler-traction-letters', nd, dict(has_winkler_foundation='yes',
                           vbc_z0='tv' + 'f' * (nd - 2), vbc_val_z0='[-3e4, 1e-10' + ', 0' * (nd - 2) + ']'),
                           letters=True))
@@ -451,18 +466,48 @@ def largest_difference(old, new):
     return 'largest relative difference {:.2g} in {}'.format(worst, where)
 
 
+# What the current build adds to its checkpoints: the boundary normals that a restart keeps.
+ADDED_FIELDS = ('boundary normals',)
+
+
+def same_fields(a, b, name):
+    added = {k for k in b.keys() - a.keys()
+             if k.split('/')[-1].lstrip('@').replace('.layout', '') in ADDED_FIELDS}
+    if a.keys() != b.keys() - added:
+        raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ (b.keys() - added))))
+    for key in a:
+        if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]:
+            raise RuntimeError('{}: {} differs'.format(name, key))
+
+
 def same_outputs(old, new):
     names = outputs(old)
     if not names or names != outputs(new):
         raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new)))
     for name in names:
-        a, b = fields(old/name), fields(new/name)
-        if a.keys() != b.keys():
-            raise RuntimeError('{}: field sets differ: {}'.format(name, sorted(a.keys() ^ b.keys())))
-        for key in a:
-            if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]:
-                raise RuntimeError('{}: {} differs'.format(name, key))
+        same_fields(fields(old/name), fields(new/name), name)
     return len(names)
+
+
+def same_after_restart(exe, result, exact):
+    """Restart the run from checkpoint 1; if exact, every later frame must match the run's."""
+    cfg = copy.deepcopy(result.cfg)
+    cfg['sim'].update(modelname='again', is_restarting='true', restarting_from_modelname='bc',
+                      restarting_from_frame='1')
+    again = run_des(exe, result.folder, 'again', cfg, timeout=600, check=False)
+    if again.returncode:
+        raise RuntimeError('the restart from checkpoint 1 exited {}'.format(again.returncode))
+    if not exact:
+        return 'restarts from checkpoint 1'
+    later = [n for n in outputs(result.folder) if int(n.split('.')[-1]) > 1]
+    for name in later:
+        twin = result.folder/name.replace('bc.', 'again.', 1)
+        if not any(twin.parent.glob(twin.name + '*')):
+            raise RuntimeError('the restart wrote no {}'.format(twin.name))
+        same_fields(fields(result.folder/name), fields(twin), name)
+    if not later:
+        raise RuntimeError('no frame after checkpoint 1')
+    return 'restart from checkpoint 1 matches {} files'.format(len(later))
 
 
 def compare_letters(current, spec, reference):
@@ -523,6 +568,8 @@ def main():
             reference = ran[spec['same_as']]
         try:
             verdict = compare_letters(current, spec, reference) if spec['letters'] else compare(parent, current, spec)
+            if spec['restart']:
+                verdict += '; ' + same_after_restart(current_exe, current, spec['restart'] == 'exact')
             ok = True
         except RuntimeError as error:
             verdict, ok = str(error), False
