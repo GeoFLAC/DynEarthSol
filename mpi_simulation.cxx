@@ -105,7 +105,7 @@ struct Fields {
         double* data;
         int stride, columns;
     };
-    std::array<Field,64> list;
+    std::array<Field,64> list{};
     int nfields = 0, columns = 0;
     void add(double_vec* values) {
         if (values) add(values->data(), values->size(), 1);
