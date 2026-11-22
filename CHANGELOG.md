@@ -204,6 +204,10 @@ For a release, the full auto-generated list of merged pull requests is in its
   boundary has bent since the start, as code 1 can at its corners: checkpoints
   carry the boundary normals of the starting mesh, and the restart keeps them.
   Older checkpoints restart as before ([#115]).
+- An oblique (`n`) boundary that holds its normal velocity now sets it on its
+  edge with a side that holds only components its normal does not touch, and
+  with the top once `vbc_val_z1_loading_period` has passed; those edge nodes
+  used to lose it ([#115]).
 - In 2D, side-wall code 4 holds the normal velocity at 0 and no longer adds
   the lithostatic support to the saved `force`; velocities and stresses are
   unchanged ([#115]).

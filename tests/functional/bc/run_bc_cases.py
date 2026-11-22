@@ -17,6 +17,8 @@ stress_bc_* of an unknown type or on a component the velocity code holds.
 Cases marked restart also restart from checkpoint 1 with the current executable; the n
 boundaries keep the normals of the starting mesh, which the checkpoints now carry. With
 restart='exact', every later frame must match the run's bit for bit.
+Cases marked corner check, at the nodes on n0 and one other side only, that the velocity
+along n0's normal is the value n0 holds.
 
 Cases ending in "-letters" give the same conditions as letters in the side frames
 (vbc_x0 = vff, vbc_val_x0 = [..]); they run with the current executable only, and must
@@ -84,14 +86,15 @@ def base(ndims, mesh):
 
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
-         same_as=None, refused=False, restart=False):
+         same_as=None, refused=False, restart=False, corner=None):
     # exit_code is the parent's; input that set nothing ran there and is refused now. A case
     # with restart also restarts from checkpoint 1: 'exact' must give the later frames bit for
     # bit, 'runs' must only run. Where an n boundary holds just its normal, apply_vbcs at the
-    # restart moves the velocity of the edge nodes once more, as before #115.
+    # restart moves the velocity of the edge nodes once more, as before #115. corner is
+    # (side, frame).
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
-                same_as=same_as, restart=restart)
+                same_as=same_as, restart=restart, corner=corner)
 
 
 def effective_cfg(spec):
@@ -123,7 +126,7 @@ def as_letters(spec):
     if nd == 2 and taper and table['x0']['types'][0] == 'v' and not table['x0']['taper']:
         return None  # letters taper any held x0 normal; the codes, 3 only
     return case(spec['name'] + '-letters', nd, dict(spec['bc'], **bc), spec['control'], spec['mesh'],
-                letters=True, same_as=spec['name'], restart=spec['restart'])
+                letters=True, same_as=spec['name'], restart=spec['restart'], corner=spec['corner'])
 
 
 def max_speed(table):
@@ -167,6 +170,8 @@ def changes(spec):
         code = 0 if (side == 'z0' and winkler) or (side == 'z1' and water) else int(cfg['bc']['vbc_' + side])
         if parent_support(side, code, winkler, water) != e['support']:
             found.append('{} support {}'.format(side, 'added' if e['support'] else 'removed'))
+    if spec['mesh'] == 'cut' and table['z1']['release_time'] is not None and table['z1']['types'][0] == 'v':
+        found.append('n0 sets its normal at the z1 edge once z1 is released')
     return '; '.join(found) or None
 
 
@@ -191,7 +196,7 @@ def cases():
             period.update(num_vbc_period_y0='2', vbc_period_y0_time_in_yr='[0, 0.3]',
                           vbc_period_y0_ratio='[1, 3]', vbc_y1='6', vbc_x0='7')
         found.append(case(f'{d}-period', nd, period))
-        found.append(case(f'{d}-z1-loading-period', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='1.3e7')))
+        found.append(case(f'{d}-z1-loading-period', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6')))
         found.append(case(f'{d}-winkler', nd, dict(has_winkler_foundation='yes', vbc_z0='3')))
         found.append(case(f'{d}-water-loading', nd, dict(has_water_loading='yes', vbc_z1='1')))
         stress = dict(vbc_x0='0', vbc_x1='0', stress_bc_x0='1', stress_val_x0='2e4',
@@ -204,7 +209,7 @@ def cases():
         # A tangential component loads a tilted facet: x on a top that rises to the east.
         found.append(case(f'{d}-stress-slope', nd, dict(stress_bc_z1='1', stress_val_z1='-4e4'), mesh='slope'))
         # A held component is loaded once its hold ends.
-        found.append(case(f'{d}-stress-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='1.3e7',
+        found.append(case(f'{d}-stress-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6',
                                                               stress_bc_z1='3', stress_val_z1='-4e4')))
         # What adds nothing is refused: a component held for the whole run, and other types.
         found.append(case(f'{d}-stress-held-normal', nd, dict(stress_bc_x0='1', stress_val_x0='2e4'),
@@ -222,6 +227,9 @@ def cases():
                     others.update(vbc_y0=str(sides), vbc_y1=str(sides))
                 found.append(case(f'{d}-n-c{code}-sides{sides}', nd, dict(vbc_n0=str(code), **others),
                                   mesh='cut', restart='exact' if code in (3, 13) else 'runs'))
+        # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
+        found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
+                          mesh='cut', corner=('z1', 3)))
         for code in (1, 3, 6):
             found.append(case(f'{d}-pt-x-c{code}', nd, dict(vbc_x0=str(code), vbc_x1=str(code)),
                               control=PT_CONTROL))
@@ -277,6 +285,11 @@ def cases():
         for what, bc in rejected:
             found.append(case(f'{d}-letters-reject-{what}', nd, bc, mesh='cut' if what.startswith('n-') else 'box',
                               exit_code=11, letters=True))
+    # A side wall holding only a tangent that n0's normal does not touch: n0 sets its normal
+    # on their edge.
+    found.append(case('3d-n-x1-tangent-letters', 3, dict(vbc_x1='fvf', vbc_val_x1='[0, 3e-10, 0]',
+                                                         vbc_val_x1_l='0'), mesh='cut', letters=True,
+                      corner=('x1', 3)))
     # What the codes cannot give: a side wall with a vertical velocity, and a 2D x0 held by
     # its normal only that tapers off over the bottom shear zone.
     found.append(case('3d-x0-vertical-letters', 3, dict(vbc_x0='vvv', vbc_val_x0='[1e-9, 2e-10, -3e-10]',
@@ -419,6 +432,37 @@ def run(exe, folder, spec):
     result = run_des(exe, folder, 'bc', cfg, timeout=600, check=False)
     result.folder, result.cfg = folder, cfg
     return result
+
+
+# The outward unit normal of n0 in cut-corner-{2,3}d.poly, and the boundary flag bits.
+CUT_NORMAL = {2: (0.5**0.5, 0.5**0.5), 3: (0.5**0.5, 0.0, 0.5**0.5)}
+FLAG_BITS = dict(x0=1, x1=2, y0=4, y1=8, z0=16, z1=32, n0=64)
+
+
+def corner_normal_velocity(result, spec):
+    """At the nodes on n0 and spec['corner'] side only, the velocity along n0's normal is
+    the value n0 holds."""
+    import numpy as np
+    side, frame = spec['corner']
+    nd = spec['ndims']
+    saved = fields(result.folder/'bc.save.{:06d}'.format(frame))
+    def array(name):
+        key = next(k for k in saved if not k.startswith('@') and k.split('/')[-1] == name)
+        layout = saved['@' + key + '.layout']
+        return np.frombuffer(saved[key], eval(layout.decode())[1])
+    flag = array('bcflag')
+    velocity = array('velocity')
+    velocity = velocity.reshape(flag.size, -1)[:, :nd]  # VTKHDF keeps 3 components in 2D
+    on = flag == FLAG_BITS['n0'] | FLAG_BITS[side]
+    if not on.any():
+        raise RuntimeError('no node lies on n0 and {} only'.format(side))
+    held = float(result.cfg['bc']['vbc_val_n0'].strip('[]').split(',')[0])
+    normal = velocity[on] @ np.array(CUT_NORMAL[nd])
+    worst = float(np.max(np.abs(normal - held)))
+    if worst > 1e-9*abs(held):
+        raise RuntimeError('velocity along the n0 normal at the {} nodes on n0 and {}: {} instead '
+                           'of {}'.format(int(on.sum()), side, normal.tolist(), held))
+    return 'n0 normal velocity {:g} at its {} nodes with {}'.format(held, int(on.sum()), side)
 
 
 def compare(parent, current, spec):
@@ -570,6 +614,8 @@ def main():
             verdict = compare_letters(current, spec, reference) if spec['letters'] else compare(parent, current, spec)
             if spec['restart']:
                 verdict += '; ' + same_after_restart(current_exe, current, spec['restart'] == 'exact')
+            if spec['corner']:
+                verdict += '; ' + corner_normal_velocity(current, spec)
             ok = True
         except RuntimeError as error:
             verdict, ok = str(error), False

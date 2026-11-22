@@ -469,9 +469,24 @@ struct WallBC {
     bool taper;
 };
 
-// What a side is to an n boundary of code 1 or 11 that meets it: a free side lets it set
-// its normal, a side holding only its normal (11 only when normalized) projects onto the edge.
-enum { MEETS_NOTHING, MEETS_FREE, MEETS_NORMAL, MEETS_HORIZONTAL_NORMAL };
+// What a side is to an n boundary of code 1 or 11 that meets it: a side that holds no
+// velocity, or no longer does, lets it set its normal; a side holding only its normal (11
+// only when normalized) projects onto the edge. A side holding other components lets it
+// set its normal where that normal is orthogonal to all of them, so that neither moves the
+// other's components, and does nothing elsewhere.
+enum { MEETS_FREE, MEETS_NORMAL, MEETS_HORIZONTAL_NORMAL, MEETS_HELD };
+
+// Whether the normal n of an n boundary (its horizontal part, for 11 and 13) has no
+// component along any global axis in the mask.
+#pragma acc routine seq
+bool normal_clear_of(int axes, ConstArrayAccessor n, bool horizontal)
+{
+    for (int d=0; d<NDIMS; ++d) {
+        if (!(axes & (1 << d)) || (horizontal && d == NDIMS-1)) continue;
+        if (std::fabs(n[d]) > 1e-12) return false;
+    }
+    return true;
+}
 } // anonymous namespace
 
 
@@ -515,7 +530,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         }
     }
 
-    int meets[nbdrytypes];
+    int meets[nbdrytypes], held_axes[nbdrytypes];
     bool held[nbdrytypes], horizontal[nbdrytypes], full[nbdrytypes];
     double n_value[nbdrytypes];
     for (int i=0; i<nbdrytypes; ++i) {
@@ -526,7 +541,13 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         for (int d=0; d<NDIMS; ++d)
             if (s.type[d] != 'v') full[i] = false;
         n_value[i] = homogeneous ? 0.0 : s.value[0];
-        meets[i] = all_free(s) ? MEETS_FREE : !normal_only(s) ? MEETS_NOTHING
+        // The global axes a side wall or z side holds; an n boundary's frame is not global,
+        // so it counts as holding every axis.
+        held_axes[i] = (i < iboundn0) ? 0 : (1 << NDIMS) - 1;
+        for (int d=0; d<NDIMS && i < iboundn0; ++d)
+            if (s.type[d] == 'v') held_axes[i] |= 1 << (std::abs(side_frame[i][d]) - 1);
+        const bool released = var.time > s.release_time;
+        meets[i] = (released || all_free(s)) ? MEETS_FREE : !normal_only(s) ? MEETS_HELD
                  : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
     }
 
@@ -587,22 +608,22 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
 #ifndef ACC
 #ifdef THREED
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, walls, any_z, meets, held, horizontal, full, n_value)
+        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, n_value)
 #else
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, walls, any_z, meets, held, horizontal, full, n_value, zmin, thickness, \
+        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, n_value, zmin, thickness, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
 #endif
 #endif
 #ifdef THREED
     #pragma acc parallel loop gang vector async \
-        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held[0:nbdrytypes], \
-               horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held_axes[0:nbdrytypes], \
+               held[0:nbdrytypes], horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #else
     #pragma acc parallel loop gang vector async present(zmin) \
-        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held[0:nbdrytypes], \
-               horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
+        copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held_axes[0:nbdrytypes], \
+               held[0:nbdrytypes], horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #endif
     for (int i=0; i<var.nnode; ++i) {
 
@@ -656,7 +677,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (meets[ic] == MEETS_FREE) {
+                                if (meets[ic] == MEETS_FREE ||
+                                    (meets[ic] == MEETS_HELD && normal_clear_of(held_axes[ic], n, false))) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS; d++)
                                         vn += v[d] * n[d];  // normal velocity
@@ -689,7 +711,8 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
                     else {  // intersection with another boundary
                         for (int ic=iboundx0; ic<ib; ic++) {
                             if (flag & (1 << ic)) {
-                                if (meets[ic] == MEETS_FREE) {
+                                if (meets[ic] == MEETS_FREE ||
+                                    (meets[ic] == MEETS_HELD && normal_clear_of(held_axes[ic], n, true))) {
                                     double vn = 0;
                                     for (int d=0; d<NDIMS-1; d++)
                                         vn += v[d] * n[d];  // normal velocity
