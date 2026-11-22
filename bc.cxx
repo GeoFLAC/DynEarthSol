@@ -539,11 +539,13 @@ void set_normal_outside(const Variables &var, int ib, uint flag, int axes, const
 // What apply_vbcs reads from the input for the velocity components the sides hold, so that
 // a restart can tell whether its velocity boundary conditions are the run's: which components
 // they hold and at what values, when they release them, the frame of an n boundary, and the
-// period table, 2D depth profile and bottom shear zone a normal value follows. Tractions and
-// free components do not count.
+// period table, 2D depth profile and bottom shear zone a normal value follows. Tractions, free
+// components and sides no node lies on do not count.
 double_vec vbc_controls(const Param &param, const Variables &var)
 {
     const BC &bc = param.bc;
+    uint present = 0;  // the sides some node lies on
+    for (int n=0; n<var.nnode; ++n) present |= (*var.bcflag)[n];
     double_vec c;
     auto add = [&c](const double_vec &table) {
         c.push_back(table.size());
@@ -551,6 +553,9 @@ double_vec vbc_controls(const Param &param, const Variables &var)
     };
     for (int i=0; i<nbdrytypes; ++i) {
         const SideBC &s = bc.side[i];
+        const bool on_mesh = (present >> i) & 1;
+        c.push_back(on_mesh);
+        if (!on_mesh) continue;
         for (int d=0; d<NDIMS; ++d) {
             c.push_back(s.type[d] == 'v');
             if (s.type[d] == 'v') c.push_back(s.value[d]);

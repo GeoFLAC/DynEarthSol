@@ -22,7 +22,7 @@ values changed, and every later frame must match the parent's restart bit for bi
 Cases with edge_restart restart from checkpoint 1 with x1 holding, at an x1-n0 edge node,
 the y velocity the run's conditions give the checkpointed one there: the restart must match
 one from the checkpoint without its record of the conditions. Restarting with only n0's
-traction changed must keep the checkpointed velocity.
+traction changed, or n1 freed, which has no node, must keep the checkpointed velocity.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
 along the normal of each n boundary there is the value it holds and that the components the
 sides hold keep their values.
@@ -659,7 +659,8 @@ def edge_restart(exe, result):
     changes it most, the y velocity the run's conditions give the checkpointed one, and n0
     free but for its traction. The conditions differ, so the restart applies them, as one from
     the checkpoint without its record does; their result at that node does not tell. With
-    only n0's traction changed, they are the run's, and the restart keeps the velocity."""
+    only n0's traction changed, or n1 freed, which has no node, they are the run's, and the
+    restart keeps the velocity."""
     import h5py
     import numpy as np
     import shutil
@@ -681,18 +682,22 @@ def edge_restart(exe, result):
     node = edge[np.argmax(np.abs(mapped[edge, 1] - saved[edge, 1]))]
     if mapped[node, 1] == saved[node, 1]:
         raise RuntimeError('the edge map leaves the y velocity of every node on x1 and n0')
-    restart_from_1(exe, folder, result, 'traction', dict(vbc_val_n0='[1.2e-9, -4e4, 0]'))
-    kept = saved_field(fields(folder/'traction.save.000001'), 'velocity').reshape(flag.size, -1)
-    if (kept != saved).any():
-        raise RuntimeError('changing only the n0 traction moved the velocity of {} nodes on '
-                           'restart'.format(int((kept != saved).any(axis=1).sum())))
+    if (flag & FLAG_BITS['n1']).any():
+        raise RuntimeError('a node lies on n1')
+    for model, what, bc in (('traction', 'the n0 traction', dict(vbc_val_n0='[1.2e-9, -4e4, 0]')),
+                            ('unused', 'n1, which has no node,', dict(vbc_n1='fff', vbc_val_n1='[0, 0, 0]'))):
+        restart_from_1(exe, folder, result, model, bc)
+        kept = saved_field(fields(folder/(model + '.save.000001')), 'velocity').reshape(flag.size, -1)
+        if (kept != saved).any():
+            raise RuntimeError('changing only {} moved the velocity of {} nodes on restart'.format(
+                what, int((kept != saved).any(axis=1).sum())))
     change = dict(vbc_x1='vvf', vbc_val_x1='[0, {!r}, 0]'.format(float(mapped[node, 1])),
                   vbc_val_x1_l='0', vbc_n0='ftf', vbc_val_n0='[0, -2e4, 0]')
     restart_from_1(exe, folder, result, 'changed', change)
     restart_from_1(exe, bare, result, 'changed', change)
     count = same_outputs(bare, folder, 'changed')
     return 'x1 holding the y velocity of the edge map at node {}: restart matches the one ' \
-           'without the record ({} files); one changing only the n0 traction keeps the ' \
+           'without the record ({} files); ones changing only the n0 traction or n1 keep the ' \
            'velocity'.format(int(node), count)
 
 
