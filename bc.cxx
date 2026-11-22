@@ -1017,7 +1017,9 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                     if (p < 0.0) p = 0.0;
                 }
 
-                (*var.etmp_int)[e] = n;
+                // An element can have more than one facet on the side, next to each other in
+                // bfacets (sorted by element): the first one stands for them.
+                if (n == 0 || (*var.bfacets[i])[n-1].first != e) (*var.etmp_int)[e] = n;
                 ElemCacheAccessor tmp = (*var.tmp_result)[n];
                 // lithostatc support - Archimed force (normal to the surface)
                 for (int j=0; j<NODES_PER_FACET; ++j) {
@@ -1037,16 +1039,23 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                 const int* patch = var.support.patch(n);
                 for (int k=0; k<npatch; ++k) {
                     int e = patch[k];
-                    int ibound = (*var.etmp_int)[e];
-                    if (ibound < 0) continue;  // not a boundary element
+                    int first = (*var.etmp_int)[e];
+                    if (first < 0) continue;  // not a boundary element
 
-                    int f = (*var.bfacets[i])[ibound].second;  // facet index
                     ConstConnAccessor conn = (*var.connectivity)[e];
-                    for (int l=0; l<NODES_PER_FACET; ++l) {
-                        if (n == conn[NODE_OF_FACET[f][l]]) {
-                            for (int d=0; d<NDIMS; ++d)
-                                force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];  // subtract the force from the facet
-                            break;  // found the node in the facet
+                    // each of its facets on the side, in the order of the facet index
+                    for (int g=0; g<FACETS_PER_ELEM; ++g) {
+                        for (int ibound=first;
+                             ibound<bound && (*var.bfacets[i])[ibound].first == e; ++ibound) {
+                            const int f = (*var.bfacets[i])[ibound].second;  // facet index
+                            if (f != g) continue;
+                            for (int l=0; l<NODES_PER_FACET; ++l) {
+                                if (n == conn[NODE_OF_FACET[f][l]]) {
+                                    for (int d=0; d<NDIMS; ++d)  // subtract the force from the facet
+                                        force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];
+                                    break;  // found the node in the facet
+                                }
+                            }
                         }
                     }
                 }
@@ -1058,7 +1067,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
             #pragma acc parallel loop gang vector async
             for (int n=0; n<bound; ++n) {
                 const int e = (*var.bfacets[i])[n].first;
-                (*var.etmp_int)[e] = -1;
+                if (n == 0 || (*var.bfacets[i])[n-1].first != e) (*var.etmp_int)[e] = -1;
             }
         }
     }

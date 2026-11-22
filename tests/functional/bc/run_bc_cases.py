@@ -26,6 +26,9 @@ traction changed, n1 freed, which has no node, z1 holding a velocity it released
 checkpoint, x1's period table changed after the checkpoint time, or x0's code 5 given as the
 same letters must keep the checkpointed velocity; one with x0's value changed may change it
 on x0 only.
+Cases with facet_loads run one step with z1 carrying the water load and one without it:
+their forces must differ by the load of every z1 facet, even on the triangle that takes both
+sides of the peak of peak-top-2d.poly.
 Cases marked corner check, at the nodes on n0 and the given sides only, that the velocity
 along the normal of each n boundary there is the value it holds and that the components the
 sides hold keep their values.
@@ -75,7 +78,7 @@ def base(ndims, mesh):
     cfg['sim'].update(modelname='bc', max_steps='6', output_step_interval='2')
     cfg['mesh'].update(xlength='1e4', ylength='1e4', zlength='1e4', resolution='2.5e3')
     if mesh != 'box':
-        poly = dict(cut='cut-corner', cuts='two-cuts', slope='slope-top')[mesh]
+        poly = dict(cut='cut-corner', cuts='two-cuts', slope='slope-top', peak='peak-top')[mesh]
         cfg['mesh'].update(meshing_option='90', meshing_elem_shape='0',
                            poly_filename=str(HERE/f'{poly}-{ndims}d.poly'))
     # DES's usual dynamics, so that gravity and every constrained component move nodes.
@@ -97,14 +100,14 @@ def base(ndims, mesh):
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
          same_as=None, refused=False, restart=False, corner=None, quoted=(), changed_restart=None,
-         edge_restart=False):
+         edge_restart=False, facet_loads=False):
     # exit_code is the parent's; input that set nothing ran there and is refused now.
     # corner is (sides, frame, {global axis: value held there}); quoted lists the bc keys
     # written in quotes; changed_restart holds the bc values a restart changes.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
                 same_as=same_as, restart=restart, corner=corner, quoted=quoted,
-                changed_restart=changed_restart, edge_restart=edge_restart)
+                changed_restart=changed_restart, edge_restart=edge_restart, facet_loads=facet_loads)
 
 
 def effective_cfg(spec, quoted=False):
@@ -184,6 +187,8 @@ def changes(spec):
         code = 0 if (side == 'z0' and winkler) or (side == 'z1' and water) else int(cfg['bc']['vbc_' + side])
         if parent_support(side, code, winkler, water) != e['support']:
             found.append('{} support {}'.format(side, 'added' if e['support'] else 'removed'))
+    if spec['mesh'] == 'peak' and table['z1']['support']:
+        found.append('z1 carries the load of both sides of the peak')
     if spec['mesh'] == 'cut' and table['z1']['release_time'] is not None and table['z1']['types'][0] == 'v':
         found.append('n0 sets its normal at the z1 edge once z1 is released')
     if spec['mesh'] == 'cut' and table['n0']['types'] == 'v' + 'f' * (nd - 1):
@@ -224,6 +229,9 @@ def cases():
         found.append(case(f'{d}-z1-loading-period', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6')))
         found.append(case(f'{d}-winkler', nd, dict(has_winkler_foundation='yes', vbc_z0='3')))
         found.append(case(f'{d}-water-loading', nd, dict(has_water_loading='yes', vbc_z1='1')))
+        if nd == 2:
+            found.append(case(f'{d}-water-loading-peak', nd, dict(has_water_loading='yes', sea_water_density='1030'),
+                              dict(surf_base_level='1000'), mesh='peak', facet_loads=True))
         stress = dict(vbc_x0='0', vbc_x1='0', stress_bc_x0='1', stress_val_x0='2e4',
                       stress_bc_x1='3', stress_val_x1='-3e4', stress_bc_z1='3', stress_val_z1='-4e4',
                       stress_bc_z0='1', stress_val_z0='5e4')
@@ -625,15 +633,20 @@ def same_outputs(old, new, model='bc'):
     return len(names)
 
 
-def restart_from_1(exe, folder, result, model, bc=None):
-    """Restart the run of result in folder from checkpoint 1 as model, with bc values changed."""
+def run_again(exe, folder, result, model, bc=None, **sim):
+    """Run the case of result again in folder as model, with bc values and sim settings changed."""
     cfg = copy.deepcopy(result.cfg)
     cfg['bc'].update(bc or {})
-    cfg['sim'].update(modelname=model, is_restarting='true', restarting_from_modelname='bc',
-                      restarting_from_frame='1')
+    cfg['sim'].update(modelname=model, **sim)
     again = run_des(exe, folder, model, cfg, timeout=600, check=False)
     if again.returncode:
-        raise RuntimeError('the {} restart from checkpoint 1 exited {}'.format(model, again.returncode))
+        raise RuntimeError('the {} run exited {}'.format(model, again.returncode))
+
+
+def restart_from_1(exe, folder, result, model, bc=None):
+    """Restart the run of result in folder from checkpoint 1 as model, with bc values changed."""
+    run_again(exe, folder, result, model, bc, is_restarting='true', restarting_from_modelname='bc',
+              restarting_from_frame='1')
 
 
 def same_after_restart(exe, result):
@@ -728,6 +741,50 @@ def edge_restart(exe, result):
            'x0 only ({} nodes)'.format(int(node), count, int(moved.sum()))
 
 
+def facet_loads(exe, result):
+    """One step with z1 carrying the water load and one without it: their forces differ by the
+    load of every z1 facet, p n / 2 on each of its nodes, with p = rho_w g (sea level - z) at its
+    center and n its outward normal times its length, even on a triangle with two such facets."""
+    import numpy as np
+    from collections import Counter
+    force = {}
+    for model, water in (('loaded', 'yes'), ('dry', 'no')):
+        run_again(exe, result.folder, result, model, dict(has_water_loading=water), max_steps='1',
+                  output_step_interval='1')
+        force[model] = saved_field(fields(result.folder/(model + '.save.000001')), 'force')
+    start = fields(result.folder/'loaded.save.000000')
+    flag = saved_field(start, 'bcflag')
+    xz = saved_field(start, 'coordinate').reshape(flag.size, -1)[:, :2]  # a 2D mesh
+    conn = saved_field(start, 'connectivity').reshape(-1, 3)
+    sides = Counter(tuple(sorted((int(e[k]), int(e[(k+1) % 3])))) for e in conn for k in range(3))
+    level = float(result.cfg['control']['surf_base_level'])
+    rho_g = float(result.cfg['bc']['sea_water_density']) * float(result.cfg['control']['gravity'])
+    expected = np.zeros((flag.size, 2))
+    facets = double = 0
+    for e in conn:
+        on = 0
+        for k in range(3):
+            a, b, c = int(e[k]), int(e[(k+1) % 3]), int(e[(k+2) % 3])
+            if not flag[a] & flag[b] & FLAG_BITS['z1'] or sides[tuple(sorted((a, b)))] != 1:
+                continue
+            t = xz[b] - xz[a]
+            n = np.array([t[1], -t[0]])
+            if n @ (xz[c] - xz[a]) > 0:
+                n = -n
+            p = max(rho_g * (level - 0.5 * (xz[a][1] + xz[b][1])), 0.0)
+            expected[[a, b]] -= p * n / 2
+            on += 1
+        facets += on
+        double += on > 1
+    if not double:
+        raise RuntimeError('no triangle has two facets on z1')
+    got = (force['loaded'] - force['dry']).reshape(flag.size, -1)[:, :2]
+    worst = float(np.max(np.abs(got - expected)))
+    if worst > 1e-12 * float(np.max(np.abs(expected))):
+        raise RuntimeError('the z1 load differs from p n / 2 per facet node by up to {:.3g} N'.format(worst))
+    return 'z1 carries the load of its {} facets, {} triangle with two'.format(facets, double)
+
+
 def compare_letters(current, spec, reference):
     if current.returncode != spec['exit_code']:
         raise RuntimeError('exited {} where {} was expected'.format(current.returncode, spec['exit_code']))
@@ -794,6 +851,8 @@ def main():
                 verdict += '; ' + edge_restart(current_exe, current)
             if spec['corner']:
                 verdict += '; ' + corner_normal_velocity(current, spec)
+            if spec['facet_loads']:
+                verdict += '; ' + facet_loads(current_exe, current)
             ok = True
         except RuntimeError as error:
             verdict, ok = str(error), False
