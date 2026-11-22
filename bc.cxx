@@ -466,12 +466,10 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
     nvtxRangePush(__FUNCTION__);
 #endif
     // Each side's table (param.bc.side, in the side's frame) is turned back into global
-    // components, valued as the integer codes were: the normal value of a side wall follows
-    // its period table; a homogeneous call zeroes the values, except that it multiplies by
-    // 0 the tangential value of such a side (L or 0) and the n values (#115).
+    // components: the normal value of a side wall follows its period table, and a
+    // homogeneous call holds every component at 0.
     const BC &bc = param.bc;
     const double t_now = var.time / YEAR2SEC;
-    const double prescribed = homogeneous ? 0.0 : 1.0;
 
     WallBC walls[nbdrytypes_hydro];
     bool any_z = false;
@@ -491,13 +489,11 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
             w.mode[axis] = CONSTANT;
             if (d == 0 && s.normal_follows_period) {
                 const double applied = homogeneous ? 0.0 : side_wall_normal_vbc(bc, i, t_now);
-                w.value[axis] = prescribed * applied;
+                w.value[axis] = applied;
 #ifndef THREED
                 w.mode[axis] = PROFILED;
 #endif
             }
-            else if (s.normal_follows_period)
-                w.value[axis] = prescribed * v;
             else
                 w.value[axis] = homogeneous ? 0.0 : v;
             if (i == iboundz0 || i == iboundz1) any_z = true;
@@ -514,7 +510,7 @@ void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool hom
         full[i] = true;
         for (int d=0; d<NDIMS; ++d)
             if (s.type[d] != 'v') full[i] = false;
-        n_value[i] = prescribed * s.value[0];
+        n_value[i] = homogeneous ? 0.0 : s.value[0];
         meets[i] = all_free(s) ? MEETS_FREE : !normal_only(s) ? MEETS_NOTHING
                  : s.horizontal_normal ? MEETS_HORIZONTAL_NORMAL : MEETS_NORMAL;
     }
