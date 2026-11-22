@@ -317,15 +317,17 @@ For a release, the full auto-generated list of merged pull requests is in its
   the jump returns the stress to the strength of the history it stores, the
   return lies where a later fall of the law, such as that of a second material
   in the element, brings one back; without one, the run stops with status 54
-  and that cause. Mesh regularization of strong softening
+  and that cause. Where more than one plastic increment returns the stress to
+  the strength of the history it stores, as where friction or dilation change
+  along a piece of the law or the return moves from a face of the yield
+  surface to an edge, the return takes the smallest. Mesh regularization of
+  strong softening
   remains separate ([#136]).
 - New option `control.iterative_return_mapping_option` (default 0). With 1
   (experimental), the return iterates until cohesion, friction and dilation
   all match the plastic strain at the end of the step (backward Euler), and
   rate-and-state models store the friction coefficient of the final plastic
-  history. Where friction or dilation changes along a piece of the law, more
-  than one increment within the piece can match; the return takes the first.
-  This depends less on the step size but costs more where friction
+  history. This depends less on the step size but costs more where friction
   or dilation weakens: on one thread the 2D accretionary-wedge example runs
   about 6% longer than before with the default and about 13% longer with 1.
   Both give the same result when only cohesion weakens ([#136]).

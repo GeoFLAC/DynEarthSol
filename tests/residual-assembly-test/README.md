@@ -105,7 +105,10 @@ at once or over a range (the return lies past the fall), with option 1 a piece
 past a cohesion jump whose friction softens while its cohesion hardens, where
 `g = recorded - delta` is below 0 at both ends and above 0 between (the return
 lies there), and a piece softening friction and cohesion where g is above 0 at
-both ends and below 0 between (the return is its first root), friction and dilation
+both ends and below 0 between (the return is its first root); with either option,
+in 3D and plane strain, a steep cohesion fall past a jump where the return moves
+from a face to an edge and g rises, falls to its first root and rises again
+(ending at 1.7e-5 or 2e-5), friction and dilation
 softening within the step, tension with a
 friction angle constant or 1e-8 degrees from constant (the two returns must
 agree), rate-and-state softening to its residual cohesion, a single state update per

@@ -1234,15 +1234,18 @@ static void check_mixed_cohesions(const char* prefix, const double trial[3], boo
     }
 }
 
-// With option 1, friction follows the increment, and g = recorded - delta can turn along a
-// piece. Two materials mixed 1:1: past a cohesion jump at 1.04e-6, one hardens from 3e5 to
-// 2.1e6 Pa while its friction falls from 40 to 0 deg by 8.79e-6. For the trial rise, g is
-// below 0 at both ends of that piece and above 0 between, where the return lies. Both
-// soften friction from 40 to 15 deg and cohesion from 1.5e6 to 5e5 Pa over 1e-4: for the
-// trial dip, g is above 0 at both ends and below 0 between, and the return is its first root.
+// g = recorded - delta can turn along a piece. With option 1, friction follows the increment.
+// Two materials mixed 1:1: past a cohesion jump at 1.04e-6, one hardens from 3e5 to 2.1e6 Pa
+// while its friction falls from 40 to 0 deg by 8.79e-6. For the trial rise, g is below 0 at
+// both ends of that piece and above 0 between, where the return lies. Both soften friction
+// from 40 to 15 deg and cohesion from 1.5e6 to 5e5 Pa over 1e-4: for the trial dip, g is
+// above 0 at both ends and below 0 between, and the return is its first root. With either
+// option, g turns where the return moves from a face to an edge (3D and plane strain): past
+// a cohesion rise from 6.5e5 to 7.5e5 Pa at 5.2e-6, the other material falls from 7.5e5 Pa
+// at 4.94e10 Pa per unit plastic strain to 1.7e-5 or 2e-5. For the trial edge, g rises above
+// 0 on the face, falls to 0 on the edge and rises again, above 0 at 2e-5.
 static void check_turning_returns(const char* prefix, const double rise[3], const double dip[3],
-                                  bool pure_2d) {
-    if(return_mapping_option==0) return;
+                                  const double edge[3], bool pure_2d) {
     MaterialFixture f(MatProps::rh_ep, 0);
     auto& p=f.m->param.mat;
     mix_two_materials(f, pure_2d);
@@ -1254,16 +1257,28 @@ static void check_turning_returns(const char* prefix, const double rise[3], cons
         std::snprintf(name,sizeof name,"%s%s: on that piece",prefix,what);
         check(name,(*f.pls)[0]<end,1);
     };
-    p.pls0={1.04e-6,1.04e-6}; p.pls1={1.04e-6,8.79e-6};
-    p.cohesion0={5e4,3e5}; p.cohesion1={3e5,2.1e6};
-    p.friction_angle0={40,40}; p.friction_angle1={40,0};
-    f.set_material();
-    check_on_piece("return where g rises above 0 past a jump",rise,1.04e-6,8.79e-6);
-    p.pls0={0,0}; p.pls1={1e-4,1e-4};
-    p.cohesion0={1.5e6,1.5e6}; p.cohesion1={5e5,5e5};
-    p.friction_angle0={40,40}; p.friction_angle1={15,15};
-    f.set_material();
-    check_on_piece("first root where g dips below 0",dip,0,1e-4);
+    if(return_mapping_option==1) {
+        p.pls0={1.04e-6,1.04e-6}; p.pls1={1.04e-6,8.79e-6};
+        p.cohesion0={5e4,3e5}; p.cohesion1={3e5,2.1e6};
+        p.friction_angle0={40,40}; p.friction_angle1={40,0};
+        f.set_material();
+        check_on_piece("return where g rises above 0 past a jump",rise,1.04e-6,8.79e-6);
+        p.pls0={0,0}; p.pls1={1e-4,1e-4};
+        p.cohesion0={1.5e6,1.5e6}; p.cohesion1={5e5,5e5};
+        p.friction_angle0={40,40}; p.friction_angle1={15,15};
+        f.set_material();
+        check_on_piece("first root where g dips below 0",dip,0,1e-4);
+    }
+    if(!edge) return;
+    for(double end : {1.7e-5,2e-5}) {
+        p.pls0={5.2e-6,5.2e-6}; p.pls1={5.2e-6,end};
+        p.cohesion0={6.5e5,7.5e5}; p.cohesion1={7.5e5,7.5e5-4.94e10*(end-5.2e-6)};
+        p.friction_angle0=p.friction_angle1={30,30};
+        f.set_material();
+        char what[96];
+        std::snprintf(what,sizeof what,"first root where g turns at an edge, to %g",end);
+        check_on_piece(what,edge,5.2e-6,end);
+    }
 }
 
 #ifndef THREED
@@ -1322,7 +1337,7 @@ static void test_pure_2d_law_returns() {
     check_cohesion_jumps(f,"pure 2D ",far);
     check_mixed_cohesions("pure 2D ",far,true);
     const double dip[3]={-7e6,-1e5,0};
-    check_turning_returns("pure 2D ",far,dip,true);
+    check_turning_returns("pure 2D ",far,dip,nullptr,true);
     p.pls0={0}; p.pls1={1e-5};
     set_mc_material(f, 10);
     p.friction_angle1={20}; p.dilation_angle1={0};
@@ -1377,8 +1392,8 @@ static void test_mohr_coulomb_law_returns() {
     const double far[3]={-6e6,-2e6,-1e6};
     check_cohesion_jumps(f,"",far);
     check_mixed_cohesions("",far,false);
-    const double dip[3]={-7e6,-3e6,-1e5};
-    check_turning_returns("",far,dip,false);
+    const double dip[3]={-7e6,-3e6,-1e5}, near_edge[3]={-6e6,-5.8e6,-1e6};
+    check_turning_returns("",far,dip,near_edge,false);
     // Friction 30 -> 20 deg and dilation 10 -> 0 deg over 1e-5: the step
     // ends inside the segment with strength and flow of the stored history
     // (option 1) or of the start of the step (option 0).
