@@ -99,8 +99,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** Boundary-condition inputs that did nothing are refused with a
   message: side-wall codes that set no velocity component (other than 0 to 7;
   5 and 7 in 2D), negative `vbc_z0` or `vbc_z1`, and `stress_bc_*` of an
-  unknown type, on a 2D y wall, or on a component the velocity code holds for
-  the whole run ([#115]).
+  unknown type or on a 2D y wall ([#115]).
 - The velocities of side-wall code 6 now count toward the largest boundary
   speed, which sets mass scaling and the timestep. Results of
   `examples/oblique-rift-3d.cfg` change markedly: its timestep falls from

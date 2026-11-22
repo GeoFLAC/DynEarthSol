@@ -690,8 +690,7 @@ static void declare_parameters(opt::Registry &cfg,
          "0: none; 1, 2 or 3: the normal stress xx, yy or zz given by bc.stress_val_x0 (2D: 1 or 3). "
          "It loads each boundary facet along that axis with the stress times the same component of "
          "the facet's area-weighted outward normal, so an axis along the side loads tilted facets "
-         "only. A component that bc.vbc_x0 holds for the whole run is refused; with letters in "
-         "bc.vbc_x0, give a traction as t instead.")
+         "only. With letters in bc.vbc_x0, give a traction as t instead.")
         ("bc.stress_bc_x1", opt::value<int>(&p.bc.stress_bc_x1)->default_value(0),
          "Stress boundary condition for the right/eastern side, as for bc.stress_bc_x0")
         ("bc.stress_bc_y0", opt::value<int>(&p.bc.stress_bc_y0)->default_value(0),
@@ -1404,15 +1403,15 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 
 
 // stress_bc_* loads global component k of each facet with S n_k, n being the facet's
-// area-weighted normal; #115 keeps that. Refuse what adds nothing: an unknown type, the y
-// walls in 2D, and a component the velocity code holds for the whole run. A tangential
-// component stays: it is zero on a flat side but loads a tilted facet.
+// area-weighted normal; #115 keeps that. Refuse what adds nothing: an unknown type and the
+// y walls in 2D. A tangential component stays: it is zero on a flat side but loads a
+// tilted facet. So does a component the velocity code holds: where the side meets an n
+// boundary, the edge map passes the load on to the other components.
 static void check_stress_bcs(const Param &p)
 {
     static const char *names[nbdrytypes_hydro] = {"x0", "x1", "y0", "y1", "z0", "z1"};
     const int codes[nbdrytypes_hydro] = {p.bc.stress_bc_x0, p.bc.stress_bc_x1, p.bc.stress_bc_y0,
                                          p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
-    const char *axes = (NDIMS == 3) ? "xyz" : "xz";
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         const int code = codes[i];
         if (code == 0) continue;
@@ -1429,15 +1428,6 @@ static void check_stress_bcs(const Param &p)
         if (axis < 0) {
             std::cerr << "Error: " << key << " = " << code << " is not "
                       << (NDIMS == 3 ? "1 (x), 2 (y) or 3 (z)" : "1 (x) or 3 (z)") << ".\n";
-            die(EXIT_CONFIG_VALUE);
-        }
-        const SideBC &s = p.bc.side[i];
-        int c = 0;  // the frame component along the loaded axis
-        while (std::abs(side_frame[i][c]) - 1 != axis) ++c;
-        if (s.type[c] == 'v' && s.release_time == std::numeric_limits<double>::max()) {
-            std::cerr << "Error: " << key << " = " << code << " loads " << axes[axis] << " on the "
-                      << names[i] << " side, which bc.vbc_" << names[i] << " holds; that adds "
-                      << "nothing. Free " << axes[axis] << " there to load it.\n";
             die(EXIT_CONFIG_VALUE);
         }
     }

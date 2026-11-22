@@ -12,7 +12,7 @@ must match the conversion tables of #115 in the side frames chosen there.
 
 Input that adds nothing ran on the parent; the current executable refuses it (#115), and
 these cases expect its exit code 11: side-wall codes that set no velocity component, and
-stress_bc_* of an unknown type or on a component the velocity code holds.
+stress_bc_* of an unknown type or on a 2D y wall.
 
 Cases marked restart also restart from checkpoint 1 with the current executable, and
 every later frame must match the run's bit for bit: the n boundaries keep the normals of
@@ -208,11 +208,14 @@ def cases():
         # A held component is loaded once its hold ends.
         found.append(case(f'{d}-stress-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6',
                                                               stress_bc_z1='3', stress_val_z1='-4e4')))
-        # What adds nothing is refused: a component held for the whole run, and other types.
-        found.append(case(f'{d}-stress-held-normal', nd, dict(stress_bc_x0='1', stress_val_x0='2e4'),
-                          refused=True))
+        # A component the velocity code holds: nothing on a box, but where the side meets an
+        # n boundary the edge map passes the load on (x on z1 at the cut corner).
+        found.append(case(f'{d}-stress-held-normal', nd, dict(stress_bc_x0='1', stress_val_x0='2e4')))
         found.append(case(f'{d}-stress-held-tangential', nd, dict(vbc_x0='2', stress_bc_x0='3',
-                                                                  stress_val_x0='2e4'), refused=True))
+                                                                  stress_val_x0='2e4')))
+        found.append(case(f'{d}-stress-held-n-corner', nd, dict(vbc_z1='2', stress_bc_z1='1',
+                                                                stress_val_z1='-4e4'), mesh='cut'))
+        # What adds nothing is refused: an unknown type, and (2D) the y walls.
         found.append(case(f'{d}-stress-type4', nd, dict(vbc_x0='0', stress_bc_x0='4', stress_val_x0='2e4'),
                           refused=True))
         if nd == 2:
