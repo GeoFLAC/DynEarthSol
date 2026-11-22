@@ -86,20 +86,24 @@ def base(ndims, mesh):
 
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
-         same_as=None, refused=False, restart=False, corner=None):
+         same_as=None, refused=False, restart=False, corner=None, quoted=()):
     # exit_code is the parent's; input that set nothing ran there and is refused now.
-    # corner is (side, frame).
+    # corner is (side, frame); quoted lists the bc keys written in quotes.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
-                same_as=same_as, restart=restart, corner=corner)
+                same_as=same_as, restart=restart, corner=corner, quoted=quoted)
 
 
-def effective_cfg(spec):
+def effective_cfg(spec, quoted=False):
+    """The case's configuration; with quoted, as written for DES (spec['quoted'] in quotes)."""
     cfg = base(spec['ndims'], spec['mesh'])
     cfg['bc'].update(spec['bc'])
     cfg['control'].update(spec['control'])
     if spec['restart']:
         cfg['sim']['has_marker_output'] = 'yes'  # a restart reads the markers
+    for k, key in enumerate(spec['quoted'] if quoted else ()):
+        mark = '"' if k % 2 == 0 else "'"
+        cfg['bc'][key] = mark + cfg['bc'][key] + mark
     return cfg
 
 
@@ -230,6 +234,9 @@ def cases():
         # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
         found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
                           mesh='cut', corner=('z1', 3)))
+        # Quoted values, as the codes and scalars took them before they became text and lists.
+        found.append(case(f'{d}-quoted', nd, dict(vbc_x0='3', vbc_val_x0='-1e-9'),
+                          quoted=('vbc_val_x0', 'vbc_x0')))
         for code in (1, 3, 6):
             found.append(case(f'{d}-pt-x-c{code}', nd, dict(vbc_x0=str(code), vbc_x1=str(code)),
                               control=PT_CONTROL))
@@ -428,9 +435,8 @@ def outputs(folder):
 
 
 def run(exe, folder, spec):
-    cfg = effective_cfg(spec)
-    result = run_des(exe, folder, 'bc', cfg, timeout=600, check=False)
-    result.folder, result.cfg = folder, cfg
+    result = run_des(exe, folder, 'bc', effective_cfg(spec, quoted=True), timeout=600, check=False)
+    result.folder, result.cfg = folder, effective_cfg(spec)
     return result
 
 

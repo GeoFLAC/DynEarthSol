@@ -124,6 +124,15 @@ inline bool is_plain_item(const std::string &v)
                                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos;
 }
 
+// The text inside one pair of matching quotes, or the text itself: how CLI11 unquotes
+// a value, which a key that was a scalar before it became a list or a string took.
+inline std::string unquoted(const std::string &v)
+{
+    if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front())
+        return v.substr(1, v.size() - 2);
+    return v;
+}
+
 inline bool is_plain_list(const std::string &v)
 {
     if (v.size() < 2 || v.front() != '[' || v.back() != ']') return false;
@@ -400,7 +409,8 @@ public:
                 defer("option '" + key + "' cannot start with three quotes (multi-line "
                       "strings are not supported), got '" + value + "'");
             else if (e->tokens) {
-                if (! detail::is_plain_list(value) && ! (e->scalar_too && detail::is_plain_item(value)))
+                if (! detail::is_plain_list(value) &&
+                    ! (e->scalar_too && detail::is_plain_item(detail::unquoted(value))))
                     defer("option '" + key + "' must be a list written as "
                           "'[d0, d1, ...]' of plain numbers" + (e->scalar_too ? " or one number" : "")
                           + ", got '" + value + "'");

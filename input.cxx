@@ -1484,6 +1484,8 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
     for (int i=0; i<nbdrytypes; ++i) {
         const std::string key = std::string("bc.vbc_") + names[i];
         const std::string value_key = std::string("bc.vbc_val_") + names[i];
+        // The raw text; a quoted code or letters read as before, when vbc_* was an integer.
+        bc.vbc_text[i] = opt::detail::unquoted(bc.vbc_text[i]);
         const std::string &text = bc.vbc_text[i];
         const std::string list = vm.str(value_key);
         std::vector<double> numbers;
