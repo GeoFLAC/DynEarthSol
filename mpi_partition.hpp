@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 #include "array2d.hpp"
+#include "mpi_transport.hpp"
 #include "parameters.hpp"
 #include "utils.hpp"
 
@@ -16,7 +17,7 @@
 // or container internals are put into the message; marker records stay on root.
 class MpiState {
 public:
-    MpiState(std::vector<unsigned char>& bytes, bool writing)
+    MpiState(mpi_host_vector<unsigned char>& bytes, bool writing)
         : bytes_(bytes), writing_(writing), position_(0) { if (writing) bytes_.clear(); }
     bool reading() const { return !writing_; }
     void raw(void* data, std::size_t bytes) {
@@ -65,7 +66,7 @@ private:
     template<class T> void vector_data(std::vector<T>& items, std::false_type) {
         for (auto& item : items) value(item);
     }
-    std::vector<unsigned char>& bytes_;
+    mpi_host_vector<unsigned char>& bytes_;
     bool writing_;
     std::size_t position_;
 };

@@ -49,6 +49,9 @@ packs compact SoA halo rows on devices, copies contiguous buffers through pinned
 host memory, and supplies **host pointers** to MPI. GPU producers finish before
 packing; receives finish before upload/unpack and buffer reuse. This path needs
 ordinary MPI transport, and makes no claim about NVLink, CUDA IPC or GPUDirect.
+Every other buffer MPI reads or writes (states sent after remeshing, gathers,
+scatters and reductions) is pinned host memory too: a CUDA-aware transport (UCX)
+corrupted managed buffers on two GPUs.
 
 Compact timestep fields use managed allocation and are prefetched after
 distribution. Initialization, MMG, double-precision nearest-neighbor remapping,

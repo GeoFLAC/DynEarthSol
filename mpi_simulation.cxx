@@ -138,7 +138,7 @@ Fields element_fields(Variables& var) {
     return fields;
 }
 
-void pack(const Fields& fields, const int_vec& rows, double_vec& out) {
+void pack(const Fields& fields, const int_vec& rows, mpi_host_vector<double>& out) {
     out.resize(std::size_t(rows.size()) * fields.columns);
     std::size_t offset = 0;
     if (rows.empty()) return;
@@ -554,15 +554,16 @@ struct MpiSimulation::Impl {
     std::uint64_t calls[int(MpiOp::Count)] = {}, payload_bytes = 0, state_bytes = 0, root_bytes = 0, all_payload_bytes = 0;
     double elapsed[int(MpiOp::Count)] = {}, communication_s = 0;
     double operation_comm[int(MpiOp::Count)] = {};
-    double_vec rank_profile;
+    mpi_host_vector<double> rank_profile;
     std::vector<std::pair<std::string, std::string>> runtime;
     bool pending_active = false;
     int pending = 0;
     bool pending_nodes = false;
     Fields pending_fields;
     std::uint64_t geometry_version = ~std::uint64_t(0);
-    std::vector<unsigned char> bytes;
-    double_vec send, recv, scatter;
+    mpi_host_vector<unsigned char> bytes;
+    mpi_host_vector<double> send, recv, scatter, reduced;
+    mpi_host_vector<int> reduced_int;
     int_vec counts, offsets, queries_n, queries_e;
     array_t average_coord;
     tensor_t average_strain, average_stress;
@@ -1065,7 +1066,10 @@ struct MpiSimulation::Impl {
             compute_earthquake_metrics(var, measurements[0], measurements[1]);
             break;
         case MpiOp::Report: {
-            MPI_Reduce(&payload_bytes, &all_payload_bytes, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+            // This object is heap memory, which a GPU build manages; MPI gets stack copies.
+            std::uint64_t mine = payload_bytes, all = 0;
+            MPI_Reduce(&mine, &all, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+            all_payload_bytes = all;
             double sample[3*int(MpiOp::Count)];
             for (int i=0; i<int(MpiOp::Count); ++i) {
                 sample[3*i] = double(calls[i]);
@@ -1158,6 +1162,15 @@ struct MpiSimulation::Impl {
         begin_exchange(entity, arrays);
         finish_exchange();
     }
+
+    // In place through a host vector: a caller may pass a managed vector (see mpi_host_vector).
+    template<class T> void allreduce(T* data, int count, MPI_Datatype type, MPI_Op op, mpi_host_vector<T>& buffer) {
+        buffer.assign(data, data + count);
+        const double start = MPI_Wtime();
+        MPI_Allreduce(MPI_IN_PLACE, buffer.data(), count, type, op, MPI_COMM_WORLD);
+        communication_s += MPI_Wtime() - start;
+        std::copy(buffer.begin(), buffer.end(), data);
+    }
 };
 
 // The manifest's [runtime.mpi]: where the ranks run and how many threads each
@@ -1218,7 +1231,7 @@ MpiSimulation::MpiSimulation(Param& param) : impl_(new Impl(param)) {
     if (current != selected_device) die(EXIT_INTERNAL_ASSERT, "CUDA/OpenACC device selection differs");
     cudaDeviceProp device{};
     mpi_cuda_check(cudaGetDeviceProperties(&device, current));
-    std::vector<char> uuids(16*local_size);
+    mpi_host_vector<char> uuids(16*local_size);
     MPI_Allgather(device.uuid.bytes, 16, MPI_BYTE, uuids.data(), 16, MPI_BYTE, local);
     for (int i=0; i<local_size; ++i) {
         for (int j=i+1; j<local_size; ++j) {
@@ -1405,9 +1418,7 @@ bool MpiSimulation::metrics(const Variables& var, double& speed, double& plastic
 }
 
 void MpiSimulation::minimum(double* data, int count) {
-    double start = MPI_Wtime();
-    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-    impl_->communication_s += MPI_Wtime() - start;
+    impl_->allreduce(data, count, MPI_DOUBLE, MPI_MIN, impl_->reduced);
 }
 
 double MpiSimulation::maximum(double value) {
@@ -1421,15 +1432,11 @@ double MpiSimulation::sum(double value) {
 }
 
 void MpiSimulation::sum(double* data, int count) {
-    double start = MPI_Wtime();
-    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    impl_->communication_s += MPI_Wtime() - start;
+    impl_->allreduce(data, count, MPI_DOUBLE, MPI_SUM, impl_->reduced);
 }
 
 void MpiSimulation::maximum(double* data, int count) {
-    double start = MPI_Wtime();
-    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-    impl_->communication_s += MPI_Wtime() - start;
+    impl_->allreduce(data, count, MPI_DOUBLE, MPI_MAX, impl_->reduced);
 }
 
 int MpiSimulation::sum(int value) {
@@ -1441,9 +1448,7 @@ int MpiSimulation::sum(int value) {
 }
 
 void MpiSimulation::maximum(int* data, int count) {
-    double start = MPI_Wtime();
-    MPI_Allreduce(MPI_IN_PLACE, data, count, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-    impl_->communication_s += MPI_Wtime() - start;
+    impl_->allreduce(data, count, MPI_INT, MPI_MAX, impl_->reduced_int);
 }
 
 void MpiSimulation::report() {
