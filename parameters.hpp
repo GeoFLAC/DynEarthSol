@@ -281,6 +281,25 @@ struct Control {
 
 };
 
+// One side's velocity and stress conditions, read from the integer codes (#115).
+// Components are in the side's frame (n, t_h, t_v): n is the outward normal,
+// t_h = up x n (+x on the top and bottom) and t_v = n x t_h. 2D keeps the in-plane
+// pair: (n, t_v) on x walls and n boundaries, (n, t_h) on z walls. The other members
+// reproduce how the codes behave today.
+struct SideBC {
+    char type[NDIMS];            // 'v': velocity held at value; 'f': free
+    double value[NDIMS];         // m/s along the frame axis
+    bool normal_follows_period;  // normal value times the period table (2D: and depth profile)
+    bool taper;                  // 2D x0 code 3: normal value tapers off near the bottom
+    bool horizontal_normal;      // n boundaries 11, 13: n is the horizontal part of the normal
+    bool support;                // a free normal carries the lithostatic, Winkler or water load
+    bool noop;                   // a side-wall code that sets no component
+    double max_speed;            // the speed find_max_vbc takes from this side
+    double release_time;         // in s; the side is free after it (bc.vbc_val_z1_loading_period)
+    int stress_axis;             // stress_bc_*: adds stress_value * normal[axis]; -1 for none
+    double stress_value;         // Pa
+};
+
 struct BC {
     double surface_temperature;
     double mantle_temperature;
@@ -375,6 +394,8 @@ struct BC {
     double stress_val_y1;
     double stress_val_z0;
     double stress_val_z1;
+
+    SideBC side[nbdrytypes];  // filled from the codes above by validate_parameters()
 };
 
 struct IC {

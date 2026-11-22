@@ -1371,6 +1371,141 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
+// Read the velocity and stress codes into one table per side, in the side's frame
+// (see SideBC). Zeros on a negative axis are stored as -0.0, so that turning a value
+// back into a global component gives today's +0.0.
+static void convert_bc_codes(Param &p)
+{
+    BC &bc = p.bc;
+    const int codes[nbdrytypes] = {bc.vbc_x0, bc.vbc_x1, bc.vbc_y0, bc.vbc_y1, bc.vbc_z0, bc.vbc_z1,
+                                   bc.vbc_n0, bc.vbc_n1, bc.vbc_n2, bc.vbc_n3};
+    const double values[nbdrytypes] = {bc.vbc_val_x0, bc.vbc_val_x1, bc.vbc_val_y0, bc.vbc_val_y1,
+                                       bc.vbc_val_z0, bc.vbc_val_z1, bc.vbc_val_n0, bc.vbc_val_n1,
+                                       bc.vbc_val_n2, bc.vbc_val_n3};
+    const double shear[4] = {bc.vbc_val_x0_l, bc.vbc_val_x1_l, bc.vbc_val_y0_l, bc.vbc_val_y1_l};
+    const int stress_codes[nbdrytypes_hydro] = {bc.stress_bc_x0, bc.stress_bc_x1, bc.stress_bc_y0,
+                                                bc.stress_bc_y1, bc.stress_bc_z0, bc.stress_bc_z1};
+    const double stress_values[nbdrytypes_hydro] = {bc.stress_val_x0, bc.stress_val_x1, bc.stress_val_y0,
+                                                    bc.stress_val_y1, bc.stress_val_z0, bc.stress_val_z1};
+    for (int i=0; i<nbdrytypes; ++i) {
+        SideBC &s = bc.side[i];
+        s = SideBC{};
+        for (int d=0; d<NDIMS; ++d) s.type[d] = 'f';
+        s.release_time = (i == iboundz1) ? bc.vbc_val_z1_loading_period : std::numeric_limits<double>::max();
+        s.stress_axis = -1;
+        const int code = codes[i];
+        const double v = values[i];
+        auto set = [&s](int d, double value) { s.type[d] = 'v'; s.value[d] = value; };
+
+        if (i >= iboundn0) {
+            // n0 to n3 accept 1, 3, 11 and 13 only (checked above).
+            s.horizontal_normal = (code == 11 || code == 13);
+            set(0, v);
+            if (code == 3 || code == 13)
+                for (int d=1; d<NDIMS; ++d) set(d, 0.);
+            s.max_speed = std::fabs(v);
+            continue;
+        }
+
+        if (code % 2 == 1 || code == 4) s.max_speed = std::fabs(v);
+        if (i < nbdrytypes_hydro && stress_codes[i] >= 1 && stress_codes[i] <= 3) {
+#ifdef THREED
+            s.stress_axis = stress_codes[i] - 1;
+#else
+            if (stress_codes[i] != 2) s.stress_axis = (stress_codes[i] == 1) ? 0 : 1;
+#endif
+            s.stress_value = stress_values[i];
+        }
+
+        const double sn = (i % 2 == 0) ? -1. : 1.;  // outward normal along -axis on x0, y0, z0
+        if (i == iboundz0 || i == iboundz1) {
+            // frame (n, t_h, t_v) = z1: (+z, +x, +y); z0: (-z, +x, -y), so t_v has n's sign.
+            // 2D: (n, t_h).
+            s.support = (code == 0 || code == 2 || code == 4) &&
+                ((i == iboundz0) ? bc.has_winkler_foundation : bc.has_water_loading);
+            if (code == 1 || code == 3) set(0, sn * v);
+            if (code == 2 || code == 3) {
+                set(1, 0.);
+#ifdef THREED
+                set(2, sn * 0.);
+#endif
+            }
+#ifndef THREED
+            if (code == 4) { set(0, sn * 0.); set(1, v); }
+#endif
+            continue;
+        }
+
+#ifdef THREED
+        // frame (n, t_h, t_v) = x0: (-x, -y, +z); x1: (+x, +y, +z); y0: (-y, +x, +z); y1: (+y, -x, +z)
+        const double sh = (i < iboundy0) ? sn : -sn;
+        const double l = shear[i];
+        s.support = (code == 0 || code == 2 || code == 4);
+        s.normal_follows_period = (code == 1 || code == 3 || code == 6 || code == 7);
+        switch (code) {
+        case 0: break;
+        case 1: set(0, sn * v); break;
+        case 2: set(1, sh * 0.); set(2, 0.); break;
+        case 3: set(0, sn * v); set(1, sh * 0.); set(2, 0.); break;
+        case 4: set(1, sh * v); set(2, 0.); break;
+        case 5: set(0, sn * 0.); set(1, sh * v); set(2, 0.); break;
+        case 6: set(0, sn * v); set(1, sh * l); break;
+        case 7: set(0, sn * v); set(1, sh * 0.); break;
+        default: s.noop = true;
+        }
+#else
+        // frame (n, t_v) = x0: (-x, +z); x1: (+x, +z). 2D has no y walls.
+        if (i == iboundy0 || i == iboundy1) continue;
+        const double l = shear[i];
+        s.support = (code == 0 || code == 2 || code == 4);
+        s.normal_follows_period = (code == 1 || code == 3 || code == 6);
+        s.taper = (i == iboundx0 && code == 3);
+        switch (code) {
+        case 0: break;
+        case 1: set(0, sn * v); break;
+        case 2: set(1, 0.); break;
+        case 3: set(0, sn * v); set(1, 0.); break;
+        case 4: set(0, sn * 0.); set(1, v); break;
+        case 6: set(0, sn * v); set(1, l); break;
+        default: s.noop = true;
+        }
+#endif
+    }
+}
+
+
+// One line per side, for checking the table against the conversion tables of #115.
+static void print_bc_table(const Param &p)
+{
+    static const char *names[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
+#ifdef THREED
+    static const char *frames[nbdrytypes_hydro] = {"-x,-y,+z", "+x,+y,+z", "-y,+x,+z", "+y,-x,+z",
+                                                   "-z,+x,-y", "+z,+x,+y"};
+#else
+    static const char *frames[nbdrytypes_hydro] = {"-x,+z", "+x,+z", "", "", "-z,+x", "+z,+x"};
+#endif
+    for (int i=0; i<nbdrytypes; ++i) {
+#ifndef THREED
+        if (i == iboundy0 || i == iboundy1) continue;
+#endif
+        const SideBC &s = p.bc.side[i];
+        std::cout << "[bc][side] name=" << names[i] << " frame="
+                  << (i < iboundn0 ? frames[i] : s.horizontal_normal ? "horizontal-normal" : "normal")
+                  << " types=" << std::string(s.type, NDIMS) << " values=";
+        for (int d=0; d<NDIMS; ++d) std::cout << (d ? "," : "") << s.value[d];
+        std::cout << " normal_follows_period=" << s.normal_follows_period << " taper=" << s.taper
+                  << " support=" << s.support << " noop=" << s.noop << " max_speed=" << s.max_speed
+                  << " release_time=";
+        if (s.release_time == std::numeric_limits<double>::max()) std::cout << "none";
+        else std::cout << s.release_time;
+        std::cout << " stress=";
+        if (s.stress_axis < 0) std::cout << "none";
+        else std::cout << "xyz"[s.stress_axis == NDIMS - 1 ? 2 : s.stress_axis] << ':' << s.stress_value;
+        std::cout << '\n';
+    }
+}
+
+
 static void validate_parameters(const opt::Registry &vm, Param &p)
 {
     std::cout << "Checking consistency of input parameters...\n";
@@ -1766,6 +1901,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if ( p.bc.vbc_n3 != 1 && p.bc.vbc_n3 != 3 && p.bc.vbc_n3 != 11 && p.bc.vbc_n3 != 13 ) {
             die(EXIT_CONFIG_VALUE, "bc.vbc_n3 is not 1, 3, 11, or 13.");
         }
+
+        convert_bc_codes(p);
+        print_bc_table(p);
     }
 
     //
