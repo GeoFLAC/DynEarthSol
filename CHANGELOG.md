@@ -17,6 +17,12 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- A side's velocity boundary condition can be given as letters, one per
+  component of the side's frame (outward normal, then two tangents): `v` holds
+  the velocity, `t` applies a traction (Pa) and `f` leaves it free, with one
+  value per letter in `vbc_val_*`, for example `vbc_x0 = vff` and
+  `vbc_val_x0 = [1e-9, 0, 0]`. The integer codes still work, and the log lists
+  each side's resulting conditions at startup ([#115]).
 - Material-following monitor points use `monitor.point_type` (`particle` or
   `grid`), retain their exact checkpoint location, and preserve CSV histories
   through restart. `monitor.remesh_output` selects before/both remesh rows;
@@ -90,6 +96,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Boundary-condition inputs that did nothing are refused with a
+  message: side-wall codes that set no velocity component (other than 0 to 7;
+  5 and 7 in 2D), negative `vbc_z0` or `vbc_z1`, and `stress_bc_*` of an
+  unknown type, on a 2D y wall, or on a component the velocity code holds for
+  the whole run ([#115]).
+- The velocities of side-wall code 6 now count toward the largest boundary
+  speed, which sets mass scaling and the timestep. Results of
+  `examples/oblique-rift-3d.cfg` change markedly: its timestep falls from
+  2.64 to 0.398 yr ([#115]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
@@ -185,6 +200,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- A restart no longer stops with "boundary 6 is curved" when an oblique (`n`)
+  boundary has bent since the start, as code 1 can at its corners: checkpoints
+  carry the boundary normals of the starting mesh, and the restart keeps them.
+  Older checkpoints restart as before ([#115]).
+- In 2D, side-wall code 4 holds the normal velocity at 0 and no longer adds
+  the lithostatic support to the saved `force`; velocities and stresses are
+  unchanged ([#115]).
+- `--help` gives the 2D meaning of velocity codes 4 and 6, and how
+  `stress_bc_*` loads a boundary facet ([#115]).
 - Explicit/GVS output cadence and pending remesh stages survive restart.
   Changed timestep controls refresh timestep and mass together; fixed-mesh
   GVS also refreshes both from the accepted velocity. Large output intervals
@@ -513,6 +537,7 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#115]: https://github.com/GeoFLAC/DynEarthSol/issues/115
 [#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119

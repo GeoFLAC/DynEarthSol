@@ -650,7 +650,8 @@ static void declare_parameters(opt::Registry &cfg,
         ("bc.mantle_temperature", opt::value<double>(&p.bc.mantle_temperature)->default_value(1600),
          "Mantle temperature (in Kelvin)")
         ("bc.has_winkler_foundation", opt::value<bool>(&p.bc.has_winkler_foundation)->default_value(true),
-         "Using Winkler foundation for the bottom boundary?")
+         "Using Winkler foundation for the bottom boundary? It frees the velocity of z0: an integer "
+         "code becomes 0, and in letters v becomes f (a traction t stays).")
         ("bc.winkler_delta_rho", opt::value<double>(&p.bc.winkler_delta_rho)->default_value(0),
          "Excess density of the bottom Winkler foundation (in kg/m^3)")
 
@@ -660,7 +661,8 @@ static void declare_parameters(opt::Registry &cfg,
          "Elastic constant for elastic foundation.")
 
         ("bc.has_water_loading", opt::value<bool>(&p.bc.has_water_loading)->default_value(true),
-         "Applying water loading for top boundary that is below sea level?")
+         "Applying water loading for top boundary that is below sea level? It frees the velocity of "
+         "z1: an integer code becomes 0, and in letters v becomes f (a traction t stays).")
 
         ("bc.sea_water_density", opt::value<double>(&p.bc.sea_water_density)->default_value(1030),
          "Density of the loading water (in kg/m^3). Used for the top-boundary "
@@ -684,75 +686,80 @@ static void declare_parameters(opt::Registry &cfg,
 
          // General stress (Neumann) boundary conditions 
         ("bc.stress_bc_x0", opt::value<int>(&p.bc.stress_bc_x0)->default_value(0),
-         "Type of boundary condition for the left/western side. "
-         "0: no traction boundary condition, "
-         "1: traction in the x direction, "
-         "2: traction in the y direction, "
-         "3: traction in the z direction.")
+         "Stress boundary condition for the left/western side, with an integer code in bc.vbc_x0. "
+         "0: none; 1, 2 or 3: the normal stress xx, yy or zz given by bc.stress_val_x0 (2D: 1 or 3). "
+         "It loads each boundary facet along that axis with the stress times the same component of "
+         "the facet's area-weighted outward normal, so an axis along the side loads tilted facets "
+         "only. A component that bc.vbc_x0 holds for the whole run is refused; with letters in "
+         "bc.vbc_x0, give a traction as t instead.")
         ("bc.stress_bc_x1", opt::value<int>(&p.bc.stress_bc_x1)->default_value(0),
-         "Type of boundary condition for the right/eastern side")
+         "Stress boundary condition for the right/eastern side, as for bc.stress_bc_x0")
         ("bc.stress_bc_y0", opt::value<int>(&p.bc.stress_bc_y0)->default_value(0),
-         "Type of boundary condition for the front/southern side")
+         "Stress boundary condition for the front/southern side, as for bc.stress_bc_x0")
         ("bc.stress_bc_y1", opt::value<int>(&p.bc.stress_bc_y1)->default_value(0),
-         "Type of boundary condition for the back/northern side")
+         "Stress boundary condition for the back/northern side, as for bc.stress_bc_x0")
         ("bc.stress_bc_z0", opt::value<int>(&p.bc.stress_bc_z0)->default_value(0),
-         "Type of boundary condition for the bottom side")
+         "Stress boundary condition for the bottom side, as for bc.stress_bc_x0")
         ("bc.stress_bc_z1", opt::value<int>(&p.bc.stress_bc_z1)->default_value(0),
-         "Type of boundary condition for the top side")
+         "Stress boundary condition for the top side, as for bc.stress_bc_x0")
 
         ("bc.stress_val_x0", opt::value<double>(&p.bc.stress_val_x0)->default_value(0.0),
-         "Magnitude of stress at the left/western side (in Pa).")
+         "Stress at the left/western side for bc.stress_bc_* (Pa, tension positive).")
         ("bc.stress_val_x1", opt::value<double>(&p.bc.stress_val_x1)->default_value(0.0),
-         "Magnitude of stress at the right/eastern side (in Pa).")
+         "Stress at the right/eastern side for bc.stress_bc_* (Pa, tension positive).")
         ("bc.stress_val_y0", opt::value<double>(&p.bc.stress_val_y0)->default_value(0.0),
-         "Magnitude of stress at the front/southern side (in Pa).")
+         "Stress at the front/southern side for bc.stress_bc_* (Pa, tension positive).")
         ("bc.stress_val_y1", opt::value<double>(&p.bc.stress_val_y1)->default_value(0.0),
-         "Magnitude of stress at the back/northern side (in Pa).")
+         "Stress at the back/northern side for bc.stress_bc_* (Pa, tension positive).")
         ("bc.stress_val_z0", opt::value<double>(&p.bc.stress_val_z0)->default_value(0.0),
-         "Magnitude of stress at the bottom side (in Pa).")
+         "Stress at the bottom side for bc.stress_bc_* (Pa, tension positive).")
         ("bc.stress_val_z1", opt::value<double>(&p.bc.stress_val_z1)->default_value(0.0),
-         "Magnitude of stress at the top side (in Pa).")
+         "Stress at the top side for bc.stress_bc_* (Pa, tension positive).")
 
         ("bc.vbc_x0", opt::value<std::string>(&p.bc.vbc_text[iboundx0])->default_value("1"),
-         "Type of velocity boundary condition for the left/western side. "
-         "Odd number indicates the normal component of the velocity is fixed. "
-         "Possible type is \n"
-         "0: all velocity components free;\n"
-         "1: normal component fixed, shear components free;\n"
-         "2: normal component free, shear components fixed at 0;\n"
-         "3: normal component fixed, shear components fixed at 0;\n"
-         "4: normal component free, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
-         "5: normal component fixed at 0, shear component (not z) fixed, z component fixed at 0, only in 3D;\n"
-         "6: normal component fixed (bc.vbc_val_*), shear component (not z) fixed (bc.vbc_val_*_l), z component free;\n"
-         "7: normal component fixed, shear component (not z) fixed at 0, z component free, only in 3D;\n"
-         "Other values set no component and are refused; 11 and 13 are for the n boundaries.\n"
+         "Velocity boundary condition for the left/western side: an integer code or letters. A code "
+         "holds these components, with values along the global axes:\n"
+         "0: all components free;\n"
+         "1: normal fixed at bc.vbc_val_x0, the others free;\n"
+         "2: normal free, the others fixed at 0;\n"
+         "3: normal fixed at bc.vbc_val_x0, the others fixed at 0;\n"
+         "4: 3D: normal free, horizontal shear fixed at bc.vbc_val_x0, z fixed at 0; 2D: normal fixed "
+         "at 0, z fixed at bc.vbc_val_x0;\n"
+         "5: 3D only: normal fixed at 0, horizontal shear fixed at bc.vbc_val_x0, z fixed at 0;\n"
+         "6: normal fixed at bc.vbc_val_x0, horizontal shear fixed at bc.vbc_val_x0_l, z free; 2D: "
+         "normal fixed at bc.vbc_val_x0, z fixed at bc.vbc_val_x0_l;\n"
+         "7: 3D only: normal fixed at bc.vbc_val_x0, horizontal shear fixed at 0, z free.\n"
+         "Other codes set no component and are refused; 11 and 13 are for the n boundaries. On a side "
+         "wall, a normal fixed at bc.vbc_val_x0 follows the period table and, in 2D, the depth "
+         "profile; in 2D, code 3 on x0 also tapers it over the bottom shear zone.\n"
          "Or one letter per component of the side's frame (n, t_h, t_v): n is the outward normal, "
          "t_h = up x n (+x on the top and bottom) and t_v = n x t_h; here (-x, -y, +z), in 2D (-x, +z). "
          "'v' holds the component at its value in bc.vbc_val_x0, then a list such as '[1e-9, 0, 0]' "
          "(m/s along the frame axis, outward positive); 't' applies a traction of that value (Pa along "
          "the frame axis, outward and tension positive, times the facet area); 'f' leaves it free. A "
          "normal that is not held keeps the lithostatic support (z0: with the Winkler foundation; z1: "
-         "with water loading), and a traction adds to it. Only a held normal value follows the period "
-         "table and, in 2D, the depth profile and the bottom shear zone. With letters, "
+         "with water loading), and a traction adds to it. On a side wall, only a held normal value "
+         "follows the period table and, in 2D, the depth profile; in 2D, a held x0 normal also tapers "
+         "over the bottom shear zone. With letters, "
          "bc.stress_bc_* is refused; give a traction as t.")
         ("bc.vbc_x1", opt::value<std::string>(&p.bc.vbc_text[iboundx1])->default_value("1"),
          "Type of boundary condition for the right/eastern side, as for bc.vbc_x0: an integer code or one letter per component of the frame (+x, +y, +z), in 2D (+x, +z)")
         ("bc.vbc_val_x0", opt::list()->scalar_too()->default_value("-1e-9"),
-         "Value of boundary condition for left/western side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the left/western side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_x0_l", opt::value<double>(&p.bc.vbc_val_x0_l)->default_value(0),
-         "Lateral shear velocity for left/western side (used with bc type 6, unit is m/s)")
+         "Horizontal shear velocity for the left/western side with code 6 (m/s, along the global axis; in 2D, the z velocity); with letters, give it in the side's list instead")
         ("bc.vbc_val_division_x0_min", opt::value<double>(&p.bc.vbc_val_division_x0_min)->default_value(1.),
-         "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
+         "Ratio of first rate change division from the top to the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_division_x0_max", opt::value<double>(&p.bc.vbc_val_division_x0_max)->default_value(1.),
-         "Ratio of second rate change division from the top to the right boundary width (for option = 8)")
+         "Ratio of second rate change division from the top to the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x0_ratio0", opt::value<double>(&p.bc.vbc_val_x0_ratio0)->default_value(1.),
-         "Ratio of the velocity at the surface of the left boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the surface of the left boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x0_ratio1", opt::value<double>(&p.bc.vbc_val_x0_ratio1)->default_value(1.),
-         "Ratio of the velocity at the vbc_val_division_x0_min of the left boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the vbc_val_division_x0_min of the left boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x0_ratio2", opt::value<double>(&p.bc.vbc_val_x0_ratio2)->default_value(1.),
-         "Ratio of the velocity at the vbc_val_division_x1_max of the left boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the vbc_val_division_x1_max of the left boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x0_ratio3", opt::value<double>(&p.bc.vbc_val_x0_ratio3)->default_value(1.),
-         "Ratio of the velocity at the bottom of the left boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the bottom of the left boundary width (2D depth profile of a held normal)")
 
         ("bc.num_vbc_period_x0", opt::value<int>(&p.bc.num_vbc_period_x0)->default_value(1),
          "Number of points in the x0 velocity period table")
@@ -771,34 +778,34 @@ static void declare_parameters(opt::Registry &cfg,
          "Ratio of vbc_val_x1 at each time of the x1 period table, as for x0")
 
         ("bc.vbc_val_x1", opt::list()->scalar_too()->default_value("1e-9"),
-         "Value of boundary condition for the right/eastern side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the right/eastern side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_x1_l", opt::value<double>(&p.bc.vbc_val_x1_l)->default_value(0),
-         "Lateral shear velocity for right/eastern side (used with bc type 6, unit is m/s)")
+         "Horizontal shear velocity for the right/eastern side with code 6 (m/s, along the global axis; in 2D, the z velocity); with letters, give it in the side's list instead")
         ("bc.vbc_val_division_x1_min", opt::value<double>(&p.bc.vbc_val_division_x1_min)->default_value(1.),
-         "Ratio of first rate change division from the top to the right boundary width (for option = 8)")
+         "Ratio of first rate change division from the top to the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_division_x1_max", opt::value<double>(&p.bc.vbc_val_division_x1_max)->default_value(1.),
-         "Ratio of second rate change division from the top to the right boundary width (for option = 8)")
+         "Ratio of second rate change division from the top to the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x1_ratio0", opt::value<double>(&p.bc.vbc_val_x1_ratio0)->default_value(1.),
-         "Ratio of the velocity at the surface of the right boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the surface of the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x1_ratio1", opt::value<double>(&p.bc.vbc_val_x1_ratio1)->default_value(1.),
-         "Ratio of the velocity at the vbc_val_division_x0_min of the right boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the vbc_val_division_x0_min of the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x1_ratio2", opt::value<double>(&p.bc.vbc_val_x1_ratio2)->default_value(1.),
-         "Ratio of the velocity at the vbc_val_division_x1_max of the right boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the vbc_val_division_x1_max of the right boundary width (2D depth profile of a held normal)")
         ("bc.vbc_val_x1_ratio3", opt::value<double>(&p.bc.vbc_val_x1_ratio3)->default_value(1.),
-         "Ratio of the velocity at the bottom of the right boundary width (for option = 1 and 3)")
+         "Ratio of the velocity at the bottom of the right boundary width (2D depth profile of a held normal)")
 
         ("bc.vbc_y0", opt::value<std::string>(&p.bc.vbc_text[iboundy0])->default_value("0"),
          "Type of boundary condition for the southern side, as for bc.vbc_x0: an integer code or one letter per component of the frame (-y, +x, +z)")
         ("bc.vbc_y1", opt::value<std::string>(&p.bc.vbc_text[iboundy1])->default_value("0"),
          "Type of boundary condition for the northern side, as for bc.vbc_x0: an integer code or one letter per component of the frame (+y, -x, +z)")
         ("bc.vbc_val_y0", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for the southern side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the southern side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_y0_l", opt::value<double>(&p.bc.vbc_val_y0_l)->default_value(0),
-         "Lateral shear velocity for southern side (used with bc type 6, unit is m/s)")
+         "Horizontal shear velocity for the southern side with code 6 (m/s, along the global axis); with letters, give it in the side's list instead")
         ("bc.vbc_val_y1", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for the northern side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the northern side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_y1_l", opt::value<double>(&p.bc.vbc_val_y1_l)->default_value(0),
-         "Lateral shear velocity for northern side (used with bc type 6, unit is m/s)")
+         "Horizontal shear velocity for the northern side with code 6 (m/s, along the global axis); with letters, give it in the side's list instead")
         ("bc.num_vbc_period_y0", opt::value<int>(&p.bc.num_vbc_period_y0)->default_value(1),
          "Number of points in the y0 velocity period table (3D only)")
         ("bc.num_vbc_period_y1", opt::value<int>(&p.bc.num_vbc_period_y1)->default_value(1),
@@ -817,40 +824,45 @@ static void declare_parameters(opt::Registry &cfg,
         ("bc.vbc_z1", opt::value<std::string>(&p.bc.vbc_text[iboundz1])->default_value("0"),
          "Type of boundary condition for the top side, as for bc.vbc_x0: an integer code or one letter per component of the frame (+z, +x, +y), in 2D (+z, +x)")
         ("bc.vbc_val_z0", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for the bottom side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the bottom side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_z1", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for the top side (if velocity, unit is m/s; if stress, unit is Pa)")
+         "Value of boundary condition for the top side: with an integer code, one velocity (m/s) along the global axes; with letters, one value per letter along the frame axes (m/s for v, Pa for t, outward positive).")
         ("bc.vbc_val_z1_loading_period", opt::value<double>(&p.bc.vbc_val_z1_loading_period)->default_value(std::numeric_limits<double>::max()),
-         "Loading period for the velocity on the top side")
+         "Time (s) after which bc.vbc_z1 no longer holds the velocity of the top side; a traction t "
+         "stays.")
 
         ("bc.vbc_n0", opt::value<std::string>(&p.bc.vbc_text[iboundn0])->default_value("1"),
          "Type of boundary condition for slant boundary #0: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
          "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n0", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for slant boundary #0 (if velocity, unit is m/s, "
-         "outward normal direction is positive; if stress, unit is Pa)")
+         "Value of boundary condition for slant boundary #0: with an integer code, "
+         "one velocity (m/s) along the outward normal; with letters, one value per letter "
+         "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n1", opt::value<std::string>(&p.bc.vbc_text[iboundn1])->default_value("1"),
          "Type of boundary condition for slant boundary #1: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
          "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n1", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for slant boundary #1 (if velocity, unit is m/s, "
-         "outward normal direction is positive; if stress, unit is Pa)")
+         "Value of boundary condition for slant boundary #1: with an integer code, "
+         "one velocity (m/s) along the outward normal; with letters, one value per letter "
+         "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n2", opt::value<std::string>(&p.bc.vbc_text[iboundn2])->default_value("1"),
          "Type of boundary condition for slant boundary #2: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
          "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n2", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for slant boundary #2 (if velocity, unit is m/s, "
-         "outward normal direction is positive; if stress, unit is Pa)")
+         "Value of boundary condition for slant boundary #2: with an integer code, "
+         "one velocity (m/s) along the outward normal; with letters, one value per letter "
+         "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n3", opt::value<std::string>(&p.bc.vbc_text[iboundn3])->default_value("1"),
          "Type of boundary condition for slant boundary #3: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
          "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n3", opt::list()->scalar_too()->default_value("0"),
-         "Value of boundary condition for slant boundary #3 (if velocity, unit is m/s, "
-         "outward normal direction is positive; if stress, unit is Pa)")
+         "Value of boundary condition for slant boundary #3: with an integer code, "
+         "one velocity (m/s) along the outward normal; with letters, one value per letter "
+         "along the frame axes (m/s for v, Pa for t, outward positive)")
         
         ("bc.bottom_shear_zone_thickness", opt::value<double>(&p.bc.bottom_shear_zone_thickness)->default_value(0.),
          "Thickness of the bottom shear zone for ndims = 2 and bc.vbc_x0 = 3 or an x0 normal held by "
