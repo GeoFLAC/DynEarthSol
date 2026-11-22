@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check complete GPU MPI timesteps against CPU outputs and one-GPU outputs.
 
-Use the site's scheduler allocation and compatible MPI launcher. Full
+Use the site's scheduler allocation and compatible MPI launcher on one host. Full
 physical HDF5 arrays are checked, including vectors/tensors and checkpoints;
 integer data and topology must be exact, floating data finite within the normal
 DES 1e-8 relative-field criterion. Timings here are not scaling measurements.
@@ -56,17 +56,17 @@ def device_records(log,ranks):
           re.findall(r'\[mpi\]\[device\] (.*)',log)]
     if len(rows)!=ranks or {int(row['rank']) for row in rows}!=set(range(ranks)):
         raise RuntimeError('Missing/duplicate GPU rank identities')
-    for host in {row['host'] for row in rows}:
-        local=[row for row in rows if row['host']==host]
-        if len({row['uuid'] for row in local})!=len(local):raise RuntimeError('GPU UUID is shared by local ranks')
-        if any(not re.fullmatch('[0-9a-f]{32}',row['uuid']) or
-               row.get('halo_transport')!='host_staged' for row in local):
-            raise RuntimeError('Missing physical GPU or unexpected transport')
+    # The OpenACC launch log (NV_ACC_NOTIFY) names a kernel's device but not its rank or
+    # host. On one host every rank selects its own device, so the device names the rank.
+    if len({row['host'] for row in rows})!=1:
+        raise RuntimeError('Run every GPU rank on one host: the kernel launch log names no host')
+    if len({row['uuid'] for row in rows})!=len(rows):raise RuntimeError('GPU UUID is shared by local ranks')
+    if any(not re.fullmatch('[0-9a-f]{32}',row['uuid']) or
+           row.get('halo_transport')!='host_staged' for row in rows):
+        raise RuntimeError('Missing physical GPU or unexpected transport')
     if 'kernel=GPU' not in log or '[mpi][kernel] name=Stress' not in log:
         raise RuntimeError('The complete compact GPU MPI timestep backend was not exercised')
-    # The OpenACC launch log (NV_ACC_NOTIFY) names each kernel's device: every rank's
-    # GPU must run the force update, or that rank fell back to the host. Device numbers
-    # repeat across hosts, so on several hosts this checks each number at least once.
+    # Every rank's GPU must run the force update, or that rank fell back to the host.
     launched={int(device) for device in
               re.findall(r'launch CUDA kernel .*function=\S*update_force\S* .*device=(\d+)',log)}
     idle=sorted({int(row['device']) for row in rows}-launched)
