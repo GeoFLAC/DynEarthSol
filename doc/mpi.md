@@ -148,7 +148,10 @@ The local mesh includes owned elements, the complete element stars of owned node
 and their vertices. Local indices map to stable global IDs until remeshing.
 Node patch sums retain global element ordering to preserve the serial arithmetic.
 Workers do not receive the full mesh. Rank zero also retains a global management
-copy, so root memory and centralized operations remain scaling limits.
+copy, so root memory and centralized operations remain scaling limits. Root sends
+each rank's compact state as one MPI message, which must stay under 2 GiB
+(`INT_MAX` bytes); a larger partition stops the run with exit code 52 before the
+transfer. Use more ranks to make each partition smaller.
 
 Ownership and halo maps are rebuilt after **every** MMG remesh, even if node and
 element counts are unchanged. Compute ranks retain per-element material counts;

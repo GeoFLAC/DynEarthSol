@@ -636,15 +636,18 @@ struct MpiSimulation::Impl {
                 parts[r].archive(state);
                 local_archive(state, packing);
                 nbytes = bytes.size();
+                // One message per rank: check its size before the header goes out.
+                const int message = count(nbytes);
                 MPI_Send(&nbytes, 1, MPI_UINT64_T, r, 20, MPI_COMM_WORLD);
-                MPI_Send(bytes.data(), count(nbytes), MPI_BYTE, r, 21, MPI_COMM_WORLD);
+                MPI_Send(bytes.data(), message, MPI_BYTE, r, 21, MPI_COMM_WORLD);
                 state_bytes += nbytes;
             }
             if (rank == r) {
                 if (r) {
                     MPI_Recv(&nbytes, 1, MPI_UINT64_T, 0, 20, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    const int message = count(nbytes);
                     bytes.resize(nbytes);
-                    MPI_Recv(bytes.data(), count(nbytes), MPI_BYTE, 0, 21, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(bytes.data(), message, MPI_BYTE, 0, 21, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     MpiState state(bytes, false);
                     part.archive(state);
                     local_archive(state, local);
@@ -858,9 +861,12 @@ struct MpiSimulation::Impl {
             state.value(queries_e);
         }
         std::uint64_t nbytes = bytes.size();
+        // Check the size before the header goes out and before workers allocate.
+        if (rank == 0) count(nbytes);
         MPI_Bcast(&nbytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        const int message = count(nbytes);
         if (rank) bytes.resize(nbytes);
-        MPI_Bcast(bytes.data(), count(nbytes), MPI_BYTE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(bytes.data(), message, MPI_BYTE, 0, MPI_COMM_WORLD);
         if (rank) {
             MpiState state(bytes, false);
             state.value(queries_n);
