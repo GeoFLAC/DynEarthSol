@@ -49,7 +49,8 @@ staging. Local ranks must select distinct physical GPU UUIDs. Stage dependencies
 before using offline hosts, and use an allocation on scheduler-managed hosts.
 Keep model workspaces on the site's designated storage.
 
-On one host with one visible GPU per rank:
+On one host where every rank sees the same GPUs, at least one per rank (local
+rank N runs on device N):
 
 ```sh
 python3 tests/functional/mpi/run_gpu_mpi.py \

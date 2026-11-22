@@ -79,8 +79,8 @@ OMP_NUM_THREADS=1 python3 tests/functional/mpi/run_gpu_mpi.py \
 ```
 
 Set the matching SDK/MPI runtime library paths as required by your installation.
-Allocate two visible GPUs for this check. One rank selects one physical GPU;
-the report checks distinct GPU UUIDs, actual device execution and all saved
+Allocate two GPUs that both ranks see for this check. Local rank N runs on
+device N; the report checks distinct GPU UUIDs, actual device execution and all saved
 fields/checkpoints against the CPU and one-GPU references. Expected: exit 0,
 `all_passed: true` in the generated `results.json`, and distinct UUIDs for the
 two-rank cases. For one available GPU use `--ranks 1`. For a direct model run,

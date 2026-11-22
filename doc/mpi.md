@@ -40,8 +40,11 @@ make -j8 ndims=3 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx usemmg=1 hd
 The Makefile detects the GPU's compute capability; set `GPU_CC` to build for
 another device.
 
-Use one rank per visible physical GPU. Device selection precedes managed
-allocations; local ranks must have distinct physical UUIDs. The implementation
+Use one rank per physical GPU. Local rank N on a host runs on that host's visible
+device N, so every rank on a host must see the same GPUs, at least one per rank.
+A launcher that gives each rank a different single GPU stops local rank 1 with
+exit code 52. Device selection precedes managed allocations; local ranks must
+have distinct physical UUIDs. The implementation
 packs compact SoA halo rows on devices, copies contiguous buffers through pinned
 host memory, and supplies **host pointers** to MPI. GPU producers finish before
 packing; receives finish before upload/unpack and buffer reuse. This path needs

@@ -514,7 +514,8 @@ void mpi_select_device() {
     const int index = local ? std::atoi(local) : 0;
     const int devices = acc_get_num_devices(acc_device_nvidia);
     if (index < 0 || index >= devices)
-        die(EXIT_RUNTIME_RESOURCE, "GPU MPI requires one visible NVIDIA device per local rank");
+        die(EXIT_RUNTIME_RESOURCE, "GPU MPI runs local rank N on visible device N: every rank on a host "
+            "must see the same NVIDIA devices, at least one per rank");
     acc_set_device_num(index, acc_device_nvidia);
     acc_init(acc_device_nvidia);
     selected_device = index;
