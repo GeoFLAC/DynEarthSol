@@ -490,6 +490,14 @@ bool management(MpiOp op) {
            op == MpiOp::Boundary || op == MpiOp::Sample;
 }
 
+// Mesh checks and requested surface reports run the surface processes on root's whole
+// surface state; on other steps options 0 and 1 leave the surface elements to the ranks.
+bool whole_surface_step(const Param& param, const Variables& var) {
+    const bool surface_report = NDIMS == 2 && param.control.is_reporting_terrigenous_info &&
+        var.steps != 0 && var.steps % 10000 == 0;
+    return var.steps % param.mesh.quality_check_step_interval == 0 || surface_report;
+}
+
 // Root broadcasts one command per operation; workers mirror its scalars.
 struct Command {
     int operation, steps;
@@ -561,7 +569,7 @@ struct MpiSimulation::Impl {
     int pending = 0;
     bool pending_nodes = false;
     Fields pending_fields;
-    std::uint64_t geometry_version = ~std::uint64_t(0);
+    std::uint64_t geometry_version = ~std::uint64_t(0), topography_version = ~std::uint64_t(0);
     mpi_host_vector<unsigned char> bytes;
     mpi_host_vector<double> send, recv, scatter, reduced;
     mpi_host_vector<int> reduced_int, send_int, recv_int;
@@ -697,7 +705,7 @@ struct MpiSimulation::Impl {
         // Redistribution finishes a mutating command; root stays current when
         // execute() advances the command version on return.
         root_version = version + 1;
-        surface_version = geometry_version = ~std::uint64_t(0);
+        surface_version = geometry_version = topography_version = ~std::uint64_t(0);
         communication_s += MPI_Wtime() - start;
     }
 
@@ -911,6 +919,17 @@ struct MpiSimulation::Impl {
         surface_version = version;
     }
 
+    // The strip's coordinates, all that surface option 1 reads between mesh checks.
+    void surface_coordinates() {
+        if (topography_version == version || surface_version == version ||
+            geometry_version == version || root_version == version) return;
+        Fields root_coord, local_coord;
+        local_coord.add(local.coord);
+        if (rank == 0) root_coord.add(master->coord);
+        gather_rows(true, local_coord, root_coord, true);
+        topography_version = version;
+    }
+
     void query() {
         if (root_version == version) return;
         if (rank == 0) {
@@ -1067,12 +1086,11 @@ struct MpiSimulation::Impl {
             break;
         case MpiOp::SurfaceTopography: {
             // Root moves the top nodes on its mesh; each rank corrects its own surface elements.
+            surface_coordinates();
             Fields root_coord, local_coord;
             local_coord.add(local.coord);
-            if (rank == 0) root_coord.add(master->coord);
-            if (root_version != version && surface_version != version && geometry_version != version)
-                gather_rows(true, local_coord, root_coord, true);
             if (rank == 0) {
+                root_coord.add(master->coord);
                 AccOffloadScope host(false);
                 update_surface_topography(param, *master, *master->coord, master->surfinfo);
             }
@@ -1128,7 +1146,8 @@ struct MpiSimulation::Impl {
             geometry();
             break;
         case MpiOp::Boundary:
-            boundary();
+            if (arg != 0) surface_coordinates();
+            else boundary();
             break;
         case MpiOp::Sample:
             query();
@@ -1413,19 +1432,15 @@ bool MpiSimulation::dispatch(MpiOp op, const Variables& var, double arg) {
     // Keep marker maintenance and requested surface reports on root. On other
     // steps the ranks correct their own surface elements, after option 1 has
     // moved the top nodes on root.
-    if (op == MpiOp::Surface) {
-        const bool surface_report = NDIMS == 2 && impl.param.control.is_reporting_terrigenous_info &&
-            var.steps != 0 && var.steps % 10000 == 0;
-        if (var.steps % impl.param.mesh.quality_check_step_interval != 0 && !surface_report) {
-            bool idle = impl.param.control.surface_process_option == 0;
-            if (idle) {
-                std::fill(impl.master->surfinfo.dh->begin(), impl.master->surfinfo.dh->end(), 0.0);
-                impl.master->surfinfo.max_surf_vel = 0;
-                op = MpiOp::SurfaceIdle;
-            }
-            else if (impl.param.control.surface_process_option == 1) {
-                op = MpiOp::SurfaceTopography;
-            }
+    if (op == MpiOp::Surface && !whole_surface_step(impl.param, var)) {
+        bool idle = impl.param.control.surface_process_option == 0;
+        if (idle) {
+            std::fill(impl.master->surfinfo.dh->begin(), impl.master->surfinfo.dh->end(), 0.0);
+            impl.master->surfinfo.max_surf_vel = 0;
+            op = MpiOp::SurfaceIdle;
+        }
+        else if (impl.param.control.surface_process_option == 1) {
+            op = MpiOp::SurfaceTopography;
         }
     }
     Command command{};
@@ -1489,7 +1504,10 @@ void MpiSimulation::geometry(const Variables& var) {
 }
 
 void MpiSimulation::boundary(const Variables& var) {
-    dispatch(MpiOp::Boundary, var);
+    // Between mesh checks, option 1 reads only the strip's coordinates.
+    const bool coordinates = impl_->param.control.surface_process_option == 1 &&
+        !whole_surface_step(impl_->param, var);
+    dispatch(MpiOp::Boundary, var, coordinates ? 1 : 0);
 }
 
 void MpiSimulation::sample(const Variables& var, const int_vec& nodes, const int_vec& elements) {

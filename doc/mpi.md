@@ -181,11 +181,11 @@ ranks per node and several threads each than with one single-threaded rank per c
 A global state is collected only when needed by these operations, checkpoints,
 output or optional earthquake moment accumulation. Phase changes collect
 coordinates, temperature and stress, and send back only material counts.
-Surface option 1 collects the coordinates of a top/boundary strip, moves the
-top nodes on rank zero and returns the coordinates; each rank then corrects its
-own surface elements. Option 0 uses compact mechanical surface
-correction outside mesh checks and requested surface reports, with neighbor
-halos. Quality checks collect coordinates and
+Between mesh checks and requested surface reports, surface option 1 collects
+the coordinates of a top/boundary strip, moves the top nodes on rank zero and
+returns the coordinates; each rank then corrects its own surface elements.
+Option 0 uses compact mechanical surface correction on those steps, with
+neighbor halos. Quality checks collect coordinates and
 element volumes; advanced surface work can require full state. The optional
 serpentinization grid collects state only when that model feature is active.
 Monitor output collects queried rows and their dependencies.
@@ -252,20 +252,20 @@ as `TimeStep` and `Residual` do.
 **4. Work that only rank 0 can do.** Operations that need the global mesh,
 markers or MMG are listed in `management()`. Their case first brings rank 0's
 copy up to date (`full()` for every field, `geometry()` for coordinates and
-volumes, `boundary()` for the surface strip, `phase_inputs()` for what the
-phase-change rules read), runs the function on `*master` under
-`if (rank == 0)`, and then sends the result back with `distribute(false)`,
-`distribute(true)` when the mesh changed (this also repartitions),
-`scatter_surface()`, or `scatter_elemmarkers()` when only material counts
-changed. OpenACC offload is off during these operations.
+volumes, `boundary()` for the surface strip, `surface_coordinates()` for its
+coordinates, `phase_inputs()` for what the phase-change rules read), runs the
+function on `*master` under `if (rank == 0)`, and then sends the result back
+with `distribute(false)`, `distribute(true)` when the mesh changed (this also
+repartitions), `scatter_surface()`, or `scatter_elemmarkers()` when only
+material counts changed. OpenACC offload is off during these operations.
 
 **5. The version rule.** After every operation, `execute()` advances `version`
 unless the operation is on the list at its end (`Collect`, `Geometry`,
 `Boundary`, `Sample`, `Average`, `Metrics`, `TimeStep`, `Residual`, `Report`).
-`full()`, `geometry()` and `boundary()` gather again only when the version has
-moved since their last gather. An operation that changes any field must
-therefore not be on the list; one that only reads fields or computes scalars
-may be added to it.
+`full()`, `geometry()`, `boundary()` and `surface_coordinates()` gather again
+only when the version has moved since their last gather. An operation that
+changes any field must therefore not be on the list; one that only reads
+fields or computes scalars may be added to it.
 
 **6. Fields and offload.** A new per-node or per-element field of `Variables`
 goes into `mpi_local_fields.hpp`, or compact meshes never get it.
