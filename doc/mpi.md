@@ -161,7 +161,7 @@ the management mesh, where marker consistency is checked after rebalancing.
 MMG and interpolation run centrally, preserving existing 2D/3D behavior without
 requiring ParMMG. Repartitioning occurs after remeshing, not periodically between
 remeshes. Cost-weighted partitioning remains a possible improvement if measured
-load warrants it; optional METIS already supplies a communication-volume objective.
+load warrants it; METIS already supplies a communication-volume objective.
 
 ## Distributed and central work
 
