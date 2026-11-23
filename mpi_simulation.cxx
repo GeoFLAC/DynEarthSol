@@ -824,6 +824,46 @@ struct MpiSimulation::Impl {
         geometry_version = version;
     }
 
+    // What phase_changes() reads on root's mesh: coordinates, temperature, stress.
+    void phase_inputs() {
+        if (root_version == version) return;
+        Fields root_node_fields, root_element_fields, local_node_fields, local_element_fields;
+        local_node_fields.add(local.coord);
+        local_node_fields.add(local.temperature);
+        local_element_fields.add(local.stress);
+        if (rank == 0) {
+            root_node_fields.add(master->coord);
+            root_node_fields.add(master->temperature);
+            root_element_fields.add(master->stress);
+        }
+        gather_rows(true, local_node_fields, root_node_fields);
+        gather_rows(false, local_element_fields, root_element_fields);
+    }
+
+    // Send every rank root's material counts for the elements it holds, ghosts included.
+    void scatter_elemmarkers() {
+        const int nmat = param.mat.nmat;
+        int_vec sending, receiving(std::size_t(local.nelem) * nmat);
+        if (rank == 0) {
+            master->mat->refresh_elem_cache();
+            counts.assign(size, 0);
+            offsets.assign(size, 0);
+            for (int r=0; r<size; ++r) {
+                offsets[r] = count(sending.size());
+                for (int e : parts[r].elements)
+                    sending.insert(sending.end(), (*master->elemmarkers)[e].begin(), (*master->elemmarkers)[e].end());
+                counts[r] = count(sending.size() - std::size_t(offsets[r]));
+            }
+        }
+        const double start = MPI_Wtime();
+        MPI_Scatterv(sending.data(), counts.data(), offsets.data(), MPI_INT, receiving.data(),
+                     count(receiving.size()), MPI_INT, 0, MPI_COMM_WORLD);
+        communication_s += MPI_Wtime() - start;
+        for (int e=0; e<local.nelem; ++e)
+            std::copy_n(receiving.begin() + std::size_t(e) * nmat, nmat, (*local.elemmarkers)[e].begin());
+        local.mat->refresh_elem_cache();
+    }
+
     Fields surface_node_fields(Variables& var) {
         Fields fields;
         fields.add(var.coord);
@@ -1039,9 +1079,10 @@ struct MpiSimulation::Impl {
             distribute(true);
             break;
         case MpiOp::PhaseChange:
-            full();
+            // The rules change marker materials only; every field on the ranks stays current.
+            phase_inputs();
             if (rank == 0) phase_changes(param, *master);
-            distribute(false);
+            scatter_elemmarkers();
             break;
         case MpiOp::Hydrous:
             full();

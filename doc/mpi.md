@@ -179,7 +179,9 @@ Rank zero runs this work with its OpenMP threads, so models with phase
 changes, surface option 1 or frequent remeshing usually run faster with fewer
 ranks per node and several threads each than with one single-threaded rank per core.
 A global state is collected only when needed by these operations, checkpoints,
-output or optional earthquake moment accumulation. Surface option 1
+output or optional earthquake moment accumulation. Phase changes collect
+coordinates, temperature and stress, and send back only material counts.
+Surface option 1
 collects/scatters a top/boundary strip. Option 0 uses compact mechanical surface
 correction outside mesh checks and requested surface reports, with neighbor
 halos. Quality checks collect coordinates and
@@ -249,10 +251,12 @@ as `TimeStep` and `Residual` do.
 **4. Work that only rank 0 can do.** Operations that need the global mesh,
 markers or MMG are listed in `management()`. Their case first brings rank 0's
 copy up to date (`full()` for every field, `geometry()` for coordinates and
-volumes, `boundary()` for the surface strip), runs the function on `*master`
-under `if (rank == 0)`, and then sends the result back with `distribute(false)`,
-`distribute(true)` when the mesh changed (this also repartitions), or
-`scatter_surface()`. OpenACC offload is off during these operations.
+volumes, `boundary()` for the surface strip, `phase_inputs()` for what the
+phase-change rules read), runs the function on `*master` under
+`if (rank == 0)`, and then sends the result back with `distribute(false)`,
+`distribute(true)` when the mesh changed (this also repartitions),
+`scatter_surface()`, or `scatter_elemmarkers()` when only material counts
+changed. OpenACC offload is off during these operations.
 
 **5. The version rule.** After every operation, `execute()` advances `version`
 unless the operation is on the list at its end (`Collect`, `Geometry`,
