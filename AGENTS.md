@@ -16,6 +16,10 @@ you cannot infer from the tree.
   either or reply to a review without the user's explicit instruction.
 - Commit messages follow the "Commit messages" section, with a `Co-Authored-By`
   trailer naming you.
+- Assistants tend to write history into comments and docs, and to add files
+  and classes. Read "Code comments" before you write a comment or doc text, and
+  "Source files and classes" before you add a file or a class. Check a change
+  you review against both.
 - A new per-node or per-element field in `Variables` must also be listed in
   `mpi_local_fields.hpp`, or MPI runs never distribute it: it stays `nullptr` on
   every rank and is never gathered back for output, checkpoints or remeshing.
