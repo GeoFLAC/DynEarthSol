@@ -181,8 +181,9 @@ ranks per node and several threads each than with one single-threaded rank per c
 A global state is collected only when needed by these operations, checkpoints,
 output or optional earthquake moment accumulation. Phase changes collect
 coordinates, temperature and stress, and send back only material counts.
-Surface option 1
-collects/scatters a top/boundary strip. Option 0 uses compact mechanical surface
+Surface option 1 collects the coordinates of a top/boundary strip, moves the
+top nodes on rank zero and returns the coordinates; each rank then corrects its
+own surface elements. Option 0 uses compact mechanical surface
 correction outside mesh checks and requested surface reports, with neighbor
 halos. Quality checks collect coordinates and
 element volumes; advanced surface work can require full state. The optional

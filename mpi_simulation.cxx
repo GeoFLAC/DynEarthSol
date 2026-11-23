@@ -464,6 +464,7 @@ const char* op_name(MpiOp op) {
         OP_NAME(InitialPT);
         OP_NAME(Surface);
         OP_NAME(SurfaceIdle);
+        OP_NAME(SurfaceTopography);
         OP_NAME(SwapVolume);
         OP_NAME(Remesh);
         OP_NAME(PhaseChange);
@@ -881,6 +882,16 @@ struct MpiSimulation::Impl {
         return fields;
     }
 
+    // Correct each rank's surface elements for their volume change since the last coordinate update.
+    void correct_surface() {
+        Variables& var = local;
+        correct_surface_element(var, *var.volume, *var.volume_n, *var.stress, *var.strain, *var.strain_rate,
+                                *var.plstrain);
+        exchange(MpiEntity::Element, {{var.volume->data(), 1}, {var.plstrain->data(), 1},
+            {var.stress->data(), NSTR}, {var.strain->data(), NSTR}, {var.strain_rate->data(), NSTR}});
+        exchange(MpiEntity::Node, {{var.volume_n->data(), 1}});
+    }
+
     void boundary() {
         if (surface_version == version || root_version == version) return;
         Fields root_node_fields, root_element_fields;
@@ -1044,13 +1055,24 @@ struct MpiSimulation::Impl {
         case MpiOp::SurfaceIdle:
             // Even without erosion, the original surface path corrects stress
             // for the volume change since the preceding coordinate update.
-            correct_surface_element(var, *var.volume, *var.volume_n, *var.stress, *var.strain, *var.strain_rate,
-                                    *var.plstrain);
-            exchange(MpiEntity::Element, {{var.volume->data(), 1}, {var.plstrain->data(), 1},
-                {var.stress->data(), NSTR}, {var.strain->data(), NSTR}, {var.strain_rate->data(), NSTR}});
-            exchange(MpiEntity::Node, {{var.volume_n->data(), 1}});
+            correct_surface();
             var.surfinfo.max_surf_vel = 0;
             break;
+        case MpiOp::SurfaceTopography: {
+            // Root moves the top nodes on its mesh; each rank corrects its own surface elements.
+            Fields root_coord, local_coord;
+            local_coord.add(local.coord);
+            if (rank == 0) root_coord.add(master->coord);
+            if (root_version != version && surface_version != version && geometry_version != version)
+                gather_rows(true, local_coord, root_coord, true);
+            if (rank == 0) {
+                AccOffloadScope host(false);
+                update_surface_topography(param, *master, *master->coord, master->surfinfo);
+            }
+            scatter_surface(true, root_coord, local_coord);
+            correct_surface();
+            break;
+        }
         case MpiOp::Surface: {
             bool whole = var.steps % param.mesh.quality_check_step_interval == 0 ||
                 (param.control.surface_process_option != 0 && param.control.surface_process_option != 1);
@@ -1381,8 +1403,9 @@ void MpiSimulation::synchronize(Variables& var) {
 bool MpiSimulation::dispatch(MpiOp op, const Variables& var, double arg) {
     auto& impl = *impl_;
     if (!distributed() || impl.inside || impl.master != &var) return false;
-    // Keep marker maintenance and requested surface reports on root. Other
-    // erosion-free steps use the existing compact mechanical correction.
+    // Keep marker maintenance and requested surface reports on root. On other
+    // steps the ranks correct their own surface elements, after option 1 has
+    // moved the top nodes on root.
     if (op == MpiOp::Surface) {
         const bool surface_report = NDIMS == 2 && impl.param.control.is_reporting_terrigenous_info &&
             var.steps != 0 && var.steps % 10000 == 0;
@@ -1392,6 +1415,9 @@ bool MpiSimulation::dispatch(MpiOp op, const Variables& var, double arg) {
                 std::fill(impl.master->surfinfo.dh->begin(), impl.master->surfinfo.dh->end(), 0.0);
                 impl.master->surfinfo.max_surf_vel = 0;
                 op = MpiOp::SurfaceIdle;
+            }
+            else if (impl.param.control.surface_process_option == 1) {
+                op = MpiOp::SurfaceTopography;
             }
         }
     }

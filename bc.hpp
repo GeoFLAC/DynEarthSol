@@ -28,6 +28,9 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain);
 void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, tensor_t& stress, \
                               tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain);
+// Moves the top nodes by this step's surface process and accumulates what the
+// mesh-check marker update reads; part of surface_processes().
+void update_surface_topography(const Param& param, const Variables& var, array_t& coord, SurfaceInfo& surfinfo);
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
                        tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \

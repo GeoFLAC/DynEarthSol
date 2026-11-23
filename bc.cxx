@@ -1814,19 +1814,8 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #endif
 }
 
-void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
-                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
-                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
+void update_surface_topography(const Param& param, const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
 {
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Surface, var, 0.0)) return;
-#endif
-
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
@@ -1935,6 +1924,22 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     #pragma acc wait
 
     surfinfo.max_surf_vel = maxdh / var.dt;
+}
+
+void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
+                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
+                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
+{
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Surface, var, 0.0)) return;
+#endif
+
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+
+    update_surface_topography(param, var, coord, surfinfo);
 
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
