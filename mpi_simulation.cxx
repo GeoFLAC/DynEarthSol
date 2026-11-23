@@ -196,8 +196,8 @@ int count(std::size_t entries) {
 // and element counts do; counted in doubles, a gather of the whole mesh would not.
 class MpiRows {
 public:
-    explicit MpiRows(int columns) {
-        MPI_Type_contiguous(columns, MPI_DOUBLE, &type_);
+    explicit MpiRows(int columns, MPI_Datatype entry = MPI_DOUBLE) {
+        MPI_Type_contiguous(columns, entry, &type_);
         MPI_Type_commit(&type_);
     }
     ~MpiRows() { MPI_Type_free(&type_); }
@@ -564,7 +564,7 @@ struct MpiSimulation::Impl {
     std::uint64_t geometry_version = ~std::uint64_t(0);
     mpi_host_vector<unsigned char> bytes;
     mpi_host_vector<double> send, recv, scatter, reduced;
-    mpi_host_vector<int> reduced_int;
+    mpi_host_vector<int> reduced_int, send_int, recv_int;
     int_vec counts, offsets, queries_n, queries_e;
     array_t average_coord;
     tensor_t average_strain, average_stress;
@@ -844,24 +844,31 @@ struct MpiSimulation::Impl {
     // Send every rank root's material counts for the elements it holds, ghosts included.
     void scatter_elemmarkers() {
         const int nmat = param.mat.nmat;
-        int_vec sending, receiving(std::size_t(local.nelem) * nmat);
+        recv_int.resize(std::size_t(local.nelem) * nmat);
         if (rank == 0) {
             master->mat->refresh_elem_cache();
             counts.assign(size, 0);
             offsets.assign(size, 0);
+            send_int.clear();
+            // As in scatter_surface(), ghost rows go to every rank that holds them.
+            std::size_t rows_before = 0;
             for (int r=0; r<size; ++r) {
-                offsets[r] = count(sending.size());
-                for (int e : parts[r].elements)
-                    sending.insert(sending.end(), (*master->elemmarkers)[e].begin(), (*master->elemmarkers)[e].end());
-                counts[r] = count(sending.size() - std::size_t(offsets[r]));
+                const auto& elements = parts[r].elements;
+                for (int e : elements)
+                    send_int.insert(send_int.end(), (*master->elemmarkers)[e].begin(), (*master->elemmarkers)[e].end());
+                counts[r] = count(elements.size());
+                offsets[r] = count(rows_before);
+                rows_before += elements.size();
+                if (r) root_bytes += std::uint64_t(elements.size()) * nmat * sizeof(int);
             }
         }
+        const MpiRows row(nmat, MPI_INT);
         const double start = MPI_Wtime();
-        MPI_Scatterv(sending.data(), counts.data(), offsets.data(), MPI_INT, receiving.data(),
-                     count(receiving.size()), MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Scatterv(send_int.data(), counts.data(), offsets.data(), row.type(), recv_int.data(),
+                     local.nelem, row.type(), 0, MPI_COMM_WORLD);
         communication_s += MPI_Wtime() - start;
         for (int e=0; e<local.nelem; ++e)
-            std::copy_n(receiving.begin() + std::size_t(e) * nmat, nmat, (*local.elemmarkers)[e].begin());
+            std::copy_n(recv_int.begin() + std::size_t(e) * nmat, nmat, (*local.elemmarkers)[e].begin());
         local.mat->refresh_elem_cache();
     }
 
