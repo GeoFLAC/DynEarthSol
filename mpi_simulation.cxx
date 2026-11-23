@@ -31,6 +31,7 @@
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
+#include "mesh.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
 #include "remeshing.hpp"
@@ -264,6 +265,9 @@ void local_archive(MpiState& state, Variables& var) {
     ARCHIVE(ntop_elems)
     ARCHIVE(surfinfo.top_nodes)
     ARCHIVE(surfinfo.ntop)
+    ARCHIVE(surfinfo.dh)
+    ARCHIVE(surfinfo.dhacc)
+    ARCHIVE(surfinfo.edvacc_surf)
 #undef ARCHIVE
     state.value(var.support.arr_data);
     state.value(var.support.idx_data);
@@ -287,6 +291,14 @@ void release(Variables& var) {
     RELEASE(bcflag)
     RELEASE(top_elems)
     RELEASE(surfinfo.top_nodes)
+    RELEASE(surfinfo.dh)
+    RELEASE(surfinfo.dhacc)
+    RELEASE(surfinfo.edvacc_surf)
+    RELEASE(surfinfo.top_facet_elems)
+    RELEASE(surfinfo.elem_and_nodes)
+    RELEASE(surfinfo.total_dx)
+    RELEASE(surfinfo.total_slope)
+    RELEASE(connectivity_surface)
     RELEASE(ntmp)
     RELEASE(etmp)
     RELEASE(etmp_int)
@@ -394,6 +406,15 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
             if (at != partition.element_local.end()) var.bfacets[i]->emplace_back(at->second, facet.second);
         }
     }
+    // The surface accumulators of these top facets and nodes: the ranks carry them between
+    // root's collections (MpiOp::SurfaceTopography).
+    if (!var.surfinfo.edvacc_surf) var.surfinfo.edvacc_surf = new double_vec;
+    var.surfinfo.edvacc_surf->clear();
+    for (std::size_t g=0; g<global.bfacets[iboundz1]->size(); ++g) {
+        if (partition.element_local.count((*global.bfacets[iboundz1])[g].first))
+            var.surfinfo.edvacc_surf->push_back((*global.surfinfo.edvacc_surf)[g]);
+    }
+    select(global.surfinfo.dhacc, var.surfinfo.dhacc, partition.nodes);
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         var.hbc_types[i] = global.hbc_types[i];
         var.stress_bc_types[i] = global.stress_bc_types[i];
@@ -430,10 +451,15 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     var.ntop_elems = var.top_elems->size();
     if (!var.surfinfo.top_nodes) var.surfinfo.top_nodes = new int_vec;
     var.surfinfo.top_nodes->clear();
+    if (!var.surfinfo.dh) var.surfinfo.dh = new double_vec;
+    var.surfinfo.dh->clear();
     if (global.surfinfo.top_nodes) {
-        for (int id : *global.surfinfo.top_nodes) {
-            auto at = partition.node_local.find(id);
-            if (at != partition.node_local.end()) var.surfinfo.top_nodes->push_back(at->second);
+        for (int g=0; g<global.surfinfo.ntop; ++g) {
+            auto at = partition.node_local.find((*global.surfinfo.top_nodes)[g]);
+            if (at != partition.node_local.end()) {
+                var.surfinfo.top_nodes->push_back(at->second);
+                var.surfinfo.dh->push_back((*global.surfinfo.dh)[g]);
+            }
         }
     }
     var.surfinfo.ntop = var.surfinfo.top_nodes->size();
@@ -570,6 +596,15 @@ struct MpiSimulation::Impl {
     bool pending_nodes = false;
     Fields pending_fields;
     std::uint64_t geometry_version = ~std::uint64_t(0), topography_version = ~std::uint64_t(0);
+    // SurfaceTopography has changed the surface accumulators on the ranks since root last had them.
+    bool surface_on_ranks = false;
+    // This partition leaves some top node without its neighbors (ranks_hold_top_neighbors()).
+    bool surface_on_root = false;
+    // simple_diffusion() keeps a term per top facet (3D) or segment (2D) in var.etmp and
+    // var.tmp_result rows. A rank's top facets can outnumber its elements, an element having
+    // two, and halo exchanges read those arrays as element fields, so a rank lends it these.
+    double_vec surface_etmp;
+    elem_cache surface_terms;
     mpi_host_vector<unsigned char> bytes;
     mpi_host_vector<double> send, recv, scatter, reduced;
     mpi_host_vector<int> reduced_int, send_int, recv_int;
@@ -632,10 +667,11 @@ struct MpiSimulation::Impl {
                 report_partitions();
             }
         }
-        int extent[] = {global_n, global_e};
-        MPI_Bcast(extent, 2, MPI_INT, 0, MPI_COMM_WORLD);
+        int extent[] = {global_n, global_e, rank == 0 && !ranks_hold_top_neighbors()};
+        MPI_Bcast(extent, 3, MPI_INT, 0, MPI_COMM_WORLD);
         global_n = extent[0];
         global_e = extent[1];
+        surface_on_root = extent[2];
         for (int r=0; r<size; ++r) {
             std::uint64_t nbytes = 0;
             if (rank == 0 && r) {
@@ -676,6 +712,7 @@ struct MpiSimulation::Impl {
                 if (!local.mat) local.mat = new MatProps(param, local);
                 else local.mat->refresh_elem_cache();
                 local.mpi = master ? master->mpi : local.mpi;
+                if (param.control.surface_process_option == 1 && !surface_on_root) index_local_surface();
             }
         }
         double hydro_diff_max = rank == 0 ? master->mat->hydro_diff_max : 0;
@@ -706,6 +743,7 @@ struct MpiSimulation::Impl {
         // execute() advances the command version on return.
         root_version = version + 1;
         surface_version = geometry_version = topography_version = ~std::uint64_t(0);
+        surface_on_ranks = false;
         communication_s += MPI_Wtime() - start;
     }
 
@@ -815,6 +853,7 @@ struct MpiSimulation::Impl {
         }
         gather_rows(true, node_fields(local), root_node_fields);
         gather_rows(false, element_fields(local), root_element_fields);
+        if (surface_on_ranks) collect_surface();
         if (rank == 0) master->mat->hydro_diff_max = local.mat->hydro_diff_max;
         root_version = version;
     }
@@ -919,15 +958,129 @@ struct MpiSimulation::Impl {
         surface_version = version;
     }
 
-    // The strip's coordinates, all that surface option 1 reads between mesh checks.
+    // The strip's coordinates, all that the side-wall tops read between mesh checks.
     void surface_coordinates() {
         if (topography_version == version || surface_version == version ||
             geometry_version == version || root_version == version) return;
+        gather_strip_coordinates();
+        topography_version = version;
+    }
+
+    void gather_strip_coordinates() {
         Fields root_coord, local_coord;
         local_coord.add(local.coord);
         if (rank == 0) root_coord.add(master->coord);
         gather_rows(true, local_coord, root_coord, true);
-        topography_version = version;
+    }
+
+    // Whether each top node's owner holds the neighbors that option 1 diffuses it with. In 3D
+    // these share its facets; in 2D they are the next top nodes in x order, which a top that
+    // folds back over itself can place in elements the owner does not hold. Root only.
+    bool ranks_hold_top_neighbors() const {
+#ifdef THREED
+        return true;
+#else
+        if (param.control.surface_process_option != 1) return true;
+        const int_vec& top = *master->surfinfo.top_nodes;
+        int_vec owner(master->nnode, 0);
+        for (int r=0; r<size; ++r)
+            for (int i=0; i<parts[r].owned_nodes; ++i) owner[parts[r].nodes[i]] = r;
+        for (int g=0; g<int(top.size()); ++g) {
+            const auto& held = parts[owner[top[g]]].node_local;
+            if ((g > 0 && !held.count(top[g-1])) || (g+1 < int(top.size()) && !held.count(top[g+1])))
+                return false;
+        }
+        return true;
+#endif
+    }
+
+    // Surface option 1 runs on the ranks between mesh checks: each indexes the top facets and
+    // nodes of its compact mesh, as create_surface_info() does the whole mesh's.
+    void index_local_surface() {
+        Variables& var = local;
+        SurfaceInfo& surf = var.surfinfo;
+        surf.etop = var.bfacets[iboundz1]->size();
+        create_surface_connectivity(var);
+        delete surf.top_facet_elems;
+        surf.top_facet_elems = new int_vec(surf.etop, 0);
+        delete surf.elem_and_nodes;
+        surf.elem_and_nodes = new segment_t(surf.etop);
+        delete surf.total_dx;
+        surf.total_dx = new double_vec(var.nnode, 0.);
+        delete surf.total_slope;
+        surf.total_slope = new double_vec(var.nnode, 0.);
+        index_surface(var, surf);
+        surf.surf_diff = param.control.surface_diffusivity;
+        surf.base_level = param.control.surf_base_level;
+        surf.diff_ratio_terrig = param.control.surf_diff_ratio_terrig;
+        surf.diff_ratio_marine = param.control.surf_diff_ratio_marine;
+#ifdef THREED
+        const int nsurf = surf.etop;
+#else
+        const int nsurf = std::max(surf.ntop - 1, 0);
+#endif
+        surface_etmp.resize(nsurf);
+        surface_terms.resize(nsurf, false);
+    }
+
+    // A rank sees only part of a ghost top node's facets: ghosts take this step's dh from their owners.
+    void share_surface_dh() {
+        Variables& var = local;
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var)
+#endif
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
+        for (int i=0; i<var.surfinfo.ntop; ++i)
+            (*var.ntmp)[(*var.surfinfo.top_nodes)[i]] = (*var.surfinfo.dh)[i];
+        #pragma acc wait
+        exchange(MpiEntity::Node, {{var.ntmp->data(), 1}});
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(var)
+#endif
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
+        for (int i=0; i<var.surfinfo.ntop; ++i)
+            (*var.surfinfo.dh)[i] = (*var.ntmp)[(*var.surfinfo.top_nodes)[i]];
+    }
+
+    // Onto root, the surface accumulators SurfaceTopography leaves on the ranks: dhacc and this
+    // step's dh of the owned top nodes, and edvacc_surf of the top facets of owned elements.
+    void collect_surface() {
+        #pragma acc wait
+        Variables& var = local;
+        const SurfaceInfo& surf = var.surfinfo;
+        std::fill(var.ntmp->begin(), var.ntmp->end(), 0.0);
+        for (int i=0; i<surf.ntop; ++i)
+            (*var.ntmp)[(*surf.top_nodes)[i]] = (*surf.dh)[i];
+        // edvacc_surf by element, one column per facet, in the column layout Fields carry
+        double_vec facets(std::size_t(var.nelem) * FACETS_PER_ELEM, 0.0);
+        for (int i=0; i<surf.etop; ++i) {
+            const auto& facet = (*var.bfacets[iboundz1])[i];
+            facets[std::size_t(facet.second) * var.nelem + facet.first] = (*surf.edvacc_surf)[i];
+        }
+        Fields local_nodes, root_nodes, local_elements, root_elements;
+        local_nodes.add(surf.dhacc);
+        local_nodes.add(var.ntmp);
+        local_elements.add(facets.data(), var.nelem, FACETS_PER_ELEM);
+        double_vec root_dh, root_facets;
+        if (rank == 0) {
+            root_dh.assign(master->nnode, 0.0);
+            root_facets.assign(std::size_t(master->nelem) * FACETS_PER_ELEM, 0.0);
+            root_nodes.add(master->surfinfo.dhacc);
+            root_nodes.add(&root_dh);
+            root_elements.add(root_facets.data(), master->nelem, FACETS_PER_ELEM);
+        }
+        gather_rows(true, local_nodes, root_nodes, true);
+        gather_rows(false, local_elements, root_elements, true);
+        if (rank == 0) {
+            SurfaceInfo& global = master->surfinfo;
+            for (int g=0; g<global.ntop; ++g)
+                (*global.dh)[g] = root_dh[(*global.top_nodes)[g]];
+            for (std::size_t g=0; g<master->bfacets[iboundz1]->size(); ++g) {
+                const auto& facet = (*master->bfacets[iboundz1])[g];
+                (*global.edvacc_surf)[g] = root_facets[std::size_t(facet.second) * master->nelem + facet.first];
+            }
+        }
+        surface_on_ranks = false;
     }
 
     void query() {
@@ -1084,23 +1237,47 @@ struct MpiSimulation::Impl {
             correct_surface();
             var.surfinfo.max_surf_vel = 0;
             break;
-        case MpiOp::SurfaceTopography: {
-            // Root moves the top nodes on its mesh; each rank corrects its own surface elements.
-            surface_coordinates();
-            Fields root_coord, local_coord;
-            local_coord.add(local.coord);
-            if (rank == 0) {
-                root_coord.add(master->coord);
-                AccOffloadScope host(false);
-                update_surface_topography(param, *master, *master->coord, master->surfinfo);
+        case MpiOp::SurfaceTopography:
+            if (surface_on_root) {
+                // Root moves the top nodes on its mesh and returns the strip's coordinates.
+                surface_coordinates();
+                Fields root_coord, local_coord;
+                local_coord.add(local.coord);
+                if (rank == 0) {
+                    root_coord.add(master->coord);
+                    AccOffloadScope host(false);
+                    update_surface_topography(param, *master, *master->coord, master->surfinfo);
+                }
+                scatter_surface(true, root_coord, local_coord);
+            } else {
+                // Each rank moves its own top nodes, ghosts by their owners' dh, and keeps the
+                // accumulators until root collects them. A rank with no top facet (3D) or segment
+                // (2D) holds only ghost top nodes and has nothing to diffuse over.
+                if (!surface_etmp.empty()) {
+                    double_vec* etmp = var.etmp;
+                    elem_cache* terms = var.tmp_result;
+                    var.etmp = &surface_etmp;
+                    var.tmp_result = &surface_terms;
+                    compute_surface_dh(param, var, *var.coord);
+                    #pragma acc wait
+                    var.etmp = etmp;
+                    var.tmp_result = terms;
+                }
+                share_surface_dh();
+                apply_surface_dh(var, *var.coord, var.surfinfo);
+                allreduce(&var.surfinfo.max_surf_vel, 1, MPI_DOUBLE, MPI_MAX, reduced);
+                if (rank == 0) master->surfinfo.max_surf_vel = var.surfinfo.max_surf_vel;
+                surface_on_ranks = true;
+                // update_mesh() reads the restored side walls' new tops on root's mesh.
+                if (param.mesh.remeshing_option == 13) gather_strip_coordinates();
             }
-            scatter_surface(true, root_coord, local_coord);
+            // Each rank corrects its own surface elements.
             correct_surface();
             break;
-        }
         case MpiOp::Surface: {
+            // Option 1 keeps its accumulators on the ranks, so a surface report takes the whole state too.
             bool whole = var.steps % param.mesh.quality_check_step_interval == 0 ||
-                (param.control.surface_process_option != 0 && param.control.surface_process_option != 1);
+                param.control.surface_process_option != 0;
             if (whole) full();
             else boundary();
             if (rank == 0)
@@ -1430,8 +1607,9 @@ bool MpiSimulation::dispatch(MpiOp op, const Variables& var, double arg) {
     auto& impl = *impl_;
     if (!distributed() || impl.inside || impl.master != &var) return false;
     // Keep marker maintenance and requested surface reports on root. On other
-    // steps the ranks correct their own surface elements, after option 1 has
-    // moved the top nodes on root.
+    // steps option 1 moves the top nodes on the ranks, or on root when a 2D
+    // partition leaves a top node's owner without its neighbors in x, and the
+    // ranks correct their own surface elements.
     if (op == MpiOp::Surface && !whole_surface_step(impl.param, var)) {
         bool idle = impl.param.control.surface_process_option == 0;
         if (idle) {

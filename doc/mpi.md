@@ -176,16 +176,20 @@ Rank zero drives initialization/isostasy, scheduling, phase changes, hydrous-mar
 advection, marker creation/correction, MMG/interpolation, surface management and
 output. Workers wait during this work. Thus **not every operation is parallel**.
 Rank zero runs this work with its OpenMP threads, so models with phase
-changes, surface option 1 or frequent remeshing usually run faster with fewer
-ranks per node and several threads each than with one single-threaded rank per core.
+changes or frequent remeshing usually run faster with fewer ranks per node and
+several threads each than with one single-threaded rank per core.
 A global state is collected only when needed by these operations, checkpoints,
 output or optional earthquake moment accumulation. Phase changes collect
 coordinates, temperature and stress, and send back only material counts.
-Between mesh checks and requested surface reports, surface option 1 collects
-the coordinates of a top/boundary strip, moves the top nodes on rank zero and
-returns the coordinates; each rank then corrects its own surface elements.
-Option 0 uses compact mechanical surface correction on those steps, with
-neighbor halos. Quality checks collect coordinates and
+Between mesh checks and requested surface reports, each rank runs surface
+option 1 on its own top nodes: ghost top nodes take their owners' change through
+the node halo, and the surface accumulators that the mesh-check marker update
+reads stay on the ranks until a global state is collected. In 2D the diffusion
+runs between top nodes adjacent in x. If a partition leaves an owned top node
+without one of those neighbors, as a top that folds back can, rank zero moves the
+whole top for that partition instead and sends back the top coordinates. Each
+rank then corrects its own surface elements, as option 0 does on those steps.
+Quality checks collect coordinates and
 element volumes; advanced surface work can require full state. The optional
 serpentinization grid collects state only when that model feature is active.
 Monitor output collects queried rows and their dependencies.

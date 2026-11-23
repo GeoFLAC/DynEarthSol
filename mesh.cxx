@@ -3387,11 +3387,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.top_nodes;
     surfinfo.top_nodes =  new int_vec(top_nodes.begin(),top_nodes.end());
 
-    // create globle --> local map
-    surfinfo.arctop_nodes.clear();
-    for (size_t i=0; i<ntop; i++)
-        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
-    
     delete surfinfo.dh;
     surfinfo.dh = new double_vec(ntop,0.);
     delete surfinfo.dhacc;
@@ -3406,6 +3401,16 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.total_slope;
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
+    index_surface(var, surfinfo);
+}
+
+
+void index_surface(const Variables& var, SurfaceInfo& surfinfo)
+{
+    const size_t etop = var.bfacets[iboundz1]->size();
+    surfinfo.arctop_nodes.clear();
+    for (int i=0; i<surfinfo.ntop; i++)
+        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
 
     for (size_t i=0; i<etop; i++) {
         (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
@@ -3417,9 +3422,35 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
             (*surfinfo.elem_and_nodes)[i][k] =
                 surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
-    create_support_surf(surfinfo, ntop, etop);
-
+    create_support_surf(surfinfo, surfinfo.ntop, etop);
 }
+
+void create_surface_connectivity(Variables& var)
+{
+    int etop = var.bfacets[iboundz1]->size();
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.connectivity_surface)
+        *var.connectivity_surface = conn_t(etop);
+    else
+        var.connectivity_surface = new conn_t(etop);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
+#endif
+    // MPI mesh management runs on the root CPU; the compact GPU fields are
+    // populated after topology and boundary facets have been constructed.
+#if !defined(ACC) || !defined(USEMPI)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
+#endif
+    for (int i=0; i<etop; ++i) {
+        int e = (*var.bfacets[iboundz1])[i].first;
+        int f = (*var.bfacets[iboundz1])[i].second;
+        for (int j=0; j<NODES_PER_FACET; ++j) {
+            (*var.connectivity_surface)[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
+        }
+    }
+}
+
 
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo)
 {
@@ -3459,10 +3490,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.terrig_diffusivity = param.control.terrig_sediment_diffusivity;
     surfinfo.terrig_dpeth_coeff = param.control.terrig_depth_coefficient;
 
-    // create globle --> local map
-    surfinfo.arctop_nodes.clear();
-    for (size_t i=0; i<ntop; i++)
-        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
     surfinfo.dh = new double_vec(ntop,0.);
     surfinfo.dhacc = new double_vec(var.nnode,0);
     surfinfo.edvacc_surf = new double_vec(etop,0);
@@ -3474,17 +3501,7 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
-    for (size_t i=0; i<etop; i++) {
-        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
-
-        // Same facets in the same order, so connectivity_surface has already gathered
-        // this facet's global node ids: elem_and_nodes is just those mapped into the
-        // surface numbering -- one contiguous read, not a second random gather.
-        for (int k=0; k<NDIMS; k++)
-            (*surfinfo.elem_and_nodes)[i][k] =
-                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
-    }
-    create_support_surf(surfinfo, ntop, etop);
+    index_surface(var, surfinfo);
 
     //***** to do *****
 //    surface_edhacc_geometry_interpolation(var,info);
@@ -3569,28 +3586,7 @@ void create_boundary_facets(Variables& var)
                 });
     }
 
-    int etop = var.bfacets[iboundz1]->size();
-    // first call: allocate; after a remesh: replace the contents, keeping the object
-    if (var.connectivity_surface)
-        *var.connectivity_surface = conn_t(etop);
-    else
-        var.connectivity_surface = new conn_t(etop);
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
-#endif
-    // MPI mesh management runs on the root CPU; the compact GPU fields are
-    // populated after topology and boundary facets have been constructed.
-#if !defined(ACC) || !defined(USEMPI)
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
-#endif
-    for (int i=0; i<etop; ++i) {
-        int e = (*var.bfacets[iboundz1])[i].first;
-        int f = (*var.bfacets[iboundz1])[i].second;
-        for (int j=0; j<NODES_PER_FACET; ++j) {
-            (*var.connectivity_surface)[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
-        }
-    }
+    create_surface_connectivity(var);
 
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";

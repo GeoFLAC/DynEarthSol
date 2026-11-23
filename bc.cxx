@@ -1019,6 +1019,13 @@ namespace {
             const auto& top = *(var.bfacets[iboundz1]);
 
             const int ntop = var.surfinfo.ntop;
+            // 3D diffuses over the top facets, 2D over the segments between consecutive top
+            // nodes: as many as the top facets on a whole mesh, not on an MPI rank's part.
+#ifdef THREED
+            const int nsurf = var.surfinfo.etop;
+#else
+            const int nsurf = ntop - 1;
+#endif
 
             double_vec& total_dx = *var.surfinfo.total_dx;
             double_vec& total_slope = *var.surfinfo.total_slope;
@@ -1038,7 +1045,7 @@ namespace {
             #pragma omp for
 #endif
             #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
-            for (int i=0; i<var.surfinfo.etop; ++i) {
+            for (int i=0; i<nsurf; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
                 int e = top[i].first;
@@ -1814,7 +1821,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #endif
 }
 
-void update_surface_topography(const Param& param, const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
+void compute_surface_dh(const Param& param, const Variables& var, array_t& coord)
 {
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
@@ -1858,9 +1865,12 @@ void update_surface_topography(const Param& param, const Variables& var, array_t
         std::cout << "Error: unknown surface process option: " << param.control.surface_process_option << '\n';
         die(EXIT_CONFIG_VALUE);
     }
+}
 
+void apply_surface_dh(const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
+{
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param, var, coord)
+    #pragma omp parallel default(none) shared(var, coord)
 #endif
     {
         // go through all surface nodes and abject all surface node by dh
@@ -1924,6 +1934,12 @@ void update_surface_topography(const Param& param, const Variables& var, array_t
     #pragma acc wait
 
     surfinfo.max_surf_vel = maxdh / var.dt;
+}
+
+void update_surface_topography(const Param& param, const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
+{
+    compute_surface_dh(param, var, coord);
+    apply_surface_dh(var, coord, surfinfo);
 }
 
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \

@@ -274,6 +274,59 @@ def main():
         print(f"{case}: restart on two ranks from an MPI checkpoint: "
               f"{'bit-exact' if exact else 'within regression tolerance'}", flush=True)
 
+    # Surface option 1 runs on the ranks between mesh checks, so the 3D checkpoints written
+    # between them hold surface accumulators collected from the ranks.
+    if args.serial3d:
+        cfg = configure(3, True, 1000)
+        reference, _ = run("remesh-3d-parent", cfg, executables["serial3d"])
+        for ranks in (r for r in args.ranks if r > 1):
+            current, timing = run(f"remesh-3d-mpi{ranks}", cfg, executables["mpi3d"], ranks)
+            exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
+            for frame in range(5):
+                compare_physical_hdf5(reference, current, frame, kind="chkpt", group="/")
+            results["checks"].append(dict(case="remesh-3d", ranks=ranks, bit_exact=exact, timing=timing))
+            print(f"remesh-3d: ranks={ranks}: {'bit-exact' if exact else 'within regression tolerance'}",
+                  flush=True)
+
+    # Surface option 1 on small 2D tops: an element with two top facets, a top that folds back
+    # over itself so that some x-order neighbors miss a rank (root then moves the top nodes), and
+    # a surface report between mesh checks, which needs the accumulators held on the ranks.
+    surfaces = {
+        "roof": ([(10000, 0), (4500, 4400), (0, 0)], "25000", 2, False),
+        "overhang": ([(10000, 0), (8500, 0), (8100, 550), (8400, 1200), (6900, 1700), (5000, 700),
+                      (2300, 500), (0, 0)], "1200", 2, False),
+        "report": ([(10000, 0), (8500, 0), (7600, 800), (6900, -500), (5800, -120), (5200, 600),
+                    (4100, -270), (3000, 600), (2000, 20), (1600, 0), (0, 0)], "1000", 10001, True),
+    }
+    for name, (top, resolution, steps, report) in surfaces.items():
+        points = [(0, -4000), (10000, -4000)] + top
+        facets = ([(0, 1, 16), (1, 2, 2)] + [(i, i + 1, 32) for i in range(2, len(points) - 1)]
+                  + [(len(points) - 1, 0, 1)])
+        poly = work / f"surface-{name}.poly"
+        poly.write_text(f"{len(points)} 2 0 0\n" + "".join(f"{i} {x} {z}\n" for i, (x, z) in enumerate(points))
+                        + f"{len(facets)} 1\n" + "".join(f"{i} {a} {b} {f}\n" for i, (a, b, f) in enumerate(facets))
+                        + "0\n1\n0 1000 -2000 0 -1\n")
+        cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        cfg.optionxform = str
+        cfg.read(ROOT / "examples/defaults.cfg")
+        cfg["sim"].update(modelname="result", max_steps=str(steps), max_time_in_yr="1e20",
+                          output_step_interval=str(max(1, steps // 2)), output_time_interval_in_yr="1e20",
+                          checkpoint_frame_interval="1", is_outputting_averaged_fields="no")
+        cfg["mesh"].update(meshing_option="90", poly_filename=str(poly), xlength="10000", ylength="4000",
+                           zlength="4000", resolution=resolution, smallest_size="0.001", min_quality="0.001",
+                           min_angle="8", remeshing_option="0", quality_check_step_interval=str(2 * steps))
+        cfg["control"].update(surface_process_option="1", surface_diffusivity="1e-6", has_moving_mesh="yes",
+                              is_reporting_terrigenous_info="yes" if report else "no")
+        label = f"surface-{name}"
+        reference, _ = run(label + "-parent", cfg, executables["serial"])
+        for ranks in (r for r in args.ranks if r > 1):
+            current, timing = run(f"{label}-mpi{ranks}", cfg, executables["mpi"], ranks)
+            for frame in range(3):
+                for kind, group in (("save", "VTKHDF"), ("chkpt", "/")):
+                    compare_physical_hdf5(reference, current, frame, kind=kind, group=group)
+            results["checks"].append(dict(case=label, ranks=ranks, bit_exact=True, timing=timing))
+            print(f"{label}: ranks={ranks}: bit-exact", flush=True)
+
     # Averaging maintains persistent local accumulators across remeshing.
     # Compare all output frames in both dimensions, including the initial one.
     for ndims in ((2, 3) if args.serial3d else (2,)):
