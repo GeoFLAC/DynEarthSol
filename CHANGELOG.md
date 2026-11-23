@@ -131,6 +131,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   longer contains.
 - HDF5 output failures stop with the I/O exit codes 20 or 21 instead of an
   uncaught exception (serial) or exit 61 (MPI).
+- **Breaking.** Checkpoints record the top facet of each surface deposition
+  entry (`dv surface acc`), and a restart puts each entry on its facet. A
+  checkpoint written before this, even by one thread, stops the restart with
+  exit 22 when an element with two top facets has different entries on them;
+  other older checkpoints restart as before.
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.

@@ -3614,6 +3614,15 @@ void create_boundary_facets(Variables& var)
 }
 
 
+int_vec top_facet_ids(const Variables& var)
+{
+    const auto& top = *var.bfacets[iboundz1];
+    int_vec ids(top.size());
+    for (std::size_t i=0; i<top.size(); ++i)
+        ids[i] = top[i].first * FACETS_PER_ELEM + top[i].second;
+    return ids;
+}
+
 
 void create_support(Variables& var)
 {

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <cstdio>
@@ -539,6 +540,34 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         bin_chkpt.read_array(*var.volume_old, "volume_old");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+        {   // The entries follow the top-facet order of the run that wrote them; put each on its facet.
+            const int_vec ids = top_facet_ids(var);
+            double_vec& acc = *var.surfinfo.edvacc_surf;
+            if (bin_chkpt.has_array("dv surface acc facets")) {
+                int_vec written(ids.size());
+                bin_chkpt.read_array(written, "dv surface acc facets");
+                std::vector<std::pair<int,int>> slot(ids.size());   // (facet, index here)
+                for (std::size_t i = 0; i < ids.size(); ++i)
+                    slot[i] = std::make_pair(ids[i], int(i));
+                std::sort(slot.begin(), slot.end());
+                const double_vec saved(acc);
+                std::vector<bool> filled(ids.size(), false);
+                for (std::size_t i = 0; i < written.size(); ++i) {
+                    auto s = std::lower_bound(slot.begin(), slot.end(), std::make_pair(written[i], 0));
+                    if (s == slot.end() || s->first != written[i] || filled[s->second])
+                        die(EXIT_IO_RESTART, "The checkpoint's \"dv surface acc facets\" are not each top facet once.");
+                    filled[s->second] = true;
+                    acc[s->second] = saved[i];
+                }
+            } else {
+                // An element's two top facets may hold each other's entries (ids are sorted by
+                // element). Equal entries restart the same either way; different ones cannot.
+                for (std::size_t i = 1; i < ids.size(); ++i)
+                    if (ids[i] / FACETS_PER_ELEM == ids[i-1] / FACETS_PER_ELEM && acc[i] != acc[i-1])
+                        die(EXIT_IO_RESTART, "The checkpoint does not record the top facet of each \"dv surface acc\" "
+                            "entry, and an element with two top facets has different entries.");
+            }
+        }
         // for surface marker correction after surface processes
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG

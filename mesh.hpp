@@ -22,6 +22,8 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 void create_boundary_flags(Variables& var);
 void create_boundary_nodes(Variables& var);
 void create_boundary_facets(Variables& var);
+// Each top facet as element * FACETS_PER_ELEM + facet, in the order of var.bfacets[iboundz1].
+int_vec top_facet_ids(const Variables& var);
 void create_top_elems(Variables& var);
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo);
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo);

@@ -21,6 +21,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[3]
+# Output fields the current executables write that a reference from an earlier commit may lack.
+ADDED_FIELDS = {"dv surface acc facets"}
 
 
 def command_text(command):
@@ -81,6 +83,9 @@ def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save
             file[group].visititems(visit)
             return found
         left, right = datasets(old), datasets(new)
+        # A reference from an older executable lacks the fields added since; compare the rest.
+        right = {path: data for path, data in right.items()
+                 if path in left or path.split("/")[-1] not in ADDED_FIELDS}
         if not left or left.keys() != right.keys():
             raise RuntimeError(f"Physical HDF5 dataset sets differ in frame {frame}")
         for path in left:
