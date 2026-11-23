@@ -3490,61 +3490,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
 //    surface_edhacc_geometry_interpolation(var,info);
 
 }
-namespace {
-
-    struct OrderedInt
-    {
-#ifdef THREED
-        int a, b, c;
-        OrderedInt(int x, int y, int z)
-        {
-            // ensure that a < b < c
-            if (x < y) {
-                if (y < z)
-                    a = x, b = y, c = z;
-                else {
-                    if (x < z)
-                        a = x, b = z, c = y;
-                    else
-                        a = z, b = x, c = y;
-                }
-            }
-            else {
-                if (x < z)
-                    a = y, b = x, c = z;
-                else {
-                    if (y < z)
-                        a = y, b = z, c = x;
-                    else
-                        a = z, b = y, c = x;
-                }
-            }
-        }
-
-        bool operator==(OrderedInt &rhs)
-        {
-            return a==rhs.a && b==rhs.b && c==rhs.c;
-        }
-
-#else
-
-        int a, b;
-        OrderedInt(int x, int y)
-        {
-            // ensure that a < b
-            if (x < y)
-                a = x, b = y;
-            else
-                a = y, b = x;
-        }
-
-        bool operator==(OrderedInt &rhs)
-        {
-            return a==rhs.a && b==rhs.b;
-        }
-#endif
-    };
-}
 
 
 void create_boundary_facets(Variables& var)
@@ -3556,83 +3501,72 @@ void create_boundary_facets(Variables& var)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
      */
 
-    // Looping through var.segment
-    #pragma omp parallel default(none) shared(var, NODE_OF_FACET, std::cerr) // TODO: fix no deterministic behavior
-    {
-        // local storage for each thread
-        int_pair_vec bfacet_local[nbdrytypes];
+    // Element facets whose nodes share a boundary flag, sorted by their node
+    // ids, then by element and facet: the first match of a key is the one a
+    // scan over all elements would find.
+    typedef std::array<int,NODES_PER_FACET> facet_key;
+    struct Candidate {
+        facet_key key;
+        int e, f;
+        uint flag;
+    };
+    std::vector<Candidate> candidates;
+    for (int e=0; e<var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        for (int f=0; f<FACETS_PER_ELEM; ++f) {
+            Candidate c;
+            c.flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]];
+            for (int j=0; j<NODES_PER_FACET; ++j) {
+                c.key[j] = conn[NODE_OF_FACET[f][j]];
+                c.flag &= (*var.bcflag)[c.key[j]];
+            }
+            if ((c.flag & BOUND_ANY) == 0U) continue;
+            std::sort(c.key.begin(), c.key.end());
+            c.e = e;
+            c.f = f;
+            candidates.push_back(c);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate &a, const Candidate &b) {
+                  if (a.key != b.key) return a.key < b.key;
+                  return a.e < b.e || (a.e == b.e && a.f < b.f);
+              });
 
-        #pragma omp for nowait
-        for (int i=0; i<var.nseg; ++i) {
-            uint flag = static_cast<uint>((*var.segflag)[i][0]);
-            if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
-            // Nodes of this facet
-            OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
-#ifdef THREED
-                          , (*var.segment)[i][2]
-#endif
-                          );
+    // Looping through var.segment, in its order
+    for (int i=0; i<var.nseg; ++i) {
+        uint flag = static_cast<uint>((*var.segflag)[i][0]);
+        if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
+        facet_key af;
+        for (int j=0; j<NODES_PER_FACET; ++j)
+            af[j] = (*var.segment)[i][j];
+        std::sort(af.begin(), af.end());
 
-            // Finding the corresponding element and facet #
-            bool found = false;
-            for (int e=0; e<var.nelem && !found; ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[e];
-                for (int f=0; f<FACETS_PER_ELEM && !found; ++f) {
-                    uint facet_flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]] &
-                                      (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
-#ifdef THREED
-                                      & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
-#endif
-                                      ;
-
-                    if ((flag & facet_flag) == 0U) continue; // skip
-
-                    OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
-#ifdef THREED
-                                  , conn[NODE_OF_FACET[f][2]]
-#endif
-                                  );
-                    if (af == bf) {
-                        for (int k=0; k<nbdrytypes; ++k) {
-                            if (flag == (1U << k)) {
-                                bfacet_local[k].emplace_back(e, f);
-                                found = true; // break out of nested loops
-                                break;
-                            }
-                        }
-                    }
+        // Finding the corresponding element and facet #
+        bool found = false;
+        auto c = std::lower_bound(candidates.begin(), candidates.end(), af,
+                                  [](const Candidate &a, const facet_key &k) { return a.key < k; });
+        for (; c != candidates.end() && c->key == af && !found; ++c) {
+            if ((flag & c->flag) == 0U) continue; // skip
+            for (int k=0; k<nbdrytypes; ++k) {
+                if (flag == (1U << k)) {
+                    var.bfacets[k]->emplace_back(c->e, c->f);
+                    found = true;
+                    break;
                 }
             }
-            // not found
-            if (!found) {
-                #pragma omp critical
-                {
-                    std::cerr << "Error: " << i << "-th segment is not on any element\n";
-                    die(EXIT_INTERNAL_UNREACHABLE);
-                }
-            }
         }
-
-        // Merge local results into global results
-        #pragma omp critical
-        {
-            for (int k = 0; k < nbdrytypes; ++k) {
-                var.bfacets[k]->insert(
-                    var.bfacets[k]->end(),
-                    bfacet_local[k].begin(),
-                    bfacet_local[k].end());
-            }
+        if (!found) {
+            std::cerr << "Error: " << i << "-th segment is not on any element\n";
+            die(EXIT_INTERNAL_UNREACHABLE);
         }
+    }
 
-        #pragma omp barrier
-
-        #pragma omp for
-        for (int n=0; n<nbdrytypes; ++n) {
-            std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
-                    [](const int_pair &a, const int_pair &b) {
-                        return a.first < b.first;
-                    });
-        }
+    for (int n=0; n<nbdrytypes; ++n) {
+        std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
+                [](const int_pair &a, const int_pair &b) {
+                    return a.first < b.first;
+                });
     }
 
     int etop = var.bfacets[iboundz1]->size();
