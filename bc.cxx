@@ -1040,13 +1040,13 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                 // An element can have more than one facet on the side, next to each other in
                 // bfacets (sorted by element): the first one stands for them.
                 if (n == 0 || (*var.bfacets[i])[n-1].first != e) (*var.etmp_int)[e] = n;
-                ElemCacheAccessor tmp = (*var.tmp_result)[n];
                 // lithostatc support - Archimed force (normal to the surface)
-                for (int j=0; j<NODES_PER_FACET; ++j) {
-                    int nn = conn[NODE_OF_FACET[f][j]];
-                    for (int d=0; d<NDIMS; ++d)
-                        tmp[j*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
-                }
+                // It is the same at each node of the facet, and kept in the element's row at the
+                // place of facet f: a side can have more facets than the mesh has elements.
+                static_assert(FACETS_PER_ELEM*NDIMS <= NODES_PER_ELEM*3, "a row holds every facet");
+                ElemCacheAccessor tmp = (*var.tmp_result)[e];
+                for (int d=0; d<NDIMS; ++d)
+                    tmp[f*NDIMS + d] = p * normal[d] / NODES_PER_FACET;
             }
 
 #ifndef ACC
@@ -1072,7 +1072,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                             for (int l=0; l<NODES_PER_FACET; ++l) {
                                 if (n == conn[NODE_OF_FACET[f][l]]) {
                                     for (int d=0; d<NDIMS; ++d)  // subtract the force from the facet
-                                        force[n][d] -= (*var.tmp_result)[ibound][l*NDIMS + d];
+                                        force[n][d] -= (*var.tmp_result)[e][f*NDIMS + d];
                                     break;  // found the node in the facet
                                 }
                             }

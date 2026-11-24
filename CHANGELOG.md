@@ -225,7 +225,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   `stress_bc_*` loads a boundary facet ([#115]).
 - The lithostatic support, the Winkler foundation and water loading load every
   facet of an element on their boundary; an element with two, as remeshing can
-  make where a boundary has bent, carried only one of them ([#115]).
+  make where a boundary has bent, carried only one of them. A boundary with more
+  facets than the mesh has elements no longer mixes up their loads ([#115]).
 - Explicit/GVS output cadence and pending remesh stages survive restart.
   Changed timestep controls refresh timestep and mass together; fixed-mesh
   GVS also refreshes both from the accepted velocity. Large output intervals

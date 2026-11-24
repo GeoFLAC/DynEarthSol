@@ -397,6 +397,39 @@ static void test_body_force() {
                 check("trial loads preserve coordinates",m->coord[n][d],coords[k++]);
         }
     }
+
+    // Water loading on a side with more facets than the mesh has elements, every facet of
+    // both: the load is the sum of the loads of each facet alone.
+    std::printf("[support load on more facets than elements]\n");
+    m->param.bc.has_winkler_foundation = false;
+    m->param.control.has_hydraulic_diffusion = false;
+    m->param.bc.has_water_loading = true;
+    m->param.bc.sea_water_density = 1000;
+    m->param.control.surf_base_level = 10;
+    m->param.bc.vbc_z1 = 0;
+    convert_bc_codes(m->param);
+    m->var.bnodes[iboundz1] = new int_vec;
+    for (int n=0;n<m->var.nnode;++n) m->var.bnodes[iboundz1]->push_back(n);
+    std::vector<std::pair<int,int>> every;
+    for (int e=0;e<m->var.nelem;++e)
+        for (int f=0;f<FACETS_PER_ELEM;++f) every.push_back({e,f});
+    auto load = [&](const std::vector<std::pair<int,int>>& facets) {
+        m->var.bfacets[iboundz1] = new std::vector<std::pair<int,int>>(facets);
+        update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped);
+        delete m->var.bfacets[iboundz1];
+        std::vector<double> f;
+        for (int n=0;n<m->var.nnode;++n) for (int d=0;d<NDIMS;++d) f.push_back(m->force_undamped[n][d]);
+        return f;
+    };
+    const std::vector<double> dry = load({}), all = load(every);
+    std::vector<double> sum(dry.size(), 0.0);
+    for (const auto& facet : every) {
+        const std::vector<double> one = load({facet});
+        for (std::size_t k=0;k<sum.size();++k) sum[k] += one[k] - dry[k];
+    }
+    for (std::size_t k=0;k<sum.size();++k)
+        check("support load of every facet",all[k]-dry[k],sum[k]);
+    delete m->var.bnodes[iboundz1];
     delete m->var.bfacets[iboundz0];
     delete m->var.bnodes[iboundz0];
 #endif
