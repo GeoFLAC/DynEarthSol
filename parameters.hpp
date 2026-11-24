@@ -233,6 +233,7 @@ struct Control {
     int damping_option;
     int ref_pressure_option;
     bool is_using_mixed_stress;
+    int iterative_return_mapping_option;
 
     int surface_process_option;
     double surface_diffusivity;
