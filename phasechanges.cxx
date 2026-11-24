@@ -4,6 +4,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "markerset.hpp"
 #include "utils.hpp"
 #include "mesh.hpp"
@@ -369,6 +370,8 @@ namespace {
     // rebuild, at the next quality check or remesh.
     void subduction_phase_changes(const Param& param, Variables& var, MarkerSet& ms)
     {
+        const int mpi_eb=0, mpi_ee=mpi_element_end(var);
+
         int n = ms.get_nmarkers();
         if (n == 0) return;
 
@@ -425,10 +428,10 @@ namespace {
         // this pass converts; see the function doc above).
 #ifndef ACC
         #pragma omp parallel for default(none) \
-            shared(param, var, ms, rule_kind, rule_to, serpentinize, vt, topo, lost)
+            shared(param, var, ms, rule_kind, rule_to, serpentinize, vt, topo, lost) firstprivate(mpi_eb,mpi_ee)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int e=0; e<var.nelem; e++) {
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee)
+        for (int e=mpi_eb; e<mpi_ee; e++) {
             int nmarkers = (*var.markers_in_elem)[e].size();
             #pragma acc loop seq
             for (int i=0; i<nmarkers; i++) {
@@ -477,6 +480,9 @@ namespace {
 
         if (!serpentinize) return;
 
+#ifdef USEMPI
+        if (var.mpi && var.mpi->in_kernel()) var.mpi->maximum(wet_crust_lost.data(),wet_crust_lost.size());
+#endif
         // Between the passes, on the host: drop the flagged cells, then build
         // the wet-crust-below map pass 2 reads.
         for (int cell = 0; cell < vt->num_cells(); ++cell)
@@ -487,10 +493,10 @@ namespace {
         // Pass 2: mantle -> serpentinite.
 #ifndef ACC
         #pragma omp parallel for default(none) \
-            shared(param, var, ms, vt, topo, nsteps, wet_crust_below)
+            shared(param, var, ms, vt, topo, nsteps, wet_crust_below) firstprivate(mpi_eb,mpi_ee)
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int e=0; e<var.nelem; e++) {
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee)
+        for (int e=mpi_eb; e<mpi_ee; e++) {
             int nmarkers = (*var.markers_in_elem)[e].size();
             #pragma acc loop seq
             for (int i=0; i<nmarkers; i++) {
@@ -710,10 +716,8 @@ void build_serpentinization_grid(const Param& param, Variables& var)
 }
 
 
-void phase_changes(const Param& param, Variables& var)
+static void change_phases(const Param& param, Variables& var)
 {
-    if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return; // no phase change        
-
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -722,23 +726,19 @@ void phase_changes(const Param& param, Variables& var)
 
     if (param.mat.phase_change_option == 3) {
         // Its own two marker loops (device kernels in an ACC build), and
-        // geometric serpentinization needs the VirtualTopology grid. Timed on
-        // its own (rather than folded into a generic phase_changes timer), so
-        // its cost shows in the run summary.
-        const int64_t time_tmp = get_nanoseconds();
+        // geometric serpentinization needs the VirtualTopology grid.
         subduction_phase_changes(param, var, ms);
-        var.func_time.phase_change_time += get_nanoseconds() - time_tmp;
-        ++var.nphasechange;
 #ifdef NPROF
         nvtxRangePop();
 #endif
         return;
     }
 
+    const int mpi_eb=0, mpi_ee=mpi_element_end(var);
     int is_error = 0;
 
-    #pragma acc parallel loop gang vector reduction(+:is_error) async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:is_error) async firstprivate(mpi_eb,mpi_ee)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         int nmarkers = (*var.markers_in_elem)[e].size();
         #pragma acc loop seq
         for (int i=0; i<nmarkers; ++i) {
@@ -772,13 +772,23 @@ void phase_changes(const Param& param, Variables& var)
 
     #pragma acc wait
 
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        is_error=var.mpi->sum(is_error);
+
+    }
+#endif
     if (is_error) {
         // validate_parameters() admits only the options this dispatch implements.
         std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
         die(EXIT_INTERNAL_UNREACHABLE);
     }
 
-    if (param.control.has_hydration_processes) {
+    if (param.control.has_hydration_processes
+#ifdef USEMPI
+        && (!var.mpi || !var.mpi->in_kernel() || var.mpi->is_root())
+#endif
+    ) {
         MarkerSet& hydms = *var.markersets[var.hydrous_marker_index];
         auto& hydem = *var.hydrous_elemmarkers;
 
@@ -827,4 +837,25 @@ void phase_changes(const Param& param, Variables& var)
 #ifdef NPROF
     nvtxRangePop();
 #endif
+}
+
+
+void phase_changes(const Param& param, Variables& var)
+{
+    if (param.mat.nmat == 1 || param.mat.phase_change_option == 0) return; // no phase change
+
+    // Timed whole, for every option, so the run summary shows its cost. Under MPI
+    // that includes the op's gather to root and its redistribution: the time of the
+    // whole op replaces what the call on root's mesh inside it has added.
+    const int64_t start = get_nanoseconds();
+#ifdef USEMPI
+    const int64_t before = var.func_time.phase_change_time;
+    if (var.mpi && var.mpi->dispatch(MpiOp::PhaseChange, var, 0.0)) {
+        var.func_time.phase_change_time = before + (get_nanoseconds() - start);
+        return;
+    }
+#endif
+    change_phases(param, var);
+    var.func_time.phase_change_time += get_nanoseconds() - start;
+    ++var.nphasechange;
 }

@@ -8,6 +8,7 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "rheology.hpp"
 #include "utils.hpp"
@@ -278,12 +279,15 @@ void refresh_rsf_friction(const Param& param, Variables& var,
                           double_vec& dyn_fric_coeff,
                           const double_vec& state_variable)
 {
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
     if (!(param.mat.rheol_type & MatProps::rh_rsf)) return;
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable)
+    #pragma omp parallel for default(none) shared(param, var, dyn_fric_coeff, state_variable) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    for (int e = 0; e < var.nelem; ++e) {
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         const int projection_option =
             param.control.rsf_slip_rate_projection_option;
         double vx = 0.0;
@@ -1932,18 +1936,42 @@ static const char* rejection_text(int reason)
     }
 }
 
+#ifdef USEMPI
+// Each MPI rank counts the rejections of its own elements. Every rank calls this once any
+// rank rejected, and all then hold the whole mesh's count, its lowest global element and
+// all reasons.
+static void combine_rejected_returns(const Variables& var, int& count,
+                                     double& first, int& reasons)
+{
+    if (count != 0) {
+        const long key = long(first);
+        const int element = var.mpi->global_element(int(key / reject_reason_count));
+        first = double(element)*int(reject_reason_count) + key % reject_reason_count;
+    }
+    count = var.mpi->sum(count);
+    var.mpi->minimum(&first, 1);
+    int seen[reject_reason_count];
+    for (int r = 0; r < reject_reason_count; ++r) seen[r] = (reasons >> r) & 1;
+    var.mpi->maximum(seen, reject_reason_count);
+    reasons = 0;
+    for (int r = 0; r < reject_reason_count; ++r) reasons |= seen[r] << r;
+}
+#endif
+
 static void report_rejected_returns(const Variables& var, int count,
                                     double first, int reasons)
 {
     const long element = long(first) / reject_reason_count;
     const int reason = int(long(first) % reject_reason_count);
-    std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
-              << " elements at step " << var.steps << ".\n"
-              << "  First element " << element << ": " << rejection_text(reason) << ".\n";
-    for (int r = 1; r < reject_reason_count; ++r)
-        if (r != reason && (reasons & (1 << r)))
-            std::cerr << "  Also: " << rejection_text(r) << ".\n";
-    die(EXIT_RUNTIME_NONCONVERGENCE,
+    if (mpi_reports(var)) {
+        std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
+                  << " elements at step " << var.steps << ".\n"
+                  << "  First element " << element << ": " << rejection_text(reason) << ".\n";
+        for (int r = 1; r < reject_reason_count; ++r)
+            if (r != reason && (reasons & (1 << r)))
+                std::cerr << "  Also: " << rejection_text(r) << ".\n";
+    }
+    die_together(EXIT_RUNTIME_NONCONVERGENCE,
         reasons & (1 << reject_nonfinite) ? "Non-finite stress: check the time step." :
         reasons & (1 << reject_no_increment) ?
             "Spread the change of the strength law over a range of plastic strain." :
@@ -1958,6 +1986,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                    double_vec& dyn_fric_coeff, double_vec& state_variable,
                    bool trial_reference_geometry, bool initial_equilibrium)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Stress, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -1986,11 +2020,11 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity, start_angles) reduction(+:rejected_returns) \
-        reduction(min:first_rejection) reduction(|:rejection_reasons)
+                     needs_projected_velocity, start_angles) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) \
+        reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
-    #pragma acc parallel loop gang vector async reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
-    for (int e = 0; e < var.nelem; e++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         int rejection = 0;
 
@@ -2389,6 +2423,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // std::cerr << '\n';
     }
     #pragma acc wait
+#ifdef USEMPI
+    if (mpi_any(var, rejected_returns != 0) && var.mpi && var.mpi->in_kernel())
+        combine_rejected_returns(var, rejected_returns, first_rejection, rejection_reasons);
+#endif
     if (rejected_returns != 0)
         report_rejected_returns(var, rejected_returns, first_rejection, rejection_reasons);
 #ifdef NPROF
@@ -2399,16 +2437,22 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::OldMeanStress, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
     #pragma omp parallel for default(none)                           \
-        shared(param, var, stress, old_mean_stress)
+        shared(param, var, stress, old_mean_stress) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstTensorAccessor s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
     }

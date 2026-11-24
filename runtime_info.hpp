@@ -76,8 +76,10 @@ typedef std::vector<ManifestSection> Manifest;
 
 // The [runtime.*] sections, then the embedded block as [build.*] sections: composed once,
 // so file and screen agree.
+// mpi: the [runtime.mpi] fields of an MPI run, NULL otherwise.
 Manifest compose_manifest(const Param& param, const BuildInfo& build,
-                          const CpuInfo& cpu, const DeviceInfo& dev);
+                          const CpuInfo& cpu, const DeviceInfo& dev,
+                          const std::vector<std::pair<std::string, std::string> >* mpi = NULL);
 // One screen line per section, "[group][topic] key=value, ...", the [build] group first.
 void report_build_and_runtime_info(const Manifest& manifest);
 // keep_existing: append even on a fresh run, for a run about to fail.
