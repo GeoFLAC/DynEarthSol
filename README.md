@@ -145,17 +145,27 @@ defaults are not what you want.
 ### Optional packages
 * [Exodus](https://github.com/sandialabs/seacas/), `useexo=1`, for importing a
   mesh in the ExodusII format. 3D only.
-  * Suggested building procedure, run in the root directory of DES; it
-    downloads and builds NetCDF and HDF5, then Exodus, with headers and libraries
-    landing in `./seacas/include` and `./seacas/lib`:
+  * Suggested building procedure, run in the root directory of DES. It builds
+    only the Exodus C library, on the system's NetCDF and HDF5 (Debian/Ubuntu:
+    `apt install libnetcdf-dev libhdf5-dev`), so Exodus and DES load the same
+    HDF5 library. Headers and libraries land in `./seacas/include` and
+    `./seacas/lib`. seacas needs cmake 3.23 or newer.
     ```BASH
     git clone https://github.com/sandialabs/seacas.git
     cd seacas && export ACCESS=`pwd`
-    COMPILER=gnu MATIO=NO GNU_PARALLEL=NO CGNS=NO FMT=NO ./install-tpl.sh
     mkdir build; cd build
-    ../cmake-exodus
+    T=$(gcc -dumpmachine)
+    COMPILER=gnu FORTRAN=NO NETCDF_PATH=/usr HDF5_PATH=/usr/lib/$T/hdf5/serial \
+      ../cmake-exodus -DNetCDF_LIBRARY_DIR=/usr/lib/$T
     make; make install
     ```
+    `/usr/lib/$T/hdf5/serial` is Debian's prefix for its serial HDF5. Elsewhere,
+    set `NETCDF_PATH` and `HDF5_PATH` to the prefixes of the NetCDF and HDF5
+    that DES builds with.
+  * Without a system NetCDF, run
+    `COMPILER=gnu MATIO=NO GNU_PARALLEL=NO CGNS=NO FMT=NO ./install-tpl.sh` in
+    `seacas/` first, then `../cmake-exodus` without the paths: seacas builds its
+    own NetCDF and HDF5, and DES links that HDF5 (see Requirements).
   * `EXO_INCLUDE` and `EXO_LIB_DIR` override those defaults.
 * [GoSPL](https://gospl.readthedocs.io/) (Global Scalable Paleo Landscape
   Evolution), `usegospl=1`, for two-way coupling with a surface process model.
