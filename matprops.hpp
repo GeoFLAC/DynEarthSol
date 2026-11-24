@@ -63,12 +63,72 @@ public:
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
+    // One linear piece of an element's weakening law, starting at plastic
+    // strain pls: the cohesion and the friction and dilation angles at pls,
+    // their change per unit plastic strain, and the plastic strain where the
+    // piece ends (the next pls0 or pls1 of the element's materials, or the
+    // largest double). A rate-and-state piece also keeps this step's rate and
+    // state terms, which stay fixed along it.
+    // Factors of the strength that depend only on the friction and dilation
+    // angles, so that a strength with fixed angles needs no trigonometry.
+    struct AngleFactors {
+        double anphi, anpsi, sqrt_anphi, tan_phi;
+        bool zero_friction;
+    };
+    struct StrengthPiece {
+        double pls, end;
+        double cohesion, friction, dilation;
+        double dcohesion, dfriction, ddilation;
+        int rsf;              // 0: none; 1: rate and state; 2: frozen friction
+        double rsf_terms[2];  // added to tan(friction), in this order
+        AngleFactors factors;               // at pls
+        double amc, anphi, anpsi, ten_max;  // strength at pls
+        bool has_slopes;                    // dfriction, ddilation and end are set
+
+        // Whether the friction or dilation angle changes along the piece.
+        #pragma acc routine seq
+        bool angles_change() const
+        {
+            return (rsf != 2 && dfriction != 0) || ddilation != 0;
+        }
+    };
+    #pragma acc routine seq
+    void strength_piece(int e, double pls, StrengthPiece& piece) const;
+    // The strength at pls only, for every element; complete_piece adds the
+    // angle slopes and the end once the element yields.
+    #pragma acc routine seq
+    void strength_here(int e, double pls, StrengthPiece& piece) const;
+    #pragma acc routine seq
+    void complete_piece(int e, StrengthPiece& piece) const;
     #pragma acc routine seq
     void plastic_props_rsf(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max, double& slip_rate,
                        double& dyn_fric_coeff, double& state_variable,
                        double dt, int state_model, bool frozen_history = false) const;
+    // The rate-and-state piece at pls with this step's rate and state held
+    // fixed: no state update and no change to the stored friction coefficient.
+    #pragma acc routine seq
+    void rsf_strength_piece(int e, double pls, double slip_rate, double state_variable,
+                            double dyn_fric_coeff, int state_model, bool frozen_history,
+                            StrengthPiece& piece) const;
+    // Strength at plastic strain piece.pls + offset, within the piece.
+    #pragma acc routine seq
+    void piece_strength(const StrengthPiece& piece, double offset,
+                        double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    // The strength of a piece over the offsets from x to y, for a cohesion that is not
+    // negative: the lowest and highest amc, anphi and ten_max, and bounds of the size of
+    // their second derivatives per unit plastic strain (for ten_max, of cohesion/tan_phi
+    // before the cap at tension_max; -1 where not known) and of the error of the lookup
+    // tables in them.
+    struct StrengthRange {
+        double amc[2], anphi[2], ten_max[2];
+        double curvature_amc, curvature_anphi, curvature_ten;
+        double error_amc, error_anphi, error_ten;
+    };
+    #pragma acc routine seq
+    void piece_strength_range(const StrengthPiece& piece, double x, double y,
+                              StrengthRange& range) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
@@ -132,6 +192,9 @@ private:
     double_vec cohesion0, cohesion1;
     double_vec friction_angle0, friction_angle1;
     double_vec dilation_angle0, dilation_angle1;
+    // Change of cohesion and friction and dilation angles per unit plastic
+    // strain on each material's weakening segment, built by the constructor.
+    double_vec cohesion_slope, friction_slope, dilation_slope;
 
     // hydraulic process
     const double_vec &ppressure;
@@ -149,6 +212,13 @@ private:
     double_vec direct_a, evolution_b, characteristic_velocity, characteristic_distance;
     // double_vec static_friction_coefficient;
 
+    // Marker means of cohesion, friction and dilation angles and the cohesion
+    // slope at pls over n markers.
+    #pragma acc routine seq
+    void weakening_means(int e, double pls,
+                         double &cohesion, double &friction_angle,
+                         double &dilation_angle, double &hardening, int &n) const;
+
     #pragma acc routine seq
     void plastic_weakening(int e, double pls,
                            double &cohesion, double &friction_angle,
@@ -163,6 +233,29 @@ private:
     #pragma acc routine seq
     void update_state_variable(int e, double slip_rate, double& state_variable,
                                double dt, int state_model) const;
+    // The rate and state terms added to tan(static friction).
+    #pragma acc routine seq
+    void rsf_terms(int e, double slip_rate, double state_variable, int state_model,
+                   double terms[2]) const;
+    // rsf selects the library trigonometry of rate-and-state instead of the
+    // tables of Mohr-Coulomb.
+    #pragma acc routine seq
+    void angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const;
+    // The cohesion and angle factors at plastic strain piece.pls + offset.
+    #pragma acc routine seq
+    void piece_point(const StrengthPiece& piece, double offset,
+                     double& cohesion, AngleFactors& factors) const;
+    #pragma acc routine seq
+    void strength_from(double cohesion, const AngleFactors& factors,
+                       double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    #pragma acc routine seq
+    void finish_piece(StrengthPiece& piece) const;
+    #pragma acc routine seq
+    void ep_derived(double cohesion, double phi, double psi,
+                    double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    #pragma acc routine seq
+    void rsf_derived(double cohesion, double phi, double psi,
+                     double& amc, double& anphi, double& anpsi, double& ten_max) const;
 };
 
 

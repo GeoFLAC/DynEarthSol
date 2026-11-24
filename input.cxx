@@ -509,6 +509,18 @@ static void declare_parameters(opt::Registry &cfg,
          "Any other value is rejected at startup.\n")
         ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
+        ("control.iterative_return_mapping_option",
+         opt::value<int>(&p.control.iterative_return_mapping_option)->default_value(0),
+         "Strength used by the Mohr-Coulomb return mapping when the friction or\n"
+         "dilation angle weakens with plastic strain.\n"
+         "0: friction and dilation at the start of the step; cohesion follows the\n"
+         "   plastic strain of the step (default).\n"
+         "1: (experimental) iterate until cohesion, friction and dilation all match the\n"
+         "   plastic strain at the end of the step (backward Euler). Slower where\n"
+         "   friction or dilation weakens; less dependent on the step size. Where more\n"
+         "   than one plastic increment matches, it can take a later one than the\n"
+         "   smallest, with more plastic strain in the step.\n"
+         "Both give the same result when only cohesion weakens.\n")
 
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
@@ -1772,6 +1784,11 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             std::cerr << "Error: control.ref_pressure_option must be 0, 1, or 2 (got "
                       << p.control.ref_pressure_option << ").\n";
             die(EXIT_CONFIG_VALUE);
+        }
+        if (p.control.iterative_return_mapping_option != 0 &&
+            p.control.iterative_return_mapping_option != 1) {
+            die(EXIT_CONFIG_VALUE,
+                "control.iterative_return_mapping_option must be 0 or 1.");
         }
         if (p.control.rsf_slip_rate_projection_option !=
                 rsf_slip_rate_projection_maximum_shear &&
