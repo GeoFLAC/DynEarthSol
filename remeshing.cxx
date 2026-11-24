@@ -1501,17 +1501,14 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
 
 // R3 BOUNDARY. Pinned: quiet LID nodes (top nodes on no boundary but a restored wall), the pure
 // wall nodes of restored sides (clamp_side_bits) and the bottom nodes (R4 frees some of them in an
-// outward side's band). Movable: every other boundary node, i.e. active lid nodes and the
-// off-bottom nodes of an unrestored side wall (its top nodes included) or of a slant boundary.
-// ACTIVE (2D only): the last surface-process dh, as a rate over one remesh interval, moves the node
-// more than 1% of resolution. Only surface_process_option 1 and 102 fill dh, so the whole lid is
-// pinned in 3D, with surface_process_option 0, 11 or 101, on a repeat remesh within one step
-// (tau = 0: no time to extrapolate over) and on a PT-loop remesh in the step after an end-of-step
-// remesh (dh still zero). The pinned lid is validated only in 2D with remeshing_option 1.
+// outward side's band). Movable: every other boundary node. A lid node is ACTIVE (2D only) when the
+// last surface-process dh, as a rate over one remesh interval, moves it more than 1% of resolution.
+// The pinned lid is validated only in 2D with remeshing_option 1.
 void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
                          uint clamp_side_bits, FreezeMask &m)
 {
-    // activity = |dh|/dt * tau (dh: see SURFACE-MOTION ANTICIPATION)
+    // activity = |dh|/dt * tau (dh: see SURFACE-MOTION ANTICIPATION); zero, so the lid stays pinned,
+    // without dh (surface_process_option not 1 or 102), at tau = 0 and while dh = 0 after a remesh.
     std::vector<char> top_active(nnode, 0);
 #ifndef THREED
     const double tau = var.time - var.last_remesh_time;
@@ -2566,16 +2563,11 @@ static void rebuild_collapsed_segments(int nseg, const int *segment, const int *
                   << n_exposed << " exposed face(s).\n";
 }
 
-// MMG-native removal of material that moved OUTSIDE a restored boundary. flatten_* snapped the
-// boundary nodes back onto their planes and marked the nodes past, or within min_dist of, a
-// restored plane (`pts`, the outside nodes); those past it would invert their elements. The peel
-// and stalemate passes below merge an outside node s by edge collapse only onto a boundary node m
-// of a plane in its `crossed` mask (BOUND* bits: m qualifies iff bcflag[m] & crossed[s]; a corner
-// matches on either bit), never onto a top-surface-only node.
-// Builds fresh 0-indexed outputs (inputs untouched); survivor node order is kept, so the metric
-// maps by renumbering; the segments follow the survivors. On a FOLD (see collapse_outside_nodes)
-// `fold` returns the surviving nodes (old ids, NODES_PER_ELEM each) of every dropped flat/inverted
-// element with an exposed fold face, and the outputs are incomplete.
+// Remove material that moved OUTSIDE a restored boundary: each node s in `pts` (past, or within
+// min_dist of, a plane that flatten_* restored) merges by edge collapse only onto a boundary node m
+// with bcflag[m] & crossed[s], never onto a top-surface-only node. Builds fresh 0-indexed outputs,
+// survivors in order (the metric maps by renumbering). On a FOLD (see collapse_outside_nodes) `fold`
+// returns the old ids of each dropped folded element's surviving nodes; the outputs are incomplete.
 static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &crossed,
                                   int nnode, int nelem, int nseg,
                                   const double *coord, const uint_vec &bcflag,
@@ -3864,19 +3856,16 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     return 0;
 }
 
-// Fail-fast guard against a TANGLED mesh (a self-collapsed free surface that no remesh can repair):
-//   (1) FOLDED element: signed measure opposite to the mesh's dominant sign (not hard-coded CCW;
-//       the 2D solver is orientation-agnostic). It can fire only after a uniform mesher
-//       (meshing_elem_shape 1 or 2): a Triangle/TetGen initial mesh orients every element alike,
-//       and MMG reorients an inverted input element.
-//   (2) SELF-INTERSECTING boundary (2D only): two boundary segments sharing no node cross. MMG
-//       does not split such a crossing.
-// So it can stop only a uniform-mesher or a 2D MMG remesh, never a 3D MMG one.
-// Prints the offending geometry and dies with the mesh error code. `when` labels the call site.
 static double tangle_orient2d(const double *a, const double *b, const double *c)
 {
     return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
 }
+
+// Fail-fast guard against a TANGLED mesh, a self-collapsed free surface no remesh can repair: (1) a
+// FOLDED element, signed measure opposite to the mesh's dominant sign (only after a uniform mesher:
+// Triangle/TetGen orient every element alike, and MMG reorients an inverted one); (2, 2D only) two
+// boundary segments that share no node and cross, which MMG does not split. Prints the offending
+// geometry and dies with the mesh error code; `when` labels the call site.
 void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
                        int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
 {

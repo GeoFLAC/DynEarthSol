@@ -188,8 +188,8 @@ ifeq ($(useexo), 1)
 
 	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
 	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
-	## Absolute, here and in the rpaths and install names below: a relative one is
-	## read against the directory DES runs in, not the one the executable is in.
+	## Recorded absolute here, in libexodus's macOS install name and in HDF5's rpath: a
+	## relative path is read against the directory DES runs in, not the executable's.
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		EXO_LDFLAGS += -Wl,-rpath=$(abspath $(EXO_LIB_DIR))
 	endif
@@ -234,9 +234,8 @@ ifeq ($(usegospl), 1)
 	PYTHON_PREFIX_INCLUDE = $(abspath $(PYTHON_INCLUDE_DIR)/..)
 endif
 
-## HDF5_INCLUDE_DIR and HDF5_LIB_DIR come as a pair: set both, or neither, and the
-## first stage below that finds an HDF5 sets both. With one set, check-deps names
-## the missing half.
+## Each HDF5 stage below runs only while both dirs are blank, and sets both (see
+## HDF5_INCLUDE_DIR above).
 ##
 ## 1. A library that brings its own HDF5, as DES must link that file on Linux (see
 ## hdf5_same_file): seacas's prefix, and on Linux the embedded Python's prefix. A
@@ -273,7 +272,7 @@ endif
 
 ## 3. Install layouts without a .pc file: Fedora/RHEL ship none, and Debian splits its
 ## serial build into two trees, so headers and library are searched apart. /usr/local
-## comes before the system directories, so a hand-built HDF5 there wins.
+## comes before the plain /usr dirs, so a hand-built HDF5 there wins over one in them.
 ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
 	HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(call under,$(BREW_PREFIX),/opt/hdf5/include) \
 		/usr/include/hdf5/serial /usr/local/include /usr/include)
@@ -922,10 +921,8 @@ DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a
 endif
 
 ## $(call hdf5_same_file,<who>,<its include dir>,<its lib dir>): stop when <its lib dir>
-## holds a libhdf5.so that is not the file DES links. On Linux the first libhdf5 loaded
-## answers every H5* call in the process, so libexodus (through seacas's netcdf) and
-## GoSPL's h5py must load DES's file; macOS binds each library to its own copy. test -ef
-## follows symlinks, so a link to the same file passes.
+## holds a libhdf5.so that is not the file DES links: on Linux the first libhdf5 loaded
+## answers every H5* call in the process. test -ef follows symlinks.
 define hdf5_same_file
 @f="$(3)/libhdf5.so"; test ! -e "$$f" || test "$$f" -ef "$(HDF5_LIB)" || { \
 		echo "HDF5: $(1) loads $$f, and DES would link another file,"; \
@@ -944,7 +941,7 @@ check-deps:
 		echo "runs '$(CXX_BACKEND)'. Set MPI_CXX to an NVHPC MPI wrapper."; exit 1; }
 	@# Each half checked on its own: one without the other is still unbuildable, and
 	@# failing here beats a confusing compile or link error further down. Fatal on every
-	@# OS: a blank path leaves a bare -I or -L in the flags, which takes the next word.
+	@# OS: a blank include dir leaves a bare -I in the flags, which takes the next word.
 	@test -f "$(strip $(HDF5_INCLUDE_DIR))/hdf5.h" || { \
 		echo "Missing: the HDF5 headers$(if $(strip $(HDF5_INCLUDE_DIR)), (no hdf5.h in '$(HDF5_INCLUDE_DIR)'))."; \
 		echo "         Install: brew install hdf5 (macOS), apt install libhdf5-dev (Debian/Ubuntu),"; \
