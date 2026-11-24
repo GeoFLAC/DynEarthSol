@@ -93,8 +93,8 @@ OSNAME := $(shell uname -s)
 ## use rather than leaving it in a shell profile.
 ########################################################################
 
-## HDF5. Set either or both; whichever is left blank is still
-## detected. Layouts the search knows about, if you would rather name them:
+## HDF5. Set both, or neither to have them detected; with one set, detection fills
+## neither. Layouts the search knows about, if you would rather name them:
 ##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
 ##   Fedora/RHEL    /usr/include              /usr/lib64
 ##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
@@ -191,13 +191,6 @@ ifeq ($(useexo), 1)
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		EXO_LDFLAGS += -Wl,-rpath=$(EXO_LIB_DIR)
 	endif
-
-	## libexodus reaches HDF5 through seacas's own netcdf, which links the HDF5
-	## seacas built: DES uses that one too, so one process loads one libhdf5.
-	ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
-		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(EXO_INCLUDE))
-		HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(EXO_LIB_DIR))
-	endif
 endif
 
 ifeq ($(usegospl), 1)
@@ -235,76 +228,56 @@ ifeq ($(usegospl), 1)
 		GOSPL_RPATH = $(abspath $(PYTHON_LIB_DIR))
 	endif
 
-	## The embedded Python's gospl loads h5py, which links the conda env's HDF5. On
-	## Linux DES uses that one too when the env has it, so one process loads one
-	## libhdf5. macOS keeps the detected HDF5, as each library binds its own copy:
-	## the env's include dir is OpenMP's -idirafter there, which an -I of the same
-	## dir cannot move ahead of /usr/local/include, and its lib dir holds a libc++.
-	ifneq ($(OSNAME), Darwin)
-		ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
-			HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(CONDA_ENV_PATH)/include)
-			HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(CONDA_ENV_PATH)/lib)
+	## <prefix>/include of the prefix that holds the embedded Python's headers.
+	PYTHON_PREFIX_INCLUDE = $(abspath $(PYTHON_INCLUDE_DIR)/..)
+endif
+
+## HDF5_INCLUDE_DIR and HDF5_LIB_DIR come as a pair: set both, or neither, and the
+## first stage below that finds an HDF5 sets both. With one set, check-deps names
+## the missing half.
+##
+## 1. A library that brings its own HDF5, as DES must link that file on Linux (see
+## hdf5_same_file): seacas's prefix, and on Linux the embedded Python's prefix. A
+## system Python's prefix holds no hdf5.h on Debian, so detection goes on. macOS keeps
+## the detected HDF5 with GoSPL: the env's include dir is OpenMP's -idirafter there,
+## which an -I of the same dir cannot move ahead of /usr/local/include.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	ifeq ($(useexo), 1)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(EXO_INCLUDE))
+		HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(EXO_LIB_DIR))
+	endif
+endif
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	ifeq ($(usegospl), 1)
+		ifneq ($(OSNAME), Darwin)
+			HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(PYTHON_PREFIX_INCLUDE))
+			HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(PYTHON_LIB_DIR))
 		endif
 	endif
 endif
 
-## Every stage below fills only what is still blank, so a path set by hand is
-## never overwritten, and setting just one of the two still leaves the other
-## detected instead of empty (a blank -L would eat the -lhdf5 that follows it).
-HDF5_DETECT :=
-ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-	HDF5_DETECT := yes
-endif
-ifeq ($(strip $(HDF5_LIB_DIR)),)
-	HDF5_DETECT := yes
-endif
-ifeq ($(HDF5_DETECT), yes)
-	ifeq ($(OSNAME), Darwin)
-		## Use the architecture-matched Homebrew prefix (see BREW_PREFIX above)
-		## and that prefix's own pkg-config, not whichever one PATH offers.
-		HDF5_BREW = $(BREW_PREFIX)
-		PKGCONFIG := $(BREW_PREFIX)/bin/pkg-config
-	else
-		HDF5_BREW =
-		PKGCONFIG := pkg-config
-	endif
-
-	## Ask pkg-config for directories rather than parsing --cflags/--libs:
-	## h5cc -show and --libs mix in inline .a paths and -lsz/-lz/-ldl, which
-	## are painful to filter and differ per build. Debian and Ubuntu name the
-	## serial module hdf5-serial; everyone else ships plain hdf5.
+## 2. pkg-config, for its directories only: --libs adds -lsz/-lz/-ldl that differ per
+## build. On macOS the architecture-matched Homebrew's (see BREW_PREFIX). Debian and
+## Ubuntu name the module hdf5-serial.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	PKGCONFIG := $(if $(filter Darwin,$(OSNAME)),$(BREW_PREFIX)/bin/pkg-config,pkg-config)
 	HDF5_PC := $(shell for m in hdf5 hdf5-serial; do \
 		$(PKGCONFIG) --exists $$m 2>/dev/null && { echo $$m; break; }; done)
 	ifneq ($(HDF5_PC),)
-		ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-			HDF5_INCLUDE_DIR := $(shell $(PKGCONFIG) --variable=includedir $(HDF5_PC))
-		endif
-		ifeq ($(strip $(HDF5_LIB_DIR)),)
-			HDF5_LIB_DIR := $(shell $(PKGCONFIG) --variable=libdir $(HDF5_PC))
-		endif
+		HDF5_INCLUDE_DIR := $(shell $(PKGCONFIG) --variable=includedir $(HDF5_PC))
+		HDF5_LIB_DIR := $(shell $(PKGCONFIG) --variable=libdir $(HDF5_PC))
 	endif
+endif
 
-	## Without a .pc file, probe the layouts real installs use -- Fedora and
-	## RHEL need this branch unconditionally, as their hdf5-devel ships no
-	## pkg-config file at all. Debian splits its serial build across two trees
-	## (/usr/include/hdf5/serial and .../hdf5/serial under the multiarch libdir),
-	## so the header and the library are searched separately, not under one
-	## prefix. /usr/local comes before the system directories so a hand-built
-	## HDF5 installed there wins over the distro package.
-	HDF5_INC_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/include) \
-		/usr/include/hdf5/serial \
-		/usr/local/include /usr/include
-	HDF5_LIB_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/lib) \
-		/usr/lib/*-linux-gnu/hdf5/serial \
-		/usr/local/lib /usr/local/lib64 \
-		/usr/lib/*-linux-gnu \
-		/usr/lib64 /usr/lib
-	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(HDF5_INC_DIRS))
-	endif
-	ifeq ($(strip $(HDF5_LIB_DIR)),)
-		HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(HDF5_LIB_DIRS))
-	endif
+## 3. Install layouts without a .pc file: Fedora/RHEL ship none, and Debian splits its
+## serial build into two trees, so headers and library are searched apart. /usr/local
+## comes before the system directories, so a hand-built HDF5 there wins.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(call under,$(BREW_PREFIX),/opt/hdf5/include) \
+		/usr/include/hdf5/serial /usr/local/include /usr/include)
+	HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(call under,$(BREW_PREFIX),/opt/hdf5/lib) \
+		/usr/lib/*-linux-gnu/hdf5/serial /usr/local/lib /usr/local/lib64 \
+		/usr/lib/*-linux-gnu /usr/lib64 /usr/lib)
 endif
 
 ########################################################################
@@ -946,6 +919,20 @@ else
 DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a module)"
 endif
 
+## $(call hdf5_same_file,<who>,<its include dir>,<its lib dir>): stop when <its lib dir>
+## holds a libhdf5.so that is not the file DES links. On Linux the first libhdf5 loaded
+## answers every H5* call in the process, so libexodus (through seacas's netcdf) and
+## GoSPL's h5py must load DES's file; macOS binds each library to its own copy. test -ef
+## follows symlinks, so a link to the same file passes.
+define hdf5_same_file
+@f="$(3)/libhdf5.so"; test ! -e "$$f" || test "$$f" -ef "$(HDF5_LIB)" || { \
+		echo "HDF5: $(1) loads $$f, and DES would link another file,"; \
+		echo "      $(HDF5_LIB). On Linux the first libhdf5 loaded answers every HDF5"; \
+		echo "      call in the process, so the calls of $(1) would fail. Link its copy,"; \
+		echo "      with this added to the make line: HDF5_INCLUDE_DIR=$(2) HDF5_LIB_DIR=$(3)"; \
+		exit 1; }
+endef
+
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
@@ -956,17 +943,27 @@ check-deps:
 	@# Each half checked on its own: one without the other is still unbuildable, and
 	@# failing here beats a confusing compile or link error further down. Fatal on every
 	@# OS: a blank path leaves a bare -I or -L in the flags, which takes the next word.
-	@test -n "$(strip $(HDF5_INCLUDE_DIR))" || { \
-		echo "Missing: the HDF5 headers."; \
+	@test -f "$(strip $(HDF5_INCLUDE_DIR))/hdf5.h" || { \
+		echo "Missing: the HDF5 headers$(if $(strip $(HDF5_INCLUDE_DIR)), (no hdf5.h in '$(HDF5_INCLUDE_DIR)'))."; \
 		echo "         Install: brew install hdf5 (macOS), apt install libhdf5-dev (Debian/Ubuntu),"; \
 		echo "                  dnf install hdf5-devel (Fedora/RHEL)"; \
-		echo "         Or: make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
+		echo "         Or set both dirs (with one set, detection fills neither):"; \
+		echo "         make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
 		exit 1; }
 	@test -n "$(strip $(HDF5_LIB))" || { \
 		echo "Missing: libhdf5 (HDF5 headers found in $(HDF5_INCLUDE_DIR))."; \
 		echo "         $(if $(strip $(HDF5_LIB_DIR)),No libhdf5.$(HDF5_SHLIB_EXT) or libhdf5.a in '$(HDF5_LIB_DIR)'.,HDF5_LIB_DIR is not set.)"; \
-		echo "         Set HDF5_LIB_DIR to the directory holding it: make HDF5_LIB_DIR=/prefix/lib"; \
+		echo "         Set both dirs (with one set, detection fills neither):"; \
+		echo "         make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
 		exit 1; }
+ifneq ($(OSNAME), Darwin)
+ifeq ($(useexo), 1)
+	$(call hdf5_same_file,libexodus,$(EXO_INCLUDE),$(EXO_LIB_DIR))
+endif
+ifeq ($(usegospl), 1)
+	$(call hdf5_same_file,GoSPL's h5py,$(PYTHON_PREFIX_INCLUDE),$(PYTHON_LIB_DIR))
+endif
+endif
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))

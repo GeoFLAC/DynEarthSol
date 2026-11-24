@@ -65,13 +65,18 @@ The requirements in detail:
   * The build locates it via `pkg-config` and then the usual install layouts,
     picking the prefix that matches the host architecture: on a Mac that has
     used both Homebrew prefixes, `h5cc` and `pkg-config` on `PATH` are often the
-    x86_64 ones. With `useexo=1` it takes the HDF5 that seacas built, and on
-    Linux with `usegospl=1` the GoSPL conda env's HDF5, each when it has one, so
-    that one process loads one HDF5 library.
+    x86_64 ones.
+  * With `useexo=1` it looks first in seacas's prefix, and on Linux with
+    `usegospl=1` in the prefix of the embedded Python. On Linux the first HDF5
+    library loaded answers every HDF5 call in the process, so DES must link the
+    one that seacas's NetCDF or GoSPL's h5py loads. `make check-deps` stops the
+    build when seacas's or the Python's lib directory holds a `libhdf5.so` that
+    is not the one DES links.
   * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
     a conda env or a hand-built copy:
     `make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
-    Either one alone is enough; the other is still detected.
+    Set both: with one set, detection fills neither, so a partial override
+    cannot pair the headers of one install with the library of another.
   * A directory with only a static `libhdf5.a` links when the archive needs no
     other library: the build adds none (Homebrew's needs `-lz -lsz -laec`).
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
@@ -108,9 +113,10 @@ defaults are not what you want.
   architecture, without building.
 * `HDF5_INCLUDE_DIR`, `HDF5_LIB_DIR` and `NVHPC_DIR` sit
   together in an **Optional paths** block near the top of the `Makefile`. All
-  may stay blank; set one only to force a specific install, which skips
-  detection for that dependency. Every other dependency's path is declared
-  beside the feature that uses it (`OPENMP_*`, `EXO_*`, `MMG_*`, the GoSPL group).
+  may stay blank; set them only to force a specific install, which skips
+  detection for that dependency (HDF5's two go together). Every other
+  dependency's path is declared beside the feature that uses it (`OPENMP_*`,
+  `EXO_*`, `MMG_*`, the GoSPL group).
   An *exported* value is honoured too, which is how a module file or a conda
   activation hook names a prefix once; the catch is that a stale export in a
   shell profile silently defeats a good package-manager install. `make config`
