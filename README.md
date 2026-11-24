@@ -72,6 +72,8 @@ The requirements in detail:
     a conda env or a hand-built copy:
     `make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
     Either one alone is enough; the other is still detected.
+  * A directory with only a static `libhdf5.a` links when the archive needs no
+    other library: the build adds none (Homebrew's needs `-lz -lsz -laec`).
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.

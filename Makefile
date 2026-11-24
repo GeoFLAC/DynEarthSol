@@ -606,16 +606,17 @@ else
 ## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
+## The library file the link takes: the shared library when the directory has one,
+## else the static libhdf5.a. Linked by its path, not -L/-l: on macOS -L on a conda env
+## would also answer the implicit -lc++.
+HDF5_SHLIB_EXT := $(if $(filter Darwin,$(OSNAME)),dylib,so)
+HDF5_LIB := $(firstword $(call firstfile,libhdf5.$(HDF5_SHLIB_EXT),$(HDF5_LIB_DIR)) \
+	$(call firstfile,libhdf5.a,$(HDF5_LIB_DIR)))
+
 CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
-ifneq ($(OSNAME), Darwin)
-	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5 -Wl,-rpath,$(HDF5_LIB_DIR)
-else
-	## Full path, as for libomp: -L on a conda env would also answer the implicit -lc++.
-	## A conda libhdf5 names itself @rpath/..., so its directory is an rpath (added after
-	## the link); Homebrew's names its full path, and the extra rpath is unused.
-	LDFLAGS += $(HDF5_LIB_DIR)/libhdf5.dylib
-	HDF5_RPATH = $(abspath $(HDF5_LIB_DIR))
-endif
+## Its directory is an rpath: a conda or hand-built libhdf5 lies off the loader's path, and a
+## conda one names itself @rpath/... on macOS. Apple ld takes this spelling, not -rpath=.
+LDFLAGS += $(HDF5_LIB) -Wl,-rpath,$(abspath $(HDF5_LIB_DIR))
 
 ## Is git in the path?
 HAS_GIT := $(shell git --version 2>/dev/null)
@@ -961,8 +962,9 @@ check-deps:
 		echo "                  dnf install hdf5-devel (Fedora/RHEL)"; \
 		echo "         Or: make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
 		exit 1; }
-	@test -n "$(strip $(HDF5_LIB_DIR))" || { \
+	@test -n "$(strip $(HDF5_LIB))" || { \
 		echo "Missing: libhdf5 (HDF5 headers found in $(HDF5_INCLUDE_DIR))."; \
+		echo "         $(if $(strip $(HDF5_LIB_DIR)),No libhdf5.$(HDF5_SHLIB_EXT) or libhdf5.a in '$(HDF5_LIB_DIR)'.,HDF5_LIB_DIR is not set.)"; \
 		echo "         Set HDF5_LIB_DIR to the directory holding it: make HDF5_LIB_DIR=/prefix/lib"; \
 		exit 1; }
 ifeq ($(OSNAME), Darwin)
@@ -1002,7 +1004,7 @@ ifeq ($(openmp), 1)
 endif
 endif
 	@echo "hdf5 include       $(if $(strip $(HDF5_INCLUDE_DIR)),$(HDF5_INCLUDE_DIR),** NOT FOUND **)"
-	@echo "hdf5 lib dir       $(if $(strip $(HDF5_LIB_DIR)),$(HDF5_LIB_DIR),** NOT FOUND **)"
+	@echo "hdf5 library       $(if $(strip $(HDF5_LIB)),$(HDF5_LIB),** NOT FOUND **)"
 	@echo "mmg archive        $(MMG_LIB)"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
@@ -1133,7 +1135,7 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# with usegospl=1 OPENMP_RPATH and GOSPL_RPATH are both the env's lib.
 		@# An empty one (openmp=0, or no runtime found) drops out of the loop, as does
 		@# GWB_RPATH without usegwb=1 (GWB's library names itself @rpath/...).
-		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH) $(HDF5_RPATH); do \
+		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(usegospl), 1)
